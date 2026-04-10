@@ -1,0 +1,14 @@
+# CLINICX BACKEND - LIVE ROUTES
+
+## 🔍 General
+- GET http://localhost:3000/health              -> Health check status (UP/DOWN)
+- GET http://localhost:3000/api/status          -> Core API status check
+
+## 🔐 Authentication (Account/Auth)
+- POST http://localhost:3000/api/auth/login      -> Authenticate user { identity (email or mobile), password }
+- POST http://localhost:3000/api/auth/refresh    -> Rotate expired access tokens { refreshToken }
+- POST http://localhost:3000/api/auth/register   -> Create new Primary or Secondary user { PhoneNumber, FirstName, ... }
+- POST http://localhost:3000/api/auth/logout     -> Revoke tokens and end session { refreshToken }
+
+## 👤 Role Management (Account/Roles)
+- GET http://localhost:3000/api/roles/getRoles   -> Fetch all roles with Status=true for Login display
