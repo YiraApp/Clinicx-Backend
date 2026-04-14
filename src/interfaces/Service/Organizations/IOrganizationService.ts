@@ -10,5 +10,5 @@ import type { DashboardSummary } from "../Common/IDashboardService.js";
 export interface IOrganizationService {
     createOrganization(data: CreateOrganizationRequest, roleId: string): Promise<CreateOrganizationResponse>;
     updateOrganization(data: UpdateOrganizationRequest): Promise<any>;
-    getAllOrganizations(page?: number, pageSize?: number): Promise<DashboardSummary>;
+    getAllOrganizations(page?: number, pageSize?: number, orgId?: number): Promise<DashboardSummary>;
 }

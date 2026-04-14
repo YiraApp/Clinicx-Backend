@@ -1,4 +1,6 @@
 import { sidebarRepository } from "../../repositories/Common/sidebar.repository.js";
+import { redisService } from "./redis.service.js";
+import { CacheKeys } from "../../utils/cache.keys.js";
 import type { ISidebarService } from "../../interfaces/Service/Common/ISidebarService.js";
 
 /**
@@ -6,6 +8,15 @@ import type { ISidebarService } from "../../interfaces/Service/Common/ISidebarSe
  */
 export class SidebarService implements ISidebarService {
     async getSidebarMenu(roleId: string, orgId?: number | null, hospId?: number | null): Promise<any[]> {
+        const cacheKey = CacheKeys.SIDEBAR_MENU(roleId, orgId, hospId);
+        const cachedMenu = await redisService.get<any[]>(cacheKey);
+
+        if (cachedMenu) {
+            console.log(`[Redis] Cache HIT: ${cacheKey}`);
+            return cachedMenu;
+        }
+
+        console.log(`[Redis] Cache MISS: ${cacheKey}`);
         const roleMenus = await sidebarRepository.getRoleSidebarMenus(roleId, orgId, hospId);
 
         // Extract the actual menu objects
@@ -40,7 +51,12 @@ export class SidebarService implements ISidebarService {
         });
 
         // 3. Final sort of root menus
-        return rootMenus.sort((a: any, b: any) => (a.OrderNo || 0) - (b.OrderNo || 0));
+        const finalMenu = rootMenus.sort((a: any, b: any) => (a.OrderNo || 0) - (b.OrderNo || 0));
+
+        // Cache the result for future use
+        await redisService.set(cacheKey, finalMenu);
+
+        return finalMenu;
     }
 }
 

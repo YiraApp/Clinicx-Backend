@@ -5,6 +5,7 @@ import { userRepository } from "../../repositories/Account/user.repository.js";
 import type { CreateUserRequest } from "../../dtos/Request/Account/CreateUserRequest.js";
 import type { CreateUserResponse } from "../../dtos/Response/Account/CreateUserResponse.js";
 import type { IUserService } from "../../interfaces/Service/Account/IUserService.js";
+import { mailService } from "../../services/Mail/mail.service.js";
 
 /**
  * Service implementation for User operations.
@@ -68,6 +69,25 @@ export class UserService implements IUserService {
 
         // 6. Save the user
         const savedUser = await userRepository.save(newUser);
+
+        // 7. Send Welcome Email
+        if (savedUser.Email) {
+            try {
+                await mailService.sendDynamicEmail("WELCOME_EMAIL", savedUser.Email, {
+                    FirstName: savedUser.FirstName,
+                    LastName: savedUser.LastName || "",
+                    RoleMessage: data.RoleMessage || (isEntityUser ? "Your account has been set up with administrative privileges." : "Welcome to the Clinicx family!"),
+                    Email: savedUser.Email,
+                    Password: data.Password || "********", // Show masked if not available
+                    Role: data.RoleName || (isEntityUser ? "Staff/Admin" : "User"),
+                    OrganizationName: data.OrganizationName || "Clinicx",
+                    LoginURL: data.LoginURL || process.env.CLIENT_URL || "https://clinicx.azurewebsites.net/"
+                });
+            } catch (mailError) {
+                console.error(`[Mail] Failed to send welcome email to ${savedUser.Email}:`, mailError);
+                // Non-blocking: user is created even if mail fails
+            }
+        }
 
         return {
             Id: savedUser.Id,

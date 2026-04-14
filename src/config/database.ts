@@ -13,6 +13,7 @@ import { Hospital } from "../models/Organizations/hospital.model.js";
 import { APILog } from "../models/Logs/apilog.model.js";
 import { SidebarMenu } from "../models/Common/sidebar-menu.model.js";
 import { RoleSidebarMenu } from "../models/Common/role-sidebar-menu.model.js";
+import { Template } from "../models/Common/template.model.js";
 
 dotenv.config(); // Load environment variables from .env
 
@@ -33,7 +34,7 @@ export const AppDataSource = new DataSource({
     database: process.env.DB_NAME,
     logging: false,
     synchronize: false,                   // Important: do NOT auto-create tables
-    entities: [User, UserToken, Address, Role, UserRole, Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu], // Explicitly listed for best results with ESM/TSX
+    entities: [User, UserToken, Address, Role, UserRole, Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template], // Explicitly listed for best results with ESM/TSX
     // subscribers: [join(__dirname, "../subscribers/*.{ts,js}")], // Optional
     extra: {
         encrypt: true,

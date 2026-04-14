@@ -13,6 +13,8 @@ import { dashboardService } from "../../services/Common/dashboard.service.js";
 import type { DashboardSummary } from "../../interfaces/Service/Common/IDashboardService.js";
 
 import { IsNull } from "typeorm";
+import { redisService } from "../../services/Common/redis.service.js";
+import { CacheKeys } from "../../utils/cache.keys.js";
 
 /**
  * Service for Organization-related business logic.
@@ -66,9 +68,15 @@ export class OrganizationService implements IOrganizationService {
                 const userCreateData: CreateUserRequest = {
                     FirstName: data.Name,
                     PhoneNumber: data.MobileNumber,
-                    Password: data.MobileNumber,
+                    Password: this.generateStrongPassword(8),
                 };
                 if (data.Email) userCreateData.Email = data.Email;
+                
+                // Add details for Welcome Email
+                userCreateData.OrganizationName = data.Name;
+                userCreateData.RoleName = "Administrator";
+                userCreateData.RoleMessage = `Welcome! You have been registered as an Administrator for:<br/><strong>${data.Name}</strong>${data.OrgCode ? `<br/>(Code: ${data.OrgCode})` : ""}`;
+                userCreateData.LoginURL = process.env.CLIENT_URL || "https://clinicx.azurewebsites.net/";
 
                 const userResponse = await userService.createUser(userCreateData, true);
 
@@ -103,6 +111,9 @@ export class OrganizationService implements IOrganizationService {
             userRole.IsDeleted = false;
 
             await transactionalEntityManager.save(userRole);
+
+            // Invalidate dashboard cache
+            await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
 
             return {
                 organization: org,
@@ -168,7 +179,7 @@ export class OrganizationService implements IOrganizationService {
                     const userCreateData: CreateUserRequest = {
                         FirstName: data.Name || org.Name,
                         PhoneNumber: data.MobileNumber,
-                        Password: data.MobileNumber,
+                        Password: this.generateStrongPassword(8),
                     };
                     const emailToUse = data.Email || org.Email;
                     if (emailToUse) userCreateData.Email = emailToUse;
@@ -191,6 +202,9 @@ export class OrganizationService implements IOrganizationService {
                 await transactionalEntityManager.save(UserRole, newUserRole);
             }
 
+            // Invalidate dashboard cache
+            await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
+
             return {
                 message: "Organization updated successfully.",
                 organization: org
@@ -198,8 +212,18 @@ export class OrganizationService implements IOrganizationService {
         });
     }
 
-    async getAllOrganizations(page?: number, pageSize?: number): Promise<DashboardSummary> {
-        return await dashboardService.getDashboardSummary(page, pageSize);
+    private generateStrongPassword(length: number = 8): string {
+        const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
+        let password = "";
+        for (let i = 0; i < length; i++) {
+            const randomIndex = Math.floor(Math.random() * charset.length);
+            password += charset[randomIndex];
+        }
+        return password;
+    }
+
+    async getAllOrganizations(page?: number, pageSize?: number, orgId?: number): Promise<DashboardSummary> {
+        return await dashboardService.getDashboardSummary(page, pageSize, orgId);
     }
 }
 

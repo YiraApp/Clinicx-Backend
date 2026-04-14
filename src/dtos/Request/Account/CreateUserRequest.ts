@@ -11,4 +11,8 @@ export interface CreateUserRequest {
     Gender?: string;
     DateOfBirth?: string;
     OrganizationId?: string;
+    RoleName?: string;
+    OrganizationName?: string;
+    RoleMessage?: string;
+    LoginURL?: string;
 }
