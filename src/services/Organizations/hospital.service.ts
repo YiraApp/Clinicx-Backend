@@ -8,8 +8,6 @@ import { userService } from "../../services/Account/user.service.js";
 import type { IHospitalService } from "../../interfaces/Service/Organizations/IHospitalService.js";
 import type { CreateHospitalRequest, CreateHospitalResponse, UpdateHospitalRequest } from "../../dtos/Request/Organizations/CreateHospitalRequest.js";
 import type { CreateUserRequest } from "../../dtos/Request/Account/CreateUserRequest.js";
-import { redisService } from "../../services/Common/redis.service.js";
-import { CacheKeys } from "../../utils/cache.keys.js";
 import { User } from "../../models/Account/user.model.js";
 
 /**
@@ -58,8 +56,6 @@ export class HospitalService implements IHospitalService {
             userRole.Status = true;
             userRole.IsDeleted = false;
             await transactionalEntityManager.save(userRole);
-
-            await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
 
             return {
                 hospital,
@@ -132,8 +128,6 @@ export class HospitalService implements IHospitalService {
                 await transactionalEntityManager.save(UserRole, newUserRole);
             }
 
-            await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
-
             return { message: "Hospital updated successfully.", hospital };
         });
     }
@@ -143,7 +137,6 @@ export class HospitalService implements IHospitalService {
         if (!hospital) throw new Error("Hospital not found.");
 
         await hospitalRepository.softDelete(id);
-        await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
     }
 
     async getHospitalById(id: number): Promise<any> {

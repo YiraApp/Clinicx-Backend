@@ -2,23 +2,12 @@ import { AppDataSource } from "../../config/database.js";
 import { Organization } from "../../models/Organizations/organization.model.js";
 import { UserRole } from "../../models/Account/userrole.model.js";
 import { User } from "../../models/Account/user.model.js";
-import { redisService } from "./redis.service.js";
-import { CacheKeys } from "../../utils/cache.keys.js";
 import type { IDashboardService, DashboardSummary } from "../../interfaces/Service/Common/IDashboardService.js";
 
 export class DashboardService implements IDashboardService {
     private PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 
     async getDashboardSummary(page: number = 1, pageSize: number = 10, orgId?: number): Promise<DashboardSummary> {
-        const cacheKey = CacheKeys.DASHBOARD_SUMMARY(page, pageSize, orgId);
-        const cachedSummary = await redisService.get<DashboardSummary>(cacheKey);
-
-        if (cachedSummary) {
-            console.log(`[Redis] Cache HIT: ${cacheKey}`);
-            return cachedSummary;
-        }
-
-        console.log(`[Redis] Cache MISS: ${cacheKey}`);
         const orgRepo = AppDataSource.getRepository(Organization);
         const userRepo = AppDataSource.getRepository(User);
         const userRoleRepo = AppDataSource.getRepository(UserRole);
@@ -97,9 +86,6 @@ export class DashboardService implements IDashboardService {
                 PatientCount: parseInt(stat.PatientCount)
             }))
         };
-
-        // Cache the result
-        await redisService.set(cacheKey, result);
 
         return result;
     }

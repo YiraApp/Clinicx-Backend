@@ -13,8 +13,6 @@ import { dashboardService } from "../../services/Common/dashboard.service.js";
 import type { DashboardSummary } from "../../interfaces/Service/Common/IDashboardService.js";
 
 import { IsNull } from "typeorm";
-import { redisService } from "../../services/Common/redis.service.js";
-import { CacheKeys } from "../../utils/cache.keys.js";
 
 /**
  * Service for Organization-related business logic.
@@ -112,9 +110,6 @@ export class OrganizationService implements IOrganizationService {
 
             await transactionalEntityManager.save(userRole);
 
-            // Invalidate dashboard cache
-            await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
-
             return {
                 organization: org,
                 user: {
@@ -201,9 +196,6 @@ export class OrganizationService implements IOrganizationService {
 
                 await transactionalEntityManager.save(UserRole, newUserRole);
             }
-
-            // Invalidate dashboard cache
-            await redisService.delByPattern(CacheKeys.PATTERNS.DASHBOARD_ALL);
 
             return {
                 message: "Organization updated successfully.",

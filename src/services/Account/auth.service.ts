@@ -99,6 +99,8 @@ export class AuthService implements IAuthService {
 
         const userResponse: Partial<User> & { Roles: any[] } = {
             Id: user.Id,
+            IsMobileVerified: user.IsMobileVerified,
+            IsEmailVerified: user.IsEmailVerified,
             Roles: userRoles.map(ur => ({
                 UserRoleId: ur.UserRoleId,
                 RoleId: ur.RoleId,
