@@ -69,7 +69,7 @@ export class OrganizationService implements IOrganizationService {
                     Password: this.generateStrongPassword(8),
                 };
                 if (data.Email) userCreateData.Email = data.Email;
-                
+
                 // Add details for Welcome Email
                 userCreateData.OrganizationName = data.Name;
                 userCreateData.RoleName = "Administrator";
@@ -214,8 +214,8 @@ export class OrganizationService implements IOrganizationService {
         return password;
     }
 
-    async getAllOrganizations(page?: number, pageSize?: number, orgId?: number): Promise<DashboardSummary> {
-        return await dashboardService.getDashboardSummary(page, pageSize, orgId);
+    async getAllOrganizations(page?: number, pageSize?: number, orgId?: number, type?: string, search?: string): Promise<DashboardSummary> {
+        return await dashboardService.getDashboardSummary(page, pageSize, orgId, type, search);
     }
 }
 

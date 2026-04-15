@@ -24,20 +24,25 @@ export class HospitalRepository {
         return await this.repo.findOne({ where: { MobileNumber: mobile, IsDeleted: false } });
     }
 
-    async getAllHospitals(orgId?: number, page: number = 1, pageSize: number = 10): Promise<{ data: Hospital[], total: number, stats: any }> {
+    async getAllHospitals(orgId?: number, page: number = 1, pageSize: number = 10, search?: string): Promise<{ data: Hospital[], total: number, stats: any }> {
         const skip = (page - 1) * pageSize;
-        const where: any = { IsDeleted: false };
+        const query = this.repo.createQueryBuilder("h")
+            .leftJoinAndSelect("h.Organization", "o")
+            .where("h.IsDeleted = :isDeleted", { isDeleted: false });
+
         if (orgId) {
-            where.OrganizationId = orgId;
+            query.andWhere("h.OrganizationId = :orgId", { orgId });
         }
 
-        const [data, total] = await this.repo.findAndCount({
-            where,
-            relations: ["Organization"],
-            order: { CreatedAt: "DESC" },
-            skip,
-            take: pageSize
-        });
+        if (search) {
+            query.andWhere("(h.Name LIKE :search OR h.HospitalCode LIKE :search OR h.Email LIKE :search)", { search: `%${search}%` });
+        }
+
+        const [data, total] = await query
+            .orderBy("h.CreatedAt", "DESC")
+            .skip(skip)
+            .take(pageSize)
+            .getManyAndCount();
 
         // Calculate Overview Stats
         const summaryWhere: any = { IsDeleted: false };

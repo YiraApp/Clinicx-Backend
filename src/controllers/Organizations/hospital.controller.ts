@@ -54,8 +54,9 @@ export class HospitalController {
             const pageSize = parseInt(req.query.pageSize as string) || 10;
             const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
             const grouped = req.query.grouped === "true";
+            const search = (req.query.search as string) || undefined;
 
-            const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped);
+            const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped, search);
             return res.json(ApiResponse.success(result, "Hospitals fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));

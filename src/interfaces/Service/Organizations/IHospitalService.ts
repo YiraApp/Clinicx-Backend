@@ -5,5 +5,5 @@ export interface IHospitalService {
     updateHospital(data: UpdateHospitalRequest): Promise<any>;
     deleteHospital(id: number): Promise<void>;
     getHospitalById(id: number): Promise<any>;
-    getAllHospitals(orgId?: number, page?: number, pageSize?: number, grouped?: boolean): Promise<any>;
+    getAllHospitals(orgId?: number, page?: number, pageSize?: number, grouped?: boolean, search?: string): Promise<any>;
 }

@@ -52,8 +52,10 @@ export class OrganizationController {
             const page = parseInt((req.query.page || req.query.PageNumber) as string) || 1;
             const pageSize = parseInt((req.query.pageSize || req.query.limit || req.query.PageSize) as string) || 10;
             const orgId = req.query.orgId || req.query.OrgId ? parseInt((req.query.orgId || req.query.OrgId) as string) : undefined;
+            const type = req.query.type as string | undefined;
+            const search = req.query.search as string | undefined;
 
-            const result = await organizationService.getAllOrganizations(page, pageSize, orgId);
+            const result = await organizationService.getAllOrganizations(page, pageSize, orgId, type, search);
             return res.json(ApiResponse.success(result, "Organizations fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));

@@ -17,5 +17,5 @@ export interface DashboardSummary {
 }
 
 export interface IDashboardService {
-    getDashboardSummary(page?: number, pageSize?: number, orgId?: number): Promise<DashboardSummary>;
+    getDashboardSummary(page?: number, pageSize?: number, orgId?: number, type?: string, search?: string): Promise<DashboardSummary>;
 }
