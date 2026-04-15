@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { User } from "../models/Account/user.model.js";
 import { UserToken } from "../models/Account/usertoken.model.js";
+import { UserOTP } from "../models/Account/userotp.model.js";
 import { Address } from "../models/Account/address.model.js";
 import { Role } from "../models/Account/role.model.js";
 import { UserRole } from "../models/Account/userrole.model.js";
@@ -34,7 +35,7 @@ export const AppDataSource = new DataSource({
     database: process.env.DB_NAME,
     logging: false,
     synchronize: false,                   // Important: do NOT auto-create tables
-    entities: [User, UserToken, Address, Role, UserRole, Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template], // Explicitly listed for best results with ESM/TSX
+    entities: [User, UserToken, UserOTP, Address, Role, UserRole, Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template], // Explicitly listed for best results with ESM/TSX
     // subscribers: [join(__dirname, "../subscribers/*.{ts,js}")], // Optional
     extra: {
         encrypt: true,

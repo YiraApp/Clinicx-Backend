@@ -2,6 +2,8 @@ import bcrypt from "bcrypt";
 import { v4 as uuidv4 } from "uuid";
 import { User } from "../../models/Account/user.model.js";
 import { userRepository } from "../../repositories/Account/user.repository.js";
+import { userOTPRepository } from "../../repositories/Account/userotp.repository.js";
+import { OTPType, OTPPurpose } from "../../enums/OTPType.enum.js";
 import type { CreateUserRequest } from "../../dtos/Request/Account/CreateUserRequest.js";
 import type { CreateUserResponse } from "../../dtos/Response/Account/CreateUserResponse.js";
 import type { IUserService } from "../../interfaces/Service/Account/IUserService.js";
@@ -42,6 +44,9 @@ export class UserService implements IUserService {
             const salt = await bcrypt.genSalt(10);
             newUser.PasswordHash = await bcrypt.hash(data.Password, salt);
         }
+
+        if (data.IsMobileVerified !== undefined) newUser.IsMobileVerified = data.IsMobileVerified;
+        if (data.IsEmailVerified !== undefined) newUser.IsEmailVerified = data.IsEmailVerified;
 
 
 
@@ -98,6 +103,11 @@ export class UserService implements IUserService {
                 : `Secondary user created and linked to primary account (${savedUser.Relation}).`
         };
     }
+
+    async getUsers(page: number = 1, pageSize: number = 10, filters?: any): Promise<any> {
+        return await userRepository.getUsers(page, pageSize, filters);
+    }
+
 }
 
 export const userService = new UserService();

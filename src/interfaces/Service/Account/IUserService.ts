@@ -10,4 +10,18 @@ export interface IUserService {
      * Applies business rules for family accounts (max 6 users per phone).
      */
     createUser(data: CreateUserRequest, isEntityUser?: boolean): Promise<CreateUserResponse>;
+
+    /**
+     * Gets all users with comprehensive filtering and pagination.
+     */
+    getUsers(page: number, pageSize: number, filters?: {
+        search?: string;
+        roleId?: string;
+        organizationId?: number;
+        status?: boolean;
+        fromDate?: Date;
+        toDate?: Date;
+        sortBy?: 'createdAt' | 'updatedAt' | 'firstName';
+        sortOrder?: 'ASC' | 'DESC';
+    }): Promise<any>;
 }

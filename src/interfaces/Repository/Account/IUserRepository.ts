@@ -28,4 +28,18 @@ export interface IUserRepository {
      * Saves a user to the database.
      */
     save(user: User): Promise<User>;
+
+    /**
+     * Gets all users with filtering and pagination.
+     */
+    getUsers(page: number, pageSize: number, filters?: {
+        search?: string;
+        roleId?: string;
+        organizationId?: number;
+        status?: boolean;
+        fromDate?: Date;
+        toDate?: Date;
+        sortBy?: 'createdAt' | 'updatedAt' | 'firstName';
+        sortOrder?: 'ASC' | 'DESC';
+    }): Promise<{ data: User[], total: number, page: number, pageSize: number, totalPages: number }>;
 }

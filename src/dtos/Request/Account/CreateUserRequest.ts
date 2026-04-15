@@ -15,4 +15,6 @@ export interface CreateUserRequest {
     OrganizationName?: string;
     RoleMessage?: string;
     LoginURL?: string;
+    IsMobileVerified?: boolean;
+    IsEmailVerified?: boolean;
 }

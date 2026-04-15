@@ -115,6 +115,8 @@ export class AuthService implements IAuthService {
         if (user.FirstName !== undefined) userResponse.FirstName = user.FirstName;
         if (user.LastName !== undefined) userResponse.LastName = user.LastName;
         if (user.Email !== undefined) userResponse.Email = user.Email;
+        userResponse.PhoneNumber = user.PhoneNumber;
+        if (user.CountryCode !== undefined) userResponse.CountryCode = user.CountryCode;
 
         return {
             accessToken,

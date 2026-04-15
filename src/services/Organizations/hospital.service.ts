@@ -41,7 +41,7 @@ export class HospitalService implements IHospitalService {
                 userCreateData.OrganizationName = org.Name;
                 userCreateData.RoleName = "Hospital Administrator";
                 userCreateData.RoleMessage = `Welcome! You have been registered as an Administrator for:<br/><strong>${data.Name}</strong><br/>(Code: ${data.HospitalCode})`;
-
+                
                 const userResponse = await userService.createUser(userCreateData, true);
                 user = await userRepository.findById(userResponse.Id);
             }
