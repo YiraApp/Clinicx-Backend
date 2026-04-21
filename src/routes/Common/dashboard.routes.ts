@@ -5,5 +5,6 @@ const dashboardRouter = Router();
 
 dashboardRouter.get("/summary", dashboardController.getSummary.bind(dashboardController));
 dashboardRouter.get("/admin", dashboardController.getAdminDashboardData.bind(dashboardController));
+dashboardRouter.get("/analytics", dashboardController.getAnalytics.bind(dashboardController));
 
 export default dashboardRouter;

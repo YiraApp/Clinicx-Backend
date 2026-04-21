@@ -1,8 +1,6 @@
 import type { Request, Response } from "express";
-import { DashboardService } from "../../services/Common/dashboard.service.js";
+import { dashboardService } from "../../services/Common/dashboard.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
-
-const dashboardService = new DashboardService();
 
 export class DashboardController {
     async getAdminDashboardData(req: Request, res: Response): Promise<void> {
@@ -12,6 +10,16 @@ export class DashboardController {
         } catch (error) {
             console.error("Error fetching admin dashboard data:", error);
             res.status(500).json(ApiResponse.error(error instanceof Error ? error.message : "Failed to retrieve admin dashboard data"));
+        }
+    }
+
+    async getAnalytics(req: Request, res: Response): Promise<void> {
+        try {
+            const data = await dashboardService.getAnalyticsData();
+            res.status(200).json(ApiResponse.success(data, "Analytics data retrieved successfully"));
+        } catch (error) {
+            console.error("Error fetching analytics data:", error);
+            res.status(500).json(ApiResponse.error(error instanceof Error ? error.message : "Failed to retrieve analytics data"));
         }
     }
 
