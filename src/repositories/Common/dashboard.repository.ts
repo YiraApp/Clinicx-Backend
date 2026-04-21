@@ -60,11 +60,11 @@ export class DashboardRepository {
                 Activity + ' - ' + 
                 COALESCE(HospitalName, OrganizationName, 'Unknown') AS ActivityMessage,
                 CASE 
-                    WHEN DATEDIFF(MINUTE, RequestedOn, GETUTCDATE()) < 60 
-                        THEN CAST(DATEDIFF(MINUTE, RequestedOn, GETUTCDATE()) AS VARCHAR) + ' minutes ago'
-                    WHEN DATEDIFF(HOUR, RequestedOn, GETUTCDATE()) < 24 
-                        THEN CAST(DATEDIFF(HOUR, RequestedOn, GETUTCDATE()) AS VARCHAR) + ' hours ago'
-                    ELSE CAST(DATEDIFF(DAY, RequestedOn, GETUTCDATE()) AS VARCHAR) + ' days ago'
+                    WHEN DATEDIFF(MINUTE, RequestedOn, GETDATE()) < 60 
+                        THEN CAST(DATEDIFF(MINUTE, RequestedOn, GETDATE()) AS VARCHAR) + ' minutes ago'
+                    WHEN DATEDIFF(HOUR, RequestedOn, GETDATE()) < 24 
+                        THEN CAST(DATEDIFF(HOUR, RequestedOn, GETDATE()) AS VARCHAR) + ' hours ago'
+                    ELSE CAST(DATEDIFF(DAY, RequestedOn, GETDATE()) AS VARCHAR) + ' days ago'
                 END AS TimeAgo,
                 RequestedOn
             FROM ActivityData
