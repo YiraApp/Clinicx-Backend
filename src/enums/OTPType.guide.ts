@@ -6,6 +6,12 @@
 
 import { OTPType, OTPPurpose } from "./OTPType.enum.js";
 
+// Mock for guide visibility
+const userService = {
+    sendOTP: async (contact: string, purpose: OTPPurpose) => ({}),
+    verifyOTP: async (contact: string, sessionId: string, otp: string, purpose: OTPPurpose) => ({})
+};
+
 // ============================================
 // ENUM DEFINITIONS
 // ============================================

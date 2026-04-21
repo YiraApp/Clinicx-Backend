@@ -4,9 +4,8 @@ import { dashboardRepository } from "../../repositories/Common/dashboard.reposit
 import type { DashboardSummary, IDashboardService } from "../../interfaces/Service/Common/IDashboardService.js";
 
 export class DashboardService implements IDashboardService {
-
-    async getAdminDashboardData() {
-        return await dashboardRepository.getAdminDashboardStats();
+    async getAdminDashboardData(orgId?: number) {
+        return await dashboardRepository.getAdminDashboardStats(orgId);
     }
 
     async getDashboardSummary(page?: number, pageSize?: number, orgId?: number, type?: string, search?: string): Promise<DashboardSummary> {
