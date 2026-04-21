@@ -34,4 +34,9 @@ export interface IUserService {
      * Checks if a primary account exists for the given phone number.
      */
     getPrimaryAccount(phoneNumber: string): Promise<any>;
+
+    /**
+     * Toggles a user's activation status.
+     */
+    toggleStatus(id: string, status: boolean): Promise<void>;
 }

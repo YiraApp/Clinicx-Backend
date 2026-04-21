@@ -197,6 +197,12 @@ export class HospitalService implements IHospitalService {
             totalPages: Math.ceil(total / pageSize)
         };
     }
+
+    async toggleStatus(id: number, status: boolean): Promise<void> {
+        const hospital = await hospitalRepository.findById(id);
+        if (!hospital) throw new Error("Hospital not found.");
+        await hospitalRepository.updateStatus(id, status);
+    }
 }
 
 export const hospitalService = new HospitalService();

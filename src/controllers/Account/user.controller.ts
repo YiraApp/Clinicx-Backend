@@ -92,6 +92,27 @@ export class UserController {
             res.status(500).json(ApiResponse.error(error.message));
         }
     }
+
+    /**
+     * Toggles a user's activation status.
+     * Body: { status: boolean }
+     */
+    async toggleStatus(req: Request, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
+            const { status } = req.body;
+
+            if (!id || typeof status !== "boolean") {
+                res.status(400).json(ApiResponse.error("Valid User ID and status (boolean) are required."));
+                return;
+            }
+
+            await userService.toggleStatus(id, status);
+            res.json(ApiResponse.success(null, `User ${status ? 'activated' : 'deactivated'} successfully.`));
+        } catch (error: any) {
+            res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const userController = new UserController();

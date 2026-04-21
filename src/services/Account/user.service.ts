@@ -243,6 +243,12 @@ export class UserService implements IUserService {
             }
         };
     }
+
+    async toggleStatus(id: string, status: boolean): Promise<void> {
+        const user = await userRepository.findById(id);
+        if (!user) throw new Error("User not found.");
+        await userRepository.updateStatus(id, status);
+    }
 }
 
 export const userService = new UserService();

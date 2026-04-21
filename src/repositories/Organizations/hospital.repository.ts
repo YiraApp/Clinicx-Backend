@@ -61,6 +61,10 @@ export class HospitalRepository {
     async softDelete(id: number): Promise<void> {
         await this.repo.update(id, { IsDeleted: true, Status: false });
     }
+
+    async updateStatus(id: number, status: boolean): Promise<void> {
+        await this.repo.update(id, { Status: status, UpdatedAt: new Date() });
+    }
 }
 
 export const hospitalRepository = new HospitalRepository();

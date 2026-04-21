@@ -31,4 +31,9 @@ userRouter.post("/updateUser", userController.updateUser.bind(userController));
  */
 userRouter.get("/checkPrimary/:phoneNumber", userController.getPrimaryAccount.bind(userController));
 
+/**
+ * Toggle user activation status.
+ */
+userRouter.patch("/toggleStatus/:id", userController.toggleStatus.bind(userController));
+
 export { userRouter };

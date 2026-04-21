@@ -54,6 +54,10 @@ export class UserRepository implements IUserRepository {
         return false;
     }
 
+    async updateStatus(id: string, status: boolean): Promise<void> {
+        await this.repo.update(id, { Status: status, UpdatedAt: new Date() });
+    }
+
     async getUsers(page: number = 1, pageSize: number = 10, filters?: any): Promise<any> {
         const skip = (page - 1) * pageSize;
         const sortBy = filters?.sortBy || 'CreatedAt';

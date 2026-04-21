@@ -114,6 +114,25 @@ export class HospitalController {
             return res.status(400).json(ApiResponse.error(error.message));
         }
     }
+
+    /**
+     * Handles deactivating/activating a hospital.
+     */
+    async toggleStatus(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            const { status } = req.body;
+
+            if (!id || typeof status !== "boolean") {
+                return res.status(400).json(ApiResponse.error("Valid Hospital ID and status (boolean) are required."));
+            }
+
+            await hospitalService.toggleStatus(id, status);
+            return res.json(ApiResponse.success(null, `Hospital ${status ? 'activated' : 'deactivated'} successfully.`));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const hospitalController = new HospitalController();
