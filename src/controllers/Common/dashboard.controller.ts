@@ -7,7 +7,8 @@ const dashboardService = new DashboardService();
 export class DashboardController {
     async getAdminDashboardData(req: Request, res: Response): Promise<void> {
         try {
-            const data = await dashboardService.getAdminDashboardData();
+            const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
+            const data = await dashboardService.getAdminDashboardData(orgId);
             res.status(200).json(ApiResponse.success(data, "Admin dashboard data retrieved successfully"));
         } catch (error) {
             console.error("Error fetching admin dashboard data:", error);

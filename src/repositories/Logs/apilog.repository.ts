@@ -42,9 +42,20 @@ export class APILogRepository {
                 "log.ResponseStatusCode",
                 "log.ResponseTimeMs",
                 "log.RequestedOn",
-                "log.RequestHeaders"
+                "log.RequestHeaders",
+                "log.UserId",
+                "log.RoleId",
+                "log.RoleName",
+                "log.OrgId",
+                "log.HospitalId",
+                "log.IPAddress",
+                "log.Location",
+                "log.DeviceInfo",
+                "log.Action",
+                "log.EntityId",
+                "log.EntityType"
             ])
-            .orderBy("log.LogId", "DESC")
+            .orderBy("log.UpdatedOn", "DESC")
             .skip(skip)
             .take(pageSize)
             .getManyAndCount();
@@ -63,7 +74,7 @@ export class APILogRepository {
             .createQueryBuilder("log")
             .where("log.RequestedOn >= :startDate", { startDate })
             .andWhere("log.RequestedOn <= :endDate", { endDate })
-            .orderBy("log.LogId", "DESC")
+            .orderBy("log.UpdatedOn", "DESC")
             .take(limit)
             .getMany();
     }
@@ -72,7 +83,7 @@ export class APILogRepository {
         return await this.repository
             .createQueryBuilder("log")
             .where("log.Method = :method", { method })
-            .orderBy("log.LogId", "DESC")
+            .orderBy("log.UpdatedOn", "DESC")
             .take(limit)
             .getMany();
     }
@@ -81,7 +92,7 @@ export class APILogRepository {
         return await this.repository
             .createQueryBuilder("log")
             .where("log.Path LIKE :path", { path: `%${path}%` })
-            .orderBy("log.LogId", "DESC")
+            .orderBy("log.UpdatedOn", "DESC")
             .take(limit)
             .getMany();
     }
@@ -90,7 +101,7 @@ export class APILogRepository {
         return await this.repository
             .createQueryBuilder("log")
             .where("log.ResponseStatusCode = :statusCode", { statusCode })
-            .orderBy("log.LogId", "DESC")
+            .orderBy("log.UpdatedOn", "DESC")
             .take(limit)
             .getMany();
     }

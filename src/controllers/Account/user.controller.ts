@@ -86,7 +86,7 @@ export class UserController {
                 return;
             }
 
-            const result = await userService.getPrimaryAccount(phoneNumber);
+            const result = await userService.getPrimaryAccount(phoneNumber as string);
             res.json(ApiResponse.success(result, "Primary account check completed."));
         } catch (error: any) {
             res.status(500).json(ApiResponse.error(error.message));

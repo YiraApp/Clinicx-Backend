@@ -4,72 +4,63 @@ import { Role } from "../../models/Account/role.model.js";
 import { Organization } from "../../models/Organizations/organization.model.js";
 
 export class DashboardRepository {
-    async getAdminDashboardStats() {
+    async getAdminDashboardStats(orgId?: number) {
         const userRepo = AppDataSource.getRepository(User);
         
-        // 1. Basic User Stats
-        const totalUsers = await userRepo.count();
-        const activeUsers = await userRepo.count({
-            where: { Status: true, IsDeleted: false }
-        });
+        // 1. Basic User Stats (filtered by Org if necessary)
+        const userQuery = userRepo.createQueryBuilder("user");
+        if (orgId) {
+            userQuery.innerJoin("user.UserRoles", "ur").where("ur.OrganizationId = :orgId", { orgId });
+        }
+        
+        const totalUsers = await userQuery.getCount();
+        const activeUsers = await userQuery.andWhere("user.Status = :status AND user.IsDeleted = :isDeleted", { status: true, isDeleted: false }).getCount();
 
         // 2. Role Breakdown
-        const roleStats = await userRepo
+        const roleStatsQuery = userRepo
             .createQueryBuilder("user")
             .innerJoin("user.UserRoles", "userRole")
-            .innerJoin("userRole.Role", "role")
+            .innerJoin("userRole.Role", "role");
+        
+        if (orgId) {
+            roleStatsQuery.andWhere("userRole.OrganizationId = :orgId", { orgId });
+        }
+
+        const roleStats = await roleStatsQuery
             .select("role.RoleName", "roleName")
             .addSelect("COUNT(user.Id)", "count")
             .groupBy("role.RoleName")
             .getRawMany();
 
-        // 3. Recent Activity
+        // 3. Recent Activity (Focused on Audit Trailing)
         const recentActivityQuery = `
-            WITH ActivityData AS (
-                SELECT 
-                    CASE 
-                        WHEN Path LIKE '%getAllHospitals%' THEN 'Hospital viewed'
-                        WHEN Path LIKE '%getAllOrganizations%' THEN 'Organization viewed'
-                        WHEN Path LIKE '%/api/hospitals%' AND Method = 'POST' THEN 'Hospital created'
-                        WHEN Path LIKE '%/api/organizations%' AND Method = 'POST' THEN 'Organization created'
-                        WHEN Path LIKE '%/api/hospitals%' AND Method IN ('PUT','PATCH') THEN 'Hospital updated'
-                        WHEN Path LIKE '%/api/organizations%' AND Method IN ('PUT','PATCH') THEN 'Organization updated'
-                        ELSE NULL
-                    END AS Activity,
-
-                    CASE 
-                        WHEN Path LIKE '%hospitals%' AND ISJSON(Response) = 1
-                            THEN COALESCE(
-                                JSON_VALUE(Response, '$.data.hospitals[0].Name'),
-                                JSON_VALUE(Response, '$.data[0].Name')
-                            )
-                    END AS HospitalName,
-
-                    CASE 
-                        WHEN Path LIKE '%organizations%' AND ISJSON(Response) = 1
-                            THEN COALESCE(
-                                JSON_VALUE(Response, '$.data.organizationStats[0].Name'),
-                                JSON_VALUE(Response, '$.data[0].Name')
-                            )
-                    END AS OrganizationName,
-
-                    RequestedOn
-                FROM APILogs
-            )
             SELECT TOP 20
-                Activity + ' - ' + 
-                COALESCE(HospitalName, OrganizationName, 'Unknown') AS ActivityMessage,
                 CASE 
-                    WHEN DATEDIFF(MINUTE, RequestedOn, GETUTCDATE()) < 60 
-                        THEN CAST(DATEDIFF(MINUTE, RequestedOn, GETUTCDATE()) AS VARCHAR) + ' minutes ago'
-                    WHEN DATEDIFF(HOUR, RequestedOn, GETUTCDATE()) < 24 
-                        THEN CAST(DATEDIFF(HOUR, RequestedOn, GETUTCDATE()) AS VARCHAR) + ' hours ago'
-                    ELSE CAST(DATEDIFF(DAY, RequestedOn, GETUTCDATE()) AS VARCHAR) + ' days ago'
-                END AS TimeAgo,
-                RequestedOn
-            FROM ActivityData
-            WHERE Activity IS NOT NULL
-            ORDER BY RequestedOn DESC;
+                    WHEN Action = 'LOGIN' THEN 'User Logged In'
+                    ELSE 
+                        CASE 
+                            WHEN EntityType = 'auth' THEN 'Account'
+                            WHEN EntityType = 'users' THEN 'User'
+                            WHEN EntityType = 'hospitals' THEN 'Hospital'
+                            WHEN EntityType = 'organizations' THEN 'Organization'
+                            WHEN EntityType = 'roles' THEN 'Role'
+                            ELSE UPPER(LEFT(EntityType, 1)) + SUBSTRING(EntityType, 2, 100)
+                        END + ' ' + 
+                        CASE 
+                            WHEN Action = 'CREATE' THEN 'Created'
+                            WHEN Action = 'UPDATE' THEN 'Updated'
+                            WHEN Action = 'DELETE' THEN 'Deleted'
+                            ELSE ISNULL(Action, 'Activity')
+                        END
+                END AS ActivityMessage,
+                UpdatedOn,
+                ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))), ''), 'System') as UserName,
+                l.RoleName
+            FROM APILogs l
+            LEFT JOIN Users u ON l.UserId = u.Id
+            WHERE Action IN ('CREATE', 'UPDATE', 'DELETE', 'LOGIN')
+            ${orgId ? 'AND l.OrgId = ' + orgId : ''}
+            ORDER BY UpdatedOn DESC;
         `;
 
         const recentActivity = await AppDataSource.query(recentActivityQuery);
