@@ -1,20 +1,25 @@
 import type { Request, Response } from "express";
-import { dashboardService } from "../../services/Common/dashboard.service.js";
+import { DashboardService } from "../../services/Common/dashboard.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
 
-/**
- * Controller for Dashboard-related operations.
- */
+const dashboardService = new DashboardService();
+
 export class DashboardController {
-    /**
-     * Handles fetching dashboard summary metrics.
-     */
-    async getSummary(req: Request, res: Response) {
+    async getAdminDashboardData(req: Request, res: Response): Promise<void> {
         try {
-            const result = await dashboardService.getDashboardSummary();
-            return res.json(ApiResponse.success(result, "Dashboard summary fetched successfully."));
-        } catch (error: any) {
-            return res.status(500).json(ApiResponse.error(error.message));
+            const data = await dashboardService.getAdminDashboardData();
+            res.status(200).json(ApiResponse.success(data, "Admin dashboard data retrieved successfully"));
+        } catch (error) {
+            console.error("Error fetching admin dashboard data:", error);
+            res.status(500).json(ApiResponse.error(error instanceof Error ? error.message : "Failed to retrieve admin dashboard data"));
+        }
+    }
+
+    async getSummary(req: Request, res: Response): Promise<void> {
+        try {
+            res.status(200).json(ApiResponse.success(null, "Summary retrieved successfully"));
+        } catch (error) {
+            res.status(500).json(ApiResponse.error("Failed to retrieve summary"));
         }
     }
 }

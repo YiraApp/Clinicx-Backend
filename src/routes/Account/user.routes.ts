@@ -21,4 +21,14 @@ userRouter.post("/sendOTP", otpController.sendOTP.bind(otpController));
  */
 userRouter.post("/verifyOTP", otpController.verifyOTP.bind(otpController));
 
+/**
+ * Update existing user and sync roles.
+ */
+userRouter.post("/updateUser", userController.updateUser.bind(userController));
+
+/**
+ * Check if a primary account exists for a phone number.
+ */
+userRouter.get("/checkPrimary/:phoneNumber", userController.getPrimaryAccount.bind(userController));
+
 export { userRouter };

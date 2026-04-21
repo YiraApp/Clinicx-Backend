@@ -24,4 +24,14 @@ export interface IUserService {
         sortBy?: 'createdAt' | 'updatedAt' | 'firstName';
         sortOrder?: 'ASC' | 'DESC';
     }): Promise<any>;
+    
+    /**
+     * Updates an existing user and manages roles safely.
+     */
+    updateUser(data: any): Promise<any>;
+
+    /**
+     * Checks if a primary account exists for the given phone number.
+     */
+    getPrimaryAccount(phoneNumber: string): Promise<any>;
 }

@@ -4,5 +4,6 @@ import { dashboardController } from "../../controllers/Common/dashboard.controll
 const dashboardRouter = Router();
 
 dashboardRouter.get("/summary", dashboardController.getSummary.bind(dashboardController));
+dashboardRouter.get("/admin", dashboardController.getAdminDashboardData.bind(dashboardController));
 
-export { dashboardRouter };
+export default dashboardRouter;

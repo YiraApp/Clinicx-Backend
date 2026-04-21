@@ -9,7 +9,7 @@ import type { CreateOrganizationRequest } from "../../dtos/Request/Organizations
 import type { CreateOrganizationResponse } from "../../dtos/Response/Organizations/CreateOrganizationResponse.js";
 import type { CreateUserRequest } from "../../dtos/Request/Account/CreateUserRequest.js";
 import type { UpdateOrganizationRequest } from "../../dtos/Request/Organizations/UpdateOrganizationRequest.js";
-import { dashboardService } from "../../services/Common/dashboard.service.js";
+import { dashboardService } from "../Common/dashboard.service.js";
 import type { DashboardSummary } from "../../interfaces/Service/Common/IDashboardService.js";
 
 import { IsNull } from "typeorm";

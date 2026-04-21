@@ -62,6 +62,36 @@ export class UserController {
             res.status(500).json(ApiResponse.error(error.message));
         }
     }
+
+    /**
+     * Handles user updates and role synchronization.
+     */
+    async updateUser(req: Request, res: Response): Promise<void> {
+        try {
+            const result = await userService.updateUser(req.body);
+            res.json(ApiResponse.success(result, "User updated successfully."));
+        } catch (error: any) {
+            res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Checks if a primary account exists for the given phone number.
+     */
+    async getPrimaryAccount(req: Request, res: Response): Promise<void> {
+        try {
+            const { phoneNumber } = req.params;
+            if (!phoneNumber) {
+                res.status(400).json(ApiResponse.error("Phone number is required."));
+                return;
+            }
+
+            const result = await userService.getPrimaryAccount(phoneNumber);
+            res.json(ApiResponse.success(result, "Primary account check completed."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const userController = new UserController();

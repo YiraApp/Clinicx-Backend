@@ -42,4 +42,9 @@ export interface IUserRepository {
         sortBy?: 'createdAt' | 'updatedAt' | 'firstName';
         sortOrder?: 'ASC' | 'DESC';
     }): Promise<{ data: User[], total: number, page: number, pageSize: number, totalPages: number }>;
+    
+    /**
+     * Soft deletes a user by ID.
+     */
+    deleteById(id: string): Promise<boolean>;
 }

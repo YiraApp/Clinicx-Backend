@@ -6,8 +6,9 @@ import { otpRouter } from "./Account/otp.routes.js";
 import { sidebarRouter } from "./Common/sidebar.routes.js";
 import { organizationRouter } from "./Organizations/organization.routes.js";
 import { hospitalRouter } from "./Organizations/hospital.routes.js";
-import { dashboardRouter } from "./Common/dashboard.routes.js";
+import dashboardRouter from "./Common/dashboard.routes.js";
 import mailRouter from "./Common/mail.routes.js";
+import { apiLogRouter } from "./Logs/apilog.routes.js";
 
 const router = Router();
 
@@ -21,6 +22,7 @@ router.use("/organizations", organizationRouter);
 router.use("/hospitals", hospitalRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/mail", mailRouter);
+router.use("/logs", apiLogRouter);
 
 router.get("/status", (req, res) => {
     res.json({ message: "API is working properly" });

@@ -3,18 +3,18 @@
  */
 export interface CreateUserRequest {
     PhoneNumber: string;
-    Email?: string;
-    Password?: string;
+    Email?: string | undefined;
+    Password?: string | undefined;
     FirstName: string;
-    LastName?: string;
-    Relation?: string; // Required for secondary users
-    Gender?: string;
-    DateOfBirth?: string;
-    OrganizationId?: string;
-    RoleName?: string;
-    OrganizationName?: string;
-    RoleMessage?: string;
-    LoginURL?: string;
-    IsMobileVerified?: boolean;
-    IsEmailVerified?: boolean;
+    LastName?: string | undefined;
+    Relation?: string | undefined; // Required for secondary users
+    Gender?: string | undefined;
+    DateOfBirth?: string | undefined;
+    OrganizationId?: string | undefined;
+    RoleName?: string | undefined;
+    OrganizationName?: string | undefined;
+    RoleMessage?: string | undefined;
+    LoginURL?: string | undefined;
+    IsMobileVerified?: boolean | undefined;
+    IsEmailVerified?: boolean | undefined;
 }
