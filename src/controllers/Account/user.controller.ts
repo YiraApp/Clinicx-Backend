@@ -107,7 +107,7 @@ export class UserController {
                 return;
             }
 
-            await userService.toggleStatus(id, status);
+            await userService.toggleStatus(id as string, status);
             res.json(ApiResponse.success(null, `User ${status ? 'activated' : 'deactivated'} successfully.`));
         } catch (error: any) {
             res.status(400).json(ApiResponse.error(error.message));
