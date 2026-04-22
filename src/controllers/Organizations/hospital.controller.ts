@@ -50,11 +50,20 @@ export class HospitalController {
      */
     async getAll(req: Request, res: Response) {
         try {
-            const page = parseInt(req.query.page as string) || 1;
-            const pageSize = parseInt(req.query.pageSize as string) || 10;
-            const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
-            const grouped = req.query.grouped === "true";
-            const search = (req.query.search as string) || undefined;
+            const roleName = req.headers["x-role-name"] as string;
+            const headerOrgId = req.headers["x-org-id"] as string;
+
+            let orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
+
+            if (roleName !== "Yira System Admin") {
+                // Force user's own OrgId unless they are a System Admin
+                orgId = headerOrgId ? parseInt(headerOrgId) : undefined;
+            }
+
+            const page = req.query.page ? parseInt(req.query.page as string) : 1;
+            const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string) : 10;
+            const search = req.query.search as string || "";
+            const grouped = req.query.grouped === 'true';
 
             const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped, search);
             return res.json(ApiResponse.success(result, "Hospitals fetched successfully."));

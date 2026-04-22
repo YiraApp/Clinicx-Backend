@@ -38,7 +38,17 @@ export class UserController {
             const pageSize = parseInt(req.query.pageSize as string) || 10;
             const search = (req.query.search as string) || undefined;
             const roleId = (req.query.roleId as string) || undefined;
-            const organizationId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
+            const roleName = req.headers["x-role-name"] as string;
+            const headerOrgId = req.headers["x-org-id"] as string;
+            
+            // Re-assign organizationId based on role to enforce security
+            let organizationId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
+            
+            if (roleName !== "Yira System Admin") {
+                // For non-system admins, force their own OrgId filter
+                organizationId = headerOrgId ? parseInt(headerOrgId) : undefined;
+            }
+
             const status = req.query.status !== undefined ? req.query.status === 'true' : undefined;
             const fromDate = req.query.fromDate ? new Date(req.query.fromDate as string) : undefined;
             const toDate = req.query.toDate ? new Date(req.query.toDate as string) : undefined;
