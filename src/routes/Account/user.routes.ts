@@ -8,6 +8,7 @@ const userRouter = Router();
  * Get all users with advanced filtering, pagination, and sorting.
  */
 userRouter.get("/getUsers", userController.getUsers.bind(userController));
+userRouter.get("/getOrgUsers", userController.getOrgUsers.bind(userController));
 
 /**
  * Global OTP sending endpoint - works for both email and mobile

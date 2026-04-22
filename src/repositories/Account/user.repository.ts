@@ -9,6 +9,167 @@ import type { IUserRepository } from "../../interfaces/Repository/Account/IUserR
 export class UserRepository implements IUserRepository {
     private repo = AppDataSource.getRepository(User);
 
+    async getOrgUserStats(organizationId: number): Promise<{ totalUsers: number, activeUsers: number, roleCounts: any[] }> {
+        // Count total users in this organization
+        const totalUsers = await this.repo.createQueryBuilder('u')
+            .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
+            .where('ur.OrganizationId = :organizationId', { organizationId })
+            .andWhere('u.IsDeleted = 0')
+            .select('COUNT(DISTINCT u.Id)', 'count')
+            .getRawOne();
+
+        // Count active users in this organization
+        const activeUsers = await this.repo.createQueryBuilder('u')
+            .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
+            .where('ur.OrganizationId = :organizationId', { organizationId })
+            .andWhere('u.IsDeleted = 0 AND u.Status = 1')
+            .select('COUNT(DISTINCT u.Id)', 'count')
+            .getRawOne();
+
+        // Role counts within organization, excluding system admin
+        const roleCountsRaw = await AppDataSource.query(`
+            SELECT r.Id as RoleId, r.RoleName, COUNT(DISTINCT ur.UserId) as userCount
+            FROM Roles r
+            INNER JOIN UserRoles ur ON r.Id = ur.RoleId AND ur.IsDeleted = 0 AND ur.Status = 1
+            WHERE ur.OrganizationId = @0 AND r.RoleName != 'Yira System Admin'
+            GROUP BY r.Id, r.RoleName
+        `, [organizationId]);
+
+        return {
+            totalUsers: parseInt(totalUsers.count),
+            activeUsers: parseInt(activeUsers.count),
+            roleCounts: roleCountsRaw.map((rc: any) => ({
+                RoleId: rc.RoleId,
+                RoleName: rc.RoleName,
+                userCount: parseInt(rc.userCount)
+            }))
+        };
+    }
+
+    async getOrgUsers(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
+        const organizationId = filters.organizationId;
+        if (!organizationId) {
+            throw new Error("Organization ID is required for getOrgUsers");
+        }
+
+        const skip = (page - 1) * pageSize;
+        const sortBy = filters?.sortBy || 'CreatedAt';
+        const sortOrder = filters?.sortOrder || 'DESC';
+
+        const query = this.repo.createQueryBuilder('u')
+            .innerJoinAndSelect('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1 AND ur.OrganizationId = :organizationId', { organizationId })
+            .leftJoinAndSelect('ur.Role', 'r')
+            .leftJoinAndSelect('ur.Organization', 'org')
+            .leftJoinAndSelect('ur.Hospital', 'h')
+            .where('u.IsDeleted = 0');
+
+        if (filters.hospitalId) {
+            query.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+        }
+
+        if (filters.search) {
+            query.andWhere(
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                { search: `%${filters.search}%` }
+            );
+        }
+
+        if (filters.status !== undefined) {
+            query.andWhere('u.Status = :status', { status: filters.status });
+        }
+
+        if (filters.roleId) {
+            query.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+        }
+
+        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
+        query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+
+        const [users, total] = await query.skip(skip).take(pageSize).getManyAndCount();
+
+        // Stats specifically for this org
+        const stats = await this.getOrgUserStats(organizationId);
+
+        // Transformation logic (similar to getUsers but filtered for this org)
+        const transformedData = users.map(u => {
+            const rolesMap = new Map<string, any>();
+
+            u.UserRoles?.forEach(ur => {
+                if (!ur.Role || ur.OrganizationId !== organizationId) return;
+
+                if (!rolesMap.has(ur.Role.Id)) {
+                    rolesMap.set(ur.Role.Id, {
+                        RoleId: ur.Role.Id,
+                        RoleName: ur.Role.RoleName,
+                        Organizations: new Map<number, any>()
+                    });
+                }
+
+                const roleNode = rolesMap.get(ur.Role.Id);
+
+                if (ur.Organization) {
+                    if (!roleNode.Organizations.has(ur.Organization.Id)) {
+                        roleNode.Organizations.set(ur.Organization.Id, {
+                            UserRoleId: ur.HospitalId ? null : ur.UserRoleId,
+                            OrganizationId: ur.Organization.Id,
+                            OrganizationName: ur.Organization.Name,
+                            Hospitals: []
+                        });
+                    }
+
+                    if (ur.Hospital) {
+                        const orgNode = roleNode.Organizations.get(ur.Organization.Id);
+                        if (!orgNode.Hospitals.some((h: any) => h.HospitalId === ur.Hospital?.Id)) {
+                            orgNode.Hospitals.push({
+                                UserRoleId: ur.UserRoleId,
+                                HospitalId: ur.Hospital.Id,
+                                HospitalName: ur.Hospital.Name
+                            });
+                        }
+                    }
+                }
+            });
+
+            return {
+                id: u.Id,
+                firstName: u.FirstName,
+                lastName: u.LastName,
+                name: `${u.FirstName || ""} ${u.LastName || ""}`.trim(),
+                fullName: `${u.FirstName || ""} ${u.LastName || ""}`.trim(),
+                email: u.Email,
+                phone: u.PhoneNumber,
+                countryCode: u.CountryCode || "91",
+                gender: u.Gender,
+                dateOfBirth: u.DateOfBirth,
+                status: u.Status ? "Active" : "Inactive",
+                isActive: u.Status,
+                isParentOrgUser: u.IsPrimary,
+                lastLogin: u.LastLoginTime,
+                createdAt: u.CreatedAt,
+                roles: Array.from(rolesMap.values()).map(r => ({
+                    RoleId: r.RoleId,
+                    RoleName: r.RoleName,
+                    Organizations: Array.from(r.Organizations.values())
+                }))
+            };
+        });
+
+        return {
+            summary: {
+                totalUsers: stats.totalUsers,
+                activeUsers: stats.activeUsers,
+                roleCounts: stats.roleCounts
+            },
+            data: {
+                data: transformedData,
+                total: total,
+                page: page,
+                pageSize: pageSize,
+                totalPages: Math.ceil(total / pageSize)
+            }
+        };
+    }
+
     async findPrimaryByPhone(phone: string): Promise<User | null> {
         return await this.repo.findOne({
             where: { PhoneNumber: phone, IsPrimary: true, IsDeleted: false }
