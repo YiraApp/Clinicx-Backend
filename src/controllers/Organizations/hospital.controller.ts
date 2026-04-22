@@ -48,15 +48,16 @@ export class HospitalController {
     /**
      * Fetches all hospitals, optionally filtered by organization.
      */
-    async getAll(req: Request, res: Response) {
+     async getAll(req: Request, res: Response) {
         try {
             const page = parseInt(req.query.page as string) || 1;
             const pageSize = parseInt(req.query.pageSize as string) || 10;
             const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
+            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
             const grouped = req.query.grouped === "true";
             const search = (req.query.search as string) || undefined;
 
-            const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped, search);
+            const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped, search, hospitalId);
             return res.json(ApiResponse.success(result, "Hospitals fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));

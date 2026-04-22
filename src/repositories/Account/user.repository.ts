@@ -91,6 +91,10 @@ export class UserRepository implements IUserRepository {
             query.andWhere('ur.OrganizationId = :organizationId', { organizationId: filters.organizationId });
         }
 
+        if (filters?.hospitalId) {
+            query.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+        }
+
         // 2. Fetch paginated data
         const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
         query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
