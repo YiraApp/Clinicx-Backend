@@ -107,8 +107,10 @@ export class AuthService implements IAuthService {
                 RoleName: ur.Role?.RoleName ?? null,
                 OrganizationId: ur.OrganizationId ?? null,
                 OrganizationName: ur.Organization?.Name ?? null,
+                OrganizationCode: ur.Organization?.OrgCode ?? null,
                 HospitalId: ur.HospitalId ?? null,
                 HospitalName: ur.Hospital?.Name ?? null,
+                HospitalCode: ur.Hospital?.HospitalCode ?? null,
                 Status: ur.Status
             }))
         };

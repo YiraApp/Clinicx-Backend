@@ -106,6 +106,47 @@ export class UserController {
     }
 
     /**
+     * Fetches users specifically within a hospital.
+     */
+    async getHospUsers(req: Request, res: Response): Promise<void> {
+        try {
+            const page = parseInt(req.query.page as string) || 1;
+            const pageSize = parseInt(req.query.pageSize as string) || 10;
+            const search = (req.query.search as string) || undefined;
+            const roleId = (req.query.roleId as string) || undefined;
+            
+            const headerOrgId = req.headers["x-org-id"] as string;
+            const headerHospId = req.headers["x-hosp-id"] as string;
+
+            if (!headerOrgId || !headerHospId) {
+                res.status(403).json(ApiResponse.error("Organization or Hospital identification missing."));
+                return;
+            }
+
+            const organizationId = parseInt(headerOrgId);
+            const hospitalId = parseInt(headerHospId);
+            const status = req.query.status !== undefined ? req.query.status === 'true' : undefined;
+            const sortBy = (req.query.sortBy as 'createdAt' | 'updatedAt' | 'firstName') || 'createdAt';
+            const sortOrder = (req.query.sortOrder as 'ASC' | 'DESC') || 'DESC';
+
+            const filters = {
+                search,
+                roleId,
+                hospitalId,
+                organizationId,
+                status,
+                sortBy,
+                sortOrder
+            };
+
+            const result = await userService.getHospUsers(page, pageSize, filters);
+            res.json(ApiResponse.success(result, "Hospital users fetched successfully."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
      * Handles user updates and role synchronization.
      */
     async updateUser(req: Request, res: Response): Promise<void> {

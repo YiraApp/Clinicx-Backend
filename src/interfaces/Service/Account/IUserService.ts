@@ -39,4 +39,14 @@ export interface IUserService {
      * Toggles a user's activation status.
      */
     toggleStatus(id: string, status: boolean): Promise<void>;
+
+    /**
+     * Gets users scoped to an organization.
+     */
+    getOrgUsers(page: number, pageSize: number, filters: any): Promise<any>;
+
+    /**
+     * Gets users scoped to a specific hospital.
+     */
+    getHospUsers(page: number, pageSize: number, filters: any): Promise<any>;
 }

@@ -4,13 +4,19 @@ import { Role } from "../../models/Account/role.model.js";
 import { Organization } from "../../models/Organizations/organization.model.js";
 
 export class DashboardRepository {
-    async getAdminDashboardStats(orgId?: number) {
+    async getAdminDashboardStats(orgId?: number, hospId?: number) {
         const userRepo = AppDataSource.getRepository(User);
 
         // 1. Basic User Stats (filtered by Org if necessary)
         const userQuery = userRepo.createQueryBuilder("user");
-        if (orgId) {
-            userQuery.innerJoin("user.UserRoles", "ur").where("ur.OrganizationId = :orgId", { orgId });
+        if (orgId || hospId) {
+            userQuery.innerJoin("user.UserRoles", "ur");
+            if (orgId) {
+                userQuery.andWhere("ur.OrganizationId = :orgId", { orgId });
+            }
+            if (hospId) {
+                userQuery.andWhere("ur.HospitalId = :hospId", { hospId });
+            }
         }
 
         const totalUsers = await userQuery.getCount();
@@ -24,6 +30,9 @@ export class DashboardRepository {
 
         if (orgId) {
             roleStatsQuery.andWhere("userRole.OrganizationId = :orgId", { orgId });
+        }
+        if (hospId) {
+            roleStatsQuery.andWhere("userRole.HospitalId = :hospId", { hospId });
         }
 
         const roleStats = await roleStatsQuery
@@ -60,6 +69,7 @@ export class DashboardRepository {
             LEFT JOIN Users u ON l.UserId = u.Id
             WHERE Action IN ('CREATE', 'UPDATE', 'DELETE', 'LOGIN')
             ${orgId ? 'AND l.OrgId = ' + orgId : ''}
+            ${hospId ? 'AND l.HospitalId = ' + hospId : ''}
             ORDER BY UpdatedOn DESC;
         `;
 
@@ -149,17 +159,7 @@ export class DashboardRepository {
         const orgRepo = AppDataSource.getRepository(Organization);
         const userRepo = AppDataSource.getRepository(User);
 
-        const totalOrganizations = await orgRepo.count();
-        const activeOrganizations = await orgRepo.count({ where: { Status: true } });
-        const totalUsers = await userRepo.count({ where: { IsDeleted: false } });
-
-        const totalPatients = await userRepo
-            .createQueryBuilder("user")
-            .innerJoin("user.UserRoles", "userRole")
-            .innerJoin("userRole.Role", "role")
-            .where("role.RoleName = :roleName", { roleName: "Patient" })
-            .getCount();
-
+        // 1. Build Base Filtered Query for Organizations
         const query = orgRepo.createQueryBuilder("org");
         if (orgId) query.andWhere("org.Id = :orgId", { orgId });
         if (type && type !== "all" && type !== "ANY") query.andWhere("org.OrganizationType = :type", { type });
@@ -167,6 +167,31 @@ export class DashboardRepository {
             query.andWhere("(org.Name LIKE :search OR org.OrgCode LIKE :search)", { search: `%${search}%` });
         }
 
+        // 2. Filter-Aware Summary Stats
+        const totalOrganizations = await query.clone().getCount();
+        const activeOrganizations = await query.clone().andWhere("org.Status = :activeStatus", { activeStatus: true }).getCount();
+
+        // Count users in filtered organizations
+        const userSummaryQuery = userRepo.createQueryBuilder("user")
+            .innerJoin("user.UserRoles", "ur")
+            .innerJoin("ur.Organization", "org")
+            .where("user.IsDeleted = 0");
+
+        if (orgId) userSummaryQuery.andWhere("org.Id = :orgId", { orgId });
+        if (type && type !== "all" && type !== "ANY") userSummaryQuery.andWhere("org.OrganizationType = :type", { type });
+        if (search) {
+            userSummaryQuery.andWhere("(org.Name LIKE :search OR org.OrgCode LIKE :search)", { search: `%${search}%` });
+        }
+
+        const totalUsers = await userSummaryQuery.clone().select("COUNT(DISTINCT user.Id)", "count").getRawOne();
+
+        const totalPatients = await userSummaryQuery.clone()
+            .innerJoin("ur.Role", "role")
+            .andWhere("role.RoleName = :roleName", { roleName: "Patient" })
+            .select("COUNT(DISTINCT user.Id)", "count")
+            .getRawOne();
+
+        // 3. Paginated Data
         const skip = (page - 1) * pageSize;
         const [orgs, total] = await query
             .orderBy("org.CreatedAt", "DESC")
@@ -177,8 +202,8 @@ export class DashboardRepository {
         return {
             totalOrganizations,
             activeOrganizations,
-            totalUsers,
-            totalPatients,
+            totalUsers: parseInt(totalUsers.count || "0"),
+            totalPatients: parseInt(totalPatients.count || "0"),
             pagination: {
                 page,
                 pageSize,
