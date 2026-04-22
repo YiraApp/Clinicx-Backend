@@ -29,13 +29,14 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     requestLog.RequestedOn = requestedOn;
 
     // Capture Network & Device Info
-    const ip = (
+    const ipRaw = (
         (req.headers["x-forwarded-for"] as string) ||
         (req.headers["x-real-ip"] as string) ||
         req.ip ||
         req.socket?.remoteAddress ||
         ""
-    ).split(",")[0].trim();
+    ).split(",")[0];
+    const ip = (ipRaw || "").trim();
 
     requestLog.IPAddress = ip;
     requestLog.DeviceInfo = (req.headers["user-agent"] || "").substring(0, 500);

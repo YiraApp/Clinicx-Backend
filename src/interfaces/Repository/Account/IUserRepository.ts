@@ -47,4 +47,9 @@ export interface IUserRepository {
      * Soft deletes a user by ID.
      */
     deleteById(id: string): Promise<boolean>;
+
+    /**
+     * Updates a user's activation status.
+     */
+    updateStatus(id: string, status: boolean): Promise<void>;
 }

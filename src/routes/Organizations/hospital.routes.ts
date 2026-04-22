@@ -7,6 +7,7 @@ hospitalRouter.post("/createhospital", hospitalController.create.bind(hospitalCo
 hospitalRouter.get("/getAllHospitals", hospitalController.getAll.bind(hospitalController));
 hospitalRouter.get("/getHospitalById/:id", hospitalController.getById.bind(hospitalController));
 hospitalRouter.put("/updatehospital", hospitalController.update.bind(hospitalController));
+hospitalRouter.patch("/toggleStatus/:id", hospitalController.toggleStatus.bind(hospitalController));
 hospitalRouter.delete("/deletehospital/:id", hospitalController.delete.bind(hospitalController));
 
 export { hospitalRouter };
