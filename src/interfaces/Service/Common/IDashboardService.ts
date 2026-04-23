@@ -17,5 +17,6 @@ export interface DashboardSummary {
 }
 
 export interface IDashboardService {
+    getAdminDashboardData(orgId?: number, hospId?: number): Promise<any>;
     getDashboardSummary(page?: number, pageSize?: number, orgId?: number, type?: string, search?: string): Promise<DashboardSummary>;
 }

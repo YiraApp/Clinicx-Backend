@@ -24,7 +24,7 @@ export class HospitalRepository {
         return await this.repo.findOne({ where: { MobileNumber: mobile, IsDeleted: false } });
     }
 
-    async getAllHospitals(orgId?: number, page: number = 1, pageSize: number = 10, search?: string): Promise<{ data: Hospital[], total: number, stats: any }> {
+    async getAllHospitals(orgId?: number, page: number = 1, pageSize: number = 10, search?: string, hospitalId?: number): Promise<{ data: Hospital[], total: number, stats: any }> {
         const skip = (page - 1) * pageSize;
         const query = this.repo.createQueryBuilder("h")
             .leftJoinAndSelect("h.Organization", "o")
@@ -32,6 +32,10 @@ export class HospitalRepository {
 
         if (orgId) {
             query.andWhere("h.OrganizationId = :orgId", { orgId });
+        }
+
+        if (hospitalId) {
+            query.andWhere("h.Id = :hospitalId", { hospitalId });
         }
 
         if (search) {
@@ -60,6 +64,10 @@ export class HospitalRepository {
 
     async softDelete(id: number): Promise<void> {
         await this.repo.update(id, { IsDeleted: true, Status: false });
+    }
+
+    async updateStatus(id: number, status: boolean): Promise<void> {
+        await this.repo.update(id, { Status: status, UpdatedAt: new Date() });
     }
 }
 

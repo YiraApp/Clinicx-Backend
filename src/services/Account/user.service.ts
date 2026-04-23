@@ -120,6 +120,10 @@ export class UserService implements IUserService {
         return await userRepository.getOrgUsers(page, pageSize, filters);
     }
 
+    async getHospUsers(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
+        return await userRepository.getHospUsers(page, pageSize, filters);
+    }
+
     async updateUser(data: UpdateUserRequest): Promise<any> {
         let user: User | null = null;
 
@@ -315,6 +319,12 @@ export class UserService implements IUserService {
             exists: true,
             user: userPayload
         };
+    }
+
+    async toggleStatus(id: string, status: boolean): Promise<void> {
+        const user = await userRepository.findById(id);
+        if (!user) throw new Error("User not found.");
+        await userRepository.updateStatus(id, status);
     }
 }
 

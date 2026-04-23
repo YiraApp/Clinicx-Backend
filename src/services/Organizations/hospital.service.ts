@@ -145,8 +145,8 @@ export class HospitalService implements IHospitalService {
         return hospital;
     }
 
-    async getAllHospitals(orgId?: number, page: number = 1, pageSize: number = 10, grouped: boolean = false, search?: string): Promise<any> {
-        const { data: hospitals, total, stats } = await hospitalRepository.getAllHospitals(orgId, page, pageSize, search);
+    async getAllHospitals(orgId?: number, page: number = 1, pageSize: number = 10, grouped: boolean = false, search?: string, hospitalId?: number): Promise<any> {
+        const { data: hospitals, total, stats } = await hospitalRepository.getAllHospitals(orgId, page, pageSize, search, hospitalId);
 
         if (!grouped) {
             return {
@@ -196,6 +196,12 @@ export class HospitalService implements IHospitalService {
             pageSize,
             totalPages: Math.ceil(total / pageSize)
         };
+    }
+
+    async toggleStatus(id: number, status: boolean): Promise<void> {
+        const hospital = await hospitalRepository.findById(id);
+        if (!hospital) throw new Error("Hospital not found.");
+        await hospitalRepository.updateStatus(id, status);
     }
 }
 

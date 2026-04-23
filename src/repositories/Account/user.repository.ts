@@ -9,39 +9,79 @@ import type { IUserRepository } from "../../interfaces/Repository/Account/IUserR
 export class UserRepository implements IUserRepository {
     private repo = AppDataSource.getRepository(User);
 
-    async getOrgUserStats(organizationId: number): Promise<{ totalUsers: number, activeUsers: number, roleCounts: any[] }> {
-        // Count total users in this organization
-        const totalUsers = await this.repo.createQueryBuilder('u')
+    async getOrgUserStats(organizationId: number, filters?: any): Promise<{ totalUsers: number, activeUsers: number, roleCounts: any[] }> {
+        // Base query for counting
+        const baseQuery = this.repo.createQueryBuilder('u')
             .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
+            .where('ur.OrganizationId = :organizationId', { organizationId })
+            .andWhere('u.IsDeleted = 0');
+
+        // Apply filters if provided
+        if (filters) {
+            if (filters.hospitalId) {
+                baseQuery.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+            }
+            if (filters.search) {
+                baseQuery.andWhere(
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    { search: `%${filters.search}%` }
+                );
+            }
+            if (filters.status !== undefined) {
+                baseQuery.andWhere('u.Status = :status', { status: filters.status });
+            }
+            if (filters.roleId) {
+                baseQuery.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+            }
+        }
+
+        // Count total users (filtered)
+        const totalUsersResult = await baseQuery.clone()
+            .select('COUNT(DISTINCT u.Id)', 'count')
+            .getRawOne();
+
+        // Count active users (filtered + active status)
+        const activeUsersResult = await baseQuery.clone()
+            .andWhere('u.Status = 1')
+            .select('COUNT(DISTINCT u.Id)', 'count')
+            .getRawOne();
+
+        // Role counts (filtered)
+        const roleCountsRaw = await this.repo.createQueryBuilder('u')
+            .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
+            .innerJoin('ur.Role', 'r')
             .where('ur.OrganizationId = :organizationId', { organizationId })
             .andWhere('u.IsDeleted = 0')
-            .select('COUNT(DISTINCT u.Id)', 'count')
-            .getRawOne();
+            .andWhere('r.RoleName != \'Yira System Admin\'');
 
-        // Count active users in this organization
-        const activeUsers = await this.repo.createQueryBuilder('u')
-            .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
-            .where('ur.OrganizationId = :organizationId', { organizationId })
-            .andWhere('u.IsDeleted = 0 AND u.Status = 1')
-            .select('COUNT(DISTINCT u.Id)', 'count')
-            .getRawOne();
+        // Apply same filters to role counts
+        if (filters) {
+            if (filters.hospitalId) roleCountsRaw.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+            if (filters.search) {
+                roleCountsRaw.andWhere(
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    { search: `%${filters.search}%` }
+                );
+            }
+            if (filters.status !== undefined) roleCountsRaw.andWhere('u.Status = :status', { status: filters.status });
+            if (filters.roleId) roleCountsRaw.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+        }
 
-        // Role counts within organization, excluding system admin
-        const roleCountsRaw = await AppDataSource.query(`
-            SELECT r.Id as RoleId, r.RoleName, COUNT(DISTINCT ur.UserId) as userCount
-            FROM Roles r
-            INNER JOIN UserRoles ur ON r.Id = ur.RoleId AND ur.IsDeleted = 0 AND ur.Status = 1
-            WHERE ur.OrganizationId = @0 AND r.RoleName != 'Yira System Admin'
-            GROUP BY r.Id, r.RoleName
-        `, [organizationId]);
+        const roleCounts = await roleCountsRaw
+            .select('r.Id', 'RoleId')
+            .addSelect('r.RoleName', 'RoleName')
+            .addSelect('COUNT(DISTINCT u.Id)', 'userCount')
+            .groupBy('r.Id')
+            .addGroupBy('r.RoleName')
+            .getRawMany();
 
         return {
-            totalUsers: parseInt(totalUsers.count),
-            activeUsers: parseInt(activeUsers.count),
-            roleCounts: roleCountsRaw.map((rc: any) => ({
+            totalUsers: parseInt(totalUsersResult.count || '0'),
+            activeUsers: parseInt(activeUsersResult.count || '0'),
+            roleCounts: roleCounts.map((rc: any) => ({
                 RoleId: rc.RoleId,
                 RoleName: rc.RoleName,
-                userCount: parseInt(rc.userCount)
+                userCount: parseInt(rc.userCount || '0')
             }))
         };
     }
@@ -87,8 +127,8 @@ export class UserRepository implements IUserRepository {
 
         const [users, total] = await query.skip(skip).take(pageSize).getManyAndCount();
 
-        // Stats specifically for this org
-        const stats = await this.getOrgUserStats(organizationId);
+        // Stats specifically for this org with filters applied
+        const stats = await this.getOrgUserStats(organizationId, filters);
 
         // Transformation logic (similar to getUsers but filtered for this org)
         const transformedData = users.map(u => {
@@ -169,6 +209,14 @@ export class UserRepository implements IUserRepository {
             }
         };
     }
+    
+    async getHospUsers(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
+        if (!filters.hospitalId) {
+            throw new Error("Hospital ID is required for getHospUsers");
+        }
+        // getOrgUsers already handles hospitalId filtering if passed in filters
+        return await this.getOrgUsers(page, pageSize, filters);
+    }
 
     async findPrimaryByPhone(phone: string): Promise<User | null> {
         return await this.repo.findOne({
@@ -215,6 +263,10 @@ export class UserRepository implements IUserRepository {
         return false;
     }
 
+    async updateStatus(id: string, status: boolean): Promise<void> {
+        await this.repo.update(id, { Status: status, UpdatedAt: new Date() });
+    }
+
     async getUsers(page: number = 1, pageSize: number = 10, filters?: any): Promise<any> {
         const skip = (page - 1) * pageSize;
         const sortBy = filters?.sortBy || 'CreatedAt';
@@ -248,6 +300,10 @@ export class UserRepository implements IUserRepository {
             query.andWhere('ur.OrganizationId = :organizationId', { organizationId: filters.organizationId });
         }
 
+        if (filters?.hospitalId) {
+            query.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+        }
+
         // 2. Fetch paginated data
         const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
         query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
@@ -271,16 +327,49 @@ export class UserRepository implements IUserRepository {
             });
         }
 
-        // 3. Summaries (Global status or filter-aware depending on preference - here following filter context)
-        const activeUsersCount = await this.repo.count({ where: { Status: true, IsDeleted: false } });
+        // 3. Summaries (Filter-aware)
+        const summaryCountQuery = this.repo.createQueryBuilder('u')
+            .leftJoin('u.UserRoles', 'ur', 'ur.IsDeleted = :urDeleted AND ur.Status = :urStatus', { urDeleted: false, urStatus: true })
+            .where('u.IsDeleted = :isDeleted', { isDeleted: false });
+
+        if (filters?.search) {
+            summaryCountQuery.andWhere(
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                { search: `%${filters.search}%` }
+            );
+        }
+        if (filters?.status !== undefined) summaryCountQuery.andWhere('u.Status = :status', { status: filters.status });
+        if (filters?.roleId) summaryCountQuery.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+        if (filters?.organizationId) summaryCountQuery.andWhere('ur.OrganizationId = :organizationId', { organizationId: filters.organizationId });
+        if (filters?.hospitalId) summaryCountQuery.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+
+        const totalUsersFiltered = await summaryCountQuery.clone().select('COUNT(DISTINCT u.Id)', 'count').getRawOne();
+        const activeUsersFiltered = await summaryCountQuery.clone().andWhere('u.Status = 1').select('COUNT(DISTINCT u.Id)', 'count').getRawOne();
         
-        // Dynamic Role Counts Aggregation
-        const roleCountsRaw = await AppDataSource.query(`
-            SELECT r.Id as RoleId, r.RoleName, COUNT(DISTINCT ur.UserId) as userCount
-            FROM Roles r
-            LEFT JOIN UserRoles ur ON r.Id = ur.RoleId AND ur.IsDeleted = 0 AND ur.Status = 1
-            GROUP BY r.Id, r.RoleName
-        `);
+        // Role Counts (Filter-aware)
+        const roleSummaryQuery = this.repo.createQueryBuilder('u')
+            .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
+            .innerJoin('ur.Role', 'r')
+            .where('u.IsDeleted = 0');
+
+        if (filters?.search) {
+            roleSummaryQuery.andWhere(
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                { search: `%${filters.search}%` }
+            );
+        }
+        if (filters?.status !== undefined) roleSummaryQuery.andWhere('u.Status = :status', { status: filters.status });
+        if (filters?.roleId) roleSummaryQuery.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+        if (filters?.organizationId) roleSummaryQuery.andWhere('ur.OrganizationId = :organizationId', { organizationId: filters.organizationId });
+        if (filters?.hospitalId) roleSummaryQuery.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+
+        const roleCountsRaw = await roleSummaryQuery
+            .select('r.Id', 'RoleId')
+            .addSelect('r.RoleName', 'RoleName')
+            .addSelect('COUNT(DISTINCT u.Id)', 'userCount')
+            .groupBy('r.Id')
+            .addGroupBy('r.RoleName')
+            .getRawMany();
 
         const orgCount = await AppDataSource.query(`SELECT COUNT(*) as count FROM Organizations`);
 
@@ -366,14 +455,14 @@ export class UserRepository implements IUserRepository {
 
         return {
             summary: {
-                totalUsers: total,
-                activeUsers: activeUsersCount,
+                totalUsers: parseInt(totalUsersFiltered.count || '0'),
+                activeUsers: parseInt(activeUsersFiltered.count || '0'),
                 healthcareProviders: healthcareCount,
                 organizations: parseInt(orgCount[0].count),
                 roleCounts: roleCountsRaw.map((rc: any) => ({
                     RoleId: rc.RoleId,
                     RoleName: rc.RoleName,
-                    userCount: parseInt(rc.userCount)
+                    userCount: parseInt(rc.userCount || '0')
                 }))
             },
             data: {

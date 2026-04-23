@@ -9,6 +9,7 @@ const userRouter = Router();
  */
 userRouter.get("/getUsers", userController.getUsers.bind(userController));
 userRouter.get("/getOrgUsers", userController.getOrgUsers.bind(userController));
+userRouter.get("/getHospUsers", userController.getHospUsers.bind(userController));
 
 /**
  * Global OTP sending endpoint - works for both email and mobile
@@ -31,5 +32,10 @@ userRouter.post("/updateUser", userController.updateUser.bind(userController));
  * Check if a primary account exists for a phone number.
  */
 userRouter.get("/checkPrimary/:phoneNumber", userController.getPrimaryAccount.bind(userController));
+
+/**
+ * Toggle user activation status.
+ */
+userRouter.patch("/toggleStatus/:id", userController.toggleStatus.bind(userController));
 
 export { userRouter };

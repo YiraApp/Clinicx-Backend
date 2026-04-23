@@ -50,22 +50,14 @@ export class HospitalController {
      */
     async getAll(req: Request, res: Response) {
         try {
-            const roleName = req.headers["x-role-name"] as string;
-            const headerOrgId = req.headers["x-org-id"] as string;
+            const page = parseInt(req.query.page as string) || 1;
+            const pageSize = parseInt(req.query.pageSize as string) || 10;
+            const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
+            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
+            const grouped = req.query.grouped === "true";
+            const search = (req.query.search as string) || undefined;
 
-            let orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
-
-            if (roleName !== "Yira System Admin") {
-                // Force user's own OrgId unless they are a System Admin
-                orgId = headerOrgId ? parseInt(headerOrgId) : undefined;
-            }
-
-            const page = req.query.page ? parseInt(req.query.page as string) : 1;
-            const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string) : 10;
-            const search = req.query.search as string || "";
-            const grouped = req.query.grouped === 'true';
-
-            const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped, search);
+            const result = await hospitalService.getAllHospitals(orgId, page, pageSize, grouped, search, hospitalId);
             return res.json(ApiResponse.success(result, "Hospitals fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));
@@ -119,6 +111,25 @@ export class HospitalController {
 
             const result = await hospitalService.updateHospital(hospitalData);
             return res.json(ApiResponse.success(result, "Hospital updated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Handles deactivating/activating a hospital.
+     */
+    async toggleStatus(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            const { status } = req.body;
+
+            if (!id || typeof status !== "boolean") {
+                return res.status(400).json(ApiResponse.error("Valid Hospital ID and status (boolean) are required."));
+            }
+
+            await hospitalService.toggleStatus(id, status);
+            return res.json(ApiResponse.success(null, `Hospital ${status ? 'activated' : 'deactivated'} successfully.`));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));
         }

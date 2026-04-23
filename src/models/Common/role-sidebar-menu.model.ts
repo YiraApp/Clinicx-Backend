@@ -17,10 +17,10 @@ export class RoleSidebarMenu {
     Menu: SidebarMenu;
 
     @Column({ type: "int", nullable: true })
-    OrganizationId?: number;
+    OrganizationId: number | null;
 
     @Column({ type: "int", nullable: true })
-    HospitalId?: number;
+    HospitalId: number | null;
 
     @Column({ type: "bit", default: 1 })
     Status: boolean;

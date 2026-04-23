@@ -38,17 +38,8 @@ export class UserController {
             const pageSize = parseInt(req.query.pageSize as string) || 10;
             const search = (req.query.search as string) || undefined;
             const roleId = (req.query.roleId as string) || undefined;
-            const roleName = req.headers["x-role-name"] as string;
-            const headerOrgId = req.headers["x-org-id"] as string;
-            
-            // Re-assign organizationId based on role to enforce security
-            let organizationId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
-            
-            if (roleName !== "Yira System Admin") {
-                // For non-system admins, force their own OrgId filter
-                organizationId = headerOrgId ? parseInt(headerOrgId) : undefined;
-            }
-
+            const organizationId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
+            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
             const status = req.query.status !== undefined ? req.query.status === 'true' : undefined;
             const fromDate = req.query.fromDate ? new Date(req.query.fromDate as string) : undefined;
             const toDate = req.query.toDate ? new Date(req.query.toDate as string) : undefined;
@@ -59,6 +50,7 @@ export class UserController {
                 search,
                 roleId,
                 organizationId,
+                hospitalId,
                 status,
                 fromDate,
                 toDate,
@@ -84,7 +76,7 @@ export class UserController {
             const roleId = (req.query.roleId as string) || undefined;
             const hospitalId = (req.query.hospitalId as string) || undefined;
             const headerOrgId = req.headers["x-org-id"] as string;
-            
+
             // Force organization ID from header for security
             if (!headerOrgId) {
                 res.status(403).json(ApiResponse.error("Organization identification missing."));
@@ -108,6 +100,47 @@ export class UserController {
 
             const result = await userService.getOrgUsers(page, pageSize, filters);
             res.json(ApiResponse.success(result, "Organization users fetched successfully."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Fetches users specifically within a hospital.
+     */
+    async getHospUsers(req: Request, res: Response): Promise<void> {
+        try {
+            const page = parseInt(req.query.page as string) || 1;
+            const pageSize = parseInt(req.query.pageSize as string) || 10;
+            const search = (req.query.search as string) || undefined;
+            const roleId = (req.query.roleId as string) || undefined;
+            
+            const headerOrgId = req.headers["x-org-id"] as string;
+            const headerHospId = req.headers["x-hosp-id"] as string;
+
+            if (!headerOrgId || !headerHospId) {
+                res.status(403).json(ApiResponse.error("Organization or Hospital identification missing."));
+                return;
+            }
+
+            const organizationId = parseInt(headerOrgId);
+            const hospitalId = parseInt(headerHospId);
+            const status = req.query.status !== undefined ? req.query.status === 'true' : undefined;
+            const sortBy = (req.query.sortBy as 'createdAt' | 'updatedAt' | 'firstName') || 'createdAt';
+            const sortOrder = (req.query.sortOrder as 'ASC' | 'DESC') || 'DESC';
+
+            const filters = {
+                search,
+                roleId,
+                hospitalId,
+                organizationId,
+                status,
+                sortBy,
+                sortOrder
+            };
+
+            const result = await userService.getHospUsers(page, pageSize, filters);
+            res.json(ApiResponse.success(result, "Hospital users fetched successfully."));
         } catch (error: any) {
             res.status(500).json(ApiResponse.error(error.message));
         }
@@ -140,6 +173,27 @@ export class UserController {
             res.json(ApiResponse.success(result, "Primary account check completed."));
         } catch (error: any) {
             res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Toggles a user's activation status.
+     * Body: { status: boolean }
+     */
+    async toggleStatus(req: Request, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
+            const { status } = req.body;
+
+            if (!id || typeof status !== "boolean") {
+                res.status(400).json(ApiResponse.error("Valid User ID and status (boolean) are required."));
+                return;
+            }
+
+            await userService.toggleStatus(id as string, status);
+            res.json(ApiResponse.success(null, `User ${status ? 'activated' : 'deactivated'} successfully.`));
+        } catch (error: any) {
+            res.status(400).json(ApiResponse.error(error.message));
         }
     }
 }

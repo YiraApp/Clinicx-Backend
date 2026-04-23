@@ -34,4 +34,19 @@ export interface IUserService {
      * Checks if a primary account exists for the given phone number.
      */
     getPrimaryAccount(phoneNumber: string): Promise<any>;
+
+    /**
+     * Toggles a user's activation status.
+     */
+    toggleStatus(id: string, status: boolean): Promise<void>;
+
+    /**
+     * Gets users scoped to an organization.
+     */
+    getOrgUsers(page: number, pageSize: number, filters: any): Promise<any>;
+
+    /**
+     * Gets users scoped to a specific hospital.
+     */
+    getHospUsers(page: number, pageSize: number, filters: any): Promise<any>;
 }

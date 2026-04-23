@@ -1,9 +1,16 @@
 import { Router } from "express";
-import { getSidebar } from "../../controllers/Common/sidebar.controller.js";
+import { getSidebar, getAllMenus, assignSidebarPermissions, createMenu, updateMenu, deleteMenu } from "../../controllers/Common/sidebar.controller.js";
 
 const sidebarRouter = Router();
 
-// Endpoint: GET /api/sidebar?roleId=xxx&orgId=yyy&hospId=zzz
+// --- Sidebar Menu Management (Admin Only) ---
+sidebarRouter.get("/menus", getAllMenus);
+sidebarRouter.post("/menus", createMenu);
+sidebarRouter.put("/menus/:id", updateMenu);
+sidebarRouter.delete("/menus/:id", deleteMenu);
+
+// --- Permissions Assignment ---
 sidebarRouter.get("/", getSidebar);
+sidebarRouter.post("/assign", assignSidebarPermissions);
 
 export { sidebarRouter };
