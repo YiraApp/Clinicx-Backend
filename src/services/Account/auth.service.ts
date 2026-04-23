@@ -23,8 +23,8 @@ export class AuthService implements IAuthService {
         // Find user by Email OR PhoneNumber with Status: true and IsDeleted: false
         const user = await this.userRepository.findOne({
             where: [
-                { Email: identity, Status: true, IsDeleted: false },
-                { PhoneNumber: identity, Status: true, IsDeleted: false }
+                { Email: identity, Status: true, IsDeleted: false, IsPrimary: true },
+                { PhoneNumber: identity, Status: true, IsDeleted: false, IsPrimary: true }
             ]
         });
 

@@ -44,6 +44,26 @@ export class SidebarService implements ISidebarService {
 
         return finalMenu;
     }
+
+    async getAllMenus(): Promise<any[]> {
+        return await sidebarRepository.getAllMenus();
+    }
+
+    async createMenu(menuData: any): Promise<any> {
+        return await sidebarRepository.createMenu(menuData);
+    }
+
+    async updateMenu(menuId: number, menuData: any): Promise<any> {
+        return await sidebarRepository.updateMenu(menuId, menuData);
+    }
+
+    async deleteMenu(menuId: number): Promise<void> {
+        await sidebarRepository.deleteMenu(menuId);
+    }
+
+    async updateSidebarPermissions(roleId: string, menuIds: number[], orgId?: number | null, hospId?: number | null): Promise<void> {
+        await sidebarRepository.updateRoleSidebarMenus(roleId, menuIds, orgId, hospId);
+    }
 }
 
 export const sidebarService = new SidebarService();
