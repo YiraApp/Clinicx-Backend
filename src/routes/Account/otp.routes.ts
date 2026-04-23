@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { otpController } from "../../controllers/Account/otp.controller.js";
+import { userController } from "../../controllers/Account/user.controller.js";
 import { authMiddleware } from "../../middlewares/auth.middleware.js";
 
 const otpRouter = Router();
@@ -12,5 +13,8 @@ const otpRouter = Router();
 // We protect these routes because the user must be authenticated (even if not verified) to trigger verification
 otpRouter.post("/sendOTP", authMiddleware, otpController.sendOTP.bind(otpController));
 otpRouter.post("/verifyOTP", authMiddleware, otpController.verifyOTP.bind(otpController));
+
+// Public check for account existence
+otpRouter.get("/checkPrimary/:phoneNumber", userController.getPrimaryAccount.bind(userController));
 
 export { otpRouter };

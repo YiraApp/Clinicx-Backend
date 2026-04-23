@@ -1,0 +1,19 @@
+import { Entity, PrimaryGeneratedColumn, Column } from "typeorm";
+
+@Entity({ name: "MainDepartments" })
+export class MainDepartment {
+    @PrimaryGeneratedColumn()
+    Id: number;
+
+    @Column({ type: "varchar", length: 150 })
+    Name: string;
+
+    @Column({ type: "bit", default: true })
+    Status: boolean;
+
+    @Column({ type: "bit", default: false })
+    IsDeleted: boolean;
+
+    @Column({ type: "datetime", default: () => "getdate()" })
+    CreatedAt: Date;
+}

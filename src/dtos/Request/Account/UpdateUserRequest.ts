@@ -13,6 +13,7 @@ export interface UpdateUserRequest {
     FirstName: string;
     LastName?: string | undefined;
     Email?: string | undefined;
+    Password?: string | undefined;
     PhoneNumber: string;
     CountryCode?: string | undefined;
     Gender?: string | undefined;

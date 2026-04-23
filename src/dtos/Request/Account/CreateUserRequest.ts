@@ -3,6 +3,7 @@
  */
 export interface CreateUserRequest {
     PhoneNumber: string;
+    CountryCode?: string | undefined;
     Email?: string | undefined;
     Password?: string | undefined;
     FirstName: string;

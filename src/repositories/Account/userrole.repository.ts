@@ -21,6 +21,13 @@ export class UserRoleRepository implements IUserRoleRepository {
         });
     }
 
+    async findByUserIdAndRoleId(userId: string, roleId: string): Promise<UserRole | null> {
+        return await this.repo.findOne({
+            where: { UserId: userId, RoleId: roleId, Status: true, IsDeleted: false },
+            relations: ["Role"]
+        });
+    }
+
     async save(userRole: UserRole): Promise<UserRole> {
         return await this.repo.save(userRole);
     }
