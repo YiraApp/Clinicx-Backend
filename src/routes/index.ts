@@ -9,6 +9,9 @@ import { hospitalRouter } from "./Organizations/hospital.routes.js";
 import dashboardRouter from "./Common/dashboard.routes.js";
 import mailRouter from "./Common/mail.routes.js";
 import { apiLogRouter } from "./Logs/apilog.routes.js";
+import masterRouter from "./Masters/master.routes.js";
+import hospitalRegistryRouter from "./Organizations/hospital-registry.routes.js";
+import { healthcareProviderRouter } from "./Organizations/healthcare-provider.routes.js";
 
 const router = Router();
 
@@ -23,6 +26,9 @@ router.use("/hospitals", hospitalRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/mail", mailRouter);
 router.use("/logs", apiLogRouter);
+router.use("/masters", masterRouter);
+router.use("/hospital-registry", hospitalRegistryRouter);
+router.use("/providers", healthcareProviderRouter);
 
 router.get("/status", (req, res) => {
     res.json({ message: "API is working properly" });

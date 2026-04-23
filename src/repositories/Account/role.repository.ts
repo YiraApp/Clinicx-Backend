@@ -16,6 +16,18 @@ export class RoleRepository implements IRoleRepository {
 
         return roles;
     }
+
+    async findByNormalizedName(name: string): Promise<Role | null> {
+        return await this.db.findOne({
+            where: { NormalizedName: name.toUpperCase(), Status: true }
+        });
+    }
+
+    async findById(id: string): Promise<Role | null> {
+        return await this.db.findOne({
+            where: { Id: id }
+        });
+    }
 }
 
 export const roleRepository = new RoleRepository();

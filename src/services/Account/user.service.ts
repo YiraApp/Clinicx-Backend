@@ -12,6 +12,9 @@ import { userRoleRepository } from "../../repositories/Account/userrole.reposito
 import { UserRole } from "../../models/Account/userrole.model.js";
 import type { UpdateUserRequest } from "../../dtos/Request/Account/UpdateUserRequest.js";
 import { generateTemporaryPassword } from "../../utils/password.utils.js";
+import { roleRepository } from "../../repositories/Account/role.repository.js";
+import { organizationRepository } from "../../repositories/Organizations/organization.repository.js";
+import { hospitalRepository } from "../../repositories/Organizations/hospital.repository.js";
 
 /**
  * Service implementation for User operations.
@@ -34,6 +37,7 @@ export class UserService implements IUserService {
         newUser.Id = uuidv4();
         newUser.PhoneNumber = data.PhoneNumber;
         newUser.FirstName = data.FirstName;
+        newUser.CountryCode = data?.CountryCode || "91";
 
         if (data.LastName) newUser.LastName = data.LastName;
         if (data.Email) newUser.Email = data.Email;
@@ -82,23 +86,20 @@ export class UserService implements IUserService {
         // 6. Save the user
         const savedUser = await userRepository.save(newUser);
 
-        // 7. Send Welcome Email
+        // 7. Send Welcome Email (Non-blocking to prevent transaction timeouts)
         if (savedUser.Email) {
-            try {
-                await mailService.sendDynamicEmail("WELCOME_EMAIL", savedUser.Email, {
-                    FirstName: savedUser.FirstName,
-                    LastName: savedUser.LastName || "",
-                    RoleMessage: data.RoleMessage || (isEntityUser ? "Your account has been set up with administrative privileges." : "Welcome to the Clinicx family!"),
-                    Email: savedUser.Email,
-                    Password: passwordToUse, // Show the used password (either provided or generated)
-                    Role: data.RoleName || (isEntityUser ? "Staff/Admin" : "User"),
-                    OrganizationName: data.OrganizationName || "Clinicx",
-                    LoginURL: data.LoginURL || process.env.CLIENT_URL || "https://clinicx.azurewebsites.net/"
-                });
-            } catch (mailError) {
-                console.error(`[Mail] Failed to send welcome email to ${savedUser.Email}:`, mailError);
-                // Non-blocking: user is created even if mail fails
-            }
+            mailService.sendDynamicEmail("WELCOME_EMAIL", savedUser.Email, {
+                FirstName: savedUser.FirstName,
+                LastName: savedUser.LastName || "",
+                RoleMessage: data.RoleMessage || (isEntityUser ? "Your account has been set up with administrative privileges." : "Welcome to the Clinicx family!"),
+                Email: savedUser.Email,
+                Password: passwordToUse, // Show the used password (either provided or generated)
+                Role: data.RoleName || (isEntityUser ? "Staff/Admin" : "User"),
+                OrganizationName: data.OrganizationName || "Clinicx",
+                LoginURL: data.LoginURL || process.env.CLIENT_URL || "https://clinicx.azurewebsites.net/"
+            }).catch(mailError => {
+                console.error(`[Mail] Background sending failed for ${savedUser.Email}:`, mailError);
+            });
         }
 
         return {
@@ -129,17 +130,14 @@ export class UserService implements IUserService {
                 throw new Error("User with provided ID not found.");
             }
         } else {
-            // New user creation path
-            // We use the existing createUser logic which handles:
-            // 1. Finding high-level primary user for the phone
-            // 2. Checking the 6-user limit
-            // 3. Auto-linking as Secondary if an account exists
             const createResult = await this.createUser({
                 FirstName: data.FirstName,
                 LastName: data.LastName,
                 Email: data.Email,
+                Password : data.Password,
                 PhoneNumber: data.PhoneNumber,
                 Gender: data.Gender,
+                CountryCode : data.CountryCode,
                 DateOfBirth: data.DateOfBirth,
                 Relation: data.Relation || "Admin" 
             }, true);
@@ -150,6 +148,8 @@ export class UserService implements IUserService {
             throw new Error("User could not be found or created.");
         }
 
+        console.log("data.PhoneNumber", data.PhoneNumber);
+        console.log("user.PhoneNumber", user.PhoneNumber);
         // 2. Enforce Business Rule (Max 6 users) if phone number is changed for an existing user
         if (data.Id && data.PhoneNumber !== user.PhoneNumber) {
             const userCount = await userRepository.countUsersByPhone(data.PhoneNumber);
@@ -188,14 +188,7 @@ export class UserService implements IUserService {
                  (ra.hospitalId ? Number(ra.hospitalId) === cr.HospitalId : !cr.HospitalId))
             );
 
-            if (matchIndex === -1) {
-                // Not requested anymore -> Inactivate if currently active
-                if (cr.Status) {
-                    cr.Status = false;
-                    cr.UpdatedAt = new Date();
-                    rolesToUpdate.push(cr);
-                }
-            } else {
+            if (matchIndex !== -1) {
                 // Found a match
                 const ra = requestedAssignments[matchIndex];
                 
@@ -212,23 +205,73 @@ export class UserService implements IUserService {
         });
 
         // Any remaining requestedAssignments are new
-        requestedAssignments.forEach(ra => {
+        for (const ra of requestedAssignments) {
+            let finalRoleId = ra.roleId;
+
+            // If it's not a valid GUID, try to resolve by name
+            const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+            if (!guidRegex.test(finalRoleId)) {
+                 const resolvedRole = await roleRepository.findByNormalizedName(finalRoleId);
+                 if (resolvedRole) {
+                     finalRoleId = resolvedRole.Id;
+                 } else {
+                     console.warn(`[UserService] Role name "${finalRoleId}" could not be resolved to a GUID.`);
+                     continue; // Skip invalid roles
+                 }
+            }
+
             const newRole = new UserRole();
             newRole.UserId = user!.Id;
-            newRole.RoleId = ra.roleId;
+            newRole.RoleId = finalRoleId;
             newRole.OrganizationId = ra.organizationId;
             if (ra.hospitalId) newRole.HospitalId = Number(ra.hospitalId);
             newRole.Status = true;
             newRole.IsDeleted = false;
             newRole.CreatedAt = new Date();
             rolesToUpdate.push(newRole);
-        });
+        }
 
         if (rolesToUpdate.length > 0) {
             await userRoleRepository.saveAll(rolesToUpdate);
+            
+            // Only notify for roles that are currently active (newly assigned or reactivated)
+            const activeNewRoles = rolesToUpdate.filter(r => r.Status);
+            
+            if (activeNewRoles.length > 0 && user!.Email) {
+                for (const ur of activeNewRoles) {
+                    try {
+                        const role = await roleRepository.findById(ur.RoleId);
+                        let orgName = "N/A";
+                        let hospitalName = "N/A (Organization Level)";
+                        
+                        if (ur.OrganizationId) {
+                            const org = await organizationRepository.findById(ur.OrganizationId);
+                            if (org) orgName = org.Name;
+                        }
+                        
+                        if (ur.HospitalId) {
+                            const hospital = await hospitalRepository.findById(ur.HospitalId);
+                            if (hospital) hospitalName = hospital.Name;
+                        }
+
+                        await mailService.sendDynamicEmail("NEW_ROLE_ASSIGNED", user!.Email, {
+                            firstName: user!.FirstName,
+                            roleName: role?.RoleName || "Member",
+                            organizationName: orgName,
+                            hospitalName: hospitalName,
+                            link: `${process.env.FRONTEND_URL}/login`
+                        });
+                    } catch (mailErr) {
+                        console.error("[UserService] Failed to send role assignment email:", mailErr);
+                    }
+                }
+            }
         }
 
-        return { message: "User updated successfully." };
+        return { 
+            message: "User updated successfully.",
+            userId: user!.Id 
+        };
     }
 
     async getPrimaryAccount(phoneNumber: string): Promise<any> {
@@ -237,14 +280,40 @@ export class UserService implements IUserService {
             return { exists: false, message: "No primary account found for this phone number." };
         }
 
+        // 1. Resolve Provider Role ID dynamically
+        const providerRole = await roleRepository.findByNormalizedName("PROVIDER");
+        const providerRoleId = providerRole?.Id || "FE80173F-9DB3-4703-84A8-5C23E7CC493C"; // Fallback to verified ID
+
+        // check if user is already a healthcare provider
+        const isHealthcareProvider = await userRoleRepository.findByUserIdAndRoleId(primaryUser.Id, providerRoleId);
+        const roles = await userRoleRepository.findAllByUserId(primaryUser.Id);
+        
+        const userPayload = {
+            id: primaryUser.Id,
+            firstName: primaryUser.FirstName,
+            lastName: primaryUser.LastName,
+            email: primaryUser.Email,
+            phoneNumber: primaryUser.PhoneNumber,
+            roles: roles.map(r => ({
+                roleId: r.RoleId,
+                roleName: r.Role?.RoleName || r.RoleId,
+                organizationId: r.OrganizationId,
+                hospitalId: r.HospitalId,
+                status: r.Status
+            }))
+        };
+
+        if (isHealthcareProvider) {
+            return { 
+                exists: true, 
+                message: "User is already a healthcare provider.",
+                user: userPayload
+            };
+        }
+
         return {
             exists: true,
-            user: {
-                id: primaryUser.Id,
-                name: `${primaryUser.FirstName} ${primaryUser.LastName || ""}`.trim(),
-                email: primaryUser.Email,
-                phoneNumber: primaryUser.PhoneNumber
-            }
+            user: userPayload
         };
     }
 }

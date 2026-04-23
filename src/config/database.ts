@@ -15,6 +15,14 @@ import { APILog } from "../models/Logs/apilog.model.js";
 import { SidebarMenu } from "../models/Common/sidebar-menu.model.js";
 import { RoleSidebarMenu } from "../models/Common/role-sidebar-menu.model.js";
 import { Template } from "../models/Common/template.model.js";
+import { MainSpecialty } from "../models/Masters/main-specialty.model.js";
+import { MainSubSpecialty } from "../models/Masters/main-subspecialty.model.js";
+import { MainDepartment } from "../models/Masters/main-department.model.js";
+import { HospitalSpecialty } from "../models/Organizations/hospital-specialty.model.js";
+import { HospitalSubSpecialty } from "../models/Organizations/hospital-subspecialty.model.js";
+import { HospitalDepartment } from "../models/Organizations/hospital-department.model.js";
+import { HealthcareProvider } from "../models/Organizations/healthcare-provider.model.js";
+import { HealthcareProviderAvailability } from "../models/Organizations/healthcare-provider-availability.model.js";
 
 dotenv.config(); // Load environment variables from .env
 
@@ -35,7 +43,13 @@ export const AppDataSource = new DataSource({
     database: process.env.DB_NAME,
     logging: false,
     synchronize: false,                   // Important: do NOT auto-create tables
-    entities: [User, UserToken, UserOTP, Address, Role, UserRole, Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template], // Explicitly listed for best results with ESM/TSX
+    entities: [
+        User, UserToken, UserOTP, Address, Role, UserRole, 
+        Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template,
+        MainSpecialty, MainSubSpecialty, MainDepartment,
+        HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
+        HealthcareProvider, HealthcareProviderAvailability
+    ], // Explicitly listed for best results with ESM/TSX
     // subscribers: [join(__dirname, "../subscribers/*.{ts,js}")], // Optional
     extra: {
         encrypt: true,
