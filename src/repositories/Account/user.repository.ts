@@ -253,6 +253,8 @@ export class UserRepository implements IUserRepository {
     }
 
     async checkUserRole(identifier: string, roleId: string, organizationId?: number, hospitalId?: number): Promise<boolean> {
+        console.log("[UserRepository] checkUserRole input:", { identifier, roleId, organizationId, hospitalId });
+        
         const query = this.repo.createQueryBuilder('u')
             .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
             .where('(u.PhoneNumber = :identifier OR u.Email = :identifier)', { identifier })
@@ -266,8 +268,10 @@ export class UserRepository implements IUserRepository {
             query.andWhere('ur.HospitalId = :hospitalId', { hospitalId });
         }
 
-        const count = await query.getCount();
-        return count > 0;
+        const userWithRole = await query.getOne();
+        console.log("[UserRepository] checkUserRole result:", userWithRole ? `Found User ID: ${userWithRole.Id}` : "Not Found");
+        
+        return !!userWithRole;
     }
 
     async deleteById(id: string): Promise<boolean> {

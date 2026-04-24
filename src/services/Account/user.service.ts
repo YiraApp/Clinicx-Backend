@@ -217,17 +217,15 @@ export class UserService implements IUserService {
         }
 
         // 3. Update basic fields
-        user.FirstName = data.FirstName;
-        if (data.LastName) user.LastName = data.LastName;
-        if (data.Email) user.Email = data.Email;
-        if (data.CountryCode) user.CountryCode = data.CountryCode;
-        if (data.Gender) user.Gender = data.Gender;
-        if (data.DateOfBirth) user.DateOfBirth = data.DateOfBirth;
-        if (data.Relation) user.Relation = data.Relation;
-        if (data.ParentUserId) user.ParentUserId = data.ParentUserId;
-        if (data.Status !== undefined) user.Status = data.Status;
-
-        if (data.Status !== undefined) user.Status = data.Status;
+        user.FirstName = data.FirstName ?? null;
+        user.LastName = data.LastName ?? null;
+        user.Email = data.Email ?? null;
+        user.CountryCode = data.CountryCode ?? "91";
+        user.Gender = data.Gender ?? null;
+        user.DateOfBirth = data.DateOfBirth ?? null;
+        user.Relation = data.Relation ?? "Admin";
+        user.ParentUserId = data.ParentUserId ?? null;
+        user.Status = data.Status !== undefined ? data.Status : true;
 
         // 4. Update addresses
         let permData = data.PermanentAddress;
@@ -249,8 +247,8 @@ export class UserService implements IUserService {
         const tempId = await this.saveAddress(data.TemporaryAddress, user.TemporaryAddressId, false);
         if (tempId) user.TemporaryAddressId = tempId;
 
-        if (data.EmergencyContactName) user.EmergencyContactName = data.EmergencyContactName;
-        if (data.EmergencyContactPhone) user.EmergencyContactPhone = data.EmergencyContactPhone;
+        user.EmergencyContactName = data.EmergencyContactName ?? null;
+        user.EmergencyContactPhone = data.EmergencyContactPhone ?? null;
         user.UpdatedAt = new Date();
 
         await userRepository.save(user);

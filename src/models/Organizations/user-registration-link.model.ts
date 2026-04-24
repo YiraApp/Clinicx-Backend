@@ -3,44 +3,44 @@ import { Entity, PrimaryGeneratedColumn, Column } from "typeorm";
 @Entity({ name: "UserRegistrationLinks" })
 export class UserRegistrationLink {
     @PrimaryGeneratedColumn()
-    Id: number;
+    Id!: number;
 
-    @Column({ type: "uniqueidentifier", default: () => "newid()" })
-    Token: string;
+    @Column({ type: "uniqueidentifier", default: () => "NEWID()" })
+    Token!: string;
 
     @Column({ type: "nvarchar", length: 255, nullable: true })
-    Email?: string;
+    Email?: string | null;
 
     @Column({ type: "int", nullable: true })
-    UserId?: number;
+    UserId?: number | null;
 
     @Column({ type: "nvarchar", length: 100, nullable: true })
-    Role?: string;
+    Role?: string | null;
 
     @Column({ type: "int", nullable: true })
-    OrganizationId?: number;
+    OrganizationId?: number | null;
 
     @Column({ type: "int", nullable: true })
-    HospitalId?: number;
+    HospitalId?: number | null;
 
     @Column({ type: "datetime" })
-    ExpiryTime: Date;
+    ExpiryTime!: Date;
 
-    @Column({ type: "bit", default: false })
-    IsUsed: boolean;
+    @Column({ type: "bit", default: () => "0" })
+    IsUsed!: boolean;
 
-    @Column({ type: "datetime", default: () => "getdate()" })
-    CreatedAt: Date;
+    @Column({ type: "datetime", default: () => "GETDATE()" })
+    CreatedAt!: Date;
 
     @Column({ type: "nvarchar", length: 100, nullable: true })
-    CreatedBy?: string;
+    CreatedBy?: string | null;
 
-    @Column({ type: "nvarchar", length: 20, default: 'Email' })
-    Type: string;
+    @Column({ type: "nvarchar", length: 20, default: "Email" })
+    Type!: "Email" | "SMS" | "WhatsApp";
 
     @Column({ type: "nvarchar", length: 20, nullable: true })
-    PhoneNumber?: string;
+    PhoneNumber?: string | null;
 
     @Column({ type: "nvarchar", length: 10, nullable: true })
-    CountryCode?: string;
+    CountryCode?: string | null;
 }

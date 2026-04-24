@@ -97,7 +97,7 @@ export class PatientRegistrationService {
     }
 
     async sendRegistrationLink(data: any): Promise<any> {
-        const { name, phone, channel, email, organizationId, hospitalId } = data;
+        const { name, phone, countryCode, channel, email, organizationId, hospitalId } = data;
         const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 
         // 1. Check if user already exists as a patient in this org/hospital
@@ -116,32 +116,36 @@ export class PatientRegistrationService {
         const { userRegistrationLinkRepository } = await import("../../repositories/Organizations/user-registration-link.repository.js");
         
         const regLink = new UserRegistrationLink();
-        regLink.Email = email;
-        regLink.PhoneNumber = phone;
-        regLink.OrganizationId = organizationId;
-        regLink.HospitalId = hospitalId;
+        regLink.Email = email ?? null;
+        regLink.PhoneNumber = phone ?? null;
+        regLink.CountryCode = countryCode ?? "91";
+        regLink.OrganizationId = organizationId ? Number(organizationId) : null;
+        regLink.HospitalId = hospitalId ? Number(hospitalId) : null;
         regLink.Type = channel === "email" ? "Email" : channel === "sms" ? "SMS" : "WhatsApp";
-        regLink.ExpiryTime = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+        regLink.IsUsed = false;
+        regLink.ExpiryTime = new Date(Date.now() + 48 * 60 * 60 * 1000);
         regLink.Role = "Patient";
+        regLink.UserId = null;
+        regLink.CreatedBy = null;
 
         const savedLink = await userRegistrationLinkRepository.save(regLink);
 
-        const baseUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+        const baseUrl = process.env.FRONTEND_URL || "http://localhost:5173";
         // Use token instead of raw details for security
-        const link = `${baseUrl}/self-register?token=${savedLink.Token}&orgId=${organizationId || ""}&hospId=${hospitalId || ""}&name=${encodeURIComponent(name)}`;
+        const link = `${baseUrl}/self-register?token=${savedLink.Token}&orgId=${organizationId || ""}&hospId=${hospitalId || ""}&name=${encodeURIComponent(name)}&phone=${phone}&countryCode=${regLink.CountryCode}`;
 
         if (channel === "email" && email) {
             try {
                 const { mailService } = await import("../Mail/mail.service.js");
-                await mailService.sendDynamicEmail("PATIENT_REGISTRATION_LINK", email, {
-                    name,
-                    link,
+                await mailService.sendDynamicEmail("PATIENT_REGISTRATION_INVITE", email, {
+                    PatientName: name,
+                    RegistrationLink: link,
                 });
             } catch (err) {
                 console.error("Mail service error:", err);
             }
         } else {
-            console.log(`[${regLink.Type} to ${phone}]: Hello ${name}, please register here: ${link}`);
+            console.log(`[${regLink.Type} to ${regLink.CountryCode}${phone}]: Hello ${name}, please register here: ${link}`);
         }
 
         return { message: "Link sent successfully.", link };

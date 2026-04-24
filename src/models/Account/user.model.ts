@@ -11,25 +11,25 @@ export class User {
     PhoneNumber: string;
 
     @Column({ type: "varchar", length: 256, nullable: true })
-    Email?: string;
+    Email?: string | null;
 
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
-    PasswordHash?: string;
+    PasswordHash?: string | null;
 
     @Column({ type: "varchar", length: 100, nullable: true })
-    FirstName?: string;
+    FirstName?: string | null;
 
     @Column({ type: "varchar", length: 100, nullable: true })
-    LastName?: string;
+    LastName?: string | null;
 
     @Column({ type: "varchar", length: 10, nullable: true })
-    Gender?: string;
+    Gender?: string | null;
 
     @Column({ type: "date", nullable: true })
-    DateOfBirth?: string;
+    DateOfBirth?: string | null;
 
     @Column({ type: "varchar", length: 10, nullable: true })
-    BloodGroup?: string;
+    BloodGroup?: string | null;
 
     @Column({ type: "varchar", length: 255, nullable: true })
     AadharNo?: string;
@@ -47,10 +47,10 @@ export class User {
     Status: boolean;
 
     @Column({ type: "uniqueidentifier", nullable: true })
-    ParentUserId?: string;
+    ParentUserId?: string | null;
 
     @Column({ type: "varchar", length: 50, nullable: true })
-    Relation?: string;
+    Relation?: string | null;
 
     @Column({ type: "bit", default: false })
     IsPrimary: boolean;
@@ -72,17 +72,17 @@ export class User {
     @Column({ type: "datetime", nullable: true })
     LastLoginTime?: Date;
 
-    @Column({ type: "datetime", default: () => "getdate()" })
+    @Column({ type: "datetime", default: () => "GETDATE()" })
     CreatedAt: Date;
 
     @Column({ type: "varchar", length: 50, nullable: true })
-    CreatedBy?: string;
+    CreatedBy?: string | null;
 
     @Column({ type: "datetime", nullable: true })
-    UpdatedAt?: Date;
+    UpdatedAt?: Date | null;
 
     @Column({ type: "varchar", length: 50, nullable: true })
-    UpdatedBy?: string;
+    UpdatedBy?: string | null;
 
     @Column({ type: "bit", default: false })
     IsDeleted: boolean;
@@ -94,21 +94,21 @@ export class User {
     UserSignature?: string;
 
     @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
-    Height?: number;
+    Height?: number | null;
 
     @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
-    Weight?: number;
+    Weight?: number | null;
 
     @Column({ type: "varchar", length: 10, nullable: true })
-    CountryCode?: string;
+    CountryCode?: string | null;
 
 
 
     @Column({ type: "nvarchar", length: 200, nullable: true })
-    EmergencyContactName?: string;
+    EmergencyContactName?: string | null;
 
-    @Column({ type: "varchar", length: 15, nullable: true })
-    EmergencyContactPhone?: string;
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    EmergencyContactPhone?: string | null;
 
     @OneToMany(() => UserRole, (userRole) => userRole.User)
     UserRoles: UserRole[];

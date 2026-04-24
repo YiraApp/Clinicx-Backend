@@ -19,7 +19,7 @@ if (!JWT_SECRET || !REFRESH_TOKEN_SECRET || !ACCESS_TOKEN_EXPIRY || !REFRESH_TOK
  */
 export interface TokenPayload {
     userId: string;
-    email?: string | undefined;
+    email?: string | null;
     [key: string]: any;
 }
 

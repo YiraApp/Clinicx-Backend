@@ -1,5 +1,5 @@
-import { AppDataSource } from "../../config/database";
-import { UserRegistrationLink } from "../../models/Organizations/user-registration-link.model";
+import { AppDataSource } from "../../config/database.js";
+import { UserRegistrationLink } from "../../models/Organizations/user-registration-link.model.js";
 
 export class UserRegistrationLinkRepository {
     private repo = AppDataSource.getRepository(UserRegistrationLink);
