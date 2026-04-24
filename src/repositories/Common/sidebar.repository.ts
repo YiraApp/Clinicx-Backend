@@ -115,7 +115,25 @@ export class SidebarRepository implements ISidebarRepository {
 
     async updateRoleSidebarMenus(roleId: string, menuIds: number[], orgId?: number | null, hospId?: number | null): Promise<void> {
         await AppDataSource.transaction(async (transactionalEntityManager) => {
-            // 1. Fetch ALL existing records for this specific scope (regardless of status)
+            // 1. Determine the baseline (inherited permissions)
+            // If we are saving for a hospital, baseline is the Organization level
+            // If we are saving for an organization, baseline is the Global level
+            let baselineRecords: RoleSidebarMenu[] = [];
+            if (hospId) {
+                // Baseline for Hospital is the Org-level effective permissions
+                baselineRecords = await this.getRoleSidebarMenus(roleId, orgId, null);
+            } else if (orgId) {
+                // Baseline for Organization is the Global-level effective permissions
+                baselineRecords = await this.getRoleSidebarMenus(roleId, null, null);
+            } else {
+                // Baseline for Global is nothing (empty)
+                baselineRecords = [];
+            }
+
+            const baselineIds = baselineRecords.map(r => r.MenuId);
+            const allPossibleMenus = await this.menuRepo.find({ where: { Status: true } });
+
+            // 2. Fetch existing records for THIS SPECIFIC scope
             const query = transactionalEntityManager.createQueryBuilder(RoleSidebarMenu, "rsm")
                 .where("rsm.RoleId = :roleId", { roleId });
 
@@ -125,36 +143,44 @@ export class SidebarRepository implements ISidebarRepository {
             if (hospId) query.andWhere("rsm.HospitalId = :hospId", { hospId });
             else query.andWhere("rsm.HospitalId IS NULL");
 
-            const existingRecords = await query.getMany();
-            const existingMenuIds = existingRecords.map(r => r.MenuId);
+            const currentScopeRecords = await query.getMany();
+            const currentScopeMap = new Map<number, RoleSidebarMenu>();
+            currentScopeRecords.forEach(r => currentScopeMap.set(r.MenuId, r));
 
-            // 2. Deactivate records that are NOT in the new menuIds list
-            const recordsToDeactivate = existingRecords.filter(r => !menuIds.includes(r.MenuId) && r.Status === true);
-            if (recordsToDeactivate.length > 0) {
-                const ids = recordsToDeactivate.map(r => r.RoleSidebarMenuId);
-                await transactionalEntityManager.update(RoleSidebarMenu, ids, { Status: false });
-            }
+            // 3. Process every possible menu to see if an override is needed
+            for (const menu of allPossibleMenus) {
+                const menuId = menu.MenuId;
+                const isTargetActive = menuIds.includes(menuId);
+                const isInheritedActive = baselineIds.includes(menuId);
+                const existingRecord = currentScopeMap.get(menuId);
 
-            // 3. Activate records that ARE in the new menuIds list but were inactive
-            const recordsToActivate = existingRecords.filter(r => menuIds.includes(r.MenuId) && r.Status === false);
-            if (recordsToActivate.length > 0) {
-                const ids = recordsToActivate.map(r => r.RoleSidebarMenuId);
-                await transactionalEntityManager.update(RoleSidebarMenu, ids, { Status: true });
-            }
-
-            // 4. Insert entirely new records
-            const newMenuIds = menuIds.filter(id => !existingMenuIds.includes(id));
-            if (newMenuIds.length > 0) {
-                const newAssignments = newMenuIds.map(menuId => {
-                    const assignment = new RoleSidebarMenu();
-                    assignment.RoleId = roleId;
-                    assignment.MenuId = menuId;
-                    assignment.OrganizationId = orgId ?? null;
-                    assignment.HospitalId = hospId ?? null;
-                    assignment.Status = true;
-                    return assignment;
-                });
-                await transactionalEntityManager.save(RoleSidebarMenu, newAssignments);
+                if (isTargetActive !== isInheritedActive) {
+                    // We need an override record at this scope
+                    if (existingRecord) {
+                        // Update existing record to match target status
+                        await transactionalEntityManager.update(RoleSidebarMenu, existingRecord.RoleSidebarMenuId, { 
+                            Status: isTargetActive 
+                        });
+                    } else {
+                        // Create new override record
+                        const newRecord = new RoleSidebarMenu();
+                        newRecord.RoleId = roleId;
+                        newRecord.MenuId = menuId;
+                        newRecord.OrganizationId = orgId ?? null;
+                        newRecord.HospitalId = hospId ?? null;
+                        newRecord.Status = isTargetActive;
+                        await transactionalEntityManager.save(RoleSidebarMenu, newRecord);
+                    }
+                } else {
+                    // No override needed (target matches inherited)
+                    // If an override record already exists, deactivate or delete it to revert to inheritance
+                    if (existingRecord) {
+                        // We delete it or set status such that it doesn't conflict. 
+                        // Actually, the priority system picks the most specific one, 
+                        // so if we want to inherit, we should just remove the specific record.
+                        await transactionalEntityManager.delete(RoleSidebarMenu, existingRecord.RoleSidebarMenuId);
+                    }
+                }
             }
         });
     }
