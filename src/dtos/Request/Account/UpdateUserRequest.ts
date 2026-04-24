@@ -21,5 +21,11 @@ export interface UpdateUserRequest {
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;
+    Address?: string | undefined;
+    City?: string | undefined;
+    State?: string | undefined;
+    Pincode?: string | undefined;
+    EmergencyContactName?: string | undefined;
+    EmergencyContactPhone?: string | undefined;
     workspaces: UserRoleAssignment[];
 }

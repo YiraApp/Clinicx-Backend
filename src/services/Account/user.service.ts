@@ -173,6 +173,12 @@ export class UserService implements IUserService {
         if (data.Relation) user.Relation = data.Relation;
         if (data.ParentUserId) user.ParentUserId = data.ParentUserId;
         if (data.Status !== undefined) user.Status = data.Status;
+        if (data.Address) user.Address = data.Address;
+        if (data.City) user.City = data.City;
+        if (data.State) user.State = data.State;
+        if (data.Pincode) user.Pincode = data.Pincode;
+        if (data.EmergencyContactName) user.EmergencyContactName = data.EmergencyContactName;
+        if (data.EmergencyContactPhone) user.EmergencyContactPhone = data.EmergencyContactPhone;
         user.UpdatedAt = new Date();
 
         await userRepository.save(user);

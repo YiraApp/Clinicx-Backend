@@ -93,6 +93,24 @@ export class User {
     @Column({ type: "varchar", length: 10, nullable: true })
     CountryCode?: string;
 
+    @Column({ type: "nvarchar", length: 500, nullable: true })
+    Address?: string;
+
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    City?: string;
+
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    State?: string;
+
+    @Column({ type: "varchar", length: 10, nullable: true })
+    Pincode?: string;
+
+    @Column({ type: "nvarchar", length: 200, nullable: true })
+    EmergencyContactName?: string;
+
+    @Column({ type: "varchar", length: 15, nullable: true })
+    EmergencyContactPhone?: string;
+
     @OneToMany(() => UserRole, (userRole) => userRole.User)
     UserRoles: UserRole[];
 }
