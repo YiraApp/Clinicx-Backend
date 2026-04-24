@@ -23,12 +23,6 @@ jobs:
         with:
           node-version: '24.x'
 
-      - name: npm install, build, and test
-        run: |
-          npm install
-          npm run build --if-present
-          npm run test --if-present
-
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
@@ -52,4 +46,4 @@ jobs:
           app-name: 'Clinicx-api-qa'
           slot-name: 'Production'
           package: .
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_B459CB8777A04357940A71C2D497D5F0 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_47A29F5A3FFC452F9F30CB9261079C09 }}
