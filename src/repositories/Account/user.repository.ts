@@ -252,6 +252,24 @@ export class UserRepository implements IUserRepository {
         });
     }
 
+    async checkUserRole(identifier: string, roleId: string, organizationId?: number, hospitalId?: number): Promise<boolean> {
+        const query = this.repo.createQueryBuilder('u')
+            .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
+            .where('(u.PhoneNumber = :identifier OR u.Email = :identifier)', { identifier })
+            .andWhere('ur.RoleId = :roleId', { roleId })
+            .andWhere('u.IsDeleted = 0');
+
+        if (organizationId) {
+            query.andWhere('ur.OrganizationId = :organizationId', { organizationId });
+        }
+        if (hospitalId) {
+            query.andWhere('ur.HospitalId = :hospitalId', { hospitalId });
+        }
+
+        const count = await query.getCount();
+        return count > 0;
+    }
+
     async deleteById(id: string): Promise<boolean> {
         const user = await this.findById(id);
         if (user) {

@@ -1,5 +1,6 @@
-import { Entity, PrimaryColumn, Column, OneToMany } from "typeorm";
+import { Entity, PrimaryColumn, Column, OneToMany, ManyToOne, JoinColumn } from "typeorm";
 import { UserRole } from "./userrole.model.js";
+import { Address } from "./address.model.js";
 
 @Entity({ name: "Users" })
 export class User {
@@ -57,8 +58,16 @@ export class User {
     @Column({ type: "int", nullable: true })
     PermanentAddressId?: number;
 
+    @ManyToOne(() => Address)
+    @JoinColumn({ name: "PermanentAddressId" })
+    PermanentAddress?: Address;
+
     @Column({ type: "int", nullable: true })
     TemporaryAddressId?: number;
+
+    @ManyToOne(() => Address)
+    @JoinColumn({ name: "TemporaryAddressId" })
+    TemporaryAddress?: Address;
 
     @Column({ type: "datetime", nullable: true })
     LastLoginTime?: Date;
@@ -93,17 +102,7 @@ export class User {
     @Column({ type: "varchar", length: 10, nullable: true })
     CountryCode?: string;
 
-    @Column({ type: "nvarchar", length: 500, nullable: true })
-    Address?: string;
 
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    City?: string;
-
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    State?: string;
-
-    @Column({ type: "varchar", length: 10, nullable: true })
-    Pincode?: string;
 
     @Column({ type: "nvarchar", length: 200, nullable: true })
     EmergencyContactName?: string;

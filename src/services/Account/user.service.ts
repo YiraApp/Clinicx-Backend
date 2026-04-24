@@ -15,12 +15,43 @@ import { generateTemporaryPassword } from "../../utils/password.utils.js";
 import { roleRepository } from "../../repositories/Account/role.repository.js";
 import { organizationRepository } from "../../repositories/Organizations/organization.repository.js";
 import { hospitalRepository } from "../../repositories/Organizations/hospital.repository.js";
+import { addressRepository } from "../../repositories/Account/address.repository.js";
+import { Address } from "../../models/Account/address.model.js";
 
 /**
  * Service implementation for User operations.
  */
 
 export class UserService implements IUserService {
+    private async saveAddress(addressData: any, existingAddressId?: number, addressType?: boolean): Promise<number | undefined> {
+        console.log("[UserService] saveAddress called with:", { addressData, existingAddressId, addressType });
+        if (!addressData || !addressData.AddressLine1) {
+            console.log("[UserService] saveAddress skipped: Missing addressData or AddressLine1");
+            return undefined;
+        }
+
+        let address: Address | null = null;
+        if (existingAddressId) {
+            address = await addressRepository.findById(existingAddressId);
+        }
+
+        if (!address) {
+            address = new Address();
+        }
+
+        address.AddressLine1 = addressData.AddressLine1;
+        address.AddressLine2 = addressData.AddressLine2;
+        address.City = addressData.City;
+        address.State = addressData.State;
+        address.Pincode = addressData.Pincode;
+        address.Landmark = addressData.Landmark;
+        address.Country = addressData.Country;
+        if (addressType !== undefined) address.AddressType = addressType;
+
+        const savedAddress = await addressRepository.save(address);
+        return savedAddress.Id;
+    }
+
     async createUser(data: CreateUserRequest, isEntityUser: boolean = false): Promise<CreateUserResponse> {
         // 1. Check if a primary user exists for this phone number
         const primaryUser = await userRepository.findPrimaryByPhone(data.PhoneNumber);
@@ -58,6 +89,28 @@ export class UserService implements IUserService {
 
         if (data.IsMobileVerified !== undefined) newUser.IsMobileVerified = data.IsMobileVerified;
         if (data.IsEmailVerified !== undefined) newUser.IsEmailVerified = data.IsEmailVerified;
+
+        if (data.IsEmailVerified !== undefined) newUser.IsEmailVerified = data.IsEmailVerified;
+
+        // 5. Handle Addresses
+        let permData = data.PermanentAddress;
+        if (!permData && data.AddressLine1) {
+            permData = {
+                AddressLine1: data.AddressLine1,
+                AddressLine2: data.AddressLine2,
+                City: data.City,
+                State: data.State,
+                Pincode: data.Pincode,
+                Landmark: data.Landmark,
+                Country: data.Country
+            };
+        }
+
+        const permId = await this.saveAddress(permData, undefined, true);
+        if (permId) newUser.PermanentAddressId = permId;
+
+        const tempId = await this.saveAddress(data.TemporaryAddress, undefined, false);
+        if (tempId) newUser.TemporaryAddressId = tempId;
 
 
 
@@ -173,10 +226,29 @@ export class UserService implements IUserService {
         if (data.Relation) user.Relation = data.Relation;
         if (data.ParentUserId) user.ParentUserId = data.ParentUserId;
         if (data.Status !== undefined) user.Status = data.Status;
-        if (data.Address) user.Address = data.Address;
-        if (data.City) user.City = data.City;
-        if (data.State) user.State = data.State;
-        if (data.Pincode) user.Pincode = data.Pincode;
+
+        if (data.Status !== undefined) user.Status = data.Status;
+
+        // 4. Update addresses
+        let permData = data.PermanentAddress;
+        if (!permData && data.AddressLine1) {
+            permData = {
+                AddressLine1: data.AddressLine1,
+                AddressLine2: data.AddressLine2,
+                City: data.City,
+                State: data.State,
+                Pincode: data.Pincode,
+                Landmark: data.Landmark,
+                Country: data.Country
+            };
+        }
+
+        const permId = await this.saveAddress(permData, user.PermanentAddressId, true);
+        if (permId) user.PermanentAddressId = permId;
+
+        const tempId = await this.saveAddress(data.TemporaryAddress, user.TemporaryAddressId, false);
+        if (tempId) user.TemporaryAddressId = tempId;
+
         if (data.EmergencyContactName) user.EmergencyContactName = data.EmergencyContactName;
         if (data.EmergencyContactPhone) user.EmergencyContactPhone = data.EmergencyContactPhone;
         user.UpdatedAt = new Date();
