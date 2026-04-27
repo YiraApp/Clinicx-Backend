@@ -1,8 +1,9 @@
-process.env.TZ = "Asia/Kolkata";
+
 
 import "reflect-metadata";
 import dotenv from "dotenv";
 dotenv.config();
+process.env.TZ = "Asia/Kolkata";
 
 import app from "./app.js";
 import { initializeDatabase } from "./config/database.js";
