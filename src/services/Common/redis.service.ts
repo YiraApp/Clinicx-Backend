@@ -1,16 +1,12 @@
 import { createClient, type RedisClientType } from "redis";
-import { DEFAULTS } from "../../config/constants.js";
-
 /**
  * Service to handle Redis caching operations.
- * Designed with a fail-safe approach: if Redis is unavailable, 
- * it logs the error and allows the application to continue using the database.
  */
 export class RedisService {
     private client: RedisClientType | null = null;
     private isConnected: boolean = false;
     private hasLoggedError: boolean = false;
-    private readonly defaultTTL: number = parseInt(process.env.REDIS_TTL || DEFAULTS.REDIS_TTL);
+    private readonly defaultTTL: number = parseInt(process.env.REDIS_TTL!);
 
     constructor() {
         this.initialize();
@@ -18,9 +14,9 @@ export class RedisService {
 
     private async initialize() {
         try {
-            const host = process.env.REDIS_HOST || DEFAULTS.REDIS_HOST;
-            const port = process.env.REDIS_PORT || DEFAULTS.REDIS_PORT;
-            const password = process.env.REDIS_PASSWORD || DEFAULTS.REDIS_PASSWORD;
+            const host = process.env.REDIS_HOST!;
+            const port = process.env.REDIS_PORT!;
+            const password = process.env.REDIS_PASSWORD || "";
 
             const url = password
                 ? `redis://:${password}@${host}:${port}`

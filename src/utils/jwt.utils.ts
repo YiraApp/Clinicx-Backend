@@ -1,12 +1,10 @@
 import jwt from 'jsonwebtoken';
-import { DEFAULTS } from '../config/constants.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || DEFAULTS.JWT_SECRET;
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || DEFAULTS.REFRESH_TOKEN_SECRET;
-const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY || DEFAULTS.ACCESS_TOKEN_EXPIRY;
-const REFRESH_TOKEN_EXPIRY = process.env.REFRESH_TOKEN_EXPIRY || DEFAULTS.REFRESH_TOKEN_EXPIRY;
-const JWT_ISSUER = process.env.JWT_ISSUER || DEFAULTS.JWT_ISSUER;
-const JWT_AUDIENCE = process.env.JWT_AUDIENCE || DEFAULTS.JWT_AUDIENCE;
+const JWT_SECRET = process.env.JWT_SECRET!;
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET!;
+const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY!;
+const REFRESH_TOKEN_EXPIRY = process.env.REFRESH_TOKEN_EXPIRY!;
+const JWT_ISSUER = process.env.JWT_ISSUER!;
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE!;
 
 /**
  * Payload interface for JWT tokens.

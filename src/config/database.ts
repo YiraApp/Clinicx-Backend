@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import dotenv from "dotenv";
+dotenv.config();
 
 import { User } from "../models/Account/user.model.js";
 import { UserToken } from "../models/Account/usertoken.model.js";
@@ -28,16 +29,29 @@ import { UserRegistrationLink } from "../models/Organizations/user-registration-
 import { ConsentTemplate } from "../models/Consent/consent-template.model.js";
 import { SignatureField } from "../models/Consent/signature-field.model.js";
 
+// Debug logs for Azure troubleshooting
+if (process.env.NODE_ENV !== 'production' || true) { 
+    console.log("--- Azure Environment Debug ---");
+    console.log("Available Env Keys:", Object.keys(process.env).filter(k => !k.includes("PASSWORD") && !k.includes("SECRET")));
+    console.log("DB_HOST exists:", !!process.env.DB_HOST);
+    console.log("DB_NAME exists:", !!process.env.DB_NAME);
+    console.log("-------------------------------");
+}
 
-import { DEFAULTS } from "./constants.js";
+const requiredEnvVars = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"];
+const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+
+if (missingVars.length > 0) {
+    throw new Error(`Database configuration missing for: ${missingVars.join(", ")}. Please check your Azure Application Settings.`);
+}
 
 export const AppDataSource = new DataSource({
     type: "mssql",
-    host: process.env.DB_HOST || DEFAULTS.DB_HOST,
-    port: parseInt(process.env.DB_PORT || DEFAULTS.DB_PORT),
-    username: process.env.DB_USER || DEFAULTS.DB_USER,
-    password: process.env.DB_PASSWORD || DEFAULTS.DB_PASSWORD,
-    database: process.env.DB_NAME || DEFAULTS.DB_NAME,
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT!),
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
     logging: false,
     synchronize: false,
     entities: [
@@ -48,6 +62,7 @@ export const AppDataSource = new DataSource({
         HealthcareProvider, HealthcareProviderAvailability,
         PatientRegistration, PatientInsurance, UserRegistrationLink,
         ConsentTemplate, SignatureField
+
     ],
     extra: {
         encrypt: true,
@@ -58,14 +73,14 @@ export const AppDataSource = new DataSource({
 export const initializeDatabase = async () => {
     try {
         console.log("ALL ENV KEYS:", Object.keys(process.env));
-        console.log("DB_HOST:", process.env.DB_HOST || DEFAULTS.DB_HOST);
-        console.log("DB_USER:", process.env.DB_USER || DEFAULTS.DB_USER);
-        console.log("DB_NAME:", process.env.DB_NAME || DEFAULTS.DB_NAME);
-        console.log(`📡 Attempting to connect to database at: ${process.env.DB_HOST || DEFAULTS.DB_HOST}`);
+        console.log("DB_HOST:", process.env.DB_HOST);
+        console.log("DB_USER:", process.env.DB_USER);
+        console.log("DB_NAME:", process.env.DB_NAME);
+        console.log(`📡 Attempting to connect to database at: ${process.env.DB_HOST}`);
 
-        console.log(`📡 Attempting to connect to database at: ${process.env.DB_NAME || DEFAULTS.DB_NAME}`);
+        console.log(`📡 Attempting to connect to database at: ${process.env.DB_NAME}`);
 
-        console.log(`📡 Attempting to connect to database at: ${process.env.DB_PORT || DEFAULTS.DB_PORT}`);
+        console.log(`📡 Attempting to connect to database at: ${process.env.DB_PORT}`);
         await AppDataSource.initialize();
         console.log("✅ Database connected");
     } catch (err) {
