@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import dotenv from "dotenv";
+dotenv.config();
 
 import { User } from "../models/Account/user.model.js";
 import { UserToken } from "../models/Account/usertoken.model.js";
@@ -25,11 +26,23 @@ import { HealthcareProviderAvailability } from "../models/Organizations/healthca
 import { PatientRegistration } from "../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../models/Organizations/patient-insurance.model.js";
 import { UserRegistrationLink } from "../models/Organizations/user-registration-link.model.js";
+import { ConsentTemplate } from "../models/Consent/consent-template.model.js";
+import { SignatureField } from "../models/Consent/signature-field.model.js";
 
-dotenv.config();
+// Debug logs for Azure troubleshooting
+if (process.env.NODE_ENV !== 'production' || true) { 
+    console.log("--- Azure Environment Debug ---");
+    console.log("Available Env Keys:", Object.keys(process.env).filter(k => !k.includes("PASSWORD") && !k.includes("SECRET")));
+    console.log("DB_HOST exists:", !!process.env.DB_HOST);
+    console.log("DB_NAME exists:", !!process.env.DB_NAME);
+    console.log("-------------------------------");
+}
 
-if (!process.env.DB_HOST || !process.env.DB_PORT || !process.env.DB_USER || !process.env.DB_PASSWORD || !process.env.DB_NAME) {
-    throw new Error("Database configuration missing in .env file");
+const requiredEnvVars = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"];
+const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+
+if (missingVars.length > 0) {
+    throw new Error(`Database configuration missing for: ${missingVars.join(", ")}. Please check your Azure Application Settings.`);
 }
 
 export const AppDataSource = new DataSource({
@@ -47,7 +60,9 @@ export const AppDataSource = new DataSource({
         MainSpecialty, MainSubSpecialty, MainDepartment,
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
         HealthcareProvider, HealthcareProviderAvailability,
-        PatientRegistration, PatientInsurance, UserRegistrationLink
+        PatientRegistration, PatientInsurance, UserRegistrationLink,
+        ConsentTemplate, SignatureField
+
     ],
     extra: {
         encrypt: true,
@@ -57,6 +72,15 @@ export const AppDataSource = new DataSource({
 
 export const initializeDatabase = async () => {
     try {
+        console.log("ALL ENV KEYS:", Object.keys(process.env));
+        console.log("DB_HOST:", process.env.DB_HOST);
+        console.log("DB_USER:", process.env.DB_USER);
+        console.log("DB_NAME:", process.env.DB_NAME);
+        console.log(`📡 Attempting to connect to database at: ${process.env.DB_HOST}`);
+
+        console.log(`📡 Attempting to connect to database at: ${process.env.DB_NAME}`);
+
+        console.log(`📡 Attempting to connect to database at: ${process.env.DB_PORT}`);
         await AppDataSource.initialize();
         console.log("✅ Database connected");
     } catch (err) {

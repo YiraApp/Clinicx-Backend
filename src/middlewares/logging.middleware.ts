@@ -3,9 +3,6 @@ import { AppDataSource } from "../config/database.js";
 import { APILog } from "../models/Logs/apilog.model.js";
 import { verifyAccessToken } from "../utils/jwt.utils.js";
 import { findByAccessToken } from "../repositories/Account/token.repository.js";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const apiLogRepository = AppDataSource.getRepository(APILog);
 

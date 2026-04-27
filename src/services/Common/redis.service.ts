@@ -1,18 +1,12 @@
 import { createClient, type RedisClientType } from "redis";
-import dotenv from "dotenv";
-
-dotenv.config();
-
 /**
  * Service to handle Redis caching operations.
- * Designed with a fail-safe approach: if Redis is unavailable, 
- * it logs the error and allows the application to continue using the database.
  */
 export class RedisService {
     private client: RedisClientType | null = null;
     private isConnected: boolean = false;
     private hasLoggedError: boolean = false;
-    private readonly defaultTTL: number = parseInt(process.env.REDIS_TTL || "3600");
+    private readonly defaultTTL: number = parseInt(process.env.REDIS_TTL!);
 
     constructor() {
         this.initialize();
@@ -20,8 +14,8 @@ export class RedisService {
 
     private async initialize() {
         try {
-            const host = process.env.REDIS_HOST || "localhost";
-            const port = process.env.REDIS_PORT || "6379";
+            const host = process.env.REDIS_HOST!;
+            const port = process.env.REDIS_PORT!;
             const password = process.env.REDIS_PASSWORD || "";
 
             const url = password

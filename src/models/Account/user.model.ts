@@ -1,4 +1,4 @@
-import { Entity, PrimaryColumn, Column, OneToMany, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm";
 import { UserRole } from "./userrole.model.js";
 import { Address } from "./address.model.js";
 
@@ -111,5 +111,5 @@ export class User {
     EmergencyContactPhone?: string | null;
 
     @OneToMany(() => UserRole, (userRole) => userRole.User)
-    UserRoles: UserRole[];
+    UserRoles: Relation<UserRole>[];
 }

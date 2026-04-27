@@ -1,9 +1,6 @@
 import nodemailer from "nodemailer";
 import { templateRepository } from "../../repositories/Common/template.repository.js";
-import dotenv from "dotenv";
 import type { IMailService } from "../../interfaces/Service/Mail/IMailService.js";
-
-dotenv.config();
 
 /**
  * Service for sending emails using dynamic templates from the database.
@@ -12,13 +9,14 @@ export class MailService implements IMailService {
     private transporter: nodemailer.Transporter;
 
     constructor() {
+        const port = parseInt(process.env.EMAIL_PORT!);
         this.transporter = nodemailer.createTransport({
-            host: process.env.EMAIL_HOST,
-            port: parseInt(process.env.EMAIL_PORT || "587"),
-            secure: process.env.EMAIL_PORT === "465", // true for 465, false for other ports
+            host: process.env.EMAIL_HOST!,
+            port: port,
+            secure: port === 465, // true for 465, false for other ports
             auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS,
+                user: process.env.EMAIL_USER!,
+                pass: process.env.EMAIL_PASS!,
             },
         });
     }

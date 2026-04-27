@@ -1,18 +1,10 @@
 import jwt from 'jsonwebtoken';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-const JWT_SECRET = process.env.JWT_SECRET;
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
-const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY;
-const REFRESH_TOKEN_EXPIRY = process.env.REFRESH_TOKEN_EXPIRY;
-const JWT_ISSUER = process.env.JWT_ISSUER;
-const JWT_AUDIENCE = process.env.JWT_AUDIENCE;
-
-if (!JWT_SECRET || !REFRESH_TOKEN_SECRET || !ACCESS_TOKEN_EXPIRY || !REFRESH_TOKEN_EXPIRY || !JWT_ISSUER || !JWT_AUDIENCE) {
-    throw new Error("JWT configuration missing in .env file");
-}
+const JWT_SECRET = process.env.JWT_SECRET!;
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET!;
+const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY!;
+const REFRESH_TOKEN_EXPIRY = process.env.REFRESH_TOKEN_EXPIRY!;
+const JWT_ISSUER = process.env.JWT_ISSUER!;
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE!;
 
 /**
  * Payload interface for JWT tokens.

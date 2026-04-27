@@ -12,6 +12,7 @@ const otpRouter = Router();
 
 // We protect these routes because the user must be authenticated (even if not verified) to trigger verification
 otpRouter.post("/sendOTP", authMiddleware, otpController.sendOTP.bind(otpController));
+otpRouter.post("/resendOTP", authMiddleware, otpController.resendOTP.bind(otpController));
 otpRouter.post("/verifyOTP", authMiddleware, otpController.verifyOTP.bind(otpController));
 
 // Public check for account existence
