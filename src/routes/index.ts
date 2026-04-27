@@ -32,7 +32,7 @@ router.use("/hospital-registry", hospitalRegistryRouter);
 router.use("/providers", healthcareProviderRouter);
 router.use("/patients", patientRegistrationRouter);
 
-router.get("/status", (req, res) => {
+router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });
 });
 
