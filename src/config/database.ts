@@ -1,7 +1,10 @@
+import dotenv from "dotenv";
+if (process.env.NODE_ENV !== "production") {
+    dotenv.config();
+}
 import "reflect-metadata";
 import { DataSource } from "typeorm";
-import dotenv from "dotenv";
-dotenv.config();
+
 
 import { User } from "../models/Account/user.model.js";
 import { UserToken } from "../models/Account/usertoken.model.js";
@@ -30,7 +33,7 @@ import { ConsentTemplate } from "../models/Consent/consent-template.model.js";
 import { SignatureField } from "../models/Consent/signature-field.model.js";
 
 // Debug logs for Azure troubleshooting
-if (process.env.NODE_ENV !== 'production' || true) { 
+if (process.env.NODE_ENV !== 'production' || true) {
     console.log("--- Azure Environment Debug ---");
     console.log("Available Env Keys:", Object.keys(process.env).filter(k => !k.includes("PASSWORD") && !k.includes("SECRET")));
     console.log("DB_HOST exists:", !!process.env.DB_HOST);

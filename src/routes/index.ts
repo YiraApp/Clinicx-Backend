@@ -13,6 +13,8 @@ import masterRouter from "./Masters/master.routes.js";
 import hospitalRegistryRouter from "./Organizations/hospital-registry.routes.js";
 import { healthcareProviderRouter } from "./Organizations/healthcare-provider.routes.js";
 import { patientRegistrationRouter } from "./Organizations/patient-registration.routes.js";
+import fileRouter from "./Common/file.routes.js";
+
 
 const router = Router();
 
@@ -31,6 +33,8 @@ router.use("/masters", masterRouter);
 router.use("/hospital-registry", hospitalRegistryRouter);
 router.use("/providers", healthcareProviderRouter);
 router.use("/patients", patientRegistrationRouter);
+router.use("/files", fileRouter);
+
 
 router.get("/status", (req, res) => {
     res.json({ message: "API is working properly" });
