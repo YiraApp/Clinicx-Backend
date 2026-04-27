@@ -28,6 +28,26 @@ export class OTPController {
     }
 
     /**
+     * Resends OTP to the provided contact.
+     */
+    async resendOTP(req: Request, res: Response) {
+        try {
+            const { contact, purpose, countryCode } = req.body;
+
+            if (!contact) {
+                return res.status(400).json(ApiResponse.error("Contact (email or mobile) is required."));
+            }
+
+            const otpPurpose = purpose || OTPPurpose.VERIFICATION;
+            const result = await otpService.resendOTP(contact, otpPurpose, countryCode);
+            
+            return res.json(ApiResponse.success(result, "OTP resent successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
      * Verifies the OTP provided by the user.
      */
     async verifyOTP(req: Request, res: Response) {

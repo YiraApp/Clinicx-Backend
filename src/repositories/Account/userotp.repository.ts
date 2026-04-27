@@ -161,6 +161,18 @@ export class UserOTPRepository {
     }
 
     /**
+     * Counts how many OTPs were sent to a contact in the last 24 hours for a specific purpose.
+     */
+    async countDailyAttempts(contact: string, purpose: OTPPurpose): Promise<number> {
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        return await this.repo.createQueryBuilder('u')
+            .where('u.Contact = :contact', { contact })
+            .andWhere('u.Purpose = :purpose', { purpose })
+            .andWhere('u.CreatedDate >= :date', { date: twentyFourHoursAgo })
+            .getCount();
+    }
+
+    /**
      * Cleans up expired OTPs (can be called periodically)
      */
     async cleanupExpiredOTPs(): Promise<void> {

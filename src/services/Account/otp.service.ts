@@ -44,6 +44,12 @@ export class OTPService {
             }
         }
 
+        // Check daily attempt limit (Max 3 OTPs per 24 hours per purpose)
+        const dailyAttempts = await userOTPRepository.countDailyAttempts(finalContact, purpose);
+        if (dailyAttempts >= 3) {
+            throw new Error("Maximum OTP attempts reached. Please try again after 24 hours.");
+        }
+
         // Optional: Find user for personalized email (don't throw error if not found)
         let user;
         if (isEmail) {
@@ -94,6 +100,37 @@ export class OTPService {
             contactType,
             message
         };
+    }
+
+    /**
+     * Resends OTP to a contact (Email or Mobile).
+     * This marks any existing unexpired OTPs for this contact as expired before sending a new one.
+     */
+    async resendOTP(
+        contact: string,
+        purpose: OTPPurpose = OTPPurpose.VERIFICATION,
+        countryCode?: string
+    ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const isEmail = emailRegex.test(contact);
+
+        let lookupContact = contact;
+        if (!isEmail) {
+            if (contact.startsWith("91") && !countryCode) {
+                lookupContact = contact.substring(2);
+            } else if (countryCode) {
+                lookupContact = contact;
+            }
+        }
+
+        // Find existing unexpired OTP and mark it as expired
+        const existingOTP = await userOTPRepository.findLatestByContact(lookupContact);
+        if (existingOTP && existingOTP.SessionId) {
+            await userOTPRepository.markAsExpired(existingOTP.SessionId);
+        }
+
+        // Send a new OTP
+        return await this.sendOTP(contact, purpose, countryCode);
     }
 
     /**
