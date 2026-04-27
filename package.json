@@ -22,6 +22,7 @@
     "@types/nodemailer": "^8.0.0",
     "@types/redis": "^4.0.10",
     "@types/uuid": "^10.0.0",
+    "cpy-cli": "^7.0.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"

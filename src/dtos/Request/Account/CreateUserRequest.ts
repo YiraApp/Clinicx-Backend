@@ -1,4 +1,17 @@
 /**
+ * DTO for address details.
+ */
+export interface AddressDTO {
+    AddressLine1?: string | undefined;
+    AddressLine2?: string | undefined;
+    City?: string | undefined;
+    State?: string | undefined;
+    Pincode?: string | undefined;
+    Landmark?: string | undefined;
+    Country?: string | undefined;
+}
+
+/**
  * Request DTO for creating a new User.
  */
 export interface CreateUserRequest {
@@ -18,4 +31,16 @@ export interface CreateUserRequest {
     LoginURL?: string | undefined;
     IsMobileVerified?: boolean | undefined;
     IsEmailVerified?: boolean | undefined;
+    
+    PermanentAddress?: AddressDTO | undefined;
+    TemporaryAddress?: AddressDTO | undefined;
+
+    // Fallback fields (if only one address is provided, it's treated as Permanent)
+    AddressLine1?: string | undefined;
+    AddressLine2?: string | undefined;
+    City?: string | undefined;
+    State?: string | undefined;
+    Pincode?: string | undefined;
+    Landmark?: string | undefined;
+    Country?: string | undefined;
 }

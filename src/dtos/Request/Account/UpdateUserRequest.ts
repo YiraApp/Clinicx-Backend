@@ -1,3 +1,5 @@
+import type { AddressDTO } from "./CreateUserRequest.js";
+
 /**
  * Request DTO for updating an existing User.
  */
@@ -21,10 +23,19 @@ export interface UpdateUserRequest {
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;
-    Address?: string | undefined;
+    
+    PermanentAddress?: AddressDTO | undefined;
+    TemporaryAddress?: AddressDTO | undefined;
+
+    // Fallback fields (if only one address is provided, it's treated as Permanent)
+    AddressLine1?: string | undefined;
+    AddressLine2?: string | undefined;
     City?: string | undefined;
     State?: string | undefined;
     Pincode?: string | undefined;
+    Landmark?: string | undefined;
+    Country?: string | undefined;
+    
     EmergencyContactName?: string | undefined;
     EmergencyContactPhone?: string | undefined;
     workspaces: UserRoleAssignment[];

@@ -1,8 +1,7 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import dotenv from "dotenv";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+
 import { User } from "../models/Account/user.model.js";
 import { UserToken } from "../models/Account/usertoken.model.js";
 import { UserOTP } from "../models/Account/userotp.model.js";
@@ -25,13 +24,10 @@ import { HealthcareProvider } from "../models/Organizations/healthcare-provider.
 import { HealthcareProviderAvailability } from "../models/Organizations/healthcare-provider-availability.model.js";
 import { PatientRegistration } from "../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../models/Organizations/patient-insurance.model.js";
+import { UserRegistrationLink } from "../models/Organizations/user-registration-link.model.js";
 
-dotenv.config(); // Load environment variables from .env
+dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Ensure all required DB config is present
 if (!process.env.DB_HOST || !process.env.DB_PORT || !process.env.DB_USER || !process.env.DB_PASSWORD || !process.env.DB_NAME) {
     throw new Error("Database configuration missing in .env file");
 }
@@ -39,21 +35,20 @@ if (!process.env.DB_HOST || !process.env.DB_PORT || !process.env.DB_USER || !pro
 export const AppDataSource = new DataSource({
     type: "mssql",
     host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT),
+    port: parseInt(process.env.DB_PORT!),
     username: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     logging: false,
-    synchronize: false,                   // Important: do NOT auto-create tables
+    synchronize: false,
     entities: [
-        User, UserToken, UserOTP, Address, Role, UserRole, 
+        User, UserToken, UserOTP, Address, Role, UserRole,
         Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template,
         MainSpecialty, MainSubSpecialty, MainDepartment,
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
         HealthcareProvider, HealthcareProviderAvailability,
-        PatientRegistration, PatientInsurance
-    ], // Explicitly listed for best results with ESM/TSX
-    // subscribers: [join(__dirname, "../subscribers/*.{ts,js}")], // Optional
+        PatientRegistration, PatientInsurance, UserRegistrationLink
+    ],
     extra: {
         encrypt: true,
         trustServerCertificate: true,
@@ -63,9 +58,9 @@ export const AppDataSource = new DataSource({
 export const initializeDatabase = async () => {
     try {
         await AppDataSource.initialize();
-        console.info("Database connection initialized successfully!");
+        console.log("✅ Database connected");
     } catch (err) {
-        console.error("Error connecting to the database", err);
+        console.error("❌ DB Error:", err);
         throw err;
     }
 };

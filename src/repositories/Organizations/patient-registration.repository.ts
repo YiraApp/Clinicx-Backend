@@ -25,6 +25,7 @@ export class PatientRegistrationRepository {
 
         const query = this.repo.createQueryBuilder("pr")
             .leftJoinAndSelect("pr.User", "u")
+            .leftJoinAndSelect("u.PermanentAddress", "pa")
             .leftJoinAndSelect("pr.Organization", "org")
             .leftJoinAndSelect("pr.Hospital", "h")
             .where("pr.IsDeleted = 0 AND u.IsDeleted = 0");
@@ -58,10 +59,10 @@ export class PatientRegistrationRepository {
             gender: pr.User?.Gender,
             dateOfBirth: pr.User?.DateOfBirth,
             bloodGroup: pr.User?.BloodGroup,
-            address: pr.User?.Address,
-            city: pr.User?.City,
-            state: pr.User?.State,
-            pincode: pr.User?.Pincode,
+            address: pr.User?.PermanentAddress?.AddressLine1,
+            city: pr.User?.PermanentAddress?.City,
+            state: pr.User?.PermanentAddress?.State,
+            pincode: pr.User?.PermanentAddress?.Pincode,
             emergencyContactName: pr.User?.EmergencyContactName,
             emergencyContactPhone: pr.User?.EmergencyContactPhone,
             allergies: pr.Allergies,
