@@ -1,9 +1,7 @@
 import nodemailer from "nodemailer";
 import { templateRepository } from "../../repositories/Common/template.repository.js";
-import dotenv from "dotenv";
+import { DEFAULTS } from "../../config/constants.js";
 import type { IMailService } from "../../interfaces/Service/Mail/IMailService.js";
-
-dotenv.config();
 
 /**
  * Service for sending emails using dynamic templates from the database.
@@ -12,13 +10,14 @@ export class MailService implements IMailService {
     private transporter: nodemailer.Transporter;
 
     constructor() {
+        const port = parseInt(process.env.EMAIL_PORT || DEFAULTS.EMAIL_PORT);
         this.transporter = nodemailer.createTransport({
-            host: process.env.EMAIL_HOST,
-            port: parseInt(process.env.EMAIL_PORT || "587"),
-            secure: process.env.EMAIL_PORT === "465", // true for 465, false for other ports
+            host: process.env.EMAIL_HOST || DEFAULTS.EMAIL_HOST,
+            port: port,
+            secure: port === 465, // true for 465, false for other ports
             auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS,
+                user: process.env.EMAIL_USER || DEFAULTS.EMAIL_USER,
+                pass: process.env.EMAIL_PASS || DEFAULTS.EMAIL_PASS,
             },
         });
     }
@@ -53,11 +52,11 @@ export class MailService implements IMailService {
         const html = this.replacePlaceholders(template.Message, data);
 
         const mailOptions = {
-            from: `"${process.env.EMAIL_FROM_ALIAS}" <${process.env.EMAIL_FROM}>`,
+            from: `"${process.env.EMAIL_FROM_ALIAS || DEFAULTS.EMAIL_FROM_ALIAS}" <${process.env.EMAIL_FROM || DEFAULTS.EMAIL_FROM}>`,
             to: to,
             subject: subject,
             html: html,
-            replyTo: process.env.EMAIL_REPLY_TO,
+            replyTo: process.env.EMAIL_REPLY_TO || DEFAULTS.EMAIL_REPLY_TO,
         };
 
         try {
@@ -75,7 +74,7 @@ export class MailService implements IMailService {
      */
     async sendTestEmail(to: string): Promise<void> {
         const mailOptions = {
-            from: `"${process.env.EMAIL_FROM_ALIAS}" <${process.env.EMAIL_FROM}>`,
+            from: `"${process.env.EMAIL_FROM_ALIAS || DEFAULTS.EMAIL_FROM_ALIAS}" <${process.env.EMAIL_FROM || DEFAULTS.EMAIL_FROM}>`,
             to: to,
             subject: "Clinicx - SMTP Test Email",
             html: `
@@ -88,7 +87,7 @@ export class MailService implements IMailService {
                     <p style="font-size: 12px; color: #777;">Sent at: ${new Date().toLocaleString()}</p>
                 </div>
             `,
-            replyTo: process.env.EMAIL_REPLY_TO,
+            replyTo: process.env.EMAIL_REPLY_TO || DEFAULTS.EMAIL_REPLY_TO,
         };
 
         try {

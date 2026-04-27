@@ -1,15 +1,13 @@
 import "reflect-metadata";
-import dotenv from "dotenv"; // Restart trigger
+import { DEFAULTS } from "./config/constants.js";
 import app from "./app.js";
 import { initializeDatabase } from "./config/database.js";
 import { MigrationService } from "./services/Common/migration.service.js";
 
-dotenv.config();
-
 // Set Global Timezone to IST
 process.env.TZ = "Asia/Kolkata";
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || DEFAULTS.PORT;
 
 const startServer = async () => {
     try {

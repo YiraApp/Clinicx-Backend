@@ -3,9 +3,7 @@ import { AppDataSource } from "../config/database.js";
 import { APILog } from "../models/Logs/apilog.model.js";
 import { verifyAccessToken } from "../utils/jwt.utils.js";
 import { findByAccessToken } from "../repositories/Account/token.repository.js";
-import dotenv from "dotenv";
-
-dotenv.config();
+import { DEFAULTS } from "../config/constants.js";
 
 const apiLogRepository = AppDataSource.getRepository(APILog);
 
@@ -43,7 +41,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     requestLog.IPAddress = ip;
     requestLog.DeviceInfo = (req.headers["user-agent"] || "").substring(0, 500);
 
-    if (process.env.NODE_ENV !== 'production') {
+    if ((process.env.NODE_ENV || DEFAULTS.NODE_ENV) !== 'production') {
         console.log(`[DEBUG] Audit Log IP: ${ip} | Path: ${req.path}`);
     }
 

@@ -1,17 +1,15 @@
-import dotenv from "dotenv";
-
-dotenv.config();
+import { DEFAULTS } from "../../config/constants.js";
 
 /**
  * Service for sending SMS using SMS Striker API.
  */
 export class SMSService {
-    private username = process.env.SMS_USER;
-    private password = process.env.SMS_PASSWORD;
-    private baseUrl = process.env.SMS_BASE_URL;
-    private type = process.env.SMS_TYPE || "1";
-    private templateId = process.env.SMS_TEMPLATE_ID;
-    private from = process.env.SMS_FROM;
+    private username = process.env.SMS_USER || DEFAULTS.SMS_USER;
+    private password = process.env.SMS_PASSWORD || DEFAULTS.SMS_PASSWORD;
+    private baseUrl = process.env.SMS_BASE_URL || DEFAULTS.SMS_BASE_URL;
+    private type = process.env.SMS_TYPE || DEFAULTS.SMS_TYPE;
+    private templateId = process.env.SMS_TEMPLATE_ID || DEFAULTS.SMS_TEMPLATE_ID;
+    private from = process.env.SMS_FROM || DEFAULTS.SMS_FROM;
 
     /**
      * Sends a single SMS message.
