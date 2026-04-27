@@ -1,4 +1,4 @@
-import { Entity, PrimaryColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm";
+import { Entity, PrimaryColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
 import { UserRole } from "./userrole.model.js";
 import { Address } from "./address.model.js";
 

@@ -1,4 +1,4 @@
-import { Repository } from "typeorm";
+import { Repository } from "typeorm/index.js";
 import { AppDataSource } from "../../config/database.js";
 import { APILog } from "../../models/Logs/apilog.model.js";
 

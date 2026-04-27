@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
 import { SignatureField } from "./signature-field.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
 

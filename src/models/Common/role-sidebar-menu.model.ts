@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from "typeorm/index.js";
 import { SidebarMenu } from "./sidebar-menu.model.js";
 
 @Entity({ name: "RoleSidebarMenus" })

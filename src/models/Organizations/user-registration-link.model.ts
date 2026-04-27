@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column } from "typeorm/index.js";
 
 @Entity({ name: "UserRegistrationLinks" })
 export class UserRegistrationLink {

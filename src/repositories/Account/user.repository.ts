@@ -1,4 +1,4 @@
-import { In } from "typeorm";
+import { In } from "typeorm/index.js";
 import { AppDataSource } from "../../config/database.js";
 import { User } from "../../models/Account/user.model.js";
 import type { IUserRepository } from "../../interfaces/Repository/Account/IUserRepository.js";
