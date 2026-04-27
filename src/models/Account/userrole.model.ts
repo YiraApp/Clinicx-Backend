@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Relation } from "typeorm";
 import { User } from "./user.model.js";
 import { Role } from "./role.model.js";
 import { Organization } from "../Organizations/organization.model.js";
@@ -14,7 +14,7 @@ export class UserRole {
 
     @ManyToOne(() => User)
     @JoinColumn({ name: "UserId" })
-    User: User;
+    User: Relation<User>;
 
     @Column("uniqueidentifier")
     RoleId: string;
