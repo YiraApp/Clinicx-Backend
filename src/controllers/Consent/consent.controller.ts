@@ -64,6 +64,50 @@ export class ConsentController {
             res.status(500).json({ error: "Failed to fetch templates" });
         }
     }
+
+    /**
+     * PUT /api/consent/templates/:id
+     */
+    async updateTemplate(req: Request, res: Response): Promise<void> {
+        try {
+            const templateId = parseInt(req.params.id as string);
+            if (isNaN(templateId)) {
+                res.status(400).json({ error: "Valid Template ID is required." });
+                return;
+            }
+
+            const file = req.file as Express.Multer.File | undefined;
+            const { Name, HospitalName, OrgName, Description, Status, IsDeleted, UpdatedBy, Fields } = req.body;
+
+            const updatedTemplate = await consentService.updateTemplate(
+                templateId,
+                file,
+                {
+                    Name,
+                    HospitalName,
+                    OrgName,
+                    Description,
+                    Status: Status !== undefined ? Status === 'true' || Status === true : undefined,
+                    IsDeleted: IsDeleted !== undefined ? IsDeleted === 'true' || IsDeleted === true : undefined,
+                    UpdatedBy
+                },
+                Fields
+            );
+
+            if (!updatedTemplate) {
+                res.status(404).json({ error: "Template not found." });
+                return;
+            }
+
+            res.status(200).json({
+                message: "Consent template updated successfully",
+                data: updatedTemplate
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error updating template:", error.message);
+            res.status(500).json({ error: "Failed to update consent template", detail: error.message });
+        }
+    }
 }
 
 export const consentController = new ConsentController();

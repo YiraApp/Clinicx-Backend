@@ -29,6 +29,10 @@ export class Hospital {
     @Column({ type: "varchar", length: 15, nullable: true })
     MobileNumber?: string;
 
+    @Column({ type: "varchar", length: 10, nullable: true })
+    CountryCode?: string;
+
+
     @Column({ type: "varchar", length: 500, nullable: true })
     Address?: string;
 

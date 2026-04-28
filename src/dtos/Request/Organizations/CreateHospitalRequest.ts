@@ -5,6 +5,8 @@ export interface CreateHospitalRequest {
     Name: string;
     Email?: string;
     MobileNumber: string;
+    CountryCode?: string;
+
     Address?: string;
     TermsAccepted?: boolean;
     roleId: string;

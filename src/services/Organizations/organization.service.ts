@@ -48,8 +48,10 @@ export class OrganizationService implements IOrganizationService {
             const orgPrepare: Partial<Organization> = {
                 Name: data.Name,
                 MobileNumber: data.MobileNumber,
+                CountryCode: data.CountryCode,
                 Status: true
             };
+
             if (data.OrgCode) orgPrepare.OrgCode = data.OrgCode;
             if (data.OrganizationType) orgPrepare.OrganizationType = data.OrganizationType;
             if (data.Email) orgPrepare.Email = data.Email;
@@ -66,8 +68,10 @@ export class OrganizationService implements IOrganizationService {
                 const userCreateData: CreateUserRequest = {
                     FirstName: data.Name,
                     PhoneNumber: data.MobileNumber,
+                    CountryCode: data.CountryCode,
                     Password: this.generateStrongPassword(8),
                 };
+
                 if (data.Email) userCreateData.Email = data.Email;
 
                 // Add details for Welcome Email
@@ -132,16 +136,23 @@ export class OrganizationService implements IOrganizationService {
         // Validation for unique fields if they are changing
         if (data.OrgCode && data.OrgCode !== org.OrgCode) {
             const existingByCode = await organizationRepository.findByCode(data.OrgCode);
-            if (existingByCode) throw new Error(`An organization with code ${data.OrgCode} already exists.`);
+            if (existingByCode && existingByCode.Id !== data.Id) {
+                throw new Error(`An organization with code ${data.OrgCode} already exists.`);
+            }
         }
         if (data.Email && data.Email !== org.Email) {
             const existingByEmail = await organizationRepository.findByEmail(data.Email);
-            if (existingByEmail) throw new Error(`An organization with email ${data.Email} already exists.`);
+            if (existingByEmail && existingByEmail.Id !== data.Id) {
+                throw new Error(`An organization with email ${data.Email} already exists.`);
+            }
         }
         if (data.MobileNumber && data.MobileNumber !== org.MobileNumber) {
             const existingByMobile = await organizationRepository.findByMobile(data.MobileNumber);
-            if (existingByMobile) throw new Error(`An organization with mobile number ${data.MobileNumber} already exists.`);
+            if (existingByMobile && existingByMobile.Id !== data.Id) {
+                throw new Error(`An organization with mobile number ${data.MobileNumber} already exists.`);
+            }
         }
+
 
         return await AppDataSource.transaction(async (transactionalEntityManager) => {
             // 1. Update Organization properties
@@ -150,7 +161,9 @@ export class OrganizationService implements IOrganizationService {
             if (data.OrganizationType) org.OrganizationType = data.OrganizationType;
             if (data.Email) org.Email = data.Email;
             if (data.MobileNumber) org.MobileNumber = data.MobileNumber;
+            if (data.CountryCode) org.CountryCode = data.CountryCode;
             if (data.Address) org.Address = data.Address;
+
             if (data.Website) org.Website = data.Website;
             if (data.Status !== undefined) org.Status = data.Status;
 
@@ -162,20 +175,36 @@ export class OrganizationService implements IOrganizationService {
                     throw new Error("RoleId is required when changing organization contact number.");
                 }
 
-                // A. Revoke previous user's role for this organization (effectively removing the admin)
-                await transactionalEntityManager.update(UserRole,
-                    { OrganizationId: org.Id, RoleId: data.roleId, IsDeleted: false },
-                    { IsDeleted: true, Status: false, UpdatedAt: new Date() }
-                );
+                // Check if the user for the new mobile number is already the current admin
+                let newUser = await userRepository.findPrimaryByPhone(data.MobileNumber);
+                
+                // Find current active role
+                const currentRole = await transactionalEntityManager.findOne(UserRole, {
+                    where: { OrganizationId: org.Id, RoleId: data.roleId, IsDeleted: false, HospitalId: IsNull() }
+                });
+
+                if (currentRole && newUser && currentRole.UserId === newUser.Id) {
+                    // Same user, just different phone string format. Skip swap.
+                    return { organization: org, message: "Organization updated successfully." };
+                }
+
+                // A. Revoke previous user's role for this organization
+                if (currentRole) {
+                    currentRole.IsDeleted = true;
+                    currentRole.Status = false;
+                    currentRole.UpdatedAt = new Date();
+                    await transactionalEntityManager.save(UserRole, currentRole);
+                }
 
                 // B. Find or create new user for the new mobile number
-                let newUser = await userRepository.findPrimaryByPhone(data.MobileNumber);
                 if (!newUser) {
                     const userCreateData: CreateUserRequest = {
                         FirstName: data.Name || org.Name,
                         PhoneNumber: data.MobileNumber,
+                        CountryCode: data.CountryCode || org.CountryCode,
                         Password: this.generateStrongPassword(8),
                     };
+
                     const emailToUse = data.Email || org.Email;
                     if (emailToUse) userCreateData.Email = emailToUse;
 
@@ -185,17 +214,32 @@ export class OrganizationService implements IOrganizationService {
 
                 if (!newUser) throw new Error("Failed to resolve new user for organization linkage.");
 
-                // C. Assign admin role to the new user for this organization
-                const newUserRole = new UserRole();
-                newUserRole.UserId = newUser.Id;
-                newUserRole.RoleId = data.roleId;
-                newUserRole.OrganizationId = org.Id;
-                if (data.HospitalId) newUserRole.HospitalId = data.HospitalId;
-                newUserRole.Status = true;
-                newUserRole.IsDeleted = false;
+                // C. Assign admin role to the new user for this organization (Reactivate if exists)
+                let newUserRole = await transactionalEntityManager.findOne(UserRole, {
+                    where: { 
+                        UserId: newUser.Id, 
+                        RoleId: data.roleId, 
+                        OrganizationId: org.Id,
+                        HospitalId: IsNull()
+                    }
+                });
+
+                if (newUserRole) {
+                    newUserRole.IsDeleted = false;
+                    newUserRole.Status = true;
+                    newUserRole.UpdatedAt = new Date();
+                } else {
+                    newUserRole = new UserRole();
+                    newUserRole.UserId = newUser.Id;
+                    newUserRole.RoleId = data.roleId;
+                    newUserRole.OrganizationId = org.Id;
+                    newUserRole.Status = true;
+                    newUserRole.IsDeleted = false;
+                }
 
                 await transactionalEntityManager.save(UserRole, newUserRole);
             }
+
 
             return {
                 message: "Organization updated successfully.",

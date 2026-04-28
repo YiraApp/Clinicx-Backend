@@ -150,6 +150,23 @@ export class PatientRegistrationService {
 
         return { message: "Link sent successfully.", link };
     }
+
+    async getOrgHospPatients(page: number, pageSize: number, filters: any): Promise<any> {
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        
+        // Force the patient role ID filter
+        const finalFilters = {
+            ...filters,
+            roleId: PATIENT_ROLE_ID
+        };
+
+        if (filters.hospitalId) {
+            return await userRepository.getHospUsers(page, pageSize, finalFilters);
+        } else {
+            return await userRepository.getOrgUsers(page, pageSize, finalFilters);
+        }
+    }
 }
 
 export const patientRegistrationService = new PatientRegistrationService();

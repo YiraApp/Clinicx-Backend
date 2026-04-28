@@ -8,6 +8,8 @@ export interface UpdateOrganizationRequest {
     OrganizationType?: string;
     Email?: string;
     MobileNumber?: string;
+    CountryCode?: string;
+
     Address?: string;
     Website?: string;
     Status?: boolean;

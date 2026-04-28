@@ -28,7 +28,17 @@ export class SignatureField {
     @Column({ type: "float", default: 50 })
     Height: number;
 
+    @Column({ type: "bit", default: 0 })
+    IncludeSignerName: boolean;
+
+    @Column({ type: "float", nullable: true })
+    NameBoxWidth?: number;
+
+    @Column({ type: "float", nullable: true })
+    NameBoxHeight?: number;
+
     @Column({ type: "nvarchar", length: 50 })
+
     FieldType: string;
 
     @Column({ type: "nvarchar", length: 100, nullable: true })

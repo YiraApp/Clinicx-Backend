@@ -10,4 +10,7 @@ router.post("/templates", upload.single("file"), (req, res) => consentController
 // Get templates (filtered by hospital or organization)
 router.get("/templates", (req, res) => consentController.getTemplates(req, res));
 
+// Update an existing consent template (optionally with file upload)
+router.put("/templates/:id", upload.single("file"), (req, res) => consentController.updateTemplate(req, res));
+
 export default router;

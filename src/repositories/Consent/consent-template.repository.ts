@@ -53,6 +53,37 @@ export class ConsentTemplateRepository {
             relations: ["SignatureFields"]
         });
     }
+
+    /**
+     * Updates an existing template and replaces its signature fields.
+     */
+    async updateTemplate(templateId: number, updateData: Partial<ConsentTemplate>, fields?: Partial<SignatureField>[]): Promise<ConsentTemplate | null> {
+        const template = await this.getTemplateById(templateId);
+        if (!template) return null;
+
+        // Update template metadata
+        await this.templateRepo.update(templateId, {
+            ...updateData,
+            UpdatedAt: new Date()
+        });
+
+        // If new fields are provided, delete the old ones and insert the new ones
+        if (fields) {
+            // Hard delete old fields for this template
+            await this.fieldRepo.delete({ TemplateId: templateId });
+
+            if (fields.length > 0) {
+                const fieldEntities = fields.map(field => this.fieldRepo.create({
+                    ...field,
+                    Template: template,
+                    TemplateId: templateId
+                }));
+                await this.fieldRepo.save(fieldEntities);
+            }
+        }
+
+        return await this.getTemplateById(templateId);
+    }
 }
 
 export const consentTemplateRepository = new ConsentTemplateRepository();

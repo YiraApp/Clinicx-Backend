@@ -33,8 +33,10 @@ export class HospitalService implements IHospitalService {
                 const userCreateData: CreateUserRequest = {
                     FirstName: `${data.Name} Admin`,
                     PhoneNumber: data.MobileNumber,
+                    CountryCode: data.CountryCode,
                     Password: data.MobileNumber,
                 };
+
                 if (data.Email) userCreateData.Email = data.Email;
                 
                 // Details for Welcome Email
@@ -92,20 +94,36 @@ export class HospitalService implements IHospitalService {
             if (data.MobileNumber && data.MobileNumber !== oldMobile) {
                 if (!data.roleId) throw new Error("RoleId is required when changing hospital admin number.");
 
+                // Check if the user for the new mobile number is already the current admin
+                let newUser = await userRepository.findPrimaryByPhone(data.MobileNumber);
+                
+                // Find current active role
+                const currentRole = await transactionalEntityManager.findOne(UserRole, {
+                    where: { HospitalId: hospital.Id, RoleId: data.roleId, IsDeleted: false }
+                });
+
+                if (currentRole && newUser && currentRole.UserId === newUser.Id) {
+                    // Same user, just different phone string format. Skip swap.
+                    return { message: "Hospital updated successfully.", hospital };
+                }
+
                 // A. Revoke previous user's role for this hospital
-                await transactionalEntityManager.update(UserRole,
-                    { HospitalId: hospital.Id, RoleId: data.roleId, IsDeleted: false },
-                    { IsDeleted: true, Status: false, UpdatedAt: new Date() }
-                );
+                if (currentRole) {
+                    currentRole.IsDeleted = true;
+                    currentRole.Status = false;
+                    currentRole.UpdatedAt = new Date();
+                    await transactionalEntityManager.save(UserRole, currentRole);
+                }
 
                 // B. Find or create new user
-                let newUser = await userRepository.findPrimaryByPhone(data.MobileNumber);
                 if (!newUser) {
                     const userCreateData: CreateUserRequest = {
                         FirstName: `${data.Name || hospital.Name} Admin`,
                         PhoneNumber: data.MobileNumber,
+                        CountryCode: data.CountryCode || hospital.CountryCode,
                         Password: data.MobileNumber,
                     };
+
                     if (data.Email || hospital.Email) {
                         userCreateData.Email = (data.Email || hospital.Email) as string;
                     }
@@ -116,17 +134,33 @@ export class HospitalService implements IHospitalService {
 
                 if (!newUser) throw new Error("Failed to resolve new user for hospital linkage.");
 
-                // C. Assign role to new user
-                const newUserRole = new UserRole();
-                newUserRole.UserId = newUser.Id;
-                newUserRole.RoleId = data.roleId;
-                newUserRole.OrganizationId = data.OrganizationId || hospital.OrganizationId;
-                newUserRole.HospitalId = hospital.Id;
-                newUserRole.Status = true;
-                newUserRole.IsDeleted = false;
+                // C. Assign role to new user (Check if a record already exists to avoid UQ constraint)
+                let newUserRole = await transactionalEntityManager.findOne(UserRole, {
+                    where: { 
+                        UserId: newUser.Id, 
+                        RoleId: data.roleId, 
+                        OrganizationId: data.OrganizationId || hospital.OrganizationId,
+                        HospitalId: hospital.Id 
+                    }
+                });
+
+                if (newUserRole) {
+                    newUserRole.IsDeleted = false;
+                    newUserRole.Status = true;
+                    newUserRole.UpdatedAt = new Date();
+                } else {
+                    newUserRole = new UserRole();
+                    newUserRole.UserId = newUser.Id;
+                    newUserRole.RoleId = data.roleId;
+                    newUserRole.OrganizationId = data.OrganizationId || hospital.OrganizationId;
+                    newUserRole.HospitalId = hospital.Id;
+                    newUserRole.Status = true;
+                    newUserRole.IsDeleted = false;
+                }
 
                 await transactionalEntityManager.save(UserRole, newUserRole);
             }
+
 
             return { message: "Hospital updated successfully.", hospital };
         });

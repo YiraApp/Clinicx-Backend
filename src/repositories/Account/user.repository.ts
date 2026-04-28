@@ -122,6 +122,11 @@ export class UserRepository implements IUserRepository {
             query.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
         }
 
+        if (filters.gender) {
+            query.andWhere('u.Gender = :gender', { gender: filters.gender });
+        }
+
+
         const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
         query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
 
@@ -153,6 +158,8 @@ export class UserRepository implements IUserRepository {
                             UserRoleId: ur.HospitalId ? null : ur.UserRoleId,
                             OrganizationId: ur.Organization.Id,
                             OrganizationName: ur.Organization.Name,
+                            OrganizationCode: ur.Organization.OrgCode,
+                            OrgCode: ur.Organization.OrgCode,
                             Hospitals: []
                         });
                     }
@@ -163,7 +170,8 @@ export class UserRepository implements IUserRepository {
                             orgNode.Hospitals.push({
                                 UserRoleId: ur.UserRoleId,
                                 HospitalId: ur.Hospital.Id,
-                                HospitalName: ur.Hospital.Name
+                                HospitalName: ur.Hospital.Name,
+                                HospitalCode: ur.Hospital.HospitalCode
                             });
                         }
                     }

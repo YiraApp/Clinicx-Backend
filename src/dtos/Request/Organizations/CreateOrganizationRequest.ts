@@ -7,6 +7,8 @@ export interface CreateOrganizationRequest {
     OrganizationType?: string;
     Email?: string;
     MobileNumber: string;
+    CountryCode?: string;
+
     Address?: string;
     Website?: string;
     roleId: string;
