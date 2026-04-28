@@ -56,7 +56,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     requestLog.RequestHeaders = JSON.stringify(req.headers).substring(0, 2000);
 
     // Capture Audit Tracking (Action, EntityId, EntityType)
-    const pathParts = req.path.split("/").filter(p => p && p !== "api");
+    const pathParts = req.path.split("/").filter((p: string) => p && p !== "api");
     if (pathParts.length > 0) {
         requestLog.EntityType = pathParts[0] || null;
         if (pathParts.length > 1) {

@@ -37,8 +37,7 @@ router.use("/patients", patientRegistrationRouter);
 router.use("/files", fileRouter);
 router.use("/consent", consentRouter);
 
-
-router.get("/status", (req, res) => {
+router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });
 });
 

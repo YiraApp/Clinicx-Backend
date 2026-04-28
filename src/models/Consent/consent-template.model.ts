@@ -1,7 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
 import { SignatureField } from "./signature-field.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
-import { Organization } from "../Organizations/organization.model.js";
 
 @Entity({ name: "ConsentTemplates" })
 export class ConsentTemplate {
@@ -14,13 +13,6 @@ export class ConsentTemplate {
     @ManyToOne(() => Hospital)
     @JoinColumn({ name: "HospitalId" })
     Hospital: Relation<Hospital>;
-
-    @Column({ type: "int", nullable: true })
-    OrganizationId?: number;
-
-    @ManyToOne(() => Organization)
-    @JoinColumn({ name: "OrganizationId" })
-    Organization: Relation<Organization>;
 
     @Column({ type: "nvarchar", length: 200 })
     Name: string;

@@ -12,7 +12,7 @@ import type { UpdateOrganizationRequest } from "../../dtos/Request/Organizations
 import { dashboardService } from "../Common/dashboard.service.js";
 import type { DashboardSummary } from "../../interfaces/Service/Common/IDashboardService.js";
 
-import { IsNull } from "typeorm";
+import { IsNull } from "typeorm/index.js";
 
 /**
  * Service for Organization-related business logic.

@@ -1,4 +1,4 @@
-import { Entity, PrimaryColumn, Column } from "typeorm";
+import { Entity, PrimaryColumn, Column } from "typeorm/index.js";
 
 @Entity({ name: "Roles" })
 export class Role {

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm/index.js";
 import { MainSpecialty } from "./main-specialty.model.js";
 
 @Entity({ name: "MainSubSpecialties" })

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm/index.js";
 import { Hospital } from "./hospital.model.js";
 import { MainSubSpecialty } from "../Masters/main-subspecialty.model.js";
 

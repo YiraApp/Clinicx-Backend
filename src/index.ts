@@ -1,18 +1,14 @@
+process.env.TZ = "Asia/Kolkata";
 
 import "reflect-metadata";
 import dotenv from "dotenv";
-if (process.env.NODE_ENV !== "production") {
-    dotenv.config();
-}
+dotenv.config();
 
-import app from "./src/app.js";
-import { initializeDatabase } from "./src/config/database.js";
-import { MigrationService } from "./src/services/Common/migration.service.js";
-
+import app from "./app.js";
+import { initializeDatabase } from "./config/database.js";
+import { MigrationService } from "./services/Common/migration.service.js";
 
 const port = process.env.PORT || 8080;
-
-process.env.TZ = "Asia/Kolkata";
 
 const startServer = async () => {
     try {

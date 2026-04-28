@@ -1,4 +1,4 @@
-import { IsNull } from "typeorm";
+import { IsNull } from "typeorm/index.js";
 import { AppDataSource } from "../../config/database.js";
 import { UserToken } from "../../models/Account/usertoken.model.js";
 import type { ITokenRepository } from "../../interfaces/Repository/Account/ITokenRepository.js";
