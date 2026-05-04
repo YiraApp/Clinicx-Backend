@@ -66,6 +66,28 @@ export class ConsentController {
     }
 
     /**
+     * GET /api/consent/templates/:id
+     */
+    async getTemplateById(req: Request, res: Response): Promise<void> {
+        try {
+            const templateId = parseInt(req.params.id);
+            const template = await consentService.getTemplateById(templateId);
+
+            if (!template) {
+                res.status(404).json({ error: "Template not found" });
+                return;
+            }
+
+            res.status(200).json({
+                data: template
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error fetching template:", error.message);
+            res.status(500).json({ error: "Failed to fetch template" });
+        }
+    }
+
+    /**
      * PUT /api/consent/templates/:id
      */
     async updateTemplate(req: Request, res: Response): Promise<void> {
@@ -106,6 +128,35 @@ export class ConsentController {
         } catch (error: any) {
             console.error("[Consent Controller] Error updating template:", error.message);
             res.status(500).json({ error: "Failed to update consent template", detail: error.message });
+        }
+    }
+
+    /**
+     * POST /api/consent/send
+     */
+    async sendConsent(req: Request, res: Response): Promise<void> {
+        try {
+            const { appointmentId, templateId, createdBy, channel } = req.body;
+
+            if (!appointmentId || !templateId) {
+                res.status(400).json({ error: "AppointmentId and TemplateId are required." });
+                return;
+            }
+
+            const request = await consentService.sendConsent({
+                appointmentId: parseInt(appointmentId),
+                templateId: parseInt(templateId),
+                createdBy,
+                channel
+            });
+
+            res.status(200).json({
+                message: "Consent request sent successfully",
+                data: request
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error sending consent:", error.message);
+            res.status(500).json({ error: "Failed to send consent request", detail: error.message });
         }
     }
 }

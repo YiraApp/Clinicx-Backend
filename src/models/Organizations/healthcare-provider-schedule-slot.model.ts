@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany } from "typeorm";
 import { HealthcareProvider } from "./healthcare-provider.model.js";
 import { Organization } from "./organization.model.js";
 import { Hospital } from "./hospital.model.js";
+import { Appointment } from "../Appointments/appointment.model.js";
 
 @Entity({ name: "HealthcareProviderScheduleSlots" })
 export class HealthcareProviderScheduleSlot {
@@ -55,4 +56,7 @@ export class HealthcareProviderScheduleSlot {
 
     @Column({ type: "datetime", nullable: true })
     UpdatedAt?: Date;
+
+    @OneToMany(() => Appointment, (a) => a.Slot)
+    Appointments: Appointment[];
 }

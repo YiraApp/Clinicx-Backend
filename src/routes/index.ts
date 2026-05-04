@@ -15,6 +15,7 @@ import { healthcareProviderRouter } from "./Organizations/healthcare-provider.ro
 import { patientRegistrationRouter } from "./Organizations/patient-registration.routes.js";
 import fileRouter from "./Common/file.routes.js";
 import consentRouter from "./Consent/consent.routes.js";
+import { appointmentRouter } from "./Appointments/appointment.routes.js";
 
 
 const router = Router();
@@ -36,6 +37,7 @@ router.use("/providers", healthcareProviderRouter);
 router.use("/patients", patientRegistrationRouter);
 router.use("/files", fileRouter);
 router.use("/consent", consentRouter);
+router.use("/appointments", appointmentRouter);
 
 router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });

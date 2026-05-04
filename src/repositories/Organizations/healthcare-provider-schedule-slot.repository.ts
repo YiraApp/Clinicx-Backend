@@ -1,6 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { HealthcareProviderScheduleSlot } from "../../models/Organizations/healthcare-provider-schedule-slot.model.js";
-import { Between } from "typeorm/index.js";
+import { Between } from "typeorm";
 
 export class HealthcareProviderScheduleSlotRepository {
     private repo = AppDataSource.getRepository(HealthcareProviderScheduleSlot);
@@ -13,10 +13,18 @@ export class HealthcareProviderScheduleSlotRepository {
                 SlotDate: Between(startDate, endDate),
                 IsDeleted: false
             },
+            relations: ["Appointments", "Appointments.User"],
             order: {
                 SlotDate: "ASC",
                 StartTime: "ASC"
             }
+        });
+    }
+
+    async findById(id: number): Promise<HealthcareProviderScheduleSlot | null> {
+        return await this.repo.findOne({ 
+            where: { Id: id, IsDeleted: false },
+            relations: ["Appointments", "Appointments.User"]
         });
     }
 
@@ -46,6 +54,26 @@ export class HealthcareProviderScheduleSlotRepository {
                 IsDeleted: false
             }
         });
+    }
+
+    async updateSlotStatus(id: number, data: { status?: string, isAvailable?: boolean }): Promise<HealthcareProviderScheduleSlot | null> {
+        const slot = await this.repo.findOneBy({ Id: id, IsDeleted: false });
+        if (!slot) return null;
+
+        if (data.status !== undefined) slot.Status = data.status;
+        if (data.isAvailable !== undefined) slot.IsAvailable = data.isAvailable;
+        
+        try {
+            await this.repo.update(id, {
+                Status: slot.Status,
+                IsAvailable: slot.IsAvailable,
+                UpdatedAt: new Date()
+            });
+            return await this.repo.findOneBy({ Id: id });
+        } catch (error) {
+            console.error(`[Repository] updateSlotStatus - UPDATE ERROR:`, error);
+            throw error;
+        }
     }
 }
 

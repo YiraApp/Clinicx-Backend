@@ -209,6 +209,7 @@ export class HealthcareProviderService {
                 status: p.Status,
                 timeSlots,
                 availableDays,
+                organizationId: p.Hospital?.OrganizationId,
                 createdAt: p.CreatedAt
             };
         });
@@ -234,6 +235,7 @@ export class HealthcareProviderService {
                 country: user.PermanentAddress.Country
             } : null,
             hospitals,
+            organizationId: doctor.Hospital?.OrganizationId,
             currentProviderId: id,
             Id: id // Added for frontend compatibility
         };
@@ -401,6 +403,51 @@ export class HealthcareProviderService {
             message: `Successfully generated ${newSlots.length} slots (${slotDuration} mins each) from ${startDate} to ${endDate}.`,
             count: newSlots.length
         };
+    }
+
+    async updateWeeklySchedule(id: number, data: any): Promise<any> {
+        return await AppDataSource.transaction(async (manager) => {
+            if (data.timeSlots) {
+                // Soft-delete all existing availability for this provider
+                await manager
+                    .getRepository(HealthcareProviderAvailability)
+                    .update(
+                        { ProviderId: id, IsDeleted: false },
+                        { IsDeleted: true, UpdatedAt: new Date() }
+                    );
+
+                const availabilityRecords: HealthcareProviderAvailability[] = [];
+                for (const day in data.timeSlots) {
+                    const slots = data.timeSlots[day];
+                    if (Array.isArray(slots)) {
+                        slots.forEach((slot: any) => {
+                            const isOvernight = slot.IsOvernight !== undefined 
+                                ? slot.IsOvernight 
+                                : (slot.EndTime < slot.StartTime);
+                            
+                            const availability = manager.create(HealthcareProviderAvailability, {
+                                ProviderId: id,
+                                DayOfWeek: day,
+                                StartTime: slot.StartTime,
+                                EndTime: slot.EndTime,
+                                IsOvernight: isOvernight
+                            });
+                            availabilityRecords.push(availability);
+                        });
+                    }
+                }
+                if (availabilityRecords.length > 0) {
+                    await manager.save(HealthcareProviderAvailability, availabilityRecords);
+                }
+            }
+            return { message: "Weekly schedule updated successfully." };
+        });
+    }
+
+    async updateSlotStatus(slotId: number, data: { status?: string, isAvailable?: boolean }): Promise<any> {
+        const slot = await healthcareProviderScheduleSlotRepository.updateSlotStatus(slotId, data);
+        if (!slot) throw new Error("Slot not found.");
+        return slot;
     }
 }
 

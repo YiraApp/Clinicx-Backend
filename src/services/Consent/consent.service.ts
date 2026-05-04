@@ -1,6 +1,10 @@
 import { consentTemplateRepository } from "../../repositories/Consent/consent-template.repository.js";
 import { blobService } from "../Common/blob.service.js";
 import { ConsentTemplate } from "../../models/Consent/consent-template.model.js";
+import { patientConsentRepository } from "../../repositories/Consent/patient-consent.repository.js";
+import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
+import { smsService } from "../Common/sms.service.js";
+import { mailService } from "../Mail/mail.service.js";
 
 export class ConsentService {
     /**
@@ -68,6 +72,13 @@ export class ConsentService {
     }
 
     /**
+     * Retrieves a single template by ID.
+     */
+    async getTemplateById(id: number) {
+        return await consentTemplateRepository.getTemplateById(id);
+    }
+
+    /**
      * Updates an existing template. Handles optional PDF replacement and updates fields.
      */
     async updateTemplate(
@@ -123,6 +134,68 @@ export class ConsentService {
 
         // 4. Send to Repository
         return await consentTemplateRepository.updateTemplate(templateId, updateData, signatureFields);
+    }
+
+    /**
+     * Generates a consent request and sends an SMS link to the patient.
+     */
+    async sendConsent(data: { appointmentId: number, templateId: number, createdBy?: string, channel?: string }) {
+        // 1. Get Appointment Details (to find the user)
+        const appointment = await appointmentRepository.findById(data.appointmentId);
+        if (!appointment) throw new Error("Appointment not found.");
+        if (!appointment.User) throw new Error("User details not found for this appointment.");
+
+        // 2. Get Template Details
+        const templates = await consentTemplateRepository.getTemplates(appointment.HospitalId, appointment.OrgId);
+        const template = templates.find(t => t.Id === data.templateId);
+        if (!template) throw new Error("Consent template not found.");
+
+        const channel = data.channel || "SMS";
+
+        // 3. Create Patient Consent record
+        const patientConsent = await patientConsentRepository.create({
+            AppointmentId: data.appointmentId,
+            TemplateId: data.templateId,
+            Status: "Pending",
+            PdfUrl: template.PdfUrl,
+            SentVia: channel,
+            SentAt: new Date(),
+            CreatedBy: data.createdBy
+        });
+
+        // 4. Generate Link
+        const signUrl = `https://clinicx.yira.ai/sign-consent/${patientConsent.RequestLink}`;
+
+        // 5. Dispatch based on channel
+        const patient = appointment.User;
+        if (channel === "Email" && patient.Email) {
+            const subject = `Consent Form Signature Required: ${template.Name}`;
+            const body = `
+                <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+                    <h2 style="color: #4f46e5;">ClinicX Consent Signature Request</h2>
+                    <p>Hello <strong>${patient.FirstName}</strong>,</p>
+                    <p>You have a new consent form to sign for your clinical visit: <strong>"${template.Name}"</strong>.</p>
+                    <p>Please click the button below to review and sign the document securely:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${signUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Sign Consent Form</a>
+                    </div>
+                    <p style="font-size: 12px; color: #666;">If the button doesn't work, copy and paste this link: ${signUrl}</p>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;" />
+                    <p style="font-size: 11px; color: #999;">This is an automated clinical notification from ClinicX.</p>
+                </div>
+            `;
+            await mailService.sendMail({
+                to: patient.Email,
+                subject,
+                body
+            });
+        } else {
+            // Default to SMS (even for WhatsApp for now as we use SMS service)
+            const message = `Hello ${patient.FirstName}, please sign the consent form "${template.Name}" for your appointment: ${signUrl} - ClinicX`;
+            await smsService.sendSMS(patient.CountryCode + patient.PhoneNumber, message);
+        }
+
+        return patientConsent;
     }
 }
 

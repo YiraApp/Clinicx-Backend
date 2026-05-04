@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Relation
 import { User } from "../Account/user.model.js";
 import { Organization } from "../Organizations/organization.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
+import { HealthcareProviderScheduleSlot } from "../Organizations/healthcare-provider-schedule-slot.model.js";
 
 @Entity({ name: "Appointments" })
 export class Appointment {
@@ -35,6 +36,13 @@ export class Appointment {
     @ManyToOne(() => User)
     @JoinColumn({ name: "DoctorId" })
     Doctor: Relation<User>;
+
+    @Column({ type: "int", nullable: true })
+    SlotId?: number;
+
+    @ManyToOne(() => HealthcareProviderScheduleSlot)
+    @JoinColumn({ name: "SlotId" })
+    Slot: Relation<HealthcareProviderScheduleSlot>;
 
     @Column({ type: "nvarchar", length: 50, nullable: true })
     AppointmentType?: string;
@@ -80,4 +88,7 @@ export class Appointment {
 
     @Column({ type: "nvarchar", length: 100, nullable: true })
     UpdatedBy?: string;
+
+    @Column({ type: "int", nullable: true })
+    AppointmentNumber?: number;
 }

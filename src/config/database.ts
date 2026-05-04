@@ -29,6 +29,8 @@ import { PatientInsurance } from "../models/Organizations/patient-insurance.mode
 import { UserRegistrationLink } from "../models/Organizations/user-registration-link.model.js";
 import { ConsentTemplate } from "../models/Consent/consent-template.model.js";
 import { SignatureField } from "../models/Consent/signature-field.model.js";
+import { Appointment } from "../models/Appointments/appointment.model.js";
+import { PatientQueue } from "../models/Appointments/patient-queue.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -62,7 +64,8 @@ export const AppDataSource = new DataSource({
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
         HealthcareProvider, HealthcareProviderAvailability, HealthcareProviderScheduleSlot,
         PatientRegistration, PatientInsurance, UserRegistrationLink,
-        ConsentTemplate, SignatureField
+        ConsentTemplate, SignatureField,
+        Appointment, PatientQueue
 
     ],
     extra: {

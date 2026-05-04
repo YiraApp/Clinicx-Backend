@@ -44,7 +44,7 @@ export class HealthcareProviderController {
     async getDoctorById(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);
-            if (!id) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
+            if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
 
             const result = await healthcareProviderService.getDoctorById(id);
             if (!result) return res.status(404).json(ApiResponse.error("Doctor not found"));
@@ -58,7 +58,7 @@ export class HealthcareProviderController {
     async update(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);
-            if (!id) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
+            if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
 
             const result = await healthcareProviderService.updateProvider(id, req.body);
             return res.json(ApiResponse.success(result, "Doctor profile updated successfully."));
@@ -70,15 +70,16 @@ export class HealthcareProviderController {
     async getSlots(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);
-            const { hospitalId, startDate, endDate } = req.query;
+            const hospitalId = parseInt(req.query.hospitalId as string);
+            const { startDate, endDate } = req.query;
 
-            if (!id || !hospitalId) {
-                return res.status(400).json(ApiResponse.error("Doctor ID and Hospital ID are required"));
+            if (isNaN(id) || isNaN(hospitalId)) {
+                return res.status(400).json(ApiResponse.error("Doctor ID and Hospital ID are required and must be valid numbers"));
             }
 
             const slots = await healthcareProviderService.getDoctorSlots(
                 id, 
-                parseInt(hospitalId as string), 
+                hospitalId, 
                 startDate as string, 
                 endDate as string
             );
@@ -91,20 +92,47 @@ export class HealthcareProviderController {
     async generateSlots(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);
-            const { hospitalId, startDate, endDate, slotDuration } = req.body;
+            const hospitalId = parseInt(req.body.hospitalId as string);
+            const { startDate, endDate, slotDuration } = req.body;
 
-            if (!id || !hospitalId || !startDate || !endDate) {
-                return res.status(400).json(ApiResponse.error("Missing required parameters: id, hospitalId, startDate, endDate"));
+            if (isNaN(id) || isNaN(hospitalId) || !startDate || !endDate) {
+                return res.status(400).json(ApiResponse.error("Missing or invalid parameters: id, hospitalId, startDate, endDate must be valid"));
             }
 
             const result = await healthcareProviderService.generateSlotsForDateRange(
                 id, 
-                parseInt(hospitalId as string), 
+                hospitalId, 
                 startDate, 
                 endDate,
-                slotDuration ? parseInt(slotDuration as string) : 15
+                slotDuration ? Number(slotDuration) : 15
             );
             return res.json(ApiResponse.success(result, "Slots generated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async updateSchedule(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
+
+            const result = await healthcareProviderService.updateWeeklySchedule(id, req.body);
+            return res.json(ApiResponse.success(result, "Weekly schedule updated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async updateSlotStatus(req: Request, res: Response) {
+        try {
+            const slotId = parseInt(req.params.slotId as string);
+            if (isNaN(slotId)) return res.status(400).json(ApiResponse.error("Invalid slot ID"));
+
+            const { status, isAvailable } = req.body;
+
+            const result = await healthcareProviderService.updateSlotStatus(slotId, { status, isAvailable });
+            return res.json(ApiResponse.success(result, "Slot status updated successfully."));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));
         }
