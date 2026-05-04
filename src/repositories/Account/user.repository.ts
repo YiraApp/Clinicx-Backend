@@ -217,7 +217,7 @@ export class UserRepository implements IUserRepository {
             }
         };
     }
-    
+
     async getHospUsers(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
         if (!filters.hospitalId) {
             throw new Error("Hospital ID is required for getHospUsers");
@@ -262,7 +262,7 @@ export class UserRepository implements IUserRepository {
 
     async checkUserRole(identifier: string, roleId: string, organizationId?: number, hospitalId?: number): Promise<boolean> {
         console.log("[UserRepository] checkUserRole input:", { identifier, roleId, organizationId, hospitalId });
-        
+
         const query = this.repo.createQueryBuilder('u')
             .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')
             .where('(u.PhoneNumber = :identifier OR u.Email = :identifier)', { identifier })
@@ -278,7 +278,7 @@ export class UserRepository implements IUserRepository {
 
         const userWithRole = await query.getOne();
         console.log("[UserRepository] checkUserRole result:", userWithRole ? `Found User ID: ${userWithRole.Id}` : "Not Found");
-        
+
         return !!userWithRole;
     }
 
@@ -295,6 +295,10 @@ export class UserRepository implements IUserRepository {
 
     async updateStatus(id: string, status: boolean): Promise<void> {
         await this.repo.update(id, { Status: status, UpdatedAt: new Date() });
+    }
+
+    async updateUser(id: string, data: Partial<User>): Promise<void> {
+        await this.repo.update(id, { ...data, UpdatedAt: new Date() });
     }
 
     async getUsers(page: number = 1, pageSize: number = 10, filters?: any): Promise<any> {
@@ -375,7 +379,7 @@ export class UserRepository implements IUserRepository {
 
         const totalUsersFiltered = await summaryCountQuery.clone().select('COUNT(DISTINCT u.Id)', 'count').getRawOne();
         const activeUsersFiltered = await summaryCountQuery.clone().andWhere('u.Status = 1').select('COUNT(DISTINCT u.Id)', 'count').getRawOne();
-        
+
         // Role Counts (Filter-aware)
         const roleSummaryQuery = this.repo.createQueryBuilder('u')
             .innerJoin('u.UserRoles', 'ur', 'ur.IsDeleted = 0 AND ur.Status = 1')

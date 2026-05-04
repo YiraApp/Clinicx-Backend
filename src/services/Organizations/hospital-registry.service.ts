@@ -14,13 +14,25 @@ export class HospitalRegistryService {
         subSpecialties: { mainId?: number, name: string }[],
         departments: { mainId?: number, name: string }[]
     }) {
-        // Simple strategy: we could clear and re-add or just add new ones.
-        // For registration flow, bulk add is sufficient.
-        
+        // Step 1: Soft-delete all current entries for this hospital.
+        // This ensures any removed items are properly deactivated.
+        await hospitalRegistryRepository.softDeleteAllSpecialties(hospitalId);
+        await hospitalRegistryRepository.softDeleteAllSubSpecialties(hospitalId);
+        await hospitalRegistryRepository.softDeleteAllDepartments(hospitalId);
+
+        // Step 2: Upsert the incoming list.
+        // bulkAdd now checks for existing records (including soft-deleted ones)
+        // and reactivates them instead of creating duplicates.
         const results = {
-            specialties: await hospitalRegistryRepository.bulkAddSpecialties(hospitalId, data.specialties),
-            subSpecialties: await hospitalRegistryRepository.bulkAddSubSpecialties(hospitalId, data.subSpecialties),
-            departments: await hospitalRegistryRepository.bulkAddDepartments(hospitalId, data.departments)
+            specialties: data.specialties.length > 0
+                ? await hospitalRegistryRepository.bulkAddSpecialties(hospitalId, data.specialties)
+                : [],
+            subSpecialties: data.subSpecialties.length > 0
+                ? await hospitalRegistryRepository.bulkAddSubSpecialties(hospitalId, data.subSpecialties)
+                : [],
+            departments: data.departments.length > 0
+                ? await hospitalRegistryRepository.bulkAddDepartments(hospitalId, data.departments)
+                : []
         };
 
         return results;

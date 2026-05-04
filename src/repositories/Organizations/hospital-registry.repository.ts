@@ -49,43 +49,92 @@ export class HospitalRegistryRepository {
         return await repo.save(entity);
     }
 
+    // Soft-delete all existing entries for a hospital (used before re-adding)
+    async softDeleteAllSpecialties(hospitalId: number) {
+        await AppDataSource.getRepository(HospitalSpecialty)
+            .update({ HospitalId: hospitalId, IsDeleted: false }, { IsDeleted: true });
+    }
+
+    async softDeleteAllSubSpecialties(hospitalId: number) {
+        await AppDataSource.getRepository(HospitalSubSpecialty)
+            .update({ HospitalId: hospitalId, IsDeleted: false }, { IsDeleted: true });
+    }
+
+    async softDeleteAllDepartments(hospitalId: number) {
+        await AppDataSource.getRepository(HospitalDepartment)
+            .update({ HospitalId: hospitalId, IsDeleted: false }, { IsDeleted: true });
+    }
+
+    // Upsert-style bulk add: reactivate existing (by name) or insert new
     async bulkAddSpecialties(hospitalId: number, items: { mainId?: number, name: string }[]) {
         const repo = AppDataSource.getRepository(HospitalSpecialty);
-        const dataToSave = items.map(item => {
-            const data: any = {
-                HospitalId: hospitalId,
-                Name: item.name
-            };
-            if (item.mainId) data.MainSpecialtyId = item.mainId;
-            return data;
-        });
-        return await repo.save(dataToSave);
+        const results: HospitalSpecialty[] = [];
+
+        for (const item of items) {
+            // Check if this specialty already exists for this hospital (including soft-deleted)
+            const existing = await repo.findOne({
+                where: { HospitalId: hospitalId, Name: item.name }
+            });
+
+            if (existing) {
+                // Reactivate if soft-deleted, update mainId if needed
+                existing.IsDeleted = false;
+                existing.Status = true;
+                if (item.mainId) existing.MainSpecialtyId = item.mainId;
+                results.push(await repo.save(existing));
+            } else {
+                const data: Partial<HospitalSpecialty> = { HospitalId: hospitalId, Name: item.name };
+                if (item.mainId) data.MainSpecialtyId = item.mainId;
+                results.push(await repo.save(repo.create(data)));
+            }
+        }
+        return results;
     }
 
     async bulkAddSubSpecialties(hospitalId: number, items: { mainId?: number, name: string }[]) {
         const repo = AppDataSource.getRepository(HospitalSubSpecialty);
-        const dataToSave = items.map(item => {
-            const data: any = {
-                HospitalId: hospitalId,
-                Name: item.name
-            };
-            if (item.mainId) data.MainSubSpecialtyId = item.mainId;
-            return data;
-        });
-        return await repo.save(dataToSave);
+        const results: HospitalSubSpecialty[] = [];
+
+        for (const item of items) {
+            const existing = await repo.findOne({
+                where: { HospitalId: hospitalId, Name: item.name }
+            });
+
+            if (existing) {
+                existing.IsDeleted = false;
+                existing.Status = true;
+                if (item.mainId) existing.MainSubSpecialtyId = item.mainId;
+                results.push(await repo.save(existing));
+            } else {
+                const data: Partial<HospitalSubSpecialty> = { HospitalId: hospitalId, Name: item.name };
+                if (item.mainId) data.MainSubSpecialtyId = item.mainId;
+                results.push(await repo.save(repo.create(data)));
+            }
+        }
+        return results;
     }
 
     async bulkAddDepartments(hospitalId: number, items: { mainId?: number, name: string }[]) {
         const repo = AppDataSource.getRepository(HospitalDepartment);
-        const dataToSave = items.map(item => {
-            const data: any = {
-                HospitalId: hospitalId,
-                Name: item.name
-            };
-            if (item.mainId) data.MainDepartmentId = item.mainId;
-            return data;
-        });
-        return await repo.save(dataToSave);
+        const results: HospitalDepartment[] = [];
+
+        for (const item of items) {
+            const existing = await repo.findOne({
+                where: { HospitalId: hospitalId, Name: item.name }
+            });
+
+            if (existing) {
+                existing.IsDeleted = false;
+                existing.Status = true;
+                if (item.mainId) existing.MainDepartmentId = item.mainId;
+                results.push(await repo.save(existing));
+            } else {
+                const data: Partial<HospitalDepartment> = { HospitalId: hospitalId, Name: item.name };
+                if (item.mainId) data.MainDepartmentId = item.mainId;
+                results.push(await repo.save(repo.create(data)));
+            }
+        }
+        return results;
     }
 }
 

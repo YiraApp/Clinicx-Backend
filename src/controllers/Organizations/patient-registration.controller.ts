@@ -66,13 +66,14 @@ export class PatientRegistrationController {
             if (status === "active") statusBool = true;
             else if (status === "inactive") statusBool = false;
 
-            const result = await patientRegistrationService.getOrgHospPatients(page, pageSize, {
+            const result = await patientRegistrationService.getPatients(page, pageSize, {
                 organizationId: orgId,
                 hospitalId: hospitalId,
                 search: search,
                 gender: gender,
                 status: statusBool
             });
+
 
             return res.json(ApiResponse.success(result, "Patients fetched successfully."));
         } catch (error: any) {

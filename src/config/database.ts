@@ -23,6 +23,7 @@ import { HospitalSubSpecialty } from "../models/Organizations/hospital-subspecia
 import { HospitalDepartment } from "../models/Organizations/hospital-department.model.js";
 import { HealthcareProvider } from "../models/Organizations/healthcare-provider.model.js";
 import { HealthcareProviderAvailability } from "../models/Organizations/healthcare-provider-availability.model.js";
+import { HealthcareProviderScheduleSlot } from "../models/Organizations/healthcare-provider-schedule-slot.model.js";
 import { PatientRegistration } from "../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../models/Organizations/patient-insurance.model.js";
 import { UserRegistrationLink } from "../models/Organizations/user-registration-link.model.js";
@@ -59,7 +60,7 @@ export const AppDataSource = new DataSource({
         Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template,
         MainSpecialty, MainSubSpecialty, MainDepartment,
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
-        HealthcareProvider, HealthcareProviderAvailability,
+        HealthcareProvider, HealthcareProviderAvailability, HealthcareProviderScheduleSlot,
         PatientRegistration, PatientInsurance, UserRegistrationLink,
         ConsentTemplate, SignatureField
 

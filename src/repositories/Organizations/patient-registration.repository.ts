@@ -24,7 +24,10 @@ export class PatientRegistrationRepository {
         const skip = (page - 1) * pageSize;
 
         const query = this.repo.createQueryBuilder("pr")
-            .leftJoinAndSelect("pr.User", "u")
+            .innerJoinAndSelect("pr.User", "u")
+            .innerJoinAndSelect("u.UserRoles", "ur", "ur.IsDeleted = 0 AND ur.Status = 1 AND ur.RoleId = :patientRoleId AND ur.OrganizationId = pr.OrganizationId", { patientRoleId: "4FC67429-28AE-4106-93EF-436228282ED0" })
+            .leftJoinAndSelect("ur.Organization", "urOrg")
+            .leftJoinAndSelect("ur.Hospital", "urHosp")
             .leftJoinAndSelect("u.PermanentAddress", "pa")
             .leftJoinAndSelect("pr.Organization", "org")
             .leftJoinAndSelect("pr.Hospital", "h")
@@ -33,21 +36,73 @@ export class PatientRegistrationRepository {
         if (filters.organizationId) {
             query.andWhere("pr.OrganizationId = :orgId", { orgId: filters.organizationId });
         }
+
         if (filters.hospitalId) {
-            query.andWhere("pr.HospitalId = :hospId", { hospId: filters.hospitalId });
+            query.andWhere("(pr.HospitalId = :hospId OR ur.HospitalId = :hospId)", { hospId: filters.hospitalId });
         }
+
+        if (filters.gender && filters.gender !== "all") {
+            query.andWhere("LOWER(u.Gender) = LOWER(:gender)", { gender: filters.gender });
+        }
+        if (filters.status !== undefined && filters.status !== "all") {
+            const statusVal = filters.status === "active" || filters.status === true;
+            query.andWhere("u.Status = :status", { status: statusVal ? 1 : 0 });
+        }
+
+
         if (filters.search) {
             query.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search)",
                 { search: `%${filters.search}%` }
             );
         }
 
+
+
         query.orderBy("pr.CreatedAt", "DESC");
+
 
         const [registrations, total] = await query.skip(skip).take(pageSize).getManyAndCount();
 
-        const data = registrations.map(pr => ({
+        // Summary stats for this org/hosp context
+        const statsQuery = this.repo.createQueryBuilder("pr")
+            .innerJoin("pr.User", "u")
+            .innerJoin("u.UserRoles", "ur", "ur.IsDeleted = 0 AND ur.Status = 1 AND ur.RoleId = :patientRoleId AND ur.OrganizationId = pr.OrganizationId", { patientRoleId: "4FC67429-28AE-4106-93EF-436228282ED0" })
+            .leftJoin("pr.Hospital", "h")
+            .where("pr.IsDeleted = 0 AND u.IsDeleted = 0");
+
+
+        if (filters.organizationId) statsQuery.andWhere("pr.OrganizationId = :orgId", { orgId: filters.organizationId });
+        if (filters.hospitalId) statsQuery.andWhere("(pr.HospitalId = :hospId OR ur.HospitalId = :hospId)", { hospId: filters.hospitalId });
+
+        if (filters.gender && filters.gender !== "all") {
+            statsQuery.andWhere("LOWER(u.Gender) = LOWER(:gender)", { gender: filters.gender });
+        }
+        if (filters.status !== undefined && filters.status !== "all") {
+            const statusVal = filters.status === "active" || filters.status === true;
+            statsQuery.andWhere("u.Status = :status", { status: statusVal ? 1 : 0 });
+        }
+
+
+        if (filters.search) {
+            statsQuery.andWhere(
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search)",
+                { search: `%${filters.search}%` }
+            );
+        }
+
+
+
+
+
+
+        const stats = await statsQuery
+            .select("COUNT(pr.Id)", "total")
+            .addSelect("SUM(CASE WHEN u.Status = 1 THEN 1 ELSE 0 END)", "active")
+            .getRawOne();
+
+
+        const patients = registrations.map(pr => ({
             id: pr.Id,
             userId: pr.UserId,
             firstName: pr.User?.FirstName,
@@ -57,6 +112,7 @@ export class PatientRegistrationRepository {
             phone: pr.User?.PhoneNumber,
             countryCode: pr.User?.CountryCode || "91",
             gender: pr.User?.Gender,
+            status: pr.User?.Status ? "active" : "inactive",
             dateOfBirth: pr.User?.DateOfBirth,
             bloodGroup: pr.User?.BloodGroup,
             address: pr.User?.PermanentAddress?.AddressLine1,
@@ -67,13 +123,23 @@ export class PatientRegistrationRepository {
             emergencyContactPhone: pr.User?.EmergencyContactPhone,
             allergies: pr.Allergies,
             medicalHistory: pr.MedicalHistory,
-            organizationName: pr.Organization?.Name,
-            hospitalName: pr.Hospital?.Name,
+            organizationName: pr.Organization?.Name || pr.User?.UserRoles?.[0]?.Organization?.Name,
+            organizationCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
+            orgCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
+            hospitalName: pr.Hospital?.Name || pr.User?.UserRoles?.[0]?.Hospital?.Name,
+            hospitalCode: pr.Hospital?.HospitalCode || pr.User?.UserRoles?.[0]?.Hospital?.HospitalCode,
+            roleId: pr.User?.UserRoles?.[0]?.RoleId,
+            roleName: "Patient",
             createdAt: pr.CreatedAt,
         }));
 
         return {
-            data,
+            summary: {
+                totalUsers: parseInt(stats.total) || 0,
+                activeUsers: parseInt(stats.active) || 0,
+                inactiveUsers: (parseInt(stats.total) || 0) - (parseInt(stats.active) || 0)
+            },
+            patients,
             total,
             page,
             pageSize,

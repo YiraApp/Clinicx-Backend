@@ -26,6 +26,9 @@ export class HealthcareProviderAvailability {
     Status: boolean;
 
     @Column({ type: "bit", default: false })
+    IsOvernight: boolean;
+
+    @Column({ type: "bit", default: false })
     IsDeleted: boolean;
 
     @CreateDateColumn()
