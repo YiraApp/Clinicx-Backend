@@ -236,9 +236,6 @@ export class DashboardRepository {
             AND a.AppointmentDate <= CAST(GETDATE() AS DATE);
         `;
 
-        const results = await AppDataSource.query(statsQuery);
-        const statsRow = results[0] || {};
-
         // 2. Fetch Recent Activity for the Hospital
         const recentActivityQuery = `
             SELECT TOP 10
@@ -271,7 +268,58 @@ export class DashboardRepository {
             ORDER BY LogId DESC;
         `;
 
-        const recentActivity = await AppDataSource.query(recentActivityQuery);
+        // 3. Recent Patients (Limit 6)
+        const recentPatientsQuery = `
+            SELECT TOP 6
+                a.UserId as id,
+                u.FirstName + ' ' + u.LastName as name,
+                u.Gender as gender,
+                DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
+                a.AppointmentDate as lastVisit,
+                a.Reason as condition,
+                a.Status as status
+            FROM Appointments a
+            INNER JOIN Users u ON a.UserId = u.Id
+            WHERE a.HospitalId = ${hospId}
+            AND a.Status = 'Completed'
+            ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
+        `;
+
+        // 4. Weekly Stats (Last 7 days)
+        const weeklyStatsQuery = `
+            SELECT 
+                FORMAT(AppointmentDate, 'ddd') as day,
+                COUNT(*) as appointments,
+                COUNT(DISTINCT UserId) as patients
+            FROM Appointments
+            WHERE HospitalId = ${hospId}
+            AND AppointmentDate >= DATEADD(day, -6, GETDATE())
+            GROUP BY FORMAT(AppointmentDate, 'ddd'), AppointmentDate
+            ORDER BY AppointmentDate ASC;
+        `;
+
+        // 5. Monthly Stats (Last 6 months)
+        const monthlyStatsQuery = `
+            SELECT 
+                FORMAT(AppointmentDate, 'MMM') as month,
+                COUNT(*) as appointments,
+                COUNT(DISTINCT UserId) as patients
+            FROM Appointments
+            WHERE HospitalId = ${hospId}
+            AND AppointmentDate >= DATEADD(month, -5, GETDATE())
+            GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
+            ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;
+        `;
+
+        const [statsResults, recentActivity, recentPatients, weeklyStats, monthlyStats] = await Promise.all([
+            AppDataSource.query(statsQuery),
+            AppDataSource.query(recentActivityQuery),
+            AppDataSource.query(recentPatientsQuery),
+            AppDataSource.query(weeklyStatsQuery),
+            AppDataSource.query(monthlyStatsQuery)
+        ]);
+
+        const statsRow = statsResults[0] || {};
 
         return {
             stats: {
@@ -295,7 +343,18 @@ export class DashboardRepository {
                 iconType: a.ActivityMessage.includes("Check") ? "UserCheck" : 
                           a.ActivityMessage.includes("Appointment") ? "Calendar" : 
                           a.ActivityMessage.includes("Patient") ? "UserPlus" : "Activity"
-            }))
+            })),
+            recentPatients: recentPatients.map((p: any) => ({
+                id: p.id,
+                name: p.name,
+                gender: p.gender,
+                age: p.age,
+                lastVisit: p.lastVisit,
+                condition: p.condition,
+                status: p.status?.toLowerCase()
+            })),
+            weeklyStats,
+            monthlyStats
         };
     }
 
@@ -337,9 +396,55 @@ export class DashboardRepository {
                  )) as newPatientsThisWeek;
         `;
 
-        const [statsResults, patientResults] = await Promise.all([
+        // 3. Recent Patients for this Doctor (Limit 6)
+        const recentPatientsQuery = `
+            SELECT TOP 6
+                a.UserId as id,
+                u.FirstName + ' ' + u.LastName as name,
+                u.Gender as gender,
+                DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
+                a.AppointmentDate as lastVisit,
+                a.Reason as condition,
+                a.Status as status
+            FROM Appointments a
+            INNER JOIN Users u ON a.UserId = u.Id
+            WHERE a.DoctorId = '${doctorId}' AND a.HospitalId = ${hospId}
+            AND a.Status = 'Completed'
+            ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
+        `;
+
+        // 4. Weekly Stats for Doctor (Last 7 days)
+        const weeklyStatsQuery = `
+            SELECT 
+                FORMAT(AppointmentDate, 'ddd') as day,
+                COUNT(*) as appointments,
+                COUNT(DISTINCT UserId) as patients
+            FROM Appointments
+            WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+            AND AppointmentDate >= DATEADD(day, -6, GETDATE())
+            GROUP BY FORMAT(AppointmentDate, 'ddd'), AppointmentDate
+            ORDER BY AppointmentDate ASC;
+        `;
+
+        // 5. Monthly Stats for Doctor (Last 6 months)
+        const monthlyStatsQuery = `
+            SELECT 
+                FORMAT(AppointmentDate, 'MMM') as month,
+                COUNT(*) as appointments,
+                COUNT(DISTINCT UserId) as patients
+            FROM Appointments
+            WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+            AND AppointmentDate >= DATEADD(month, -5, GETDATE())
+            GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
+            ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;
+        `;
+
+        const [statsResults, patientResults, recentPatientsResult, weeklyStats, monthlyStats] = await Promise.all([
             AppDataSource.query(statsQuery),
-            AppDataSource.query(patientStatsQuery)
+            AppDataSource.query(patientStatsQuery),
+            AppDataSource.query(recentPatientsQuery),
+            AppDataSource.query(weeklyStatsQuery),
+            AppDataSource.query(monthlyStatsQuery)
         ]);
 
         const stats = statsResults[0] || {};
@@ -355,7 +460,18 @@ export class DashboardRepository {
                 newPatients: stats.newPatientsToday || 0
             },
             totalPatients: patientStats.totalPatients || 0,
-            newPatientsThisWeek: patientStats.newPatientsThisWeek || 0
+            newPatientsThisWeek: patientStats.newPatientsThisWeek || 0,
+            recentPatients: recentPatientsResult.map((p: any) => ({
+                id: p.id,
+                name: p.name,
+                gender: p.gender,
+                age: p.age,
+                lastVisit: p.lastVisit,
+                condition: p.condition,
+                status: p.status?.toLowerCase()
+            })),
+            weeklyStats,
+            monthlyStats
         };
     }
 }
