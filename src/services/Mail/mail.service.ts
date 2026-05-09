@@ -50,20 +50,31 @@ export class MailService implements IMailService {
         const subject = this.replacePlaceholders(template.Title, data);
         const html = this.replacePlaceholders(template.Message, data);
 
-        const mailOptions = {
-            from: `"${process.env.EMAIL_FROM_ALIAS}" <${process.env.EMAIL_FROM}>`,
+        await this.sendMail({
             to: to,
             subject: subject,
-            html: html,
+            body: html
+        });
+    }
+
+    /**
+     * Sends a direct email with provided subject and body.
+     */
+    async sendMail(options: { to: string; subject: string; body: string }): Promise<void> {
+        const mailOptions = {
+            from: `"${process.env.EMAIL_FROM_ALIAS}" <${process.env.EMAIL_FROM}>`,
+            to: options.to,
+            subject: options.subject,
+            html: options.body,
             replyTo: process.env.EMAIL_REPLY_TO,
         };
 
         try {
             await this.transporter.sendMail(mailOptions);
-            console.log(`Email sent successfully to ${to} using template ${templateCode}`);
-        } catch (error) {
-            console.error(`Error sending email to ${to}:`, error);
-            throw new Error("Failed to send email.");
+            console.log(`Email sent successfully to ${options.to}`);
+        } catch (error: any) {
+            console.error(`Error sending email to ${options.to}:`, error);
+            throw new Error(`Failed to send email: ${error.message}`);
         }
     }
 

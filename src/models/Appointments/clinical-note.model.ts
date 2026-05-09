@@ -3,31 +3,24 @@ import { Appointment } from "./appointment.model.js";
 import { Visit } from "./visit.model.js";
 import { User } from "../Account/user.model.js";
 
-@Entity({ name: "ClinicalNotes" })
+@Entity({ name: "PatientClinicalNotes" })
 export class ClinicalNote {
     @PrimaryGeneratedColumn()
     Id: number;
 
-    @Column({ type: "int" })
-    AppointmentId: number;
+    @Column({ type: "int", nullable: true })
+    AppointmentId?: number;
 
     @ManyToOne(() => Appointment)
     @JoinColumn({ name: "AppointmentId" })
-    Appointment: Relation<Appointment>;
+    Appointment?: Relation<Appointment>;
 
-    @Column({ type: "int", nullable: true })
-    VisitId?: number;
-
-    @ManyToOne(() => Visit)
-    @JoinColumn({ name: "VisitId" })
-    Visit?: Relation<Visit>;
-
-    @Column({ type: "uniqueidentifier" })
-    DoctorId: string;
+    @Column({ type: "uniqueidentifier", nullable: true })
+    DoctorId?: string;
 
     @ManyToOne(() => User)
     @JoinColumn({ name: "DoctorId" })
-    Doctor: Relation<User>;
+    Doctor?: Relation<User>;
 
     @Column({ type: "uniqueidentifier" })
     PatientId: string;
@@ -37,16 +30,13 @@ export class ClinicalNote {
     Patient: Relation<User>;
 
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
-    ChiefComplaint?: string;
-
-    @Column({ type: "nvarchar", length: "MAX", nullable: true })
-    Diagnosis?: string;
-
-    @Column({ type: "nvarchar", length: "MAX", nullable: true })
-    TreatmentPlan?: string;
-
-    @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Notes?: string;
+
+    @Column({ type: "int", nullable: true })
+    OrganizationId?: number;
+
+    @Column({ type: "int", nullable: true })
+    HospitalId?: number;
 
     @Column({ type: "datetime", default: () => "GETDATE()" })
     CreatedAt: Date;

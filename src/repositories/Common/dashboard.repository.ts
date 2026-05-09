@@ -213,6 +213,151 @@ export class DashboardRepository {
             organizationStats: orgs
         };
     }
+    async getFrontdeskDashboardStats(hospId: number) {
+        // 1. Fetch Today's and Yesterday's Stats for Trends
+        const statsQuery = `
+            SELECT 
+                -- Today's Metrics
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) AND a.Status = 'Arrived' THEN 1 END) as todayCheckIns,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) THEN 1 END) as todayScheduled,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) AND q.Status = 'Waiting' THEN 1 END) as todayWaiting,
+                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as todayPayments,
+                
+                -- Yesterday's Metrics (for Trends)
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) AND a.Status = 'Arrived' THEN 1 END) as yesterdayCheckIns,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) THEN 1 END) as yesterdayScheduled,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as yesterdayWaiting,
+                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as yesterdayPayments
+            FROM Appointments a
+            LEFT JOIN HealthcareProviders hp ON a.DoctorId = hp.UserId
+            LEFT JOIN PatientQueue q ON a.Id = q.AppointmentId
+            WHERE a.HospitalId = ${hospId} 
+            AND a.AppointmentDate >= CAST(DATEADD(day, -1, GETDATE()) AS DATE)
+            AND a.AppointmentDate <= CAST(GETDATE() AS DATE);
+        `;
+
+        const results = await AppDataSource.query(statsQuery);
+        const statsRow = results[0] || {};
+
+        // 2. Fetch Recent Activity for the Hospital
+        const recentActivityQuery = `
+            SELECT TOP 10
+                CASE 
+                    WHEN Action = 'LOGIN' THEN 'User Logged In'
+                    WHEN EntityType = 'patients' AND Action = 'CREATE' THEN 'New Patient Registered'
+                    WHEN EntityType = 'appointments' AND Action = 'CREATE' THEN 'New Appointment Scheduled'
+                    WHEN EntityType = 'appointments' AND Action = 'UPDATE' THEN 'Appointment Status Updated'
+                    WHEN EntityType = 'auth' AND Action = 'CREATE' THEN 'User Authenticated'
+                    ELSE 
+                        CASE 
+                            WHEN EntityType IS NULL THEN 'System Activity'
+                            ELSE UPPER(LEFT(EntityType, 1)) + SUBSTRING(EntityType, 2, 100)
+                        END + ' ' + 
+                        CASE 
+                            WHEN Action = 'CREATE' THEN 'Created'
+                            WHEN Action = 'UPDATE' THEN 'Updated'
+                            WHEN Action = 'DELETE' THEN 'Deleted'
+                            ELSE ISNULL(Action, 'Activity')
+                        END
+                END AS ActivityMessage,
+                LogId as id,
+                UpdatedOn as timestamp,
+                ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))), ''), 'System') as [user],
+                l.RoleName as role
+            FROM APILogs l
+            LEFT JOIN Users u ON l.UserId = u.Id
+            WHERE l.HospitalId = ${hospId}
+            AND Action IN ('CREATE', 'UPDATE', 'DELETE', 'LOGIN')
+            ORDER BY LogId DESC;
+        `;
+
+        const recentActivity = await AppDataSource.query(recentActivityQuery);
+
+        return {
+            stats: {
+                todayCheckIns: statsRow.todayCheckIns || 0,
+                appointmentsScheduled: statsRow.todayScheduled || 0,
+                waitingPatients: statsRow.todayWaiting || 0,
+                paymentsCollected: statsRow.todayPayments || 0,
+                
+                // Yesterday values for trend calculation in service
+                yesterdayCheckIns: statsRow.yesterdayCheckIns || 0,
+                yesterdayScheduled: statsRow.yesterdayScheduled || 0,
+                yesterdayWaiting: statsRow.yesterdayWaiting || 0,
+                yesterdayPayments: statsRow.yesterdayPayments || 0
+            },
+            recentActivity: recentActivity.map((a: any) => ({
+                id: a.id,
+                title: a.ActivityMessage,
+                description: `Performed by ${a.user} (${a.role})`,
+                time: a.timestamp,
+                type: "success",
+                iconType: a.ActivityMessage.includes("Check") ? "UserCheck" : 
+                          a.ActivityMessage.includes("Appointment") ? "Calendar" : 
+                          a.ActivityMessage.includes("Patient") ? "UserPlus" : "Activity"
+            }))
+        };
+    }
+
+    async getDoctorDashboardStats(doctorId: string, hospId: number) {
+        const statsQuery = `
+            SELECT 
+                -- Today's Appointments
+                COUNT(*) as totalToday,
+                COUNT(CASE WHEN Status = 'Completed' THEN 1 END) as completedToday,
+                COUNT(CASE WHEN Status IN ('Confirmed', 'Arrived', 'Scheduled', 'InProgress') THEN 1 END) as pendingToday,
+                
+                -- Patients Seen Today (distinct completed appointments)
+                COUNT(DISTINCT CASE WHEN Status = 'Completed' THEN UserId END) as patientsSeenToday,
+                
+                -- Follow-ups vs New Patients Today
+                COUNT(CASE WHEN AppointmentType = 'Follow-up' THEN 1 END) as followUpsToday,
+                COUNT(CASE WHEN AppointmentType IN ('New', 'Consultation', 'New Patient') THEN 1 END) as newPatientsToday
+            FROM Appointments
+            WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+            AND CAST(AppointmentDate AS DATE) = CAST(GETDATE() AS DATE);
+        `;
+
+        const patientStatsQuery = `
+            SELECT 
+                -- Total Patients for this doctor
+                (SELECT COUNT(DISTINCT UserId) FROM Appointments WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}) as totalPatients,
+                
+                -- New this week (Patients whose FIRST appointment with this doctor is this week)
+                (SELECT COUNT(DISTINCT a1.UserId) 
+                 FROM Appointments a1 
+                 WHERE a1.DoctorId = '${doctorId}' 
+                 AND a1.HospitalId = ${hospId}
+                 AND a1.AppointmentDate >= DATEADD(day, -DATEPART(weekday, GETDATE()) + 1, GETDATE())
+                 AND NOT EXISTS (
+                     SELECT 1 FROM Appointments a2 
+                     WHERE a2.UserId = a1.UserId 
+                     AND a2.DoctorId = a1.DoctorId 
+                     AND a2.AppointmentDate < DATEADD(day, -DATEPART(weekday, GETDATE()) + 1, GETDATE())
+                 )) as newPatientsThisWeek;
+        `;
+
+        const [statsResults, patientResults] = await Promise.all([
+            AppDataSource.query(statsQuery),
+            AppDataSource.query(patientStatsQuery)
+        ]);
+
+        const stats = statsResults[0] || {};
+        const patientStats = patientResults[0] || {};
+
+        return {
+            todayStats: {
+                totalAppointments: stats.totalToday || 0,
+                completedAppointments: stats.completedToday || 0,
+                pendingAppointments: stats.pendingToday || 0,
+                patientsSeenToday: stats.patientsSeenToday || 0,
+                followUps: stats.followUpsToday || 0,
+                newPatients: stats.newPatientsToday || 0
+            },
+            totalPatients: patientStats.totalPatients || 0,
+            newPatientsThisWeek: patientStats.newPatientsThisWeek || 0
+        };
+    }
 }
 
 export const dashboardRepository = new DashboardRepository();

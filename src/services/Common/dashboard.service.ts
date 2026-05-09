@@ -45,6 +45,53 @@ export class DashboardService implements IDashboardService {
             }
         };
     }
+    
+    async getFrontdeskDashboardData(hospId: number) {
+        const rawData = await dashboardRepository.getFrontdeskDashboardStats(hospId);
+        const { stats, recentActivity } = rawData;
+
+        // Calculate trends
+        const calcTrend = (today: number, yesterday: number) => {
+            const diff = today - yesterday;
+            return diff >= 0 ? `+${diff}` : `${diff}`;
+        };
+
+        const processedStats = [
+            { 
+                title: "Today's Check-ins", 
+                value: stats.todayCheckIns, 
+                change: calcTrend(stats.todayCheckIns, stats.yesterdayCheckIns), 
+                trend: stats.todayCheckIns >= stats.yesterdayCheckIns ? "up" : "down"
+            },
+            { 
+                title: "Appointments Scheduled", 
+                value: stats.appointmentsScheduled, 
+                change: calcTrend(stats.appointmentsScheduled, stats.yesterdayScheduled), 
+                trend: stats.appointmentsScheduled >= stats.yesterdayScheduled ? "up" : "down"
+            },
+            { 
+                title: "Waiting Patients", 
+                value: stats.waitingPatients, 
+                change: calcTrend(stats.waitingPatients, stats.yesterdayWaiting), 
+                trend: stats.waitingPatients >= stats.yesterdayWaiting ? "up" : "down"
+            },
+            { 
+                title: "Payments Collected", 
+                value: `Rs ${stats.paymentsCollected.toLocaleString()}`, 
+                change: `Rs ${Math.abs(stats.paymentsCollected - stats.yesterdayPayments).toLocaleString()}`, 
+                trend: stats.paymentsCollected >= stats.yesterdayPayments ? "up" : "down"
+            }
+        ];
+
+        return {
+            stats: processedStats,
+            recentActivity
+        };
+    }
+
+    async getDoctorDashboardData(doctorId: string, hospId: number) {
+        return await dashboardRepository.getDoctorDashboardStats(doctorId, hospId);
+    }
 
     private formatUptime(seconds: number): string {
         const days = Math.floor(seconds / (3600 * 24));

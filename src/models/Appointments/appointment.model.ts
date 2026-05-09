@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, Relation } from "typeorm/index.js";
 import { User } from "../Account/user.model.js";
 import { Organization } from "../Organizations/organization.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
 import { HealthcareProviderScheduleSlot } from "../Organizations/healthcare-provider-schedule-slot.model.js";
+import { PatientVerification } from "./patient-verification.model.js";
 
 @Entity({ name: "Appointments" })
 export class Appointment {
@@ -65,6 +66,9 @@ export class Appointment {
     @Column({ type: "bit", default: 0 })
     IsTeleConsultation: boolean;
 
+    @Column({ type: "nvarchar", length: 500, nullable: true })
+    MeetingUrl?: string;
+
     @Column({ type: "nvarchar", length: 255, nullable: true })
     Location?: string;
 
@@ -91,4 +95,7 @@ export class Appointment {
 
     @Column({ type: "int", nullable: true })
     AppointmentNumber?: number;
+
+    @OneToMany(() => PatientVerification, (verification) => verification.Appointment)
+    Verifications: Relation<PatientVerification[]>;
 }

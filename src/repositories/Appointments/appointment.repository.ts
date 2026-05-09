@@ -22,7 +22,7 @@ export class AppointmentRepository {
                 DoctorId: doctorId,
                 AppointmentDate: date
             },
-            relations: ["User"],
+            relations: ["User", "Doctor", "Hospital", "Verifications"],
             order: { StartTime: "ASC" }
         });
     }
@@ -46,16 +46,17 @@ export class AppointmentRepository {
         });
     }
 
-    async getAppointments(filters: { orgId?: number, hospitalId?: number, date?: string, status?: string }): Promise<Appointment[]> {
+    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string }): Promise<Appointment[]> {
         const query: any = {};
         if (filters.orgId) query.OrgId = filters.orgId;
         if (filters.hospitalId) query.HospitalId = filters.hospitalId;
+        if (filters.userId) query.UserId = filters.userId;
         if (filters.date) query.AppointmentDate = new Date(filters.date);
         if (filters.status) query.Status = filters.status;
 
         return await this.repo.find({
             where: query,
-            relations: ["User", "Doctor", "Hospital"],
+            relations: ["User", "Doctor", "Hospital", "Verifications"],
             order: { AppointmentDate: "DESC", StartTime: "ASC" }
         });
     }
@@ -64,14 +65,18 @@ export class AppointmentRepository {
         await this.repo.update(id, { Status: status, UpdatedAt: new Date() });
     }
 
-    async getNextAppointmentNumber(hospitalId: number, doctorId: string, date: Date): Promise<number> {
+    async getNextAppointmentNumber(hospitalId: number, date: Date): Promise<number> {
+        // Format date to YYYY-MM-DD
+        const dateString = date.toISOString().split('T')[0];
+
         const result = await this.repo.createQueryBuilder("appointment")
             .select("MAX(appointment.AppointmentNumber)", "max")
             .where("appointment.HospitalId = :hospitalId", { hospitalId })
-            .andWhere("appointment.DoctorId = :doctorId", { doctorId })
-            .andWhere("appointment.AppointmentDate = :date", { date })
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date: dateString })
             .getRawOne();
-        return (parseInt(result?.max) || 0) + 1;
+
+        const nextNumber = (parseInt(result?.max) || 0) + 1;
+        return nextNumber;
     }
 }
 

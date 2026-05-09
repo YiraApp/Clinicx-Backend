@@ -9,10 +9,25 @@ export class ConsentRequestRepository {
         return await this.repo.save(request);
     }
 
+    async findOne(options: any): Promise<ConsentRequest | null> {
+        return await this.repo.findOne(options);
+    }
+
+    async save(request: ConsentRequest): Promise<ConsentRequest> {
+        return await this.repo.save(request);
+    }
+
     async findByLink(link: string): Promise<ConsentRequest | null> {
         return await this.repo.findOne({
             where: { RequestLink: link },
-            relations: ["Patient", "Template", "Hospital"]
+            relations: ["Patient", "Template", "Hospital", "Template.SignatureFields"]
+        });
+    }
+
+    async findManyByLink(link: string): Promise<ConsentRequest[]> {
+        return await this.repo.find({
+            where: { RequestLink: link },
+            relations: ["Patient", "Template", "Hospital", "Template.SignatureFields"]
         });
     }
 
@@ -22,6 +37,13 @@ export class ConsentRequestRepository {
             SignedAt: status === "Signed" ? new Date() : undefined,
             UpdatedAt: new Date() 
         });
+    }
+
+    async findByAppointmentIds(appointmentIds: number[]): Promise<ConsentRequest[]> {
+        if (appointmentIds.length === 0) return [];
+        return await this.repo.createQueryBuilder("r")
+            .where("r.AppointmentId IN (:...ids)", { ids: appointmentIds })
+            .getMany();
     }
 }
 

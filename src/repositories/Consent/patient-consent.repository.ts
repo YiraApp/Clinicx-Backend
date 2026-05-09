@@ -16,12 +16,23 @@ export class PatientConsentRepository {
         });
     }
 
+    async findByDate(date: string, hospitalId: number): Promise<PatientConsent[]> {
+        // Join with Appointment to filter by HospitalId
+        return await this.repo.createQueryBuilder("pc")
+            .innerJoinAndSelect("pc.Appointment", "appointment")
+            .leftJoinAndSelect("pc.Template", "template")
+            .leftJoinAndSelect("appointment.User", "user")
+            .where("appointment.HospitalId = :hospitalId", { hospitalId })
+            .andWhere("CAST(pc.CreatedAt AS DATE) = :date", { date })
+            .getMany();
+    }
+
     async updateStatus(id: number, status: string, signedUrl?: string): Promise<void> {
-        await this.repo.update(id, { 
-            Status: status, 
+        await this.repo.update(id, {
+            Status: status,
             SignedAt: status === "Signed" ? new Date() : undefined,
             SignedPdfUrl: signedUrl,
-            UpdatedAt: new Date() 
+            UpdatedAt: new Date()
         });
     }
 }

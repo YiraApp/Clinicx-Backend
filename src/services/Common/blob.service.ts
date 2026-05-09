@@ -89,6 +89,42 @@ export class BlobService {
 
         return uploadResponses;
     }
+
+    /**
+     * Downloads a file from a URL to a Buffer.
+     */
+    async downloadFile(fileUrl: string): Promise<Buffer> {
+        try {
+            // Extract blob name from URL
+            // Example URL: https://account.blob.core.windows.net/container/path/to/blob
+            const url = new URL(fileUrl);
+            const pathParts = url.pathname.split('/');
+            const containerName = pathParts[1];
+            const blobName = decodeURIComponent(pathParts.slice(2).join('/'));
+
+            const blockBlobClient = this.blobServiceClient.getContainerClient(containerName).getBlockBlobClient(blobName);
+            return await blockBlobClient.downloadToBuffer();
+        } catch (error: any) {
+            console.error("[Blob Service] Error downloading file:", error.message);
+            throw new Error(`Failed to download file from Azure: ${error.message}`);
+        }
+    }
+
+    /**
+     * Uploads a Buffer directly to a specific path.
+     */
+    async uploadBuffer(buffer: Buffer, blobPath: string, contentType: string): Promise<string> {
+        try {
+            const blockBlobClient = this.containerClient.getBlockBlobClient(blobPath);
+            await blockBlobClient.uploadData(buffer, {
+                blobHTTPHeaders: { blobContentType: contentType }
+            });
+            return blockBlobClient.url;
+        } catch (error: any) {
+            console.error("[Blob Service] Error uploading buffer:", error.message);
+            throw new Error(`Failed to upload buffer to Azure: ${error.message}`);
+        }
+    }
 }
 
 export const blobService = new BlobService();

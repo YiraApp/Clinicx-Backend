@@ -31,6 +31,15 @@ import { ConsentTemplate } from "../models/Consent/consent-template.model.js";
 import { SignatureField } from "../models/Consent/signature-field.model.js";
 import { Appointment } from "../models/Appointments/appointment.model.js";
 import { PatientQueue } from "../models/Appointments/patient-queue.model.js";
+import { PatientConsent } from "../models/Consent/patient-consent.model.js";
+import { ConsentRequest } from "../models/Consent/consent-request.model.js";
+import { PatientVerification } from "../models/Appointments/patient-verification.model.js";
+import { PatientVerificationDocument } from "../models/Appointments/patient-verification-document.model.js";
+import { ClinicalNote } from "../models/Appointments/clinical-note.model.js";
+import { MedicalRecord } from "../models/Appointments/medical-record.model.js";
+import { PatientMedicalRecord } from "../models/Appointments/patient-medical-record.model.js";
+import { Visit } from "../models/Appointments/visit.model.js";
+import { PatientDocument } from "../models/Appointments/patient-document.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -65,8 +74,10 @@ export const AppDataSource = new DataSource({
         HealthcareProvider, HealthcareProviderAvailability, HealthcareProviderScheduleSlot,
         PatientRegistration, PatientInsurance, UserRegistrationLink,
         ConsentTemplate, SignatureField,
-        Appointment, PatientQueue
-
+        Appointment, PatientQueue,
+        PatientConsent, ConsentRequest,
+        PatientVerification, PatientVerificationDocument,
+        ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument
     ],
     extra: {
         encrypt: true,

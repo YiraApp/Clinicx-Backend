@@ -9,8 +9,11 @@ export class ConsentRequest {
     @PrimaryGeneratedColumn()
     Id: number;
 
-    @Column({ type: "nvarchar", length: "MAX" })
+    @Column({ type: "uniqueidentifier" })
     PatientId: string; // User UUID
+
+    @Column({ type: "int", nullable: true })
+    AppointmentId?: number;
 
     @ManyToOne(() => User)
     @JoinColumn({ name: "PatientId" })
@@ -43,8 +46,23 @@ export class ConsentRequest {
     @Column({ type: "uniqueidentifier", default: () => "NEWID()" })
     RequestLink: string;
 
+    @Column({ type: "nvarchar", length: "max", nullable: true })
+    Signature?: string; // Base64 signature
+
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    IpAddress?: string;
+
+    @Column({ type: "nvarchar", length: "max", nullable: true })
+    SignedPdfUrl?: string;
+
+    @Column({ type: "nvarchar", length: "max", nullable: true })
+    SignatureImageUrl?: string;
+
     @Column({ type: "datetime", nullable: true })
     SignedAt?: Date;
+
+    @Column({ type: "datetime", nullable: true })
+    ExpiresAt?: Date;
 
     @Column({ type: "datetime", default: () => "getdate()" })
     CreatedAt: Date;

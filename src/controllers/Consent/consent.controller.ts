@@ -23,14 +23,14 @@ export class ConsentController {
 
             const template = await consentService.createTemplate(
                 file,
-                { 
-                    Name, 
-                    HospitalId: parseInt(HospitalId), 
-                    OrganizationId: parseInt(OrganizationId), 
+                {
+                    Name,
+                    HospitalId: parseInt(HospitalId),
+                    OrganizationId: parseInt(OrganizationId),
                     HospitalName,
                     OrgName,
-                    Description, 
-                    CreatedBy 
+                    Description,
+                    CreatedBy
 
                 },
                 Fields
@@ -57,11 +57,13 @@ export class ConsentController {
             const templates = await consentService.getTemplates(hospitalId, organizationId);
 
             res.status(200).json({
+                status: "success",
+                message: "Templates fetched successfully",
                 data: templates
             });
         } catch (error: any) {
             console.error("[Consent Controller] Error fetching templates:", error.message);
-            res.status(500).json({ error: "Failed to fetch templates" });
+            res.status(500).json({ status: "error", message: "Failed to fetch templates" });
         }
     }
 
@@ -70,20 +72,17 @@ export class ConsentController {
      */
     async getTemplateById(req: Request, res: Response): Promise<void> {
         try {
-            const templateId = parseInt(req.params.id);
+            const templateId = parseInt(req.params.id as string);
             const template = await consentService.getTemplateById(templateId);
 
-            if (!template) {
-                res.status(404).json({ error: "Template not found" });
-                return;
-            }
-
             res.status(200).json({
+                status: "success",
+                message: "Template details fetched successfully",
                 data: template
             });
         } catch (error: any) {
-            console.error("[Consent Controller] Error fetching template:", error.message);
-            res.status(500).json({ error: "Failed to fetch template" });
+            console.error("[Consent Controller] Error fetching template details:", error.message);
+            res.status(500).json({ status: "error", message: "Failed to fetch template details" });
         }
     }
 
@@ -136,16 +135,28 @@ export class ConsentController {
      */
     async sendConsent(req: Request, res: Response): Promise<void> {
         try {
-            const { appointmentId, templateId, createdBy, channel } = req.body;
+            const { appointmentId, templateIds, createdBy, channel } = req.body;
 
-            if (!appointmentId || !templateId) {
-                res.status(400).json({ error: "AppointmentId and TemplateId are required." });
+            console.log("[Consent Controller] Incoming send request:", { appointmentId, templateIds, channel });
+
+            if (appointmentId === undefined || appointmentId === null) {
+                res.status(400).json({ error: "appointmentId is required." });
+                return;
+            }
+
+            if (!templateIds || !Array.isArray(templateIds)) {
+                res.status(400).json({ error: "templateIds must be a valid array." });
+                return;
+            }
+
+            if (templateIds.length === 0) {
+                res.status(400).json({ error: "Please select at least one consent template." });
                 return;
             }
 
             const request = await consentService.sendConsent({
                 appointmentId: parseInt(appointmentId),
-                templateId: parseInt(templateId),
+                templateIds: templateIds.map((id: any) => parseInt(id)),
                 createdBy,
                 channel
             });
@@ -157,6 +168,130 @@ export class ConsentController {
         } catch (error: any) {
             console.error("[Consent Controller] Error sending consent:", error.message);
             res.status(500).json({ error: "Failed to send consent request", detail: error.message });
+        }
+    }
+
+    /**
+     * GET /api/consent/status/daily
+     */
+    async getDailyConsentStatus(req: Request, res: Response): Promise<void> {
+        try {
+            const date = req.query.date as string;
+            const hospitalId = parseInt(req.query.hospitalId as string);
+
+            if (!date || isNaN(hospitalId)) {
+                res.status(400).json({ error: "Date (YYYY-MM-DD) and hospitalId are required." });
+                return;
+            }
+
+            const consents = await consentService.getDailyConsentStatus(date, hospitalId);
+            res.status(200).json({ 
+                status: "success",
+                message: "Daily consent status fetched successfully",
+                data: consents 
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error fetching daily consent status:", error.message);
+            res.status(500).json({ status: "error", message: "Failed to fetch daily consent status" });
+        }
+    }
+
+    /**
+     * GET /api/consent/appointment/:appointmentId
+     */
+    async getAppointmentConsentStatus(req: Request, res: Response): Promise<void> {
+        try {
+            const appointmentId = parseInt(req.params.appointmentId as string);
+            const consents = await consentService.getAppointmentConsentStatus(appointmentId);
+
+            res.status(200).json({
+                status: "success",
+                message: "Appointment consent status fetched successfully",
+                data: consents
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error fetching appointment consent status:", error.message);
+            res.status(500).json({ status: "error", message: "Failed to fetch appointment consent status" });
+        }
+    }
+
+    /**
+     * GET /api/consent/request/:link
+     */
+    async getConsentRequestByLink(req: Request, res: Response) {
+        try {
+            const link = req.params.link as string;
+            const requests = await consentService.getConsentRequestByLink(link);
+
+            if (!requests || requests.length === 0) {
+                return res.status(404).json({ error: "Consent request not found." });
+            }
+
+            // Check for expiration
+            const first = requests[0];
+            if (first.ExpiresAt && new Date() > new Date(first.ExpiresAt)) {
+                return res.status(410).json({
+                    error: "This consent link has expired.",
+                    detail: "Links are valid for 24 hours. Please request a new link from the front desk."
+                });
+            }
+            const response = {
+                Patient: first.Patient,
+                Hospital: first.Hospital,
+                RequestLink: first.RequestLink,
+                CreatedAt: first.CreatedAt,
+                Requests: requests.map(r => ({
+                    Id: r.Id,
+                    TemplateId: r.TemplateId,
+                    Template: r.Template,
+                    Status: r.Status,
+                    SignedPdfUrl: r.SignedPdfUrl,
+                    SignatureImageUrl: r.SignatureImageUrl,
+                    SignedAt: r.SignedAt
+                }))
+            };
+
+            return res.json(response);
+        } catch (error: any) {
+            console.error("[Consent Controller] Get Error:", error.message);
+            return res.status(500).json({ error: "Internal server error." });
+        }
+    }
+
+    /**
+     * POST /api/consent/submit/:link
+     */
+    async submitConsentSignature(req: Request, res: Response): Promise<void> {
+        try {
+            const link = req.params.link as string;
+            const { signatureData, ipAddress } = req.body;
+
+            if (!signatureData) {
+                res.status(400).json({ error: "Signature data is required." });
+                return;
+            }
+
+            const updatedRequest = await consentService.submitConsentSignature(link, signatureData, ipAddress || req.ip);
+
+            let nextLink = null;
+            if (updatedRequest.AppointmentId) {
+                const { consentRequestRepository } = await import("../../repositories/Consent/consent-request.repository.js");
+                const nextPending = await consentRequestRepository.findOne({
+                    where: { AppointmentId: updatedRequest.AppointmentId, Status: "Pending" }
+                });
+                if (nextPending) {
+                    nextLink = nextPending.RequestLink;
+                }
+            }
+
+            res.status(200).json({
+                message: "Consent signed successfully",
+                data: updatedRequest,
+                nextLink: nextLink
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error submitting signature:", error.message);
+            res.status(500).json({ error: "Failed to submit signature", detail: error.message });
         }
     }
 }

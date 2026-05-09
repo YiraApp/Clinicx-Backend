@@ -16,10 +16,11 @@ export class AppointmentController {
         try {
             const orgId = req.query.orgId ? parseInt(String(req.query.orgId)) : undefined;
             const hospitalId = req.query.hospitalId ? parseInt(String(req.query.hospitalId)) : undefined;
+            const userId = req.query.userId ? String(req.query.userId) : undefined;
             const date = req.query.date ? String(req.query.date) : undefined;
             const status = req.query.status ? String(req.query.status) : undefined;
 
-            const result = await appointmentService.getAppointments({ orgId, hospitalId, date, status });
+            const result = await appointmentService.getAppointments({ orgId, hospitalId, userId, date, status });
             return res.json(ApiResponse.success(result));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));

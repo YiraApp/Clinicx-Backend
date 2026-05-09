@@ -1,6 +1,7 @@
 export enum AppointmentStatus {
     Scheduled = "Scheduled",
     Confirmed = "Confirmed",
+    Arrived = "Arrived",
     InProgress = "InProgress",
     Completed = "Completed",
     Cancelled = "Cancelled",
@@ -16,6 +17,7 @@ export enum AppointmentType {
 
 export enum QueueStatus {
     Waiting = "Waiting",
+    Called = "Called",
     WithDoctor = "WithDoctor",
     Completed = "Completed",
     Skipped = "Skipped"

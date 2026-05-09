@@ -36,6 +36,9 @@ export class PatientVerification {
     @Column({ type: "datetime", nullable: true })
     VerifiedAt?: Date;
 
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    InsuranceId?: string;
+
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Notes?: string;
 

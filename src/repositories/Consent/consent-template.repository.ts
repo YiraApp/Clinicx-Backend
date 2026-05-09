@@ -73,11 +73,13 @@ export class ConsentTemplateRepository {
             await this.fieldRepo.delete({ TemplateId: templateId });
 
             if (fields.length > 0) {
-                const fieldEntities = fields.map(field => this.fieldRepo.create({
-                    ...field,
-                    Template: template,
-                    TemplateId: templateId
-                }));
+                // Remove primary key and generated columns to avoid Identity errors
+                const cleanedFields = fields.map(field => {
+                    const { FieldId, CreatedAt, ...fieldData } = field as any;
+                    return { ...fieldData, TemplateId: templateId };
+                });
+                
+                const fieldEntities = this.fieldRepo.create(cleanedFields);
                 await this.fieldRepo.save(fieldEntities);
             }
         }

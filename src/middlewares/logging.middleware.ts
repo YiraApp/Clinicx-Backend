@@ -15,7 +15,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     const requestedOn = new Date();
 
     // Whitelist for public endpoints that skip JWT validation
-    const publicRoutes = ["/api/auth/login", "/api/auth/refresh", "/api/auth/register", "/health", "/api/roles", "/favicon.ico", "/robots.txt"];
+    const publicRoutes = ["/api/auth/login", "/api/auth/refresh", "/api/auth/register", "/health", "/api/roles", "/api/consent/request", "/api/consent/submit", "/favicon.ico", "/robots.txt"];
     const isPublic = publicRoutes.some(route => req.path.startsWith(route));
 
     // Capture initial request metadata

@@ -112,4 +112,7 @@ export class User {
 
     @OneToMany(() => UserRole, (userRole) => userRole.User)
     UserRoles: Relation<UserRole>[];
+
+    @OneToMany("Appointment", "User")
+    Appointments: any[];
 }

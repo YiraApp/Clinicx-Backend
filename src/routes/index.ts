@@ -16,6 +16,12 @@ import { patientRegistrationRouter } from "./Organizations/patient-registration.
 import fileRouter from "./Common/file.routes.js";
 import consentRouter from "./Consent/consent.routes.js";
 import { appointmentRouter } from "./Appointments/appointment.routes.js";
+import verificationRouter from "./Appointments/verification.routes.js";
+import patientQueueRouter from "./Appointments/patient-queue.routes.js";
+import { clinicalNoteRouter } from "./Appointments/clinical-note.routes.js";
+import patientMedicalRecordRouter from "./Appointments/patient-medical-record.routes.js";
+
+import { snomedRouter } from "../snomed/snomed.routes.js";
 
 
 const router = Router();
@@ -38,6 +44,11 @@ router.use("/patients", patientRegistrationRouter);
 router.use("/files", fileRouter);
 router.use("/consent", consentRouter);
 router.use("/appointments", appointmentRouter);
+router.use("/verification", verificationRouter);
+router.use("/queue", patientQueueRouter);
+router.use("/clinical-notes", clinicalNoteRouter);
+router.use("/medical-records", patientMedicalRecordRouter);
+router.use("/snomed", snomedRouter);
 
 router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });

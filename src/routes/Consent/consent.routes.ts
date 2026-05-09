@@ -16,4 +16,12 @@ router.put("/templates/:id", upload.single("file"), (req, res) => consentControl
 // Send consent to patient
 router.post("/send", (req, res) => consentController.sendConsent(req, res));
 
+// Public endpoints for patient signing
+router.get("/request/:link", (req, res) => consentController.getConsentRequestByLink(req, res));
+router.post("/submit/:link", (req, res) => consentController.submitConsentSignature(req, res));
+
+// Internal endpoints for tracking
+router.get("/appointment/:appointmentId", (req, res) => consentController.getAppointmentConsentStatus(req, res));
+router.get("/daily-status", (req, res) => consentController.getDailyConsentStatus(req, res));
+
 export default router;

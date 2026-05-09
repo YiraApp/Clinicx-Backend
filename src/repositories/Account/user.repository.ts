@@ -101,6 +101,7 @@ export class UserRepository implements IUserRepository {
             .leftJoinAndSelect('ur.Role', 'r')
             .leftJoinAndSelect('ur.Organization', 'org')
             .leftJoinAndSelect('ur.Hospital', 'h')
+            .leftJoinAndSelect('u.Appointments', 'apt')
             .where('u.IsDeleted = 0');
 
         if (filters.hospitalId) {
@@ -194,6 +195,7 @@ export class UserRepository implements IUserRepository {
                 isParentOrgUser: u.IsPrimary,
                 lastLogin: u.LastLoginTime,
                 createdAt: u.CreatedAt,
+                appointments: u.Appointments || [],
                 roles: Array.from(rolesMap.values()).map(r => ({
                     RoleId: r.RoleId,
                     RoleName: r.RoleName,
@@ -301,6 +303,10 @@ export class UserRepository implements IUserRepository {
         await this.repo.update(id, { ...data, UpdatedAt: new Date() });
     }
 
+    async updateSignature(id: string, signature: string): Promise<void> {
+        await this.repo.update(id, { UserSignature: signature, UpdatedAt: new Date() });
+    }
+
     async getUsers(page: number = 1, pageSize: number = 10, filters?: any): Promise<any> {
         const skip = (page - 1) * pageSize;
         const sortBy = filters?.sortBy || 'CreatedAt';
@@ -312,6 +318,7 @@ export class UserRepository implements IUserRepository {
             .leftJoinAndSelect('ur.Role', 'r')
             .leftJoinAndSelect('ur.Organization', 'org')
             .leftJoinAndSelect('ur.Hospital', 'h')
+            .leftJoinAndSelect('u.Appointments', 'apt')
             .where('u.IsDeleted = :isDeleted', { isDeleted: false });
 
         // Apply Filters
@@ -475,6 +482,7 @@ export class UserRepository implements IUserRepository {
                 imagePath: u.ImagePath,
                 lastLogin: u.LastLoginTime,
                 createdAt: u.CreatedAt,
+                appointments: u.Appointments || [],
                 roles: Array.from(rolesMap.values()).map(r => ({
                     RoleId: r.RoleId,
                     RoleName: r.RoleName,
