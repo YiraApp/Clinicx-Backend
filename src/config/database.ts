@@ -40,6 +40,9 @@ import { MedicalRecord } from "../models/Appointments/medical-record.model.js";
 import { PatientMedicalRecord } from "../models/Appointments/patient-medical-record.model.js";
 import { Visit } from "../models/Appointments/visit.model.js";
 import { PatientDocument } from "../models/Appointments/patient-document.model.js";
+import { PatientPrescription } from "../models/Appointments/patient-prescription.model.js";
+import { PostVisitDocument } from "../models/Appointments/post-visit-document.model.js";
+import { AppointmentShareLink } from "../models/Appointments/appointment-share-link.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -77,7 +80,8 @@ export const AppDataSource = new DataSource({
         Appointment, PatientQueue,
         PatientConsent, ConsentRequest,
         PatientVerification, PatientVerificationDocument,
-        ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument
+        ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
+        PostVisitDocument, AppointmentShareLink
     ],
     extra: {
         encrypt: true,

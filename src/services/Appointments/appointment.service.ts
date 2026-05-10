@@ -74,13 +74,11 @@ export class AppointmentService {
     }
 
     async getDoctorAppointments(doctorId: string, dateStr: string) {
-        const date = new Date(dateStr);
-        return await appointmentRepository.getDoctorAppointments(doctorId, date);
+        return await appointmentRepository.getDoctorAppointments(doctorId, dateStr);
     }
 
     async getHospitalAppointments(hospitalId: number, dateStr: string) {
-        const date = new Date(dateStr);
-        return await appointmentRepository.getHospitalAppointments(hospitalId, date);
+        return await appointmentRepository.getHospitalAppointments(hospitalId, dateStr);
     }
 
     async getPatientAppointments(userId: string) {

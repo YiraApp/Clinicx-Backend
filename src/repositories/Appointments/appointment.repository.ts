@@ -16,15 +16,16 @@ export class AppointmentRepository {
         });
     }
 
-    async getDoctorAppointments(doctorId: string, date: Date): Promise<Appointment[]> {
-        return await this.repo.find({
-            where: {
-                DoctorId: doctorId,
-                AppointmentDate: date
-            },
-            relations: ["User", "Doctor", "Hospital", "Verifications"],
-            order: { StartTime: "ASC" }
-        });
+    async getDoctorAppointments(doctorId: string, date: string): Promise<Appointment[]> {
+        return await this.repo.createQueryBuilder("appointment")
+            .leftJoinAndSelect("appointment.User", "user")
+            .leftJoinAndSelect("appointment.Doctor", "doctor")
+            .leftJoinAndSelect("appointment.Hospital", "hospital")
+            .leftJoinAndSelect("appointment.Verifications", "verifications")
+            .where("appointment.DoctorId = :doctorId", { doctorId })
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date })
+            .orderBy("appointment.StartTime", "ASC")
+            .getMany();
     }
 
     async getPatientAppointments(userId: string): Promise<Appointment[]> {
@@ -35,30 +36,44 @@ export class AppointmentRepository {
         });
     }
 
-    async getHospitalAppointments(hospitalId: number, date: Date): Promise<Appointment[]> {
-        return await this.repo.find({
-            where: {
-                HospitalId: hospitalId,
-                AppointmentDate: date
-            },
-            relations: ["User", "Doctor"],
-            order: { StartTime: "ASC" }
-        });
+    async getHospitalAppointments(hospitalId: number, date: string): Promise<Appointment[]> {
+        return await this.repo.createQueryBuilder("appointment")
+            .leftJoinAndSelect("appointment.User", "user")
+            .leftJoinAndSelect("appointment.Doctor", "doctor")
+            .where("appointment.HospitalId = :hospitalId", { hospitalId })
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date })
+            .orderBy("appointment.StartTime", "ASC")
+            .getMany();
     }
 
     async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string }): Promise<Appointment[]> {
-        const query: any = {};
-        if (filters.orgId) query.OrgId = filters.orgId;
-        if (filters.hospitalId) query.HospitalId = filters.hospitalId;
-        if (filters.userId) query.UserId = filters.userId;
-        if (filters.date) query.AppointmentDate = new Date(filters.date);
-        if (filters.status) query.Status = filters.status;
+        const queryBuilder = this.repo.createQueryBuilder("appointment")
+            .leftJoinAndSelect("appointment.User", "user")
+            .leftJoinAndSelect("appointment.Doctor", "doctor")
+            .leftJoinAndSelect("appointment.Hospital", "hospital")
+            .leftJoinAndSelect("appointment.Verifications", "verifications");
 
-        return await this.repo.find({
-            where: query,
-            relations: ["User", "Doctor", "Hospital", "Verifications"],
-            order: { AppointmentDate: "DESC", StartTime: "ASC" }
-        });
+        if (filters.orgId) {
+            queryBuilder.andWhere("appointment.OrgId = :orgId", { orgId: filters.orgId });
+        }
+        if (filters.hospitalId) {
+            queryBuilder.andWhere("appointment.HospitalId = :hospitalId", { hospitalId: filters.hospitalId });
+        }
+        if (filters.userId) {
+            queryBuilder.andWhere("appointment.UserId = :userId", { userId: filters.userId });
+        }
+        if (filters.date) {
+            // Use CAST to ensure we compare only the date part in MSSQL
+            queryBuilder.andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date: filters.date });
+        }
+        if (filters.status) {
+            queryBuilder.andWhere("appointment.Status = :status", { status: filters.status });
+        }
+
+        return await queryBuilder
+            .orderBy("appointment.AppointmentDate", "DESC")
+            .addOrderBy("appointment.StartTime", "ASC")
+            .getMany();
     }
 
     async updateStatus(id: number, status: string): Promise<void> {
