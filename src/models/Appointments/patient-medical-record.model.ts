@@ -37,6 +37,9 @@ export class PatientMedicalRecord {
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     ChiefComplaint?: string;
 
+    @Column({ type: "nvarchar", length: 255, nullable: true })
+    ChiefComplaintConceptId?: string;
+
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Symptoms?: string;
 
@@ -45,6 +48,9 @@ export class PatientMedicalRecord {
 
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     PhysicalExamination?: string;
+
+    @Column({ type: "nvarchar", length: 255, nullable: true })
+    PhysicalExaminationConceptId?: string;
 
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Diagnosis?: string;

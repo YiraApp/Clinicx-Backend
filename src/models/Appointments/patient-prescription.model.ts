@@ -32,6 +32,15 @@ export class PatientPrescription {
     @Column({ type: "nvarchar", length: 100, nullable: true })
     Duration?: string;
 
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    Route?: string;
+
+    @Column({ type: "nvarchar", length: 255, nullable: true })
+    Diagnosis?: string;
+
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    DiagnosisConceptId?: string;
+
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Instructions?: string;
 

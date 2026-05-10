@@ -21,6 +21,7 @@ import patientQueueRouter from "./Appointments/patient-queue.routes.js";
 import { clinicalNoteRouter } from "./Appointments/clinical-note.routes.js";
 import patientMedicalRecordRouter from "./Appointments/patient-medical-record.routes.js";
 import { clinicalSummaryRouter } from "./Appointments/clinical-summary.routes.js";
+import patientPrescriptionRouter from "./Appointments/patient-prescription.routes.js";
 
 import { snomedRouter } from "../snomed/snomed.routes.js";
 
@@ -50,6 +51,7 @@ router.use("/queue", patientQueueRouter);
 router.use("/clinical-notes", clinicalNoteRouter);
 router.use("/medical-records", patientMedicalRecordRouter);
 router.use("/clinical-summary", clinicalSummaryRouter);
+router.use("/prescriptions", patientPrescriptionRouter);
 router.use("/snomed", snomedRouter);
 
 router.get("/status", (req: any, res: any) => {

@@ -12,10 +12,15 @@ export class PatientMedicalRecordController {
                 AppointmentId: body.appointmentId || body.AppointmentId,
                 Type: body.type || body.Type,
                 ChiefComplaint: body.chiefComplaint || body.ChiefComplaint,
+                ChiefComplaintConceptId: body.chiefComplaintConceptId || body.ChiefComplaintConceptId,
                 Symptoms: body.symptoms || body.Symptoms,
+                SymptomConceptId: body.symptomConceptId || body.SymptomConceptId,
                 PhysicalExamination: body.physicalExamination || body.examination || body.PhysicalExamination,
+                PhysicalExaminationConceptId: body.physicalExaminationConceptId || body.PhysicalExaminationConceptId,
                 Diagnosis: body.diagnosis || body.Diagnosis,
+                DiagnosisConceptId: body.diagnosisConceptId || body.DiagnosisConceptId,
                 Treatment: body.treatment || body.treatmentPlan || body.Treatment,
+                TreatmentConceptId: body.treatmentConceptId || body.TreatmentConceptId,
                 BloodPressure: body.bloodPressure || body.BloodPressure,
                 HeartRate: body.heartRate || body.HeartRate,
                 Temperature: body.temperature || body.Temperature,
@@ -67,12 +72,18 @@ export class PatientMedicalRecordController {
             if (body.appointmentId !== undefined) data.AppointmentId = body.appointmentId;
             if (body.type !== undefined) data.Type = body.type;
             if (body.chiefComplaint !== undefined) data.ChiefComplaint = body.chiefComplaint;
+            if (body.chiefComplaintConceptId !== undefined) data.ChiefComplaintConceptId = body.chiefComplaintConceptId;
             if (body.symptoms !== undefined) data.Symptoms = body.symptoms;
+            if (body.symptomConceptId !== undefined) data.SymptomConceptId = body.symptomConceptId;
             if (body.physicalExamination !== undefined || body.examination !== undefined) 
                 data.PhysicalExamination = body.physicalExamination || body.examination;
+            if (body.physicalExaminationConceptId !== undefined) 
+                data.PhysicalExaminationConceptId = body.physicalExaminationConceptId;
             if (body.diagnosis !== undefined) data.Diagnosis = body.diagnosis;
+            if (body.diagnosisConceptId !== undefined) data.DiagnosisConceptId = body.diagnosisConceptId;
             if (body.treatment !== undefined || body.treatmentPlan !== undefined) 
                 data.Treatment = body.treatment || body.treatmentPlan;
+            if (body.treatmentConceptId !== undefined) data.TreatmentConceptId = body.treatmentConceptId;
             if (body.bloodPressure !== undefined) data.BloodPressure = body.bloodPressure;
             if (body.heartRate !== undefined) data.HeartRate = body.heartRate;
             if (body.temperature !== undefined) data.Temperature = body.temperature;

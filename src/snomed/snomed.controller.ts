@@ -20,7 +20,8 @@ export class SnomedController {
                     ecl = SNOMED_CT_PARENT_IDS.DISORDER;
                     break;
                 case "drug":
-                    ecl = SNOMED_CT_INDIAN_DRUG_CODES.MEDICINAL_PRODUCT;
+                    // Broaden drug search to include Medicinal products, Clinical drugs, and Brand products
+                    ecl = `<<${SNOMED_CT_INDIAN_DRUG_CODES.MEDICINAL_PRODUCT} OR <<${SNOMED_CT_INDIAN_DRUG_CODES.CLINICAL_DRUG} OR <<${SNOMED_CT_INDIAN_DRUG_CODES.BRAND_PRODUCT}`;
                     break;
                 case "procedure":
                     ecl = SNOMED_CT_PARENT_IDS.PROCEDURE;

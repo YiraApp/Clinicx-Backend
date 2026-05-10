@@ -91,4 +91,6 @@ export const ucumCodes = [
     { unit: "kilocalorie", code: "kcal", display: "Calories Burned (kcal)" }
 ];
 
-export const SNOMED_SERVER_URL = "http://52.165.81.116:8080/browser/MAIN/concepts";
+export const SNOMED_BASE_URL = "http://52.165.81.116:8080";
+export const BRANCH_INTERNATIONAL = "MAIN";
+export const BRANCH_INDIAN = "MAIN/SNOMEDCT-IN";
