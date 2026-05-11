@@ -1,5 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from "typeorm/index.js";
-import { HealthcareProvider } from "./healthcare-provider.model.js";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
+import type { HealthcareProvider } from "./healthcare-provider.model.js";
 
 @Entity("HealthcareProviderAvailability")
 export class HealthcareProviderAvailability {
@@ -9,9 +9,9 @@ export class HealthcareProviderAvailability {
     @Column({ type: "int" })
     ProviderId: number;
 
-    @ManyToOne(() => HealthcareProvider)
+    @ManyToOne("HealthcareProvider")
     @JoinColumn({ name: "ProviderId" })
-    Provider: HealthcareProvider;
+    Provider: Relation<HealthcareProvider>;
 
     @Column({ type: "nvarchar", length: 20 })
     DayOfWeek: string; // Monday, Tuesday, etc.
