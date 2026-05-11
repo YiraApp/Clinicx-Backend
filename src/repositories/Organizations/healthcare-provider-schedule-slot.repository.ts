@@ -1,6 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { HealthcareProviderScheduleSlot } from "../../models/Organizations/healthcare-provider-schedule-slot.model.js";
-import { Between } from "typeorm";
+import { Between } from "typeorm/index.js";
 
 export class HealthcareProviderScheduleSlotRepository {
     private repo = AppDataSource.getRepository(HealthcareProviderScheduleSlot);

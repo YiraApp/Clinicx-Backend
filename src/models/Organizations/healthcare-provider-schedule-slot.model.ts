@@ -1,5 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany } from "typeorm";
-import { HealthcareProvider } from "./healthcare-provider.model.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Relation } from "typeorm/index.js";
+import type { HealthcareProvider } from "./healthcare-provider.model.js";
 import { Organization } from "./organization.model.js";
 import { Hospital } from "./hospital.model.js";
 import { Appointment } from "../Appointments/appointment.model.js";
@@ -12,9 +12,9 @@ export class HealthcareProviderScheduleSlot {
     @Column({ type: "int" })
     ProviderId: number;
 
-    @ManyToOne(() => HealthcareProvider)
+    @ManyToOne("HealthcareProvider")
     @JoinColumn({ name: "ProviderId" })
-    Provider: HealthcareProvider;
+    Provider: Relation<HealthcareProvider>;
 
     @Column({ type: "int" })
     OrganizationId: number;
