@@ -112,6 +112,28 @@ export class HealthcareProviderController {
         }
     }
 
+    async generateManualSlots(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            const hospitalId = parseInt(req.body.hospitalId as string);
+            const { date, slots } = req.body;
+
+            if (isNaN(id) || isNaN(hospitalId) || !date || !Array.isArray(slots)) {
+                return res.status(400).json(ApiResponse.error("Missing or invalid parameters: id, hospitalId, date, and slots (array) are required"));
+            }
+
+            const result = await healthcareProviderService.generateManualSlots(
+                id,
+                hospitalId,
+                date,
+                slots
+            );
+            return res.json(ApiResponse.success(result, "Manual slots generated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async updateSchedule(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);

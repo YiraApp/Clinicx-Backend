@@ -369,6 +369,7 @@ export class HealthcareProviderService {
         while (currentDate <= end) {
             const dayName = DAYS[currentDate.getDay()];
             const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
+            const dateStr = currentDate.toISOString().split('T')[0];
 
             dayTemplates.forEach(template => {
                 let currentSlotMinutes = timeToMinutes(template.StartTime);
@@ -380,7 +381,7 @@ export class HealthcareProviderService {
                     slot.ProviderId = providerId;
                     slot.HospitalId = hospitalId;
                     slot.OrganizationId = provider.Hospital.OrganizationId;
-                    slot.SlotDate = new Date(currentDate);
+                    slot.SlotDate = dateStr as any;
                     slot.StartTime = minutesToTime(currentSlotMinutes);
                     slot.EndTime = minutesToTime(currentSlotMinutes + slotDuration);
                     slot.IsAvailable = template.Status;
@@ -403,6 +404,66 @@ export class HealthcareProviderService {
             message: `Successfully generated ${newSlots.length} slots (${slotDuration} mins each) from ${startDate} to ${endDate}.`,
             count: newSlots.length
         };
+    }
+
+    async generateManualSlots(providerId: number, hospitalId: number, date: string, slots: any[]): Promise<any> {
+        const provider = await healthcareProviderRepository.getDoctorById(providerId);
+        if (!provider) throw new Error("Doctor not found.");
+
+        // Normalize date to avoid timezone shifts (take only YYYY-MM-DD)
+        const dateStr = date.split('T')[0];
+        console.log(`[Service] Generating manual slots for Date: ${dateStr}, Slots: ${slots.length}`);
+
+        return await AppDataSource.transaction(async (manager) => {
+            // 1. Soft-delete existing UNBOOKED slots for this specific date
+            const deleteResult = await manager.getRepository(HealthcareProviderScheduleSlot).update(
+                { 
+                    ProviderId: providerId, 
+                    HospitalId: hospitalId, 
+                    SlotDate: dateStr as any,
+                    IsBooked: false,
+                    IsDeleted: false
+                },
+                { IsDeleted: true, UpdatedAt: new Date() }
+            );
+            
+            console.log(`[Service] Soft-deleted ${deleteResult.affected} existing slots for ${dateStr}`);
+
+            // 2. Create new manual slots
+            const newSlots: HealthcareProviderScheduleSlot[] = [];
+            
+            for (const s of slots) {
+                if (!s.startTime || !s.endTime) {
+                    console.warn("[Service] Skipping invalid slot:", s);
+                    continue;
+                }
+
+                const slot = manager.create(HealthcareProviderScheduleSlot, {
+                    ProviderId: providerId,
+                    HospitalId: hospitalId,
+                    OrganizationId: provider.Hospital.OrganizationId,
+                    SlotDate: dateStr as any,
+                    StartTime: s.startTime,
+                    EndTime: s.endTime,
+                    IsAvailable: s.isAvailable !== undefined ? s.isAvailable : true,
+                    IsBooked: false,
+                    Status: s.status || (s.isAvailable === false ? "Blocked" : "Available"),
+                    IsDeleted: false
+                });
+                newSlots.push(slot);
+            }
+
+            if (newSlots.length > 0) {
+                await manager.save(HealthcareProviderScheduleSlot, newSlots);
+                console.log(`[Service] Successfully saved ${newSlots.length} new slots.`);
+            }
+
+            return {
+                message: `Successfully updated slots for ${dateStr}.`,
+                count: newSlots.length,
+                deletedCount: deleteResult.affected
+            };
+        });
     }
 
     async updateWeeklySchedule(id: number, data: any): Promise<any> {
