@@ -294,8 +294,8 @@ export class DashboardRepository {
             FROM Appointments
             WHERE HospitalId = ${hospId}
             AND AppointmentDate >= DATEADD(day, -6, GETDATE())
-            GROUP BY FORMAT(AppointmentDate, 'ddd'), AppointmentDate
-            ORDER BY AppointmentDate ASC;
+            GROUP BY FORMAT(AppointmentDate, 'ddd'), CAST(AppointmentDate AS DATE)
+            ORDER BY CAST(AppointmentDate AS DATE) ASC;
         `;
 
         // 5. Monthly Stats (Last 6 months)
@@ -413,42 +413,42 @@ export class DashboardRepository {
             ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
         `;
 
-        // 4. Weekly Stats for Doctor (Last 7 days)
-        const weeklyStatsQuery = `
-            SELECT 
-                FORMAT(AppointmentDate, 'ddd') as day,
-                COUNT(*) as appointments,
-                COUNT(DISTINCT UserId) as patients
-            FROM Appointments
-            WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-            AND AppointmentDate >= DATEADD(day, -6, GETDATE())
-            GROUP BY FORMAT(AppointmentDate, 'ddd'), AppointmentDate
-            ORDER BY AppointmentDate ASC;
-        `;
-
-        // 5. Monthly Stats for Doctor (Last 6 months)
-        const monthlyStatsQuery = `
-            SELECT 
-                FORMAT(AppointmentDate, 'MMM') as month,
-                COUNT(*) as appointments,
-                COUNT(DISTINCT UserId) as patients
-            FROM Appointments
-            WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-            AND AppointmentDate >= DATEADD(month, -5, GETDATE())
-            GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
-            ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;
-        `;
+        console.log(`Fetching Doctor Dashboard stats for Doctor: ${doctorId}, Hospital: ${hospId}`);
 
         const [statsResults, patientResults, recentPatientsResult, weeklyStats, monthlyStats] = await Promise.all([
             AppDataSource.query(statsQuery),
             AppDataSource.query(patientStatsQuery),
             AppDataSource.query(recentPatientsQuery),
-            AppDataSource.query(weeklyStatsQuery),
-            AppDataSource.query(monthlyStatsQuery)
+            AppDataSource.query(`
+                SELECT 
+                    FORMAT(AppointmentDate, 'ddd') as day,
+                    COUNT(*) as appointments,
+                    COUNT(DISTINCT UserId) as patients
+                FROM Appointments
+                WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+                AND AppointmentDate >= CAST(DATEADD(day, -6, GETDATE()) AS DATE)
+                GROUP BY FORMAT(AppointmentDate, 'ddd'), CAST(AppointmentDate AS DATE)
+                ORDER BY CAST(AppointmentDate AS DATE) ASC;
+            `),
+            AppDataSource.query(`
+                SELECT 
+                    FORMAT(AppointmentDate, 'MMM') as month,
+                    COUNT(*) as appointments,
+                    COUNT(DISTINCT UserId) as patients
+                FROM Appointments
+                WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+                AND AppointmentDate >= CAST(DATEADD(month, -5, GETDATE()) AS DATE)
+                GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
+                ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;
+            `)
         ]);
+
+        console.log(`Doctor Dashboard Data: Stats Found: ${statsResults.length}, Weekly Stats Found: ${weeklyStats.length}, Monthly Stats Found: ${monthlyStats.length}`);
 
         const stats = statsResults[0] || {};
         const patientStats = patientResults[0] || {};
+
+        console.log(`Doctor Dashboard Data: Today Total: ${stats.totalToday || 0}, Total Patients: ${patientStats.totalPatients || 0}, Weekly Rows: ${weeklyStats.length}, Monthly Rows: ${monthlyStats.length}`);
 
         return {
             todayStats: {
