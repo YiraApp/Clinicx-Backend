@@ -16,14 +16,11 @@ export class PatientQueueService {
         return await patientQueueRepository.getQueueByDoctor(doctorId, queryDate);
     }
 
-    async updateStatus(queueId: number, status: PatientQueueStatus): Promise<void> {
+    async updateStatus(queueId: number, status: QueueStatus): Promise<void> {
         await patientQueueRepository.updateStatus(queueId, status);
 
         // Sync with Appointment status
-        const queueEntry = await patientQueueRepository.repo.findOne({ 
-            where: { Id: queueId },
-            relations: ["Appointment"] 
-        });
+        const queueEntry = await patientQueueRepository.findByIdWithAppointment(queueId);
 
         if (queueEntry?.AppointmentId) {
             const appointmentRepo = AppDataSource.getRepository(Appointment);

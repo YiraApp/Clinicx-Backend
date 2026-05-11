@@ -33,7 +33,7 @@ export class PostVisitController {
      */
     async getSharedSummary(req: Request, res: Response) {
         try {
-            const { token } = req.params;
+            const token = req.params.token as string;
             if (!token) {
                 return res.status(400).json(ApiResponse.error("Share token is required."));
             }

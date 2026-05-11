@@ -62,7 +62,7 @@ export class PatientPrescriptionController {
 
     async deletePrescription(req: Request, res: Response): Promise<void> {
         try {
-            const { id } = req.params;
+            const id = req.params.id as string;
             await patientPrescriptionService.deletePrescription(id);
             res.status(200).json(ApiResponse.success(null, "Prescription deleted successfully"));
         } catch (error: any) {

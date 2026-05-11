@@ -13,6 +13,13 @@ export class PatientQueueRepository {
         return await this.repo.findOne({ where: { AppointmentId: appointmentId } });
     }
 
+    async findByIdWithAppointment(id: number): Promise<PatientQueue | null> {
+        return await this.repo.findOne({
+            where: { Id: id } as any,
+            relations: ["Appointment"]
+        });
+    }
+
     async getNextQueueNumber(hospitalId: number, date: Date): Promise<number> {
         const startOfDay = new Date(date);
         startOfDay.setHours(0, 0, 0, 0);
