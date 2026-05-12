@@ -60,8 +60,8 @@ export class MedicalDocumentService {
         return savedDocuments;
     }
 
-    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number): Promise<MedicalDocument[]> {
-        return await medicalDocumentRepository.findByPatient(patientId, organizationId, hospitalId);
+    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number): Promise<MedicalDocument[]> {
+        return await medicalDocumentRepository.findByPatient(patientId, organizationId, hospitalId, appointmentId);
     }
 
     async deleteDocument(id: number, userId?: string): Promise<void> {

@@ -130,7 +130,7 @@ export class PatientRegistrationService {
 
         const savedLink = await userRegistrationLinkRepository.save(regLink);
 
-        const baseUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
         // Use token instead of raw details for security
         const link = `${baseUrl}/self-register?token=${savedLink.Token}&orgId=${organizationId || ""}&hospId=${hospitalId || ""}&name=${encodeURIComponent(name)}&phone=${phone}&countryCode=${regLink.CountryCode}`;
 

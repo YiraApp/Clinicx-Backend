@@ -8,13 +8,15 @@ export class MedicalDocumentRepository {
         return await this.repo.save(document);
     }
 
-    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number): Promise<MedicalDocument[]> {
+    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number): Promise<MedicalDocument[]> {
         const query: any = { PatientId: patientId, IsDeleted: false };
         if (organizationId) query.OrganizationId = organizationId;
         if (hospitalId) query.HospitalId = hospitalId;
+        if (appointmentId) query.AppointmentId = appointmentId;
 
         return await this.repo.find({
             where: query,
+            relations: ["UploadedByUser"],
             order: { CreatedAt: "DESC" }
         });
     }

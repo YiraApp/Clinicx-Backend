@@ -44,6 +44,16 @@ export class SMSService {
      * @param message Message content
      */
     async sendSMS(to: string, message: string): Promise<any> {
+        return await this.sendSMSWithCustomTemplate(to, message, this.templateId);
+    }
+
+    /**
+     * Sends a single SMS message with a specific template ID.
+     * @param to Recipient mobile number
+     * @param message Message content
+     * @param templateId DLT Template ID
+     */
+    async sendSMSWithCustomTemplate(to: string, message: string, templateId: string): Promise<any> {
         try {
             if (!this.username || !this.password || !this.baseUrl) {
                 console.error("[SMS Service] Missing configuration.");
@@ -63,7 +73,7 @@ export class SMSService {
             url.searchParams.append("to", normalizedTo);
             url.searchParams.append("from", this.from || "");
             url.searchParams.append("type", this.type);
-            url.searchParams.append("template_id", this.templateId || "");
+            url.searchParams.append("template_id", templateId || "");
             url.searchParams.append("msg", message);
 
             // Create a safe URL for logging (masking password)

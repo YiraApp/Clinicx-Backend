@@ -19,10 +19,11 @@ export class MedicalDocumentController {
             const patientId = req.params.patientId as string;
             const organizationId = req.query.organizationId ? Number(req.query.organizationId) : undefined;
             const hospitalId = req.query.hospitalId ? Number(req.query.hospitalId) : undefined;
+            const appointmentId = req.query.appointmentId ? Number(req.query.appointmentId) : undefined;
 
             if (!patientId) return res.status(400).json(ApiResponse.error("Patient ID is required"));
 
-            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId);
+            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId);
             return res.json(ApiResponse.success(result, "Patient documents fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));

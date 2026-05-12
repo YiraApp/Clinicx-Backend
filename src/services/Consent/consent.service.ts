@@ -230,7 +230,7 @@ export class ConsentService {
             throw new Error("No valid templates found.");
         }
 
-        const baseUrl = process.env.FRONTEND_URL || "http://localhost:4200";
+        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:4200";
         const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
         const signUrl = `${cleanBaseUrl}/sign-consent/${batchLink}`;
 

@@ -17,6 +17,7 @@ import { organizationRepository } from "../../repositories/Organizations/organiz
 import { hospitalRepository } from "../../repositories/Organizations/hospital.repository.js";
 import { addressRepository } from "../../repositories/Account/address.repository.js";
 import { Address } from "../../models/Account/address.model.js";
+import { tokenRepository } from "../../repositories/Account/token.repository.js";
 
 /**
  * Service implementation for User operations.
@@ -191,12 +192,12 @@ export class UserService implements IUserService {
                 FirstName: data.FirstName,
                 LastName: data.LastName,
                 Email: data.Email,
-                Password : data.Password,
+                Password: data.Password,
                 PhoneNumber: data.PhoneNumber,
                 Gender: data.Gender,
-                CountryCode : data.CountryCode,
+                CountryCode: data.CountryCode,
                 DateOfBirth: data.DateOfBirth,
-                Relation: data.Relation || "Admin" 
+                Relation: data.Relation || "Admin"
             }, true);
             user = await userRepository.findById(createResult.Id);
         }
@@ -261,26 +262,33 @@ export class UserService implements IUserService {
 
         // Identify existing roles and mark for update (reactivate or deactivate)
         currentRoles.forEach(cr => {
-            const matchIndex = requestedAssignments.findIndex(ra => 
-                (ra.userRoleId && Number(ra.userRoleId) === cr.UserRoleId) || 
-                (ra.roleId === cr.RoleId && 
-                 ra.organizationId === cr.OrganizationId && 
-                 (ra.hospitalId ? Number(ra.hospitalId) === cr.HospitalId : !cr.HospitalId))
+            const matchIndex = requestedAssignments.findIndex(ra =>
+                (ra.userRoleId && Number(ra.userRoleId) === cr.UserRoleId) ||
+                (ra.roleId === cr.RoleId &&
+                    ra.organizationId === cr.OrganizationId &&
+                    (ra.hospitalId ? Number(ra.hospitalId) === cr.HospitalId : !cr.HospitalId))
             );
 
             if (matchIndex !== -1) {
-                // Found a match
+                // Found a match - should be active
                 const ra = requestedAssignments[matchIndex];
-                
+
                 // Reactivate if currently inactive
                 if (!cr.Status) {
                     cr.Status = true;
                     cr.UpdatedAt = new Date();
                     rolesToUpdate.push(cr);
                 }
-                
+
                 // Remove from requested list so we don't treat it as a new creation
                 requestedAssignments.splice(matchIndex, 1);
+            } else {
+                // NOT in requested assignments - deactivate if currently active
+                if (cr.Status) {
+                    cr.Status = false;
+                    cr.UpdatedAt = new Date();
+                    rolesToUpdate.push(cr);
+                }
             }
         });
 
@@ -291,13 +299,13 @@ export class UserService implements IUserService {
             // If it's not a valid GUID, try to resolve by name
             const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
             if (!guidRegex.test(finalRoleId)) {
-                 const resolvedRole = await roleRepository.findByNormalizedName(finalRoleId);
-                 if (resolvedRole) {
-                     finalRoleId = resolvedRole.Id;
-                 } else {
-                     console.warn(`[UserService] Role name "${finalRoleId}" could not be resolved to a GUID.`);
-                     continue; // Skip invalid roles
-                 }
+                const resolvedRole = await roleRepository.findByNormalizedName(finalRoleId);
+                if (resolvedRole) {
+                    finalRoleId = resolvedRole.Id;
+                } else {
+                    console.warn(`[UserService] Role name "${finalRoleId}" could not be resolved to a GUID.`);
+                    continue; // Skip invalid roles
+                }
             }
 
             const newRole = new UserRole();
@@ -313,22 +321,25 @@ export class UserService implements IUserService {
 
         if (rolesToUpdate.length > 0) {
             await userRoleRepository.saveAll(rolesToUpdate);
-            
+
+            // Revoke all existing sessions to force immediate role reflection on all devices
+            await tokenRepository.revokeAllUserTokens(user.Id);
+
             // Only notify for roles that are currently active (newly assigned or reactivated)
             const activeNewRoles = rolesToUpdate.filter(r => r.Status);
-            
+
             if (activeNewRoles.length > 0 && user!.Email) {
                 for (const ur of activeNewRoles) {
                     try {
                         const role = await roleRepository.findById(ur.RoleId);
                         let orgName = "N/A";
                         let hospitalName = "N/A (Organization Level)";
-                        
+
                         if (ur.OrganizationId) {
                             const org = await organizationRepository.findById(ur.OrganizationId);
                             if (org) orgName = org.Name;
                         }
-                        
+
                         if (ur.HospitalId) {
                             const hospital = await hospitalRepository.findById(ur.HospitalId);
                             if (hospital) hospitalName = hospital.Name;
@@ -348,9 +359,9 @@ export class UserService implements IUserService {
             }
         }
 
-        return { 
+        return {
             message: "User updated successfully.",
-            userId: user!.Id 
+            userId: user!.Id
         };
     }
 
@@ -367,7 +378,7 @@ export class UserService implements IUserService {
         // check if user is already a healthcare provider
         const isHealthcareProvider = await userRoleRepository.findByUserIdAndRoleId(primaryUser.Id, providerRoleId);
         const roles = await userRoleRepository.findAllByUserId(primaryUser.Id);
-        
+
         const userPayload = {
             id: primaryUser.Id,
             firstName: primaryUser.FirstName,
@@ -384,8 +395,8 @@ export class UserService implements IUserService {
         };
 
         if (isHealthcareProvider) {
-            return { 
-                exists: true, 
+            return {
+                exists: true,
                 message: "User is already a healthcare provider.",
                 user: userPayload
             };

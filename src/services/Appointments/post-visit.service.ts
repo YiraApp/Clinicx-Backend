@@ -85,7 +85,7 @@ export class PostVisitService {
 
         // 2. Create a secure Share Link for this visit summary
         const shareToken = uuidv4();
-        const baseUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
         const shareLinkUrl = `${baseUrl}/view-summary/${shareToken}`;
 
         const shareLink = await appointmentShareLinkRepository.create({
