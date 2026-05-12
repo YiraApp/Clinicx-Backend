@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm/index.js";
 import { User } from "../Account/user.model.js";
 import { ConsentTemplate } from "./consent-template.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";

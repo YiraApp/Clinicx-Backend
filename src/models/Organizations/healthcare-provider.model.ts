@@ -1,7 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, JoinColumn } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, JoinColumn, Relation } from "typeorm/index.js";
 import { User } from "../Account/user.model.js";
 import { Hospital } from "./hospital.model.js";
-import { HealthcareProviderAvailability } from "./healthcare-provider-availability.model.js";
+import type { HealthcareProviderAvailability } from "./healthcare-provider-availability.model.js";
 
 @Entity("HealthcareProviders")
 export class HealthcareProvider {
@@ -46,8 +46,8 @@ export class HealthcareProvider {
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Bio: string;
 
-    @OneToMany(() => HealthcareProviderAvailability, (a) => a.Provider)
-    Availability: HealthcareProviderAvailability[];
+    @OneToMany("HealthcareProviderAvailability", (a: HealthcareProviderAvailability) => a.Provider)
+    Availability: Relation<HealthcareProviderAvailability[]>;
 
 
     @Column({ type: "bit", default: true })

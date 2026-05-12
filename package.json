@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "main": "dist/index.js",
+  
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc"
   },
+  
   "keywords": [],
   "author": "",
   "license": "ISC",
