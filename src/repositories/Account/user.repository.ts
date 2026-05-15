@@ -23,7 +23,7 @@ export class UserRepository implements IUserRepository {
             }
             if (filters.search) {
                 baseQuery.andWhere(
-                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
                     { search: `%${filters.search}%` }
                 );
             }
@@ -59,7 +59,7 @@ export class UserRepository implements IUserRepository {
             if (filters.hospitalId) roleCountsRaw.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
             if (filters.search) {
                 roleCountsRaw.andWhere(
-                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
                     { search: `%${filters.search}%` }
                 );
             }
@@ -110,7 +110,7 @@ export class UserRepository implements IUserRepository {
 
         if (filters.search) {
             query.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -129,7 +129,15 @@ export class UserRepository implements IUserRepository {
 
 
         const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
-        query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+
+        if (filters?.currentUserId) {
+            query.addSelect('CASE WHEN u.Id = :currentUserId THEN 0 ELSE 1 END', 'priority');
+            query.orderBy('priority', 'ASC');
+            query.addOrderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+            query.setParameter('currentUserId', filters.currentUserId);
+        } else {
+            query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+        }
 
         const [users, total] = await query.skip(skip).take(pageSize).getManyAndCount();
 
@@ -324,7 +332,7 @@ export class UserRepository implements IUserRepository {
         // Apply Filters
         if (filters?.search) {
             query.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -347,7 +355,15 @@ export class UserRepository implements IUserRepository {
 
         // 2. Fetch paginated data
         const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
-        query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+
+        if (filters?.currentUserId) {
+            query.addSelect('CASE WHEN u.Id = :currentUserId THEN 0 ELSE 1 END', 'priority');
+            query.orderBy('priority', 'ASC');
+            query.addOrderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+            query.setParameter('currentUserId', filters.currentUserId);
+        } else {
+            query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+        }
 
         const [users, total] = await query.skip(skip).take(pageSize).getManyAndCount();
 
@@ -375,7 +391,7 @@ export class UserRepository implements IUserRepository {
 
         if (filters?.search) {
             summaryCountQuery.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -395,7 +411,7 @@ export class UserRepository implements IUserRepository {
 
         if (filters?.search) {
             roleSummaryQuery.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -515,6 +531,85 @@ export class UserRepository implements IUserRepository {
                 totalPages: Math.ceil(total / pageSize)
             }
         };
+    }
+
+    async getAllUsersForExport(filters?: any): Promise<any[]> {
+        const sortBy = filters?.sortBy || 'CreatedAt';
+        const sortOrder = filters?.sortOrder || 'DESC';
+
+        const query = this.repo.createQueryBuilder('u')
+            .leftJoinAndSelect('u.UserRoles', 'ur', 'ur.IsDeleted = :urDeleted AND ur.Status = :urStatus', { urDeleted: false, urStatus: true })
+            .leftJoinAndSelect('ur.Role', 'r')
+            .leftJoinAndSelect('ur.Organization', 'org')
+            .leftJoinAndSelect('ur.Hospital', 'h')
+            .where('u.IsDeleted = :isDeleted', { isDeleted: false });
+
+        if (filters?.search) {
+            query.andWhere(
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                { search: `%${filters.search}%` }
+            );
+        }
+
+        if (filters?.status !== undefined) {
+            query.andWhere('u.Status = :status', { status: filters.status });
+        }
+
+        if (filters?.roleId) {
+            query.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+        }
+
+        if (filters?.organizationId) {
+            query.andWhere('ur.OrganizationId = :organizationId', { organizationId: filters.organizationId });
+        }
+
+        if (filters?.hospitalId) {
+            query.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
+        }
+
+        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
+
+        if (filters?.currentUserId) {
+            query.addSelect('CASE WHEN u.Id = :currentUserId THEN 0 ELSE 1 END', 'priority');
+            query.orderBy('priority', 'ASC');
+            query.addOrderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+            query.setParameter('currentUserId', filters.currentUserId);
+        } else {
+            query.orderBy(orderByColumn, sortOrder as 'ASC' | 'DESC');
+        }
+
+        const users = await query.getMany();
+
+        return users.map(u => ({
+            Id: u.Id,
+            FirstName: u.FirstName || "",
+            LastName: u.LastName || "",
+            Email: u.Email || "",
+            PhoneNumber: u.PhoneNumber || "",
+            CountryCode: u.CountryCode || "91",
+            Gender: u.Gender || "",
+            DateOfBirth: u.DateOfBirth || "",
+            BloodGroup: u.BloodGroup || "",
+            AadharNo: u.AadharNo || "",
+            AlternatePhone: u.AlternatePhoneNumber || "",
+            Height: u.Height || "",
+            Weight: u.Weight || "",
+            EmergencyContact: u.EmergencyContactName || "",
+            EmergencyPhone: u.EmergencyContactPhone || "",
+            IsMobileVerified: u.IsMobileVerified ? "Yes" : "No",
+            IsEmailVerified: u.IsEmailVerified ? "Yes" : "No",
+            Status: u.Status ? "Active" : "Inactive",
+            IsPrimary: u.IsPrimary ? "Yes" : "No",
+            Relation: u.Relation || "",
+            CreatedAt: u.CreatedAt ? new Date(u.CreatedAt).toISOString().replace('T', ' ').split('.')[0] : "",
+            LastLogin: u.LastLoginTime ? new Date(u.LastLoginTime).toISOString().replace('T', ' ').split('.')[0] : "",
+            AccessDetails: u.UserRoles?.map(ur => {
+                const role = ur.Role?.RoleName || "Unknown Role";
+                const org = ur.Organization?.Name || "No Org";
+                const hosp = ur.Hospital?.Name || "All Hospitals";
+                return `${role} [${org} - ${hosp}]`;
+            }).join(" | ") || "No Access"
+        }));
     }
 }
 

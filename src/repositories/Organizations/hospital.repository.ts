@@ -1,5 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { Hospital } from "../../models/Organizations/hospital.model.js";
+import { HealthcareProvider } from "../../models/Organizations/healthcare-provider.model.js";
 
 export class HospitalRepository {
     private repo = AppDataSource.getRepository(Hospital);
@@ -48,15 +49,45 @@ export class HospitalRepository {
             .take(pageSize)
             .getManyAndCount();
 
+        // Manual count query to avoid model-level integration
+        const hospitalIds = data.map(h => h.Id);
+        if (hospitalIds.length > 0) {
+            const counts = await AppDataSource.getRepository(HealthcareProvider)
+                .createQueryBuilder("hp")
+                .select("hp.HospitalId", "hospitalId")
+                .addSelect("COUNT(hp.Id)", "count")
+                .where("hp.HospitalId IN (:...ids)", { ids: hospitalIds })
+                .andWhere("hp.IsDeleted = :hpDeleted", { hpDeleted: false })
+                .groupBy("hp.HospitalId")
+                .getRawMany();
+
+            data.forEach((h: any) => {
+                const match = counts.find(c => c.hospitalId === h.Id);
+                h.MedicalStaff = match ? parseInt(match.count) : 0;
+            });
+        }
+
         // Calculate Overview Stats
         const summaryWhere: any = { IsDeleted: false };
         if (orgId) summaryWhere.OrganizationId = orgId;
         const allHospitals = await this.repo.find({ where: summaryWhere });
+        // Calculate Medical Staff Count for summary
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+        const providerQuery = providerRepo.createQueryBuilder("hp")
+            .where("hp.IsDeleted = :isDeleted", { isDeleted: false });
+        
+        if (orgId) {
+            providerQuery.innerJoin("hp.Hospital", "h")
+                .andWhere("h.OrganizationId = :orgId", { orgId });
+        }
+        
+        const medicalStaffCount = await providerQuery.getCount();
+
         const summaryStats = {
             totalHospitals: total,
             activeBranches: allHospitals.filter(h => h.Status).length,
             totalBeds: allHospitals.reduce((sum, h) => sum + (h.TotalBeds || 0), 0),
-            medicalStaff: 0 // Placeholder until Staff module is linked
+            medicalStaff: medicalStaffCount
         };
 
         return { data, total, stats: summaryStats };

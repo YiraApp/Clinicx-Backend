@@ -8,6 +8,7 @@ const userRouter = Router();
  * Get all users with advanced filtering, pagination, and sorting.
  */
 userRouter.get("/getUsers", userController.getUsers.bind(userController));
+userRouter.get("/exportUsers", userController.exportUsers.bind(userController));
 userRouter.get("/getOrgUsers", userController.getOrgUsers.bind(userController));
 userRouter.get("/getHospUsers", userController.getHospUsers.bind(userController));
 
@@ -37,5 +38,11 @@ userRouter.get("/checkPrimary/:phoneNumber", userController.getPrimaryAccount.bi
  * Toggle user activation status.
  */
 userRouter.patch("/toggleStatus/:id", userController.toggleStatus.bind(userController));
+
+/**
+ * Update user password securely.
+ * Body: { userId: string, newPassword: string }
+ */
+userRouter.post("/updatePassword", userController.updatePassword.bind(userController));
 
 export { userRouter };

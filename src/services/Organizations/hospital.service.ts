@@ -194,7 +194,7 @@ export class HospitalService implements IHospitalService {
         }
 
         // Grouping logic for OrgHospitalsResponse
-        const groupedData = hospitals.reduce((acc: any[], current: Hospital) => {
+        const groupedData = hospitals.reduce((acc: any[], current: any) => {
             const org = current.Organization;
             if (!org) return acc;
 
@@ -216,7 +216,8 @@ export class HospitalService implements IHospitalService {
                 HospitalCode: current.HospitalCode || null,
                 City: current.City || null,
                 State: current.State || null,
-                Is24Hours: !!current.Is24Hours
+                Is24Hours: !!current.Is24Hours,
+                MedicalStaff: current.MedicalStaff || 0
             });
 
             return acc;

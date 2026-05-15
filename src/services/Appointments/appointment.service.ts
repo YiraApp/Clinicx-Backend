@@ -6,6 +6,8 @@ import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { PatientQueue } from "../../models/Appointments/patient-queue.model.js";
 import { AppointmentStatus, QueueStatus } from "../../enums/appointments.js";
 
+import { zoomService } from "../Common/zoom.service.js";
+
 export class AppointmentService {
     async bookAppointment(data: {
         userId: string;
@@ -30,10 +32,14 @@ export class AppointmentService {
 
             // 2. Generate Meeting URL if teleconsultation
             let meetingUrl: string | undefined = undefined;
-            if (data.isTeleConsultation) {
-                // Generate a simple meeting ID
-                const meetingId = Math.random().toString(36).substring(2, 12);
-                meetingUrl = `/teleconsult/${meetingId}`;
+            const isTele = data.isTeleConsultation || data.appointmentType === "Teleconsult" || data.appointmentType === "TeleConsultation";
+            if (isTele) {
+                const appointmentDate = new Date(data.appointmentDate);
+                const zoomMeeting = await zoomService.createMeeting(
+                    `Consultation: ${data.reason || 'General'}`,
+                    appointmentDate
+                );
+                meetingUrl = zoomMeeting.join_url;
             }
 
             // 3. Generate Appointment Number
@@ -56,7 +62,7 @@ export class AppointmentService {
                 Reason: data.reason,
                 AppointmentType: data.appointmentType || "Consultation",
                 Status: "Scheduled",
-                IsTeleConsultation: data.isTeleConsultation || false,
+                IsTeleConsultation: isTele,
                 MeetingUrl: meetingUrl,
                 CreatedBy: data.createdBy,
                 AppointmentNumber: appointmentNumber
@@ -166,6 +172,9 @@ export class AppointmentService {
                 }
             }
         });
+    }
+    async createInstantMeeting(topic: string = "Instant Consultation") {
+        return await zoomService.createMeeting(topic);
     }
 }
 

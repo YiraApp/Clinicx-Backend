@@ -21,4 +21,5 @@ export interface IDashboardService {
     getDashboardSummary(page?: number, pageSize?: number, orgId?: number, type?: string, search?: string): Promise<DashboardSummary>;
     getFrontdeskDashboardData(hospId: number): Promise<any>;
     getDoctorDashboardData(doctorId: string, hospId: number): Promise<any>;
+    getAnalyticsData(timeRange?: string): Promise<any>;
 }

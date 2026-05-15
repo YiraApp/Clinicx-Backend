@@ -2,6 +2,7 @@ import { AppDataSource } from "../../config/database.js";
 import { User } from "../../models/Account/user.model.js";
 import { Role } from "../../models/Account/role.model.js";
 import { Organization } from "../../models/Organizations/organization.model.js";
+import { UserRole } from "../../models/Account/userrole.model.js";
 
 export class DashboardRepository {
     async getAdminDashboardStats(orgId?: number, hospId?: number) {
@@ -65,8 +66,8 @@ export class DashboardRepository {
                 UpdatedOn,
                 ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))), ''), 'System') as UserName,
                 l.RoleName
-            FROM APILogs l
-            LEFT JOIN Users u ON l.UserId = u.Id
+            FROM APILogs l WITH (NOLOCK)
+            LEFT JOIN Users u WITH (NOLOCK) ON l.UserId = u.Id
             WHERE Action IN ('CREATE', 'UPDATE', 'DELETE', 'LOGIN')
             ${orgId ? 'AND l.OrgId = ' + orgId : ''}
             ${hospId ? 'AND l.HospitalId = ' + hospId : ''}
@@ -75,32 +76,99 @@ export class DashboardRepository {
 
         const recentActivity = await AppDataSource.query(recentActivityQuery);
 
+        // 4. Analytics (Appointments & Revenue)
+        const analyticsQuery = `
+            SELECT 
+                -- Today's Stats (IST Adjustment)
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayTotal,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND a.Status NOT IN ('Completed', 'Cancelled') THEN 1 END) as todayPending,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND a.Status = 'Completed' THEN 1 END) as todayCompleted,
+                
+                -- Total Stats
+                COUNT(a.Id) as totalAppointments,
+                SUM(ISNULL(hp.ConsultationFee, 0)) as totalRevenue,
+                
+                -- Current Month Stats (Calendar Month in IST)
+                COUNT(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MINUTE, 330, GETUTCDATE())) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MINUTE, 330, GETUTCDATE())) THEN 1 END) as currentMonthAppointments,
+                SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MINUTE, 330, GETUTCDATE())) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MINUTE, 330, GETUTCDATE())) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as currentMonthRevenue,
+                
+                -- Previous Month Stats
+                COUNT(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) THEN 1 END) as prevMonthAppointments,
+                SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as prevMonthRevenue
+            FROM Appointments a WITH (NOLOCK)
+            LEFT JOIN HealthcareProviders hp WITH (NOLOCK) ON a.DoctorId = hp.UserId
+            WHERE 1=1
+            ${orgId ? 'AND a.OrgId = ' + orgId : ''}
+            ${hospId ? 'AND a.HospitalId = ' + hospId : ''}
+        `;
+
+        const analyticsResults = await AppDataSource.query(analyticsQuery);
+        const stats = analyticsResults[0] || {};
+
+        // Calculate Trends/Analysis
+        const calculateTrend = (current: number, previous: number) => {
+            if (previous === 0) return current > 0 ? 100 : 0;
+            return Math.round(((current - previous) / previous) * 100);
+        };
+
+        const revenueTrend = calculateTrend(stats.currentMonthRevenue || 0, stats.prevMonthRevenue || 0);
+        const appointmentTrend = calculateTrend(stats.currentMonthAppointments || 0, stats.prevMonthAppointments || 0);
+
         return {
             totalUsers,
             activeUsers,
-            todayAppointments: 0,
-            monthlyRevenue: 0,
+            totalAppointments: stats.totalAppointments || 0,
+            totalRevenue: stats.totalRevenue || 0,
+            todayAppointments: stats.todayTotal || 0,
+            pendingAppointments: stats.todayPending || 0,
+            completedAppointments: stats.todayCompleted || 0,
+            monthlyRevenue: stats.currentMonthRevenue || 0,
+            revenueChange: revenueTrend,
+            revenueIncrease: (stats.currentMonthRevenue || 0) - (stats.prevMonthRevenue || 0),
+            appointmentChange: appointmentTrend,
+            appointmentIncrease: (stats.currentMonthAppointments || 0) - (stats.prevMonthAppointments || 0),
             roleStats,
             recentActivity
         };
     }
 
-    async getAnalyticsStats() {
+    async getAnalyticsStats(timeRange: string = '30d') {
         const userRepo = AppDataSource.getRepository(User);
         const orgRepo = AppDataSource.getRepository(Organization);
 
-        // 1. Basic Stats
-        const totalUsers = await userRepo.count({ where: { IsDeleted: false } });
-        const activeUsers = await userRepo.count({ where: { Status: true, IsDeleted: false } });
-        const totalOrgs = await orgRepo.count({ where: { Status: true } });
+        let dateLimit: string;
+        switch (timeRange) {
+            case '7d': dateLimit = "DATEADD(DAY, -7, DATEADD(MINUTE, 330, GETUTCDATE()))"; break;
+            case '90d': dateLimit = "DATEADD(DAY, -90, DATEADD(MINUTE, 330, GETUTCDATE()))"; break;
+            case '1y': dateLimit = "DATEADD(YEAR, -1, DATEADD(MINUTE, 330, GETUTCDATE()))"; break;
+            case 'all': dateLimit = "CAST('1970-01-01' AS DATETIME)"; break;
+            default: dateLimit = "DATEADD(DAY, -30, DATEADD(MINUTE, 330, GETUTCDATE()))"; // 30d
+        }
 
-        // 2. Growth Trends (Monthly)
+        // 1. Basic Stats (Filtered by timeRange)
+        const totalUsersQuery = userRepo.createQueryBuilder("u").where("u.IsDeleted = 0");
+        const activeUsersQuery = userRepo.createQueryBuilder("u").where("u.Status = 1 AND u.IsDeleted = 0");
+        const totalOrgsQuery = orgRepo.createQueryBuilder("o").where("o.Status = 1");
+
+        if (timeRange !== 'all') {
+            totalUsersQuery.andWhere(`u.CreatedAt >= ${dateLimit}`);
+            activeUsersQuery.andWhere(`u.CreatedAt >= ${dateLimit}`);
+            totalOrgsQuery.andWhere(`o.CreatedAt >= ${dateLimit}`);
+        }
+
+        const [totalUsers, activeUsers, totalOrgs] = await Promise.all([
+            totalUsersQuery.getCount(),
+            activeUsersQuery.getCount(),
+            totalOrgsQuery.getCount()
+        ]);
+
+        // 2. Growth Trends (Monthly in IST - fixed last 6 months for trend visualization)
         const userGrowthQuery = `
             SELECT 
                 FORMAT(CreatedAt, 'MMM yyyy') as month,
                 COUNT(Id) as count
-            FROM Users
-            WHERE CreatedAt >= DATEADD(MONTH, -6, GETDATE())
+            FROM Users WITH (NOLOCK)
+            WHERE CreatedAt >= DATEADD(MONTH, -6, DATEADD(MINUTE, 330, GETUTCDATE()))
             GROUP BY FORMAT(CreatedAt, 'MMM yyyy'), YEAR(CreatedAt), MONTH(CreatedAt)
             ORDER BY YEAR(CreatedAt), MONTH(CreatedAt)
         `;
@@ -109,8 +177,8 @@ export class DashboardRepository {
             SELECT 
                 FORMAT(CreatedAt, 'MMM yyyy') as month,
                 COUNT(Id) as count
-            FROM Organizations
-            WHERE CreatedAt >= DATEADD(MONTH, -6, GETDATE())
+            FROM Organizations WITH (NOLOCK)
+            WHERE CreatedAt >= DATEADD(MONTH, -6, DATEADD(MINUTE, 330, GETUTCDATE()))
             GROUP BY FORMAT(CreatedAt, 'MMM yyyy'), YEAR(CreatedAt), MONTH(CreatedAt)
             ORDER BY YEAR(CreatedAt), MONTH(CreatedAt)
         `;
@@ -128,24 +196,47 @@ export class DashboardRepository {
             .groupBy("org.OrganizationType")
             .getRawMany();
 
-        // 4. Top Organizations (By User Count)
+        // 4. Top Organizations (By Revenue - Filtered by timeRange)
         const topOrgsQuery = `
             SELECT TOP 5
                 o.Name as name,
-                COUNT(ur.UserId) as userCount
-            FROM Organizations o
-            LEFT JOIN UserRoles ur ON o.Id = ur.OrganizationId
-            GROUP BY o.Name
-            ORDER BY userCount DESC
+                SUM(ISNULL(hp.ConsultationFee, 0)) as revenue,
+                COUNT(a.Id) as appointmentCount,
+                (SELECT COUNT(DISTINCT ur.UserId) FROM UserRoles ur WITH (NOLOCK) INNER JOIN Roles r WITH (NOLOCK) ON ur.RoleId = r.Id INNER JOIN Users u WITH (NOLOCK) ON ur.UserId = u.Id WHERE ur.OrganizationId = o.Id AND r.RoleName != 'Patient' AND ur.IsDeleted = 0 AND ur.Status = 1 AND u.Status = 1 AND u.IsDeleted = 0) as staffCount,
+                (SELECT COUNT(DISTINCT ur.UserId) FROM UserRoles ur WITH (NOLOCK) INNER JOIN Roles r WITH (NOLOCK) ON ur.RoleId = r.Id INNER JOIN Users u WITH (NOLOCK) ON ur.UserId = u.Id WHERE ur.OrganizationId = o.Id AND r.RoleName = 'Patient' AND ur.IsDeleted = 0 AND ur.Status = 1 AND u.Status = 1 AND u.IsDeleted = 0) as patientCount,
+                CAST(CASE 
+                    WHEN SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) = 0 
+                    THEN CASE WHEN SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MINUTE, 330, GETUTCDATE())) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MINUTE, 330, GETUTCDATE())) THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) > 0 THEN 100 ELSE 0 END
+                    ELSE 
+                        ((SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MINUTE, 330, GETUTCDATE())) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MINUTE, 330, GETUTCDATE())) THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) - 
+                          SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END)) / 
+                          SUM(CASE WHEN MONTH(a.AppointmentDate) = MONTH(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) AND YEAR(a.AppointmentDate) = YEAR(DATEADD(MONTH, -1, DATEADD(MINUTE, 330, GETUTCDATE()))) THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END)) * 100
+                END AS DECIMAL(10,1)) as growth
+            FROM Organizations o WITH (NOLOCK)
+            LEFT JOIN Appointments a WITH (NOLOCK) ON o.Id = a.OrgId ${timeRange !== 'all' ? `AND a.AppointmentDate >= ${dateLimit}` : ''}
+            LEFT JOIN HealthcareProviders hp WITH (NOLOCK) ON a.DoctorId = hp.UserId
+            GROUP BY o.Id, o.Name
+            ORDER BY revenue DESC
         `;
         const topOrgs = await AppDataSource.query(topOrgsQuery);
+
+        // 5. Global Analytics (Appointments & Revenue - Filtered by timeRange)
+        const globalAnalyticsQuery = `
+            SELECT 
+                COUNT(a.Id) as totalAppointments,
+                SUM(ISNULL(hp.ConsultationFee, 0)) as totalRevenue
+            FROM Appointments a WITH (NOLOCK)
+            LEFT JOIN HealthcareProviders hp WITH (NOLOCK) ON a.DoctorId = hp.UserId
+            ${timeRange !== 'all' ? `WHERE a.AppointmentDate >= ${dateLimit}` : ''}
+        `;
+        const globalStats = await AppDataSource.query(globalAnalyticsQuery);
 
         return {
             totalUsers,
             activeUsers,
             totalOrganizations: totalOrgs,
-            totalAppointments: 0, // Placeholder
-            totalRevenue: 0, // Placeholder
+            totalAppointments: globalStats[0]?.totalAppointments || 0,
+            totalRevenue: globalStats[0]?.totalRevenue || 0,
             growthTrends: {
                 users: userTrends,
                 organizations: orgTrends
@@ -175,7 +266,8 @@ export class DashboardRepository {
         const userSummaryQuery = userRepo.createQueryBuilder("user")
             .innerJoin("user.UserRoles", "ur")
             .innerJoin("ur.Organization", "org")
-            .where("user.IsDeleted = 0");
+            .where("user.IsDeleted = 0 AND user.Status = 1")
+            .andWhere("ur.IsDeleted = 0 AND ur.Status = 1");
 
         if (orgId) userSummaryQuery.andWhere("org.Id = :orgId", { orgId });
         if (type && type !== "all" && type !== "ANY") userSummaryQuery.andWhere("org.OrganizationType = :type", { type });
@@ -191,13 +283,63 @@ export class DashboardRepository {
             .select("COUNT(DISTINCT user.Id)", "count")
             .getRawOne();
 
-        // 3. Paginated Data
+        // 3. Paginated Data with per-organization counts
         const skip = (page - 1) * pageSize;
-        const [orgs, total] = await query
+        const orgsQuery = orgRepo.createQueryBuilder("org")
+            .select([
+                "org.Id", "org.Name", "org.OrgCode", "org.OrganizationType", 
+                "org.Email", "org.MobileNumber", "org.CountryCode", 
+                "org.Address", "org.Status", "org.CreatedAt", "org.Website"
+            ])
+            .addSelect(subQuery => {
+                return subQuery
+                    .select("COUNT(DISTINCT ur1.UserId)", "staffCount")
+                    .from(UserRole, "ur1")
+                    .innerJoin(Role, "r1", "ur1.RoleId = r1.Id")
+                    .where("ur1.OrganizationId = org.Id")
+                    .andWhere("r1.RoleName != :patientRole", { patientRole: "Patient" })
+                    .andWhere("ur1.IsDeleted = 0")
+                    .andWhere("ur1.Status = 1");
+            }, "UserCount")
+            .addSelect(subQuery => {
+                return subQuery
+                    .select("COUNT(DISTINCT ur2.UserId)", "patientCount")
+                    .from(UserRole, "ur2")
+                    .innerJoin(Role, "r2", "ur2.RoleId = r2.Id")
+                    .where("ur2.OrganizationId = org.Id")
+                    .andWhere("r2.RoleName = :patientRole", { patientRole: "Patient" })
+                    .andWhere("ur2.IsDeleted = 0")
+                    .andWhere("ur2.Status = 1");
+            }, "PatientCount");
+
+        // Apply same filters as query
+        if (orgId) orgsQuery.andWhere("org.Id = :orgId", { orgId });
+        if (type && type !== "all" && type !== "ANY") orgsQuery.andWhere("org.OrganizationType = :type", { type });
+        if (search) {
+            orgsQuery.andWhere("(org.Name LIKE :search OR org.OrgCode LIKE :search)", { search: `%${search}%` });
+        }
+
+        const rawOrgs = await orgsQuery
             .orderBy("org.CreatedAt", "DESC")
             .skip(skip)
             .take(pageSize)
-            .getManyAndCount();
+            .getRawMany();
+
+        const organizations = rawOrgs.map(org => ({
+            Id: org.org_Id,
+            Name: org.org_Name,
+            OrgCode: org.org_OrgCode,
+            OrganizationType: org.org_OrganizationType,
+            Email: org.org_Email,
+            MobileNumber: org.org_MobileNumber,
+            CountryCode: org.org_CountryCode,
+            Address: org.org_Address,
+            Status: org.org_Status,
+            CreatedAt: org.org_CreatedAt,
+            Website: org.org_Website,
+            UserCount: parseInt(org.UserCount || "0"),
+            PatientCount: parseInt(org.PatientCount || "0")
+        }));
 
         return {
             totalOrganizations,
@@ -207,33 +349,33 @@ export class DashboardRepository {
             pagination: {
                 page,
                 pageSize,
-                totalRecords: total,
-                totalPages: Math.ceil(total / pageSize)
+                totalRecords: totalOrganizations,
+                totalPages: Math.ceil(totalOrganizations / pageSize)
             },
-            organizationStats: orgs
+            organizationStats: organizations
         };
     }
     async getFrontdeskDashboardStats(hospId: number) {
         // 1. Fetch Today's and Yesterday's Stats for Trends
         const statsQuery = `
             SELECT 
-                -- Today's Metrics
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) AND a.Status = 'Arrived' THEN 1 END) as todayCheckIns,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) THEN 1 END) as todayScheduled,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) AND q.Status = 'Waiting' THEN 1 END) as todayWaiting,
-                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(GETDATE() AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as todayPayments,
+                -- Today's Metrics (IST)
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayCheckIns,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayScheduled,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as todayWaiting,
+                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as todayPayments,
                 
-                -- Yesterday's Metrics (for Trends)
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) AND a.Status = 'Arrived' THEN 1 END) as yesterdayCheckIns,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) THEN 1 END) as yesterdayScheduled,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as yesterdayWaiting,
-                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, GETDATE()) AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as yesterdayPayments
-            FROM Appointments a
-            LEFT JOIN HealthcareProviders hp ON a.DoctorId = hp.UserId
-            LEFT JOIN PatientQueue q ON a.Id = q.AppointmentId
+                -- Yesterday's Metrics (IST)
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND a.Status = 'Arrived' THEN 1 END) as yesterdayCheckIns,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) THEN 1 END) as yesterdayScheduled,
+                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as yesterdayWaiting,
+                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as yesterdayPayments
+            FROM Appointments a WITH (NOLOCK)
+            LEFT JOIN HealthcareProviders hp WITH (NOLOCK) ON a.DoctorId = hp.UserId
+            LEFT JOIN PatientQueue q WITH (NOLOCK) ON a.Id = q.AppointmentId
             WHERE a.HospitalId = ${hospId} 
-            AND a.AppointmentDate >= CAST(DATEADD(day, -1, GETDATE()) AS DATE)
-            AND a.AppointmentDate <= CAST(GETDATE() AS DATE);
+            AND a.AppointmentDate >= CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
+            AND a.AppointmentDate <= CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE);
         `;
 
         // 2. Fetch Recent Activity for the Hospital
@@ -261,8 +403,8 @@ export class DashboardRepository {
                 UpdatedOn as timestamp,
                 ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))), ''), 'System') as [user],
                 l.RoleName as role
-            FROM APILogs l
-            LEFT JOIN Users u ON l.UserId = u.Id
+            FROM APILogs l WITH (NOLOCK)
+            LEFT JOIN Users u WITH (NOLOCK) ON l.UserId = u.Id
             WHERE l.HospitalId = ${hospId}
             AND Action IN ('CREATE', 'UPDATE', 'DELETE', 'LOGIN')
             ORDER BY LogId DESC;
@@ -278,8 +420,8 @@ export class DashboardRepository {
                 a.AppointmentDate as lastVisit,
                 a.Reason as condition,
                 a.Status as status
-            FROM Appointments a
-            INNER JOIN Users u ON a.UserId = u.Id
+            FROM Appointments a WITH (NOLOCK)
+            INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
             WHERE a.HospitalId = ${hospId}
             AND a.Status = 'Completed'
             ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
@@ -291,7 +433,7 @@ export class DashboardRepository {
                 FORMAT(AppointmentDate, 'ddd') as day,
                 COUNT(*) as appointments,
                 COUNT(DISTINCT UserId) as patients
-            FROM Appointments
+            FROM Appointments WITH (NOLOCK)
             WHERE HospitalId = ${hospId}
             AND AppointmentDate >= DATEADD(day, -6, GETDATE())
             GROUP BY FORMAT(AppointmentDate, 'ddd'), CAST(AppointmentDate AS DATE)
@@ -304,7 +446,7 @@ export class DashboardRepository {
                 FORMAT(AppointmentDate, 'MMM') as month,
                 COUNT(*) as appointments,
                 COUNT(DISTINCT UserId) as patients
-            FROM Appointments
+            FROM Appointments WITH (NOLOCK)
             WHERE HospitalId = ${hospId}
             AND AppointmentDate >= DATEADD(month, -5, GETDATE())
             GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
@@ -372,27 +514,27 @@ export class DashboardRepository {
                 -- Follow-ups vs New Patients Today
                 COUNT(CASE WHEN AppointmentType = 'Follow-up' THEN 1 END) as followUpsToday,
                 COUNT(CASE WHEN AppointmentType IN ('New', 'Consultation', 'New Patient') THEN 1 END) as newPatientsToday
-            FROM Appointments
+            FROM Appointments WITH (NOLOCK)
             WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-            AND CAST(AppointmentDate AS DATE) = CAST(GETDATE() AS DATE);
+            AND CAST(AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE);
         `;
 
         const patientStatsQuery = `
             SELECT 
                 -- Total Patients for this doctor
-                (SELECT COUNT(DISTINCT UserId) FROM Appointments WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}) as totalPatients,
+                (SELECT COUNT(DISTINCT UserId) FROM Appointments WITH (NOLOCK) WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}) as totalPatients,
                 
-                -- New this week (Patients whose FIRST appointment with this doctor is this week)
+                -- New this week (Patients whose FIRST appointment with this doctor is this week in IST)
                 (SELECT COUNT(DISTINCT a1.UserId) 
-                 FROM Appointments a1 
+                 FROM Appointments a1 WITH (NOLOCK)
                  WHERE a1.DoctorId = '${doctorId}' 
                  AND a1.HospitalId = ${hospId}
-                 AND a1.AppointmentDate >= DATEADD(day, -DATEPART(weekday, GETDATE()) + 1, GETDATE())
+                 AND a1.AppointmentDate >= DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
                  AND NOT EXISTS (
-                     SELECT 1 FROM Appointments a2 
+                     SELECT 1 FROM Appointments a2 WITH (NOLOCK)
                      WHERE a2.UserId = a1.UserId 
                      AND a2.DoctorId = a1.DoctorId 
-                     AND a2.AppointmentDate < DATEADD(day, -DATEPART(weekday, GETDATE()) + 1, GETDATE())
+                     AND a2.AppointmentDate < DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
                  )) as newPatientsThisWeek;
         `;
 
@@ -406,8 +548,8 @@ export class DashboardRepository {
                 a.AppointmentDate as lastVisit,
                 a.Reason as condition,
                 a.Status as status
-            FROM Appointments a
-            INNER JOIN Users u ON a.UserId = u.Id
+            FROM Appointments a WITH (NOLOCK)
+            INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
             WHERE a.DoctorId = '${doctorId}' AND a.HospitalId = ${hospId}
             AND a.Status = 'Completed'
             ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
@@ -424,9 +566,9 @@ export class DashboardRepository {
                     FORMAT(AppointmentDate, 'ddd') as day,
                     COUNT(*) as appointments,
                     COUNT(DISTINCT UserId) as patients
-                FROM Appointments
+                FROM Appointments WITH (NOLOCK)
                 WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-                AND AppointmentDate >= CAST(DATEADD(day, -6, GETDATE()) AS DATE)
+                AND AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
                 GROUP BY FORMAT(AppointmentDate, 'ddd'), CAST(AppointmentDate AS DATE)
                 ORDER BY CAST(AppointmentDate AS DATE) ASC;
             `),
@@ -435,9 +577,9 @@ export class DashboardRepository {
                     FORMAT(AppointmentDate, 'MMM') as month,
                     COUNT(*) as appointments,
                     COUNT(DISTINCT UserId) as patients
-                FROM Appointments
+                FROM Appointments WITH (NOLOCK)
                 WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-                AND AppointmentDate >= CAST(DATEADD(month, -5, GETDATE()) AS DATE)
+                AND AppointmentDate >= CAST(DATEADD(month, -5, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
                 GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
                 ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;
             `)

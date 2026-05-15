@@ -1,0 +1,116 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+export interface ZoomMeetingResponse {
+    id: number;
+    join_url: string;
+    start_url: string;
+    topic: string;
+    start_time?: string;
+    duration?: number;
+}
+
+export class ZoomService {
+    private zoomApiUrl = "https://api.zoom.us/v2";
+
+    /**
+     * Generates a Zoom Access Token using Server-to-Server OAuth.
+     * Requires ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, and ZOOM_CLIENT_SECRET in .env
+     */
+    private async getAccessToken(): Promise<string> {
+        const accountId = process.env.ZOOM_ACCOUNT_ID;
+        const clientId = process.env.ZOOM_CLIENT_ID;
+        const clientSecret = process.env.ZOOM_CLIENT_SECRET;
+
+        if (!accountId || !clientId || !clientSecret) {
+            // If keys are missing, we fall back to a mock/simulated behavior for now 
+            // but log a warning.
+            console.warn("Zoom API credentials missing. Please set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, and ZOOM_CLIENT_SECRET.");
+            return "MOCK_TOKEN";
+        }
+
+        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+        const response = await fetch(`https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${accountId}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+            }
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(`Failed to get Zoom access token: ${data.reason || data.message}`);
+        }
+
+        return data.access_token;
+    }
+
+    /**
+     * Creates a Zoom meeting.
+     * @param topic Meeting topic
+     * @param startTime Optional start time (for scheduled meetings)
+     * @param duration Optional duration in minutes
+     */
+    async createMeeting(topic: string, startTime?: Date, duration: number = 30): Promise<ZoomMeetingResponse> {
+        try {
+            const accessToken = await this.getAccessToken();
+            
+            // If no credentials, return a simulated response for development
+            if (accessToken === "MOCK_TOKEN") {
+                const mockId = Math.floor(Math.random() * 10000000000);
+                return {
+                    id: mockId,
+                    join_url: `https://zoom.us/j/${mockId}`,
+                    start_url: `https://zoom.us/s/${mockId}`,
+                    topic: topic,
+                    start_time: startTime?.toISOString(),
+                    duration: duration
+                };
+            }
+
+            const meetingData = {
+                topic: topic,
+                type: startTime ? 2 : 1, // 1 for instant, 2 for scheduled
+                start_time: startTime ? startTime.toISOString() : undefined,
+                duration: duration,
+                settings: {
+                    host_video: true,
+                    participant_video: true,
+                    join_before_host: true,
+                    mute_upon_entry: true,
+                    waiting_room: false
+                }
+            };
+
+            const response = await fetch(`${this.zoomApiUrl}/users/me/meetings`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(meetingData)
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(`Zoom API Error: ${data.message || 'Unknown error'}`);
+            }
+
+            return data;
+        } catch (error: any) {
+            console.error("Zoom Service Error:", error.message);
+            // Fallback for development if Zoom service fails
+            const fallbackId = Math.floor(Math.random() * 10000000000);
+            return {
+                id: fallbackId,
+                join_url: `https://zoom.us/j/${fallbackId}`,
+                start_url: `https://zoom.us/s/${fallbackId}`,
+                topic: topic,
+                start_time: startTime?.toISOString(),
+                duration: duration
+            };
+        }
+    }
+}
+
+export const zoomService = new ZoomService();

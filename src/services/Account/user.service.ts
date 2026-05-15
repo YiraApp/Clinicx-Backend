@@ -408,10 +408,25 @@ export class UserService implements IUserService {
         };
     }
 
+    async exportUsers(filters: any): Promise<any[]> {
+        return await userRepository.getAllUsersForExport(filters);
+    }
+
     async toggleStatus(id: string, status: boolean): Promise<void> {
         const user = await userRepository.findById(id);
         if (!user) throw new Error("User not found.");
         await userRepository.updateStatus(id, status);
+    }
+
+    async updatePassword(userId: string, newPassword: string): Promise<void> {
+        const user = await userRepository.findById(userId);
+        if (!user) throw new Error("User not found.");
+
+        const salt = await bcrypt.genSalt(10);
+        user.PasswordHash = await bcrypt.hash(newPassword, salt);
+        user.UpdatedAt = new Date();
+
+        await userRepository.save(user);
     }
 }
 

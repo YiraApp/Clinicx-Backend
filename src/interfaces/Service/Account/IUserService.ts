@@ -49,4 +49,9 @@ export interface IUserService {
      * Gets users scoped to a specific hospital.
      */
     getHospUsers(page: number, pageSize: number, filters: any): Promise<any>;
+
+    /**
+     * Updates a user's password securely.
+     */
+    updatePassword(userId: string, newPassword: string): Promise<void>;
 }

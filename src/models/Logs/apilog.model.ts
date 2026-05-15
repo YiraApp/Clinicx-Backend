@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, Index } from "typeorm/index.js";
 
 @Entity({ name: "APILogs" })
 export class APILog {
@@ -26,6 +26,7 @@ export class APILog {
     @Column({ type: "datetime", nullable: true })
     RequestedOn?: Date | null;
 
+    @Index()
     @Column({ type: "datetime", nullable: true })
     UpdatedOn?: Date | null;
 
@@ -46,9 +47,11 @@ export class APILog {
     RoleName?: string | null;
 
     // Organization Context
+    @Index()
     @Column({ type: "int", nullable: true })
     OrgId?: number | null;
 
+    @Index()
     @Column({ type: "int", nullable: true })
     HospitalId?: number | null;
 
@@ -63,6 +66,7 @@ export class APILog {
     DeviceInfo?: string | null;
 
     // Audit Tracking
+    @Index()
     @Column({ type: "nvarchar", length: 100, nullable: true })
     Action?: string | null;
 

@@ -46,6 +46,8 @@ export class UserController {
             const sortBy = (req.query.sortBy as 'createdAt' | 'updatedAt' | 'firstName') || 'createdAt';
             const sortOrder = (req.query.sortOrder as 'ASC' | 'DESC') || 'DESC';
 
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+
             const filters = {
                 search,
                 roleId,
@@ -55,7 +57,8 @@ export class UserController {
                 fromDate,
                 toDate,
                 sortBy,
-                sortOrder
+                sortOrder,
+                currentUserId
             };
 
             const result = await userService.getUsers(page, pageSize, filters);
@@ -88,6 +91,8 @@ export class UserController {
             const sortBy = (req.query.sortBy as 'createdAt' | 'updatedAt' | 'firstName') || 'createdAt';
             const sortOrder = (req.query.sortOrder as 'ASC' | 'DESC') || 'DESC';
 
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+
             const filters = {
                 search,
                 roleId,
@@ -95,7 +100,8 @@ export class UserController {
                 organizationId,
                 status,
                 sortBy,
-                sortOrder
+                sortOrder,
+                currentUserId
             };
 
             const result = await userService.getOrgUsers(page, pageSize, filters);
@@ -129,6 +135,8 @@ export class UserController {
             const sortBy = (req.query.sortBy as 'createdAt' | 'updatedAt' | 'firstName') || 'createdAt';
             const sortOrder = (req.query.sortOrder as 'ASC' | 'DESC') || 'DESC';
 
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+
             const filters = {
                 search,
                 roleId,
@@ -136,7 +144,8 @@ export class UserController {
                 organizationId,
                 status,
                 sortBy,
-                sortOrder
+                sortOrder,
+                currentUserId
             };
 
             const result = await userService.getHospUsers(page, pageSize, filters);
@@ -192,6 +201,63 @@ export class UserController {
 
             await userService.toggleStatus(id as string, status);
             res.json(ApiResponse.success(null, `User ${status ? 'activated' : 'deactivated'} successfully.`));
+        } catch (error: any) {
+            res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async exportUsers(req: Request, res: Response): Promise<void> {
+        try {
+            const search = (req.query.search as string) || undefined;
+            const roleId = (req.query.roleId as string) || undefined;
+            const organizationId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
+            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
+            const status = req.query.status !== undefined ? req.query.status === 'true' : undefined;
+
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+            const filters = { search, roleId, organizationId, hospitalId, status, currentUserId };
+            const users = await userService.exportUsers(filters);
+
+            if (users.length === 0) {
+                res.status(404).json(ApiResponse.error("No users found to export."));
+                return;
+            }
+
+            // Generate CSV
+            const headers = Object.keys(users[0]).join(",");
+            const rows = users.map(user => {
+                return Object.values(user).map(value => {
+                    const strValue = value === null || value === undefined ? "" : String(value);
+                    // Escape double quotes and wrap in quotes
+                    return `"${strValue.replace(/"/g, '""')}"`;
+                }).join(",");
+            });
+
+            const csvContent = [headers, ...rows].join("\n");
+
+            res.setHeader("Content-Type", "text/csv");
+            res.setHeader("Content-Disposition", `attachment; filename=users_export_${Date.now()}.csv`);
+            res.status(200).send(csvContent);
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Updates a user's password.
+     * Body: { userId: string, newPassword: string }
+     */
+    async updatePassword(req: Request, res: Response): Promise<void> {
+        try {
+            const { userId, newPassword } = req.body;
+
+            if (!userId || !newPassword) {
+                res.status(400).json(ApiResponse.error("User ID and new password are required."));
+                return;
+            }
+
+            await userService.updatePassword(userId, newPassword);
+            res.json(ApiResponse.success(null, "Password updated successfully."));
         } catch (error: any) {
             res.status(400).json(ApiResponse.error(error.message));
         }

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, Relation } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, Relation, Index } from "typeorm/index.js";
 import { User } from "../Account/user.model.js";
 import { Organization } from "../Organizations/organization.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
@@ -17,6 +17,7 @@ export class Appointment {
     @JoinColumn({ name: "UserId" })
     User: Relation<User>;
 
+    @Index()
     @Column({ type: "int" })
     OrgId: number;
 
@@ -24,6 +25,7 @@ export class Appointment {
     @JoinColumn({ name: "OrgId" })
     Organization: Relation<Organization>;
 
+    @Index()
     @Column({ type: "int" })
     HospitalId: number;
 
@@ -48,9 +50,11 @@ export class Appointment {
     @Column({ type: "nvarchar", length: 50, nullable: true })
     AppointmentType?: string;
 
+    @Index()
     @Column({ type: "nvarchar", length: 50, nullable: true })
     Status?: string;
 
+    @Index()
     @Column({ type: "date" })
     AppointmentDate: Date;
 

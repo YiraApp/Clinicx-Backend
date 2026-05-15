@@ -83,6 +83,16 @@ export class AppointmentController {
             return res.status(400).json(ApiResponse.error(error.message));
         }
     }
+
+    async createInstantMeeting(req: Request, res: Response) {
+        try {
+            const topic = req.body.topic || "Instant Consultation";
+            const result = await appointmentService.createInstantMeeting(topic);
+            return res.json(ApiResponse.success(result, "Instant meeting created successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const appointmentController = new AppointmentController();

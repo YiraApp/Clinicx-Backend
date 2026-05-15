@@ -17,7 +17,8 @@ export class DashboardController {
 
     async getAnalytics(req: Request, res: Response): Promise<void> {
         try {
-            const data = await dashboardService.getAnalyticsData();
+            const timeRange = req.query.timeRange as string || '30d';
+            const data = await dashboardService.getAnalyticsData(timeRange);
             res.status(200).json(ApiResponse.success(data, "Analytics data retrieved successfully"));
         } catch (error) {
             console.error("Error fetching analytics data:", error);

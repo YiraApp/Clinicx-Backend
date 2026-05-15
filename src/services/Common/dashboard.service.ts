@@ -12,8 +12,8 @@ export class DashboardService implements IDashboardService {
         return await dashboardRepository.getDashboardSummary(page, pageSize, orgId, type, search);
     }
 
-    async getAnalyticsData() {
-        const dbStats = await dashboardRepository.getAnalyticsStats();
+    async getAnalyticsData(timeRange?: string) {
+        const dbStats = await dashboardRepository.getAnalyticsStats(timeRange);
 
         // =========================
         // SYSTEM METRICS (REAL)
