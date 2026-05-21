@@ -35,7 +35,15 @@ export class SMSService {
         }
 
         const message = this.replacePlaceholders(template.Message, data);
-        await this.sendSMS(to, message);
+        
+        let templateIdToUse = this.templateId;
+        if (templateCode === "CONSENT_SMS") {
+            templateIdToUse = "1707177867188357697";
+        } else if (templateCode === "MEDICAL_RECORD_SMS" || templateCode === "POST_VISIT_SMS") {
+            templateIdToUse = "1707177823272001938";
+        }
+
+        await this.sendSMSWithCustomTemplate(to, message, templateIdToUse);
     }
 
     /**
@@ -106,13 +114,13 @@ export class SMSService {
 
         if (isIndia) {
             // EXACT message for SMS Striker (DLT requirement)
-            const message = `Hello, Your One Time Password (OTP) for Yira AI Mobile Application login authentication is ${otp} - YIRA AI`;
+            const message = `Hello, your One Time Password (OTP) for ClinicX application authentication is ${otp} this OTP is valid for 10 minutes only. Do not share it with anyone - YIRA AI`;
             return await this.sendSMS(to, message);
         } else {
             // International flow using 2Factor.in
             const apiKey = "55b36a1d-a3fe-11eb-80ea-0200cd936042"; // From provided C# logic
             const url = `http://2factor.in/API/V1/${apiKey}/SMS/+${to}/${otp}/Yiralife1`;
-            
+
             console.log(`[SMS Service] Sending International SMS to ${to} via 2Factor...`);
             try {
                 const response = await fetch(url, { method: "GET" });

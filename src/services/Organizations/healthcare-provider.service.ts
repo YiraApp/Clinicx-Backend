@@ -126,6 +126,7 @@ export class HealthcareProviderService {
                     Specialty: provider.Specialty,
                     Department: provider.Department,
                     Status: provider.Status,
+                    ConsultationFee: provider.ConsultationFee,
                     hospitals: []
                 });
             }
@@ -138,6 +139,7 @@ export class HealthcareProviderService {
                 specialty: provider.Specialty,
                 subSpecialty: provider.SubSpecialty,
                 department: provider.Department,
+                consultationFee: provider.ConsultationFee,
                 status: provider.Status
             });
         }
@@ -334,12 +336,26 @@ export class HealthcareProviderService {
         return await healthcareProviderScheduleSlotRepository.getSlots(providerId, hospitalId, start, end);
     }
 
-    async generateSlotsForDateRange(providerId: number, hospitalId: number, startDate: string, endDate: string, slotDuration: number = 15): Promise<any> {
+    async generateSlotsForDateRange(providerId: number, hospitalId: number, startDate: string, endDate: string, slotDuration: number = 15, overwrite: boolean = false): Promise<any> {
         const provider = await healthcareProviderRepository.getDoctorById(providerId);
         if (!provider) throw new Error("Doctor not found.");
 
-        const start = new Date(startDate);
-        const end = new Date(endDate);
+        // Parse as local midnight to avoid UTC timezone shifting dates by 1 day
+        const [sy, sm, sd] = startDate.split("-").map(Number);
+        const [ey, em, ed] = endDate.split("-").map(Number);
+        let start = new Date(sy, sm - 1, sd);
+        const end = new Date(ey, em - 1, ed);
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        if (start < today) {
+            start = today; // Silently skip past dates
+        }
+        if (end < start) {
+            throw new Error("Date range cannot be entirely in the past.");
+        }
+
         const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
         // Helper to convert "HH:mm" to minutes from midnight
@@ -359,54 +375,123 @@ export class HealthcareProviderService {
         const weeklyAvailability = provider.Availability || [];
         if (weeklyAvailability.length === 0) return { message: "No weekly availability defined for this doctor.", count: 0 };
 
-        // 2. Clear existing slots for this range
-        await healthcareProviderScheduleSlotRepository.deleteSlotsForDateRange(providerId, hospitalId, start, end);
+        return await AppDataSource.transaction(async (manager) => {
+            // Check for existing slots in the range
+            const existingSlots = await manager.createQueryBuilder(HealthcareProviderScheduleSlot, "slot")
+                .where("slot.ProviderId = :providerId", { providerId })
+                .andWhere("slot.HospitalId = :hospitalId", { hospitalId })
+                .andWhere("slot.SlotDate >= :start AND slot.SlotDate <= :end", { 
+                    start: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`,
+                    end: `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`
+                })
+                .andWhere("slot.IsDeleted = 0")
+                .getMany();
 
-        // 3. Generate sliced slots
-        const newSlots: HealthcareProviderScheduleSlot[] = [];
-        let currentDate = new Date(start);
+            if (existingSlots.length > 0 && !overwrite) {
+                throw new Error("SLOTS_ALREADY_EXIST");
+            }
 
-        while (currentDate <= end) {
-            const dayName = DAYS[currentDate.getDay()];
-            const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
-            const dateStr = currentDate.toISOString().split('T')[0];
+            // 2. Delete only UNBOOKED slots for this range — booked slots are preserved
+            const deleteResult = await manager.createQueryBuilder()
+                .update(HealthcareProviderScheduleSlot)
+                .set({ IsDeleted: true, UpdatedAt: new Date() })
+                .where("ProviderId = :providerId", { providerId })
+                .andWhere("HospitalId = :hospitalId", { hospitalId })
+                .andWhere("SlotDate >= :start AND SlotDate <= :end", { 
+                    start: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`,
+                    end: `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`
+                })
+                .andWhere("IsBooked = 0")
+                .andWhere("IsDeleted = 0")
+                .execute();
 
-            dayTemplates.forEach(template => {
-                let currentSlotMinutes = timeToMinutes(template.StartTime);
-                const endMinutes = timeToMinutes(template.EndTime);
+            const deletedCount = deleteResult.affected || 0;
+            console.log(`[Slots] Soft-deleted ${deletedCount} unbooked slots for range ${startDate} to ${endDate}`);
 
-                // Loop and create slices
-                while (currentSlotMinutes + slotDuration <= endMinutes) {
-                    const slot = new HealthcareProviderScheduleSlot();
-                    slot.ProviderId = providerId;
-                    slot.HospitalId = hospitalId;
-                    slot.OrganizationId = provider.Hospital.OrganizationId;
-                    slot.SlotDate = dateStr as any;
-                    slot.StartTime = minutesToTime(currentSlotMinutes);
-                    slot.EndTime = minutesToTime(currentSlotMinutes + slotDuration);
-                    slot.IsAvailable = template.Status;
-                    slot.IsBooked = false;
-                    slot.Status = template.Status ? "Available" : "Blocked";
-                    
-                    newSlots.push(slot);
-                    currentSlotMinutes += slotDuration;
-                }
-            });
+            // Fetch preserved booked slots to prevent overlaps
+            const bookedSlots = existingSlots.filter(s => s.IsBooked);
 
-            currentDate.setDate(currentDate.getDate() + 1);
-        }
+            // 3. Generate new slots
+            const newSlots: HealthcareProviderScheduleSlot[] = [];
+            let currentDate = new Date(start);
 
-        if (newSlots.length > 0) {
-            await healthcareProviderScheduleSlotRepository.saveSlots(newSlots);
-        }
+            while (currentDate <= end) {
+                const dayName = DAYS[currentDate.getDay()];
+                const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
+                // Determine effective templates: use dayTemplates if any, otherwise fallback to default full-day availability
+                const effectiveTemplates = dayTemplates.length > 0 ? dayTemplates : [{
+                    StartTime: "09:00",
+                    EndTime: "17:00",
+                    Status: true // available by default
+                }];
+                // Use local date parts to avoid timezone shifting YYYY-MM-DD
+                const y = currentDate.getFullYear();
+                const m = String(currentDate.getMonth() + 1).padStart(2, "0");
+                const d = String(currentDate.getDate()).padStart(2, "0");
+                const dateStr = `${y}-${m}-${d}`;
 
-        return {
-            message: `Successfully generated ${newSlots.length} slots (${slotDuration} mins each) from ${startDate} to ${endDate}.`,
-            count: newSlots.length
-        };
+                // Filter booked slots for this specific date
+                const todaysBookedSlots = bookedSlots.filter(s => {
+                    const sd = new Date(s.SlotDate);
+                    return sd.getFullYear() === y && 
+                           String(sd.getMonth() + 1).padStart(2, "0") === m && 
+                           String(sd.getDate()).padStart(2, "0") === d;
+                });
+
+                effectiveTemplates.forEach(template => {
+                    // Use effectiveTemplates instead of dayTemplates
+                    const tmpl = effectiveTemplates.find(t => t.StartTime === template.StartTime && t.EndTime === template.EndTime) || template;
+                    let currentSlotMinutes = timeToMinutes(template.StartTime);
+                    const endMinutes = timeToMinutes(template.EndTime);
+
+                    // Loop and create slices
+                    while (currentSlotMinutes + slotDuration <= endMinutes) {
+                        const startTime = minutesToTime(currentSlotMinutes);
+                        const endTime = minutesToTime(currentSlotMinutes + slotDuration);
+
+                        // Overlap check (same as existing)
+                        const isOverlapping = todaysBookedSlots.some(b => {
+                            const bStart = timeToMinutes(b.StartTime);
+                            const bEnd = timeToMinutes(b.EndTime);
+                            return (currentSlotMinutes >= bStart && currentSlotMinutes < bEnd) ||
+                                   (currentSlotMinutes + slotDuration > bStart && currentSlotMinutes + slotDuration <= bEnd) ||
+                                   (currentSlotMinutes <= bStart && currentSlotMinutes + slotDuration >= bEnd);
+                        });
+
+                        if (!isOverlapping) {
+                            const slot = new HealthcareProviderScheduleSlot();
+                            slot.ProviderId = providerId;
+                            slot.HospitalId = hospitalId;
+                            slot.OrganizationId = provider.Hospital.OrganizationId;
+                            slot.SlotDate = dateStr as any;
+                            slot.StartTime = startTime;
+                            slot.EndTime = endTime;
+                            slot.IsAvailable = template.Status !== undefined ? template.Status : true;
+                            slot.IsBooked = false;
+                            slot.Status = template.Status !== false ? "Available" : "Blocked";
+                            newSlots.push(slot);
+                        }
+
+                        currentSlotMinutes += slotDuration;
+                    }
+                });
+
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+
+            if (newSlots.length > 0) {
+                await manager.save(HealthcareProviderScheduleSlot, newSlots);
+            }
+
+            return {
+                message: `Successfully generated ${newSlots.length} slots (${slotDuration} mins each) from ${startDate} to ${endDate}. Replaced ${deletedCount} previous unbooked slots.`,
+                count: newSlots.length,
+                replaced: deletedCount
+            };
+        });
     }
 
-    async generateManualSlots(providerId: number, hospitalId: number, date: string, slots: any[]): Promise<any> {
+    async generateManualSlots(providerId: number, hospitalId: number, date: string, slots: any[], overwrite: boolean = false): Promise<any> {
         const provider = await healthcareProviderRepository.getDoctorById(providerId);
         if (!provider) throw new Error("Doctor not found.");
 
@@ -414,29 +499,101 @@ export class HealthcareProviderService {
         const dateStr = date.split('T')[0];
         console.log(`[Service] Generating manual slots for Date: ${dateStr}, Slots: ${slots.length}`);
 
-        return await AppDataSource.transaction(async (manager) => {
-            // 1. Soft-delete existing UNBOOKED slots for this specific date
-            const deleteResult = await manager.getRepository(HealthcareProviderScheduleSlot).update(
-                { 
-                    ProviderId: providerId, 
-                    HospitalId: hospitalId, 
-                    SlotDate: dateStr as any,
-                    IsBooked: false,
-                    IsDeleted: false
-                },
-                { IsDeleted: true, UpdatedAt: new Date() }
-            );
-            
-            console.log(`[Service] Soft-deleted ${deleteResult.affected} existing slots for ${dateStr}`);
+        // 1. Prevent editing past dates
+        const targetDate = new Date(dateStr);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (targetDate < today) {
+            throw new Error("Cannot edit slots for previous days.");
+        }
 
-            // 2. Create new manual slots
+        return await AppDataSource.transaction(async (manager) => {
+            // Check for existing slots
+            const existingSlots = await manager.getRepository(HealthcareProviderScheduleSlot).find({
+                where: {
+                    ProviderId: providerId,
+                    HospitalId: hospitalId,
+                    SlotDate: dateStr as any,
+                    IsDeleted: false
+                }
+            });
+
+            let bookedSlots: HealthcareProviderScheduleSlot[] = [];
+            let deletedCount = 0;
+
+            if (existingSlots.length > 0) {
+                const hasBooking = existingSlots.some(s => s.IsBooked);
+                if (hasBooking) {
+                    // If there is a booking, only allow overwriting when the flag is true.
+                    if (!overwrite) {
+                        throw new Error("Cannot edit slots for this day because a booking already exists.");
+                    }
+                    // Booked slots are preserved; we only soft‑delete unbooked ones below.
+                }
+
+                // 1. Soft-delete existing UNBOOKED slots for this specific date
+                const deleteResult = await manager.getRepository(HealthcareProviderScheduleSlot).update(
+                    { 
+                        ProviderId: providerId, 
+                        HospitalId: hospitalId, 
+                        SlotDate: dateStr as any,
+                        IsBooked: false,
+                        IsDeleted: false
+                    },
+                    { IsDeleted: true, UpdatedAt: new Date() }
+                );
+                
+                deletedCount = deleteResult.affected || 0;
+                console.log(`[Service] Soft-deleted ${deletedCount} existing slots for ${dateStr}`);
+
+                bookedSlots = existingSlots.filter(s => s.IsBooked);
+            }
+
+            // Prepare a set of booked slot time ranges to avoid duplicates (allow re‑creating unbooked slots)
+            const existingTimes = new Set<string>(bookedSlots.map(s => `${s.StartTime}-${s.EndTime}`));
+
+            // 2. Create new manual slots, skipping any that would duplicate an existing time range
             const newSlots: HealthcareProviderScheduleSlot[] = [];
-            
+            const newTimes = new Set<string>(); // track times added in this request
+
             for (const s of slots) {
                 if (!s.startTime || !s.endTime) {
                     console.warn("[Service] Skipping invalid slot:", s);
                     continue;
                 }
+                
+                // Duplicate check against existing slots (including booked)
+                const timeKey = `${s.startTime}-${s.endTime}`;
+                if (existingTimes.has(timeKey)) {
+                    console.warn(`[Service] Skipping duplicate slot ${timeKey} (exists in DB)`);
+                    continue;
+                }
+                // Duplicate check within the incoming list
+                if (newTimes.has(timeKey)) {
+                    console.warn(`[Service] Skipping duplicate slot ${timeKey} (duplicate in request)`);
+                    continue;
+                }
+                // Overlap check with existing booked slots
+                const timeToMins = (t: string) => {
+                    const [h, m] = t.split(':').map(Number);
+                    return h * 60 + m;
+                };
+                const newStart = timeToMins(s.startTime);
+                const newEnd = timeToMins(s.endTime);
+                let overlaps = false;
+                for (const b of bookedSlots) {
+                    const bStart = timeToMins(b.StartTime);
+                    const bEnd = timeToMins(b.EndTime);
+                    if ((newStart < bEnd && newEnd > bStart) || (newStart === bStart && newEnd === bEnd)) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+                if (overlaps) {
+                    console.warn(`[Service] Skipping overlapping slot ${timeKey} with booked slot`);
+                    continue;
+                }
+                newTimes.add(timeKey);
 
                 const slot = manager.create(HealthcareProviderScheduleSlot, {
                     ProviderId: providerId,
@@ -461,7 +618,7 @@ export class HealthcareProviderService {
             return {
                 message: `Successfully updated slots for ${dateStr}.`,
                 count: newSlots.length,
-                deletedCount: deleteResult.affected
+                deletedCount: deletedCount
             };
         });
     }

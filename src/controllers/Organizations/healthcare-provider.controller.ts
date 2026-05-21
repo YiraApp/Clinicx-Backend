@@ -93,7 +93,7 @@ export class HealthcareProviderController {
         try {
             const id = parseInt(req.params.id as string);
             const hospitalId = parseInt(req.body.hospitalId as string);
-            const { startDate, endDate, slotDuration } = req.body;
+            const { startDate, endDate, slotDuration, overwrite } = req.body;
 
             if (isNaN(id) || isNaN(hospitalId) || !startDate || !endDate) {
                 return res.status(400).json(ApiResponse.error("Missing or invalid parameters: id, hospitalId, startDate, endDate must be valid"));
@@ -104,7 +104,8 @@ export class HealthcareProviderController {
                 hospitalId, 
                 startDate, 
                 endDate,
-                slotDuration ? Number(slotDuration) : 15
+                slotDuration ? Number(slotDuration) : 15,
+                overwrite === true || overwrite === 'true'
             );
             return res.json(ApiResponse.success(result, "Slots generated successfully."));
         } catch (error: any) {
@@ -116,7 +117,7 @@ export class HealthcareProviderController {
         try {
             const id = parseInt(req.params.id as string);
             const hospitalId = parseInt(req.body.hospitalId as string);
-            const { date, slots } = req.body;
+            const { date, slots, overwrite } = req.body;
 
             if (isNaN(id) || isNaN(hospitalId) || !date || !Array.isArray(slots)) {
                 return res.status(400).json(ApiResponse.error("Missing or invalid parameters: id, hospitalId, date, and slots (array) are required"));
@@ -126,7 +127,8 @@ export class HealthcareProviderController {
                 id,
                 hospitalId,
                 date,
-                slots
+                slots,
+                overwrite === true || overwrite === 'true'
             );
             return res.json(ApiResponse.success(result, "Manual slots generated successfully."));
         } catch (error: any) {

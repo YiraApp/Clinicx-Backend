@@ -44,6 +44,11 @@ import { PatientPrescription } from "../models/Appointments/patient-prescription
 import { PostVisitDocument } from "../models/Appointments/post-visit-document.model.js";
 import { AppointmentShareLink } from "../models/Appointments/appointment-share-link.model.js";
 import { MedicalDocument } from "../models/Appointments/medical-document.model.js";
+import { Payment } from "../models/Payments/payment.model.js";
+import { PaymentLog } from "../models/Payments/payment-log.model.js";
+import { HospitalPaymentConfiguration } from "../models/Organizations/hospital-payment-configuration.model.js";
+import { AppointmentBill } from "../models/Payments/appointment-bill.model.js";
+import { AppointmentBillItem } from "../models/Payments/appointment-bill-item.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -82,7 +87,8 @@ export const AppDataSource = new DataSource({
         PatientConsent, ConsentRequest,
         PatientVerification, PatientVerificationDocument,
         ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
-        PostVisitDocument, AppointmentShareLink, MedicalDocument
+        PostVisitDocument, AppointmentShareLink, MedicalDocument,
+        Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem
     ],
     extra: {
         encrypt: true,

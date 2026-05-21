@@ -2,6 +2,7 @@ import { blobService } from "../Common/blob.service.js";
 import { postVisitDocumentRepository } from "../../repositories/Appointments/post-visit-document.repository.js";
 import { appointmentShareLinkRepository } from "../../repositories/Appointments/appointment-share-link.repository.js";
 import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
+import { mailService } from "../Mail/mail.service.js";
 import { v4 as uuidv4 } from "uuid";
 import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
 
@@ -86,7 +87,8 @@ export class PostVisitService {
         // 2. Create a secure Share Link for this visit summary
         const shareToken = uuidv4();
         const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
-        const shareLinkUrl = `${baseUrl}/view-summary/${shareToken}`;
+        const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+        const shareLinkUrl = `${cleanBaseUrl}/view-summary/${shareToken}`;
 
         const shareLink = await appointmentShareLinkRepository.create({
             AppointmentId: appointmentId,
@@ -105,7 +107,26 @@ export class PostVisitService {
             await postVisitDocumentRepository.update(doc.Id, { ShareLinkId: shareLink.Id });
         }
 
+        // 4. Send email if requested
+        if (channel === "email" && appointment.User?.Email) {
+            const templateData = {
+                PatientName: `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim(),
+                HospitalName: appointment.Hospital?.Name || "the facility",
+                AppointmentNumber: appointment.AppointmentNumber || appointment.Id,
+                DoctorName: appointment.Doctor ? `${appointment.Doctor.FirstName} ${appointment.Doctor.LastName || ""}`.trim() : "N/A",
+                VisitDate: new Date(appointment.AppointmentDate).toLocaleDateString("en-IN", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric"
+                }),
+                ShareLink: shareLinkUrl
+            };
+
+            await mailService.sendDynamicEmail("POST_VISIT_MEDICAL_RECORDS", appointment.User.Email, templateData);
+        }
+
         return {
+            success: true,
             shareToken: shareLink.ShareToken,
             shareLink: shareLink.ShareLink,
             appointmentId: appointmentId,

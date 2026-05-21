@@ -75,6 +75,7 @@ export class UserService implements IUserService {
         if (data.Email) newUser.Email = data.Email;
         if (data.Gender) newUser.Gender = data.Gender;
         if (data.DateOfBirth) newUser.DateOfBirth = data.DateOfBirth;
+        if (data.BloodGroup) newUser.BloodGroup = data.BloodGroup;
 
         newUser.Status = true;
         newUser.IsDeleted = false;
@@ -197,6 +198,7 @@ export class UserService implements IUserService {
                 Gender: data.Gender,
                 CountryCode: data.CountryCode,
                 DateOfBirth: data.DateOfBirth,
+                BloodGroup: data.BloodGroup,
                 Relation: data.Relation || "Admin"
             }, true);
             user = await userRepository.findById(createResult.Id);
@@ -224,6 +226,7 @@ export class UserService implements IUserService {
         user.CountryCode = data.CountryCode ?? "91";
         user.Gender = data.Gender ?? null;
         user.DateOfBirth = data.DateOfBirth ?? null;
+        user.BloodGroup = data.BloodGroup ?? null;
         user.Relation = data.Relation ?? "Admin";
         user.ParentUserId = data.ParentUserId ?? null;
         user.Status = data.Status !== undefined ? data.Status : true;

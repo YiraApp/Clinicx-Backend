@@ -1,5 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
+import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
 
 export class PatientRegistrationRepository {
     private repo = AppDataSource.getRepository(PatientRegistration);
@@ -64,6 +65,18 @@ export class PatientRegistrationRepository {
 
         const [registrations, total] = await query.skip(skip).take(pageSize).getManyAndCount();
 
+        // Batch-load insurance for all returned patients in one query
+        const userIds = registrations.map(pr => pr.UserId).filter(Boolean);
+        const insuranceMap = new Map<string, PatientInsurance>();
+        if (userIds.length > 0) {
+            const insurances = await AppDataSource.getRepository(PatientInsurance)
+                .createQueryBuilder("ins")
+                .where("ins.UserId IN (:...userIds)", { userIds })
+                .andWhere("ins.IsDeleted = :deleted", { deleted: false })
+                .getMany();
+            insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
+        }
+
         // Summary stats for this org/hosp context
         const statsQuery = this.repo.createQueryBuilder("pr")
             .innerJoin("pr.User", "u")
@@ -102,36 +115,42 @@ export class PatientRegistrationRepository {
             .getRawOne();
 
 
-        const patients = registrations.map(pr => ({
-            id: pr.Id,
-            userId: pr.UserId,
-            firstName: pr.User?.FirstName,
-            lastName: pr.User?.LastName,
-            name: `${pr.User?.FirstName || ""} ${pr.User?.LastName || ""}`.trim(),
-            email: pr.User?.Email,
-            phone: pr.User?.PhoneNumber,
-            countryCode: pr.User?.CountryCode || "91",
-            gender: pr.User?.Gender,
-            status: pr.User?.Status ? "active" : "inactive",
-            dateOfBirth: pr.User?.DateOfBirth,
-            bloodGroup: pr.User?.BloodGroup,
-            address: pr.User?.PermanentAddress?.AddressLine1,
-            city: pr.User?.PermanentAddress?.City,
-            state: pr.User?.PermanentAddress?.State,
-            pincode: pr.User?.PermanentAddress?.Pincode,
-            emergencyContactName: pr.User?.EmergencyContactName,
-            emergencyContactPhone: pr.User?.EmergencyContactPhone,
-            allergies: pr.Allergies,
-            medicalHistory: pr.MedicalHistory,
-            organizationName: pr.Organization?.Name || pr.User?.UserRoles?.[0]?.Organization?.Name,
-            organizationCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
-            orgCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
-            hospitalName: pr.Hospital?.Name || pr.User?.UserRoles?.[0]?.Hospital?.Name,
-            hospitalCode: pr.Hospital?.HospitalCode || pr.User?.UserRoles?.[0]?.Hospital?.HospitalCode,
-            roleId: pr.User?.UserRoles?.[0]?.RoleId,
-            roleName: "Patient",
-            createdAt: pr.CreatedAt,
-        }));
+        const patients = registrations.map(pr => {
+            const ins = insuranceMap.get(pr.UserId.toUpperCase());
+            return {
+                id: pr.Id,
+                userId: pr.UserId,
+                firstName: pr.User?.FirstName,
+                lastName: pr.User?.LastName,
+                name: `${pr.User?.FirstName || ""} ${pr.User?.LastName || ""}`.trim(),
+                email: pr.User?.Email,
+                phone: pr.User?.PhoneNumber,
+                countryCode: pr.User?.CountryCode || "91",
+                gender: pr.User?.Gender,
+                status: pr.User?.Status ? "active" : "inactive",
+                dateOfBirth: pr.User?.DateOfBirth,
+                bloodGroup: pr.User?.BloodGroup,
+                address: pr.User?.PermanentAddress?.AddressLine1,
+                city: pr.User?.PermanentAddress?.City,
+                state: pr.User?.PermanentAddress?.State,
+                pincode: pr.User?.PermanentAddress?.Pincode,
+                emergencyContactName: pr.User?.EmergencyContactName,
+                emergencyContactPhone: pr.User?.EmergencyContactPhone,
+                allergies: pr.Allergies,
+                medicalHistory: pr.MedicalHistory,
+                insuranceProvider: ins?.InsuranceProvider || null,
+                insuranceNumber: ins?.InsuranceNumber || null,
+                insuranceStatus: ins?.Status ?? null,
+                organizationName: pr.Organization?.Name || pr.User?.UserRoles?.[0]?.Organization?.Name,
+                organizationCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
+                orgCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
+                hospitalName: pr.Hospital?.Name || pr.User?.UserRoles?.[0]?.Hospital?.Name,
+                hospitalCode: pr.Hospital?.HospitalCode || pr.User?.UserRoles?.[0]?.Hospital?.HospitalCode,
+                roleId: pr.User?.UserRoles?.[0]?.RoleId,
+                roleName: "Patient",
+                createdAt: pr.CreatedAt,
+            };
+        });
 
         return {
             summary: {

@@ -21,6 +21,16 @@ export class TestSMSV2Service {
         // For testing, I'll modify sendSMS to accept an optional templateId
         return await (this.smsService as any).sendSMSWithCustomTemplate(to, message, templateId);
     }
+    async testConsentSMSTemplate(to: string, patientName: string, hospitalName: string, consentLink: string): Promise<any> {
+        const templateId = "1707177867188357697";
+        const message = `Hello ${patientName}, please review and sign the hospital consent form for your treatment/procedure at ${hospitalName} using the link below: ${consentLink}`;
+
+        console.log(`[Test Consent SMS] Sending with Template ID: ${templateId}`);
+        console.log(`[Test Consent SMS] To: ${to}`);
+        console.log(`[Test Consent SMS] Message: ${message}`);
+
+        return await (this.smsService as any).sendSMSWithCustomTemplate(to, message, templateId);
+    }
 }
 
 export const testSMSV2Service = new TestSMSV2Service();

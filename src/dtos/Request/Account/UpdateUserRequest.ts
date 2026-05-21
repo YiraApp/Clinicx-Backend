@@ -20,6 +20,7 @@ export interface UpdateUserRequest {
     CountryCode?: string | undefined;
     Gender?: string | undefined;
     DateOfBirth?: string | undefined;
+    BloodGroup?: string | undefined;
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;

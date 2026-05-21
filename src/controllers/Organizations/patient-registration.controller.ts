@@ -35,7 +35,7 @@ export class PatientRegistrationController {
         try {
             const orgId = req.headers["x-org-id"] ? parseInt(req.headers["x-org-id"] as string) : undefined;
             const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
-            
+
             const result = await patientRegistrationService.sendRegistrationLink({
                 ...req.body,
                 organizationId: orgId,
@@ -78,6 +78,25 @@ export class PatientRegistrationController {
             return res.json(ApiResponse.success(result, "Patients fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async quickCheck(req: Request, res: Response) {
+        try {
+            const mobile = req.query.mobile as string | undefined;
+            const email = req.query.email as string | undefined;
+            const name = req.query.name as string | undefined;
+            const globalSearch = req.query.globalSearch === 'true';
+            
+            const orgId = req.headers["x-org-id"] ? parseInt(req.headers["x-org-id"] as string) : undefined;
+            const hospitalId = req.query.hospitalId 
+                ? parseInt(req.query.hospitalId as string) 
+                : (req.headers["x-hosp-id"] ? parseInt(req.headers["x-hosp-id"] as string) : undefined);
+
+            const result = await patientRegistrationService.quickCheck({ mobile, email, name, organizationId: orgId, hospitalId, globalSearch });
+            return res.json(ApiResponse.success(result, "Quick check completed successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
         }
     }
 }

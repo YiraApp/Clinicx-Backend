@@ -32,6 +32,39 @@ export class HealthcareProviderScheduleSlotRepository {
         return await this.repo.save(slots);
     }
 
+    async findExistingSlots(providerId: number, hospitalId: number, startDate: Date, endDate: Date): Promise<Set<string>> {
+        const slots = await this.repo.find({
+            where: {
+                ProviderId: providerId,
+                HospitalId: hospitalId,
+                SlotDate: Between(startDate, endDate),
+                IsDeleted: false
+            },
+            select: ["SlotDate", "StartTime", "EndTime"]
+        });
+        // Normalize SlotDate to YYYY-MM-DD regardless of how DB returns it
+        return new Set(slots.map(s => {
+            const d = s.SlotDate instanceof Date
+                ? s.SlotDate.toISOString().split('T')[0]
+                : String(s.SlotDate).split('T')[0];
+            return `${d}|${s.StartTime}|${s.EndTime}`;
+        }));
+    }
+
+    async deleteUnbookedSlotsForDateRange(providerId: number, hospitalId: number, startDate: Date, endDate: Date): Promise<number> {
+        const result = await this.repo.update(
+            {
+                ProviderId: providerId,
+                HospitalId: hospitalId,
+                SlotDate: Between(startDate, endDate),
+                IsBooked: false,
+                IsDeleted: false
+            },
+            { IsDeleted: true, UpdatedAt: new Date() }
+        );
+        return result.affected || 0;
+    }
+
     async deleteSlotsForDateRange(providerId: number, hospitalId: number, startDate: Date, endDate: Date): Promise<void> {
         await this.repo.update(
             {

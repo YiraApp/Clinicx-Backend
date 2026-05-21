@@ -24,6 +24,7 @@ export interface CreateUserRequest {
     Relation?: string | undefined; // Required for secondary users
     Gender?: string | undefined;
     DateOfBirth?: string | undefined;
+    BloodGroup?: string | undefined;
     OrganizationId?: string | undefined;
     RoleName?: string | undefined;
     OrganizationName?: string | undefined;

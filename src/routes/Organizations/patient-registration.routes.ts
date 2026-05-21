@@ -9,7 +9,6 @@ patientRegistrationRouter.post("/send-registration-link", patientRegistrationCon
 
 // New dedicated FrontDesk Patient Management endpoints
 patientRegistrationRouter.get("/getpatients", patientRegistrationController.getOrgHospPatients.bind(patientRegistrationController));
-
-
+patientRegistrationRouter.get("/quick-check", patientRegistrationController.quickCheck.bind(patientRegistrationController));
 
 export { patientRegistrationRouter };

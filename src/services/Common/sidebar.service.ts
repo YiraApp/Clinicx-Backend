@@ -1,4 +1,5 @@
 import { sidebarRepository } from "../../repositories/Common/sidebar.repository.js";
+import { roleRepository } from "../../repositories/Account/role.repository.js";
 import type { ISidebarService } from "../../interfaces/Service/Common/ISidebarService.js";
 
 /**
@@ -6,10 +7,36 @@ import type { ISidebarService } from "../../interfaces/Service/Common/ISidebarSe
  */
 export class SidebarService implements ISidebarService {
     async getSidebarMenu(roleId: string, orgId?: number | null, hospId?: number | null): Promise<any[]> {
+        let isFrontDesk = false;
+        try {
+            const role = await roleRepository.findById(roleId);
+            if (role && role.RoleName === "Front Desk") {
+                isFrontDesk = true;
+            }
+        } catch (err) {
+            console.error("Failed to load role in sidebar service", err);
+        }
+
         const roleMenus = await sidebarRepository.getRoleSidebarMenus(roleId, orgId, hospId);
 
         // Extract the actual menu objects
         const menus = roleMenus.map(rm => rm.Menu);
+
+        // Inject in-memory Billing menu for Front Desk role if not already present
+        if (isFrontDesk) {
+            const hasBilling = menus.some(m => m && m.Route === "/frontdesk/billing");
+            if (!hasBilling) {
+                menus.push({
+                    MenuId: 99999,
+                    MenuName: "Billing",
+                    Route: "/frontdesk/billing",
+                    Icon: "CreditCard",
+                    OrderNo: 6,
+                    Status: true,
+                    CreatedAt: new Date()
+                } as any);
+            }
+        }
 
         // Build hierarchy
         const menuMap = new Map<number, any>();

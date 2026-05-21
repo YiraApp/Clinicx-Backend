@@ -24,6 +24,8 @@ import { clinicalSummaryRouter } from "./Appointments/clinical-summary.routes.js
 import patientPrescriptionRouter from "./Appointments/patient-prescription.routes.js";
 import { medicalDocumentRouter } from "./Appointments/medical-document.routes.js";
 import testSMSV2Routes from "./Common/test-sms-v2.routes.js";
+import { paymentRouter } from "./Payments/payment.routes.js";
+
 
 import { snomedRouter } from "../snomed/snomed.routes.js";
 
@@ -56,7 +58,9 @@ router.use("/clinical-summary", clinicalSummaryRouter);
 router.use("/prescriptions", patientPrescriptionRouter);
 router.use("/medical-documents", medicalDocumentRouter);
 router.use("/test-sms", testSMSV2Routes);
+router.use("/payments", paymentRouter);
 router.use("/snomed", snomedRouter);
+
 
 router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });

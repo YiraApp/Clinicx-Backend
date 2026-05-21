@@ -198,6 +198,7 @@ export class UserRepository implements IUserRepository {
                 countryCode: u.CountryCode || "91",
                 gender: u.Gender,
                 dateOfBirth: u.DateOfBirth,
+                bloodGroup: u.BloodGroup || null,
                 status: u.Status ? "Active" : "Inactive",
                 isActive: u.Status,
                 isParentOrgUser: u.IsPrimary,

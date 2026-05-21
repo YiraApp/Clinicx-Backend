@@ -22,7 +22,9 @@ export class AppointmentService {
         appointmentType?: string;
         createdBy?: string;
         isTeleConsultation?: boolean;
+        status?: string;
     }): Promise<Appointment> {
+
         return await AppDataSource.transaction(async (manager) => {
             // 1. Check if slot exists and is available
             const slot = await healthcareProviderScheduleSlotRepository.findById(data.slotId);
@@ -61,8 +63,9 @@ export class AppointmentService {
                 EndTime: data.endTime,
                 Reason: data.reason,
                 AppointmentType: data.appointmentType || "Consultation",
-                Status: "Scheduled",
+                Status: data.status || "Scheduled",
                 IsTeleConsultation: isTele,
+
                 MeetingUrl: meetingUrl,
                 CreatedBy: data.createdBy,
                 AppointmentNumber: appointmentNumber
