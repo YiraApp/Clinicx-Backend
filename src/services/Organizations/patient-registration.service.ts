@@ -227,31 +227,17 @@ export class PatientRegistrationService {
 
         const { AppDataSource } = await import("../../config/database.js");
         const { User } = await import("../../models/Account/user.model.js");
+        const { PatientRegistration } = await import("../../models/Organizations/patient-registration.model.js");
         const userRepo = AppDataSource.getRepository(User);
-        
-        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+        const regRepo = AppDataSource.getRepository(PatientRegistration);
 
-        // 1. Find all potential matches
+        // 1. Find primary user(s) matching the search — no role filter, search all users
         const query = userRepo.createQueryBuilder("u")
-            .innerJoin("u.UserRoles", "ur")
-            .where("u.IsDeleted = 0")
-            .andWhere("ur.RoleId = :patientRole", { patientRole: PATIENT_ROLE_ID })
-            .andWhere("ur.Status = 1");
-            
-        if (!globalSearch) {
-            if (hospitalId) {
-                query.andWhere("ur.HospitalId = :hospitalId", { hospitalId });
-            } else if (organizationId) {
-                query.andWhere("ur.OrganizationId = :organizationId", { organizationId });
-            }
-        } else if (organizationId) {
-            // Even in global search, restrict to organization level to prevent cross-tenant leakage
-            query.andWhere("ur.OrganizationId = :organizationId", { organizationId });
-        }
-            
+            .where("u.IsDeleted = 0");
+
         const orConditions = [];
         const params: any = {};
-        
+
         if (mobile) {
             orConditions.push("u.PhoneNumber LIKE :mobile");
             params.mobile = `%${mobile}%`;
@@ -264,52 +250,51 @@ export class PatientRegistrationService {
             orConditions.push("(u.FirstName LIKE :name OR u.LastName LIKE :name OR (COALESCE(u.FirstName, '') + ' ' + COALESCE(u.LastName, '')) LIKE :name)");
             params.name = `%${name}%`;
         }
-        
+
         if (orConditions.length > 0) {
             query.andWhere(`(${orConditions.join(' OR ')})`, params);
         }
-        
+
         const matches = await query.getMany();
-        
-        if (matches.length === 0) {
-            return [];
-        }
-        
-        // 2. Extract unique PhoneNumbers from matches to get entire family groups
+        if (matches.length === 0) return [];
+
+        // 2. Get all unique phone numbers from matches to find family members
         const phoneNumbers = [...new Set(matches.map(m => m.PhoneNumber).filter(Boolean))];
-        
         if (phoneNumbers.length === 0) return [];
 
-        // 3. Fetch all users belonging to those phone numbers
-        const familyQuery = userRepo.createQueryBuilder("u")
-            .innerJoin("u.UserRoles", "ur")
+        // 3. Fetch ALL users with those phone numbers (family group) — no role restriction
+        const allFamilyMembers = await userRepo.createQueryBuilder("u")
             .where("u.IsDeleted = 0")
-            .andWhere("ur.RoleId = :patientRole", { patientRole: PATIENT_ROLE_ID })
-            .andWhere("ur.Status = 1")
-            .andWhere("u.PhoneNumber IN (:...phoneNumbers)", { phoneNumbers });
-            
-        if (!globalSearch) {
+            .andWhere("u.PhoneNumber IN (:...phoneNumbers)", { phoneNumbers })
+            .getMany();
+
+        // 4. Check hospital/org registration for each user
+        let registeredUserIds = new Set<string>();
+        if (hospitalId || organizationId) {
+            const regQuery = regRepo.createQueryBuilder("pr")
+                .select("pr.UserId")
+                .where("pr.IsDeleted = 0");
             if (hospitalId) {
-                familyQuery.andWhere("ur.HospitalId = :hospitalId", { hospitalId });
+                regQuery.andWhere("pr.HospitalId = :hospitalId", { hospitalId });
             } else if (organizationId) {
-                familyQuery.andWhere("ur.OrganizationId = :organizationId", { organizationId });
+                regQuery.andWhere("pr.OrganizationId = :organizationId", { organizationId });
             }
-        } else if (organizationId) {
-            familyQuery.andWhere("ur.OrganizationId = :organizationId", { organizationId });
+            const regs = await regQuery.getMany();
+            registeredUserIds = new Set(regs.map(r => r.UserId.toUpperCase()));
         }
 
-        const allFamilyMembers = await familyQuery.getMany();
-            
-        // 4. Group by PhoneNumber
+        // 5. Group by PhoneNumber
         const groupsMap = new Map<string, { primary: any, relations: any[] }>();
-        
+
         allFamilyMembers.forEach(u => {
             const phone = u.PhoneNumber;
             if (!groupsMap.has(phone)) {
                 groupsMap.set(phone, { primary: null, relations: [] });
             }
-            
+
             const group = groupsMap.get(phone)!;
+            const isRegisteredAtHospital = registeredUserIds.size === 0 || registeredUserIds.has(u.Id.toUpperCase());
+
             const userData = {
                 id: u.Id,
                 name: `${u.FirstName || ""} ${u.LastName || ""}`.trim(),
@@ -322,19 +307,26 @@ export class PatientRegistrationService {
                 relation: u.Relation,
                 isPrimary: u.IsPrimary,
                 status: u.Status,
-                bloodGroup: u.BloodGroup
+                bloodGroup: u.BloodGroup,
+                // Key flag: is this person registered at the current hospital?
+                isRegisteredAtHospital,
+                // Action hint for frontend
+                action: isRegisteredAtHospital ? "book" : "register_and_book"
             };
-            
-            if (u.IsPrimary || u.Relation === "Self") {
-                group.primary = userData;
+
+            if (u.IsPrimary || u.Relation === "Self" || !u.Relation) {
+                // If no primary set yet, first match becomes primary
+                if (!group.primary) {
+                    group.primary = userData;
+                } else {
+                    group.relations.push(userData);
+                }
             } else {
                 group.relations.push(userData);
             }
         });
-        
-        // Return array of groups
+
         return Array.from(groupsMap.values()).map(g => ({
-            // If somehow primary is missing, fallback to first user
             primary: g.primary || g.relations[0],
             relations: g.primary ? g.relations : g.relations.slice(1)
         }));
