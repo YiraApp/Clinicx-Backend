@@ -192,38 +192,76 @@ export class ConsentService {
 
         const templates = await consentTemplateRepository.getTemplates(appointment.HospitalId, appointment.OrgId);
 
-        const channel = data.channel || "SMS";
-        let batchLink = crypto.randomUUID();
-        let validTemplates = [];
+        const channel = (data.channel || "sms").toLowerCase();
+        let batchLink: string;
+        let validTemplates: string[] = [];
 
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + 24);
+
+        // ── Check for existing consent requests for this appointment ──
+        const existingRequests = await consentRequestRepository.findByAppointmentId(data.appointmentId);
+        const now = new Date();
+
+        // Find an existing valid (non-expired, pending) batch link
+        const existingPendingRequest = existingRequests.find(
+            r => r.Status === "Pending" && r.RequestLink && (!r.ExpiresAt || r.ExpiresAt > now)
+        );
+
+        if (existingPendingRequest) {
+            // Reuse the existing batch link
+            batchLink = existingPendingRequest.RequestLink;
+            console.log(`[SendConsent] Reusing existing batchLink: ${batchLink} for appointment ${data.appointmentId}`);
+        } else {
+            // No existing valid request – generate a new link
+            batchLink = crypto.randomUUID();
+            console.log(`[SendConsent] Generated new batchLink: ${batchLink} for appointment ${data.appointmentId}`);
+        }
+
+        // Build a set of templateIds that already have a record for this batchLink
+        const existingTemplateIds = new Set(
+            existingRequests
+                .filter(r => r.RequestLink === batchLink)
+                .map(r => r.TemplateId)
+        );
+
+        // Also build a set of existing PatientConsent templateIds to avoid duplicates there
+        const existingPatientConsents = await patientConsentRepository.findByAppointment(data.appointmentId);
+        const existingPatientConsentTemplateIds = new Set(
+            existingPatientConsents.map(pc => pc.TemplateId)
+        );
 
         for (const tid of data.templateIds) {
             const template = templates.find(t => t.TemplateId === tid);
             if (!template) continue;
             validTemplates.push(template.Name);
 
-            await patientConsentRepository.create({
-                AppointmentId: data.appointmentId,
-                TemplateId: tid,
-                Status: "Pending",
-                PdfUrl: template.PdfUrl,
-                SentVia: channel,
-                SentAt: new Date(),
-                CreatedBy: data.createdBy
-            });
+            // Only create PatientConsent if it doesn't already exist for this template + appointment
+            if (!existingPatientConsentTemplateIds.has(tid)) {
+                await patientConsentRepository.create({
+                    AppointmentId: data.appointmentId,
+                    TemplateId: tid,
+                    Status: "Pending",
+                    PdfUrl: template.PdfUrl,
+                    SentVia: channel,
+                    SentAt: new Date(),
+                    CreatedBy: data.createdBy
+                });
+            }
 
-            await consentRequestRepository.create({
-                PatientId: appointment.UserId,
-                AppointmentId: data.appointmentId,
-                TemplateId: tid,
-                HospitalId: appointment.HospitalId,
-                OrganizationId: appointment.OrgId,
-                Status: "Pending",
-                RequestLink: batchLink,
-                ExpiresAt: expiresAt
-            });
+            // Only create ConsentRequest if it doesn't already exist for this template + batchLink
+            if (!existingTemplateIds.has(tid)) {
+                await consentRequestRepository.create({
+                    PatientId: appointment.UserId,
+                    AppointmentId: data.appointmentId,
+                    TemplateId: tid,
+                    HospitalId: appointment.HospitalId,
+                    OrganizationId: appointment.OrgId,
+                    Status: "Pending",
+                    RequestLink: batchLink,
+                    ExpiresAt: expiresAt
+                });
+            }
         }
 
         if (validTemplates.length === 0) {
@@ -237,17 +275,60 @@ export class ConsentService {
         const patient = appointment.User;
         const templateNames = validTemplates.join(", ");
 
-        if (channel === "Email" && patient.Email) {
+        const patientName = `${patient.FirstName} ${patient.LastName || ""}`.trim();
+        const hospitalName = appointment.Hospital?.Name || "the facility";
+
+        if (channel === "email" && patient.Email) {
             await mailService.sendDynamicEmail("CONSENT_EMAIL", patient.Email, {
-                PatientName: `${patient.FirstName} ${patient.LastName || ""}`.trim(),
-                HospitalName: appointment.Hospital?.Name || "the facility",
+                PatientName: patientName,
+                HospitalName: hospitalName,
                 ConsentLink: signUrl
             });
+        } else if (channel === "whatsapp" && patient.PhoneNumber) {
+            // Send via WhatsApp Graph API using the "consent" template
+            try {
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
+                const normalizedPhone = `${patient.CountryCode || "91"}${patient.PhoneNumber.replace(/\D/g, "")}`;
+
+                // Template: consent
+                // Body: Hello {{1}}, As part of your visit to {{2}}, please review and sign...
+                // Button[0]: URL button with consent signing link
+                const components = [
+                    {
+                        type: "header",
+                        parameters: [
+                            { type: "text", text: hospitalName }
+                        ]
+                    },
+                    {
+                        type: "body",
+                        parameters: [
+                            { type: "text", text: patientName || "Patient" },   // {{1}} - Patient name
+                            { type: "text", text: hospitalName },                // {{2}} - Hospital/Org name
+                        ]
+                    },
+                    {
+                        type: "button",
+                        sub_type: "url",
+                        index: 0,
+                        parameters: [
+                            { type: "text", text: batchLink }                      // Dynamic URL for the button (suffix/token)
+                        ]
+                    }
+                ];
+
+                await whatsappService.sendTemplateMessage(normalizedPhone, "consent", "en", components);
+                console.log(`[SendConsent] WhatsApp consent template sent to ${normalizedPhone}`);
+            } catch (err) {
+                console.error("[SendConsent] WhatsApp service error:", err);
+                throw err;
+            }
         } else {
-            const phone = patient.CountryCode + patient.PhoneNumber;
+            // Fallback to SMS
+            const phone = (patient.CountryCode || "91") + patient.PhoneNumber;
             await smsService.sendDynamicSMS("CONSENT_SMS", phone, {
-                PatientName: `${patient.FirstName} ${patient.LastName || ""}`.trim(),
-                HospitalName: appointment.Hospital?.Name || "the facility",
+                PatientName: patientName,
+                HospitalName: hospitalName,
                 ConsentLink: signUrl
             });
         }

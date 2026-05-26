@@ -14,6 +14,10 @@ export class PatientPrescriptionService {
         return await patientPrescriptionRepository.findById(id);
     }
 
+    async getPrescriptionsByAppointment(appointmentId: string, orgId?: number, hospitalId?: number): Promise<PatientPrescription[]> {
+        return await patientPrescriptionRepository.findByAppointment(appointmentId, orgId, hospitalId);
+    }
+
     async updatePrescription(id: string, data: Partial<PatientPrescription>): Promise<void> {
         await patientPrescriptionRepository.update(id, data);
     }

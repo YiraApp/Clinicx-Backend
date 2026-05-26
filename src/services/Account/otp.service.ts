@@ -2,6 +2,7 @@ import { userOTPRepository } from "../../repositories/Account/userotp.repository
 import { userRepository } from "../../repositories/Account/user.repository.js";
 import { mailService } from "../../services/Mail/mail.service.js";
 import { smsService } from "../../services/Common/sms.service.js";
+import { whatsappService } from "../../services/Common/whatsapp.service.js";
 import { OTPType, OTPPurpose } from "../../enums/OTPType.enum.js";
 
 /**
@@ -20,7 +21,8 @@ export class OTPService {
         purpose: OTPPurpose = OTPPurpose.VERIFICATION, 
         countryCode?: string,
         templateCode?: string,
-        customData?: Record<string, any>
+        customData?: Record<string, any>,
+        channel?: "sms" | "whatsapp"
     ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
         // Detect if contact is email or phone
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -44,9 +46,9 @@ export class OTPService {
             }
         }
 
-        // Check daily attempt limit (Max 3 OTPs per 24 hours per purpose)
+        // Check daily attempt limit (Max 6 OTPs per 24 hours per purpose)
         const dailyAttempts = await userOTPRepository.countDailyAttempts(finalContact, purpose);
-        if (dailyAttempts >= 3) {
+        if (dailyAttempts >= 5) {
             throw new Error("Maximum OTP attempts reached. Please try again after 24 hours.");
         }
 
@@ -71,7 +73,7 @@ export class OTPService {
             }
         }
 
-        // Send OTP via email or SMS
+        // Send OTP via email, SMS, or WhatsApp
         if (contactType === OTPType.EMAIL) {
             try {
                 await mailService.sendDynamicEmail(emailTemplate, finalContact, {
@@ -87,11 +89,44 @@ export class OTPService {
                 throw new Error("Failed to send OTP email. Please try again.");
             }
         } else {
-            try {
-                // Send OTP via SMS (using full mobile number including 91)
-                await smsService.sendOTP(fullMobileForSMS, otp);
-            } catch (smsError) {
-                console.error(`[OTP] Failed to send SMS to ${fullMobileForSMS}:`, smsError);
+            if (channel === "whatsapp") {
+                try {
+                    const normalizedTo = fullMobileForSMS.startsWith("+") ? fullMobileForSMS.slice(1) : fullMobileForSMS;
+                    const components = [
+                        {
+                            type: "body",
+                            parameters: [
+                                {
+                                    type: "text",
+                                    text: otp
+                                }
+                            ]
+                        },
+                        {
+                            type: "button",
+                            sub_type: "url",
+                            index: 0,
+                            parameters: [
+                                {
+                                    type: "text",
+                                    text: otp
+                                }
+                            ]
+                        }
+                    ];
+                    console.log(`[OTP] Sending WhatsApp template message to ${normalizedTo} with OTP ${otp}...`);
+                    await whatsappService.sendTemplateMessage(normalizedTo, "auth", "en", components);
+                } catch (whatsappError: any) {
+                    console.error(`[OTP] Failed to send WhatsApp message to ${fullMobileForSMS}:`, whatsappError);
+                    throw new Error(`Failed to send OTP via WhatsApp: ${whatsappError.message}`);
+                }
+            } else {
+                try {
+                    // Send OTP via SMS (using full mobile number including 91)
+                    await smsService.sendOTP(fullMobileForSMS, otp);
+                } catch (smsError) {
+                    console.error(`[OTP] Failed to send SMS to ${fullMobileForSMS}:`, smsError);
+                }
             }
         }
 
@@ -109,7 +144,8 @@ export class OTPService {
     async resendOTP(
         contact: string,
         purpose: OTPPurpose = OTPPurpose.VERIFICATION,
-        countryCode?: string
+        countryCode?: string,
+        channel?: "sms" | "whatsapp"
     ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const isEmail = emailRegex.test(contact);
@@ -130,7 +166,7 @@ export class OTPService {
         }
 
         // Send a new OTP
-        return await this.sendOTP(contact, purpose, countryCode);
+        return await this.sendOTP(contact, purpose, countryCode, undefined, undefined, channel);
     }
 
     /**

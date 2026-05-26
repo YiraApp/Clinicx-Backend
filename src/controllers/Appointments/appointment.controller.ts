@@ -20,8 +20,13 @@ export class AppointmentController {
             const date = req.query.date ? String(req.query.date) : undefined;
             const status = req.query.status ? String(req.query.status) : undefined;
 
-            const result = await appointmentService.getAppointments({ orgId, hospitalId, userId, date, status });
-            return res.json(ApiResponse.success(result));
+            const { data, summary } = await appointmentService.getAppointments({ orgId, hospitalId, userId, date, status });
+            return res.json({
+                status: true,
+                message: "Success",
+                summary,
+                data
+            });
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));
         }

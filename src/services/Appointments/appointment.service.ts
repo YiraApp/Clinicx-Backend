@@ -4,6 +4,8 @@ import { healthcareProviderScheduleSlotRepository } from "../../repositories/Org
 import { patientQueueRepository } from "../../repositories/Appointments/patient-queue.repository.js";
 import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { PatientQueue } from "../../models/Appointments/patient-queue.model.js";
+import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
+import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
 import { AppointmentStatus, QueueStatus } from "../../enums/appointments.js";
 
 import { zoomService } from "../Common/zoom.service.js";
@@ -82,6 +84,40 @@ export class AppointmentService {
         });
     }
 
+    async attachMedicalAndInsurance(appointments: Appointment[]) {
+        const userIds = [...new Set(appointments.map(a => a.UserId).filter(Boolean))];
+        const medicalMap = new Map<string, PatientRegistration>();
+        const insuranceMap = new Map<string, PatientInsurance>();
+
+        if (userIds.length > 0) {
+            const registrations = await AppDataSource.getRepository(PatientRegistration)
+                .createQueryBuilder("pr")
+                .where("pr.UserId IN (:...userIds)", { userIds })
+                .andWhere("pr.IsDeleted = :deleted", { deleted: false })
+                .getMany();
+            registrations.forEach(reg => medicalMap.set(reg.UserId.toUpperCase(), reg));
+
+            const insurances = await AppDataSource.getRepository(PatientInsurance)
+                .createQueryBuilder("ins")
+                .where("ins.UserId IN (:...userIds)", { userIds })
+                .andWhere("ins.IsDeleted = :deleted", { deleted: false })
+                .getMany();
+            insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
+        }
+
+        return appointments.map(apt => {
+            const reg = medicalMap.get(apt.UserId?.toUpperCase());
+            const ins = insuranceMap.get(apt.UserId?.toUpperCase());
+            return {
+                ...apt,
+                allergies: reg?.Allergies || null,
+                medicalHistory: reg?.MedicalHistory || null,
+                insuranceProvider: ins?.InsuranceProvider || null,
+                insuranceNumber: ins?.InsuranceNumber || null,
+            };
+        });
+    }
+
     async getDoctorAppointments(doctorId: string, dateStr: string) {
         return await appointmentRepository.getDoctorAppointments(doctorId, dateStr);
     }
@@ -91,11 +127,28 @@ export class AppointmentService {
     }
 
     async getPatientAppointments(userId: string) {
-        return await appointmentRepository.getPatientAppointments(userId);
+        const appointments = await appointmentRepository.getPatientAppointments(userId);
+        return await this.attachMedicalAndInsurance(appointments);
     }
 
     async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string }) {
-        return await appointmentRepository.getAppointments(filters);
+        const appointments = await appointmentRepository.getAppointments(filters);
+        const enriched = await this.attachMedicalAndInsurance(appointments);
+        const summary = {
+            totalAppointments: appointments.length,
+            totalScheduled: 0,
+            totalConfirmed: 0,
+            totalPaymentPending: 0,
+            totalCompleted: 0
+        };
+        for (const apt of appointments) {
+            const s = apt.Status?.toLowerCase() || "";
+            if (s === "scheduled") summary.totalScheduled++;
+            else if (s === "confirmed") summary.totalConfirmed++;
+            else if (s === "paymentpending") summary.totalPaymentPending++;
+            else if (s === "completed") summary.totalCompleted++;
+        }
+        return { data: enriched, summary };
     }
 
     async cancelAppointment(appointmentId: number, slotId: number) {

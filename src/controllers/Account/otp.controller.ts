@@ -12,14 +12,14 @@ export class OTPController {
      */
     async sendOTP(req: Request, res: Response) {
         try {
-            const { contact, purpose, countryCode } = req.body;
+            const { contact, purpose, countryCode, channel } = req.body;
 
             if (!contact) {
                 return res.status(400).json(ApiResponse.error("Contact (email or mobile) is required."));
             }
 
             const otpPurpose = purpose || OTPPurpose.VERIFICATION;
-            const result = await otpService.sendOTP(contact, otpPurpose, countryCode);
+            const result = await otpService.sendOTP(contact, otpPurpose, countryCode, undefined, undefined, channel);
             
             return res.json(ApiResponse.success(result, "OTP sent successfully."));
         } catch (error: any) {
@@ -32,14 +32,14 @@ export class OTPController {
      */
     async resendOTP(req: Request, res: Response) {
         try {
-            const { contact, purpose, countryCode } = req.body;
+            const { contact, purpose, countryCode, channel } = req.body;
 
             if (!contact) {
                 return res.status(400).json(ApiResponse.error("Contact (email or mobile) is required."));
             }
 
             const otpPurpose = purpose || OTPPurpose.VERIFICATION;
-            const result = await otpService.resendOTP(contact, otpPurpose, countryCode);
+            const result = await otpService.resendOTP(contact, otpPurpose, countryCode, channel);
             
             return res.json(ApiResponse.success(result, "OTP resent successfully."));
         } catch (error: any) {

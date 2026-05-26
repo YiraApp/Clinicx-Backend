@@ -50,35 +50,20 @@ export class AuthService implements IAuthService {
         expiryDate.setDate(expiryDate.getDate() + 1);
 
         const refreshTokenExpiry = expiryDate;
-
-        // Check for existing active session for this device/IP to prevent duplicate rows
-        const existingSession = await tokenRepository.findActiveSession(user.Id, deviceInfo, ipAddress);
-
         const accessTokenExpiryMs = 24 * 60 * 60 * 1000; // Match the 24h in .env
         const accessTokenExpiry = new Date(Date.now() + accessTokenExpiryMs);
 
-        if (existingSession) {
-            // Update existing active session instead of creating a new row
-            await tokenRepository.updateToken(existingSession.TokenId, {
-                AccessToken: accessToken,
-                RefreshToken: refreshToken,
-                AccessTokenExpiry: accessTokenExpiry,
-                RefreshTokenExpiry: refreshTokenExpiry,
-                UpdatedAt: new Date()
-            });
-        } else {
-            // Record a new login token
-            await tokenRepository.createToken({
-                UserId: user.Id,
-                AccessToken: accessToken,
-                RefreshToken: refreshToken,
-                AccessTokenExpiry: accessTokenExpiry,
-                RefreshTokenExpiry: refreshTokenExpiry,
-                IsRevoked: false,
-                ...(deviceInfo && { DeviceInfo: deviceInfo }),
-                ...(ipAddress && { IPAddress: ipAddress })
-            });
-        }
+        // Always create a new session record so the user can stay logged in from multiple devices/browsers.
+        await tokenRepository.createToken({
+            UserId: user.Id,
+            AccessToken: accessToken,
+            RefreshToken: refreshToken,
+            AccessTokenExpiry: accessTokenExpiry,
+            RefreshTokenExpiry: refreshTokenExpiry,
+            IsRevoked: false,
+            ...(deviceInfo && { DeviceInfo: deviceInfo }),
+            ...(ipAddress && { IPAddress: ipAddress })
+        });
 
         // Update LastLoginTime
         user.LastLoginTime = new Date();

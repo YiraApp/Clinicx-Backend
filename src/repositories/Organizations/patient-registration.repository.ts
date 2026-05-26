@@ -1,4 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
+import { Appointment } from "../../models/Appointments/appointment.model.js";
+import { AppointmentStatus } from "../../enums/appointments.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
 
@@ -75,6 +77,31 @@ export class PatientRegistrationRepository {
                 .andWhere("ins.IsDeleted = :deleted", { deleted: false })
                 .getMany();
             insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
+        }
+
+        // Batch-load completed appointment counts for each patient in the current org/hospital context
+        const appointmentCounts = new Map<string, number>();
+        if (userIds.length > 0) {
+            const appointmentQuery = AppDataSource.getRepository(Appointment)
+                .createQueryBuilder("a")
+                .select("UPPER(a.UserId)", "userId")
+                .addSelect("COUNT(*)", "count")
+                .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) })
+                .andWhere("LOWER(a.Status) = LOWER(:status)", { status: AppointmentStatus.Completed });
+
+            if (filters.organizationId) {
+                appointmentQuery.andWhere("a.OrgId = :orgId", { orgId: filters.organizationId });
+            }
+            if (filters.hospitalId) {
+                appointmentQuery.andWhere("a.HospitalId = :hospId", { hospId: filters.hospitalId });
+            }
+
+            const appointmentsRaw = await appointmentQuery
+                .groupBy("UPPER(a.UserId)")
+                .getRawMany();
+            appointmentsRaw.forEach((row: any) => {
+                appointmentCounts.set((row.userId || "").toUpperCase(), parseInt(row.count, 10) || 0);
+            });
         }
 
         // Summary stats for this org/hosp context

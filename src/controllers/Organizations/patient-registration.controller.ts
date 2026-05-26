@@ -33,8 +33,12 @@ export class PatientRegistrationController {
 
     async sendRegistrationLink(req: Request, res: Response) {
         try {
-            const orgId = req.headers["x-org-id"] ? parseInt(req.headers["x-org-id"] as string) : undefined;
-            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
+            const orgId = req.headers["x-org-id"] 
+                ? parseInt(req.headers["x-org-id"] as string) 
+                : (req.body.organizationId ? parseInt(req.body.organizationId as string) : undefined);
+            const hospitalId = req.headers["x-hospital-id"] 
+                ? parseInt(req.headers["x-hospital-id"] as string) 
+                : (req.body.hospitalId ? parseInt(req.body.hospitalId as string) : (req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined));
 
             const result = await patientRegistrationService.sendRegistrationLink({
                 ...req.body,
@@ -44,6 +48,19 @@ export class PatientRegistrationController {
             return res.json(ApiResponse.success(result, "Registration link sent successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async getRegistrationLink(req: Request, res: Response) {
+        try {
+            const { token } = req.params;
+            if (!token) {
+                return res.status(400).json(ApiResponse.error("Registration token is required."));
+            }
+            const result = await patientRegistrationService.getRegistrationLinkByToken(token as string);
+            return res.json(ApiResponse.success(result, "Registration link retrieved successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
         }
     }
 

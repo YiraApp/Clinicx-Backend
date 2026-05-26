@@ -1,12 +1,14 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, Relation } from "typeorm/index.js";
+import { PrescriptionDiagnosis } from "./prescription-diagnosis.model.js";
+import { PrescriptionMedication } from "./prescription-medication.model.js";
 
 @Entity({ name: "PatientPrescription" })
 export class PatientPrescription {
     @PrimaryGeneratedColumn("uuid")
     Id: string;
 
-    @Column({ type: "nvarchar", length: 255, nullable: true, default: "0" })
-    AppointmentId?: string;
+    @Column({ type: "nvarchar", length: 255, nullable: true, default: null })
+    AppointmentId?: string | null;
 
     @Column({ type: "nvarchar", length: 255, nullable: true })
     MedicalRecordId?: string;
@@ -16,33 +18,6 @@ export class PatientPrescription {
 
     @Column({ type: "nvarchar", length: 255, nullable: true })
     DoctorId?: string;
-
-    @Column({ type: "nvarchar", length: 255 })
-    Medication: string;
-
-    @Column({ type: "nvarchar", length: 255, nullable: true })
-    ConceptId?: string;
-
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    Dosage?: string;
-
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    Frequency?: string;
-
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    Duration?: string;
-
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    Route?: string;
-
-    @Column({ type: "nvarchar", length: 255, nullable: true })
-    Diagnosis?: string;
-
-    @Column({ type: "nvarchar", length: 100, nullable: true })
-    DiagnosisConceptId?: string;
-
-    @Column({ type: "nvarchar", length: "MAX", nullable: true })
-    Instructions?: string;
 
     @Column({ type: "datetime", nullable: true, default: () => "GETDATE()" })
     Date?: Date;
@@ -64,4 +39,13 @@ export class PatientPrescription {
 
     @Column({ type: "int", nullable: true })
     HospitalId?: number;
+
+    @Column({ type: "nvarchar", length: 4000, nullable: true })
+    Notes?: string | null;
+
+    @OneToMany(() => PrescriptionDiagnosis, (diagnosis) => diagnosis.Prescription, { cascade: true })
+    Diagnoses?: Relation<PrescriptionDiagnosis[]>;
+
+    @OneToMany(() => PrescriptionMedication, (medication) => medication.Prescription, { cascade: true })
+    Medications?: Relation<PrescriptionMedication[]>;
 }

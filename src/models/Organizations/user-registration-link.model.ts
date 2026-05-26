@@ -38,6 +38,9 @@ export class UserRegistrationLink {
     @Column({ type: "nvarchar", length: 20, default: "Email" })
     Type!: "Email" | "SMS" | "WhatsApp";
 
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    PatientName?: string | null;
+
     @Column({ type: "nvarchar", length: 20, nullable: true })
     PhoneNumber?: string | null;
 

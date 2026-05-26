@@ -8,9 +8,22 @@ import { userRepository } from "../../repositories/Account/user.repository.js";
 
 export class PatientRegistrationService {
     async registerPatient(data: any): Promise<any> {
-        const { userId, organizationId, hospitalId, ...patientFields } = data;
+        const { userId, organizationId, hospitalId, token, ...patientFields } = data;
 
         if (!userId) throw new Error("UserId is required for patient registration.");
+
+        // If registration was initiated via a token, validate and deactivate it
+        if (token) {
+            const { userRegistrationLinkRepository } = await import("../../repositories/Organizations/user-registration-link.repository.js");
+            const regLink = await userRegistrationLinkRepository.findByToken(token);
+            if (!regLink) {
+                throw new Error("Registration link not found or has already been used.");
+            }
+            if (regLink.ExpiryTime && new Date(regLink.ExpiryTime) < new Date()) {
+                throw new Error("Registration link has expired. Please request a new one.");
+            }
+            await userRegistrationLinkRepository.markAsUsed(regLink.Id);
+        }
 
         // 1. Handle Medical Registration (Allergies, Medical History)
         let registration = await patientRegistrationRepository.findByUserId(userId, organizationId);
@@ -119,6 +132,7 @@ export class PatientRegistrationService {
         regLink.Email = email ?? null;
         regLink.PhoneNumber = phone ?? null;
         regLink.CountryCode = countryCode ?? "91";
+        regLink.PatientName = name ?? null;
         regLink.OrganizationId = organizationId ? Number(organizationId) : null;
         regLink.HospitalId = hospitalId ? Number(hospitalId) : null;
         regLink.Type = channel === "email" ? "Email" : channel === "sms" ? "SMS" : "WhatsApp";
@@ -130,10 +144,27 @@ export class PatientRegistrationService {
 
         const savedLink = await userRegistrationLinkRepository.save(regLink);
 
-        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
-        // Use token instead of raw details for security
-        const link = `${baseUrl}/self-register?token=${savedLink.Token}&orgId=${organizationId || ""}&hospId=${hospitalId || ""}&name=${encodeURIComponent(name)}&phone=${phone}&countryCode=${regLink.CountryCode}`;
+        const baseUrl = (process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173").replace(/\/+$/, "");
+        // Use only the token in the link — all metadata is fetched securely from the backend
+        const link = `${baseUrl}/self-register?token=${savedLink.Token}`;
 
+        // Resolve organization/hospital name for WhatsApp template {{2}} parameter
+        let orgDisplayName = "our clinic";
+        try {
+            if (hospitalId) {
+                const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+                const hospital = await hospitalRepository.findById(Number(hospitalId));
+                if (hospital?.Name) orgDisplayName = hospital.Name;
+            } else if (organizationId) {
+                const { organizationRepository } = await import("../../repositories/Organizations/organization.repository.js");
+                const org = await organizationRepository.findById(Number(organizationId));
+                if (org?.Name) orgDisplayName = org.Name;
+            }
+        } catch (err) {
+            console.error("[SendRegistrationLink] Failed to resolve org/hospital name:", err);
+        }
+
+        // 3. Send via the selected channel
         if (channel === "email" && email) {
             try {
                 const { mailService } = await import("../Mail/mail.service.js");
@@ -142,13 +173,121 @@ export class PatientRegistrationService {
                     RegistrationLink: link,
                 });
             } catch (err) {
-                console.error("Mail service error:", err);
+                console.error("[SendRegistrationLink] Mail service error:", err);
+            }
+        } else if (channel === "whatsapp" && phone) {
+            // Send via WhatsApp Graph API using the "self_registration" template
+            try {
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
+                const normalizedPhone = `${countryCode || "91"}${phone.replace(/\D/g, "")}`;
+
+                // Template: self_registration
+                // Header: Expected 1 localizable_param (e.g. Org Name / Clinic Name)
+                // Body: Hello {{1}}, Your patient registration for {{2}} is awaiting completion...
+                // Button[0]: URL button with registration link
+                const components = [
+                    {
+                        type: "header",
+                        parameters: [
+                            { type: "text", text: orgDisplayName }            // Dynamic header parameter (e.g., Clinic Name)
+                        ]
+                    },
+                    {
+                        type: "body",
+                        parameters: [
+                            { type: "text", text: name || "Patient" },       // {{1}} - Patient name
+                            { type: "text", text: orgDisplayName },           // {{2}} - Organization/Hospital name
+                        ]
+                    },
+                    {
+                        type: "button",
+                        sub_type: "url",
+                        index: 0,
+                        parameters: [
+                            { type: "text", text: link }                      // Dynamic URL for the button
+                        ]
+                    }
+                ];
+
+                await whatsappService.sendTemplateMessage(normalizedPhone, "self_registration", "en", components);
+                console.log(`[SendRegistrationLink] WhatsApp template sent to ${normalizedPhone}`);
+            } catch (err) {
+                console.error("[SendRegistrationLink] WhatsApp service error:", err);
+                throw err;
+            }
+        } else if (channel === "sms" && phone) {
+            // Send via SMS
+            try {
+                const { smsService } = await import("../Common/sms.service.js");
+                const normalizedPhone = `${countryCode || "91"}${phone.replace(/\D/g, "")}`;
+                const message = `Hello ${name || "Patient"}, your patient registration for ${orgDisplayName} is awaiting completion. Please use this secure link to complete your registration: ${link} - Thank you`;
+                await smsService.sendSMS(normalizedPhone, message);
+                console.log(`[SendRegistrationLink] SMS sent to ${normalizedPhone}`);
+            } catch (err) {
+                console.error("[SendRegistrationLink] SMS service error:", err);
             }
         } else {
-            console.log(`[${regLink.Type} to ${regLink.CountryCode}${phone}]: Hello ${name}, please register here: ${link}`);
+            console.log(`[SendRegistrationLink] [${regLink.Type} to ${regLink.CountryCode}${phone}]: Hello ${name}, please register here: ${link}`);
         }
 
         return { message: "Link sent successfully.", link };
+    }
+
+    /**
+     * Looks up a registration link by token and returns the associated metadata.
+     * Used by the public /self-register page to pre-fill the form.
+     */
+    async getRegistrationLinkByToken(token: string): Promise<any> {
+        const { userRegistrationLinkRepository } = await import("../../repositories/Organizations/user-registration-link.repository.js");
+
+        const regLink = await userRegistrationLinkRepository.findAnyByToken(token);
+        if (!regLink) {
+            throw new Error("Registration link not found. Please verify your link.");
+        }
+
+        if (regLink.IsUsed) {
+            throw new Error("ALREADY_USED");
+        }
+
+        if (regLink.ExpiryTime && new Date(regLink.ExpiryTime) < new Date()) {
+            throw new Error("Registration link has expired. Please request a new one.");
+        }
+
+        // Resolve organization and hospital names for display
+        let organizationName: string | null = null;
+        let hospitalName: string | null = null;
+
+        if (regLink.OrganizationId) {
+            const { organizationRepository } = await import("../../repositories/Organizations/organization.repository.js");
+            const org = await organizationRepository.findById(regLink.OrganizationId);
+            organizationName = org?.Name ?? null;
+        }
+
+        if (regLink.HospitalId) {
+            const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+            const hospital = await hospitalRepository.findById(regLink.HospitalId);
+            hospitalName = hospital?.Name ?? null;
+        }
+
+        // Parse name into firstName / lastName
+        const nameParts = (regLink.PatientName || "").trim().split(" ");
+        const firstName = nameParts[0] || "";
+        const lastName = nameParts.slice(1).join(" ") || "";
+
+        return {
+            token: regLink.Token,
+            firstName,
+            lastName,
+            name: regLink.PatientName,
+            phone: regLink.PhoneNumber,
+            countryCode: regLink.CountryCode,
+            email: regLink.Email,
+            organizationId: regLink.OrganizationId,
+            hospitalId: regLink.HospitalId,
+            organizationName,
+            hospitalName,
+            role: regLink.Role,
+        };
     }
 
     async getOrgHospPatients(page: number, pageSize: number, filters: any): Promise<any> {

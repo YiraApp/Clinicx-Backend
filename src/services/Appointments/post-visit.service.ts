@@ -107,22 +107,87 @@ export class PostVisitService {
             await postVisitDocumentRepository.update(doc.Id, { ShareLinkId: shareLink.Id });
         }
 
-        // 4. Send email if requested
+        // 4. Send via selected channel
         if (channel === "email" && appointment.User?.Email) {
-            const templateData = {
-                PatientName: `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim(),
-                HospitalName: appointment.Hospital?.Name || "the facility",
-                AppointmentNumber: appointment.AppointmentNumber || appointment.Id,
-                DoctorName: appointment.Doctor ? `${appointment.Doctor.FirstName} ${appointment.Doctor.LastName || ""}`.trim() : "N/A",
-                VisitDate: new Date(appointment.AppointmentDate).toLocaleDateString("en-IN", {
-                    day: "2-digit",
-                    month: "short",
-                    year: "numeric"
-                }),
-                ShareLink: shareLinkUrl
-            };
+            try {
+                const templateData = {
+                    PatientName: `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim(),
+                    HospitalName: appointment.Hospital?.Name || "the facility",
+                    AppointmentNumber: appointment.AppointmentNumber || appointment.Id,
+                    DoctorName: appointment.Doctor ? `${appointment.Doctor.FirstName} ${appointment.Doctor.LastName || ""}`.trim() : "N/A",
+                    VisitDate: new Date(appointment.AppointmentDate).toLocaleDateString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric"
+                    }),
+                    ShareLink: shareLinkUrl
+                };
 
-            await mailService.sendDynamicEmail("POST_VISIT_MEDICAL_RECORDS", appointment.User.Email, templateData);
+                await mailService.sendDynamicEmail("POST_VISIT_MEDICAL_RECORDS", appointment.User.Email, templateData);
+            } catch (err) {
+                console.error("[PostVisitService] Mail error:", err);
+            }
+        } else if (channel === "whatsapp" && appointment.User?.PhoneNumber) {
+            try {
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
+                const countryCode = appointment.User.CountryCode || "91";
+                const phone = appointment.User.PhoneNumber;
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${phone.replace(/\D/g, "")}`;
+                const patientName = `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim();
+                const hospitalName = appointment.Hospital?.Name || "our hospital";
+
+                // Template: medical_patient_documents
+                // Header: Expected 1 parameter (Hospital Name)
+                // Body parameters:
+                // {{1}}: Patient Name
+                // {{2}}: Hospital Name
+                // Button index 0: Dynamic URL token parameter
+                const components = [
+                    {
+                        type: "header",
+                        parameters: [
+                            { type: "text", text: hospitalName }
+                        ]
+                    },
+                    {
+                        type: "body",
+                        parameters: [
+                            { type: "text", text: patientName },
+                            { type: "text", text: hospitalName }
+                        ]
+                    },
+                    {
+                        type: "button",
+                        sub_type: "url",
+                        index: 0,
+                        parameters: [
+                            { type: "text", text: shareToken }
+                        ]
+                    }
+                ];
+
+                await whatsappService.sendTemplateMessage(normalizedPhone, "medical_patient_documents", "en", components);
+                console.log(`[PostVisitService] WhatsApp template sent to ${normalizedPhone}`);
+            } catch (err) {
+                console.error("[PostVisitService] WhatsApp error:", err);
+                throw err;
+            }
+        } else if (channel === "sms" && appointment.User?.PhoneNumber) {
+            try {
+                const { smsService } = await import("../Common/sms.service.js");
+                const countryCode = appointment.User.CountryCode || "91";
+                const phone = appointment.User.PhoneNumber;
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${phone.replace(/\D/g, "")}`;
+                const patientName = `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim();
+                const hospitalName = appointment.Hospital?.Name || "our hospital";
+
+                const message = `Hello ${patientName}, your medical documents from ${hospitalName} are now available. You can securely view and download them using this link: ${shareLinkUrl} - Thank you`;
+                await smsService.sendSMS(normalizedPhone, message);
+                console.log(`[PostVisitService] SMS sent to ${normalizedPhone}`);
+            } catch (err) {
+                console.error("[PostVisitService] SMS error:", err);
+                throw err;
+            }
         }
 
         return {

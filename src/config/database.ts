@@ -41,6 +41,10 @@ import { PatientMedicalRecord } from "../models/Appointments/patient-medical-rec
 import { Visit } from "../models/Appointments/visit.model.js";
 import { PatientDocument } from "../models/Appointments/patient-document.model.js";
 import { PatientPrescription } from "../models/Appointments/patient-prescription.model.js";
+import { PrescriptionDiagnosis } from "../models/Appointments/prescription-diagnosis.model.js";
+import { PrescriptionMedication } from "../models/Appointments/prescription-medication.model.js";
+import { PrescriptionMedicationSchedule } from "../models/Appointments/prescription-medication-schedule.model.js";
+import { PrescriptionMedicationDays } from "../models/Appointments/prescription-medication-days.model.js";
 import { PostVisitDocument } from "../models/Appointments/post-visit-document.model.js";
 import { AppointmentShareLink } from "../models/Appointments/appointment-share-link.model.js";
 import { MedicalDocument } from "../models/Appointments/medical-document.model.js";
@@ -87,6 +91,7 @@ export const AppDataSource = new DataSource({
         PatientConsent, ConsentRequest,
         PatientVerification, PatientVerificationDocument,
         ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
+        PrescriptionDiagnosis, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
         Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem
     ],

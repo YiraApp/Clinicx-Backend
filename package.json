@@ -5,8 +5,10 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "cleanup-duplicates": "tsx scratch/cleanup-duplicate-prescriptions.ts",
     "start": "node dist/index.js",
-    "build": "tsc"
+    "build": "tsc",
+    "update-prescription-schema": "tsx scratch/update-prescription-refactor.ts"
   },
   "keywords": [],
   "author": "",

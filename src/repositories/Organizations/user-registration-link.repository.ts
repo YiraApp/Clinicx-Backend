@@ -12,6 +12,10 @@ export class UserRegistrationLinkRepository {
         return await this.repo.findOne({ where: { Token: token, IsUsed: false } });
     }
 
+    async findAnyByToken(token: string): Promise<UserRegistrationLink | null> {
+        return await this.repo.findOne({ where: { Token: token } });
+    }
+
     async findByEmail(email: string): Promise<UserRegistrationLink | null> {
         return await this.repo.findOne({ where: { Email: email, IsUsed: false } });
     }

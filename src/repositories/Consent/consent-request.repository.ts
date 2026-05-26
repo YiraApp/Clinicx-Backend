@@ -39,6 +39,13 @@ export class ConsentRequestRepository {
         });
     }
 
+    async findByAppointmentId(appointmentId: number): Promise<ConsentRequest[]> {
+        return await this.repo.find({
+            where: { AppointmentId: appointmentId },
+            relations: ["Patient", "Template", "Hospital"]
+        });
+    }
+
     async findByAppointmentIds(appointmentIds: number[]): Promise<ConsentRequest[]> {
         if (appointmentIds.length === 0) return [];
         return await this.repo.createQueryBuilder("r")
