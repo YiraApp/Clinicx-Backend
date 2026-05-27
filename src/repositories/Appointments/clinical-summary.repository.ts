@@ -36,10 +36,11 @@ export class ClinicalSummaryRepository {
             where: { AppointmentId: appointmentId }
         });
 
-        // 5. Get Structured Prescriptions
+        // 5. Get Structured Prescriptions with full relations
         const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
         const prescriptions = await prescriptionRepo.find({
-            where: { AppointmentId: String(appointmentId) }
+            where: { AppointmentId: String(appointmentId) },
+            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days"]
         });
 
         // 6. Get Post-Visit Generated Documents (Reports sent to patient)
