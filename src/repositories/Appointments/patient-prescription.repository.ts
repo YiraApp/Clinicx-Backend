@@ -57,8 +57,9 @@ export class PatientPrescriptionRepository {
             const seenDiag = new Set<string>();
             const uniqueDiags: any[] = [];
             for (const d of data.Diagnoses) {
-                const diagText = (d.Diagnosis || d.diagnosis || "").toString().trim().toLowerCase();
-                const diagConcept = (d.DiagnosisConceptId || d.diagnosisConceptId || "").toString().trim();
+                const dd = d as any;
+                const diagText = (dd.Diagnosis || dd.diagnosis || "").toString().trim().toLowerCase();
+                const diagConcept = (dd.DiagnosisConceptId || dd.diagnosisConceptId || "").toString().trim();
                 const key = `${diagText}|${diagConcept}`;
                 if (!seenDiag.has(key)) {
                     seenDiag.add(key);
@@ -73,12 +74,13 @@ export class PatientPrescriptionRepository {
             const seenMed = new Set<string>();
             const uniqueMeds: any[] = [];
             for (const m of data.Medications) {
-                const medName = (m.Medication || m.medication || "").toString().trim().toLowerCase();
-                const dosage = (m.Dosage || m.dosage || "").toString().trim().toLowerCase();
-                const freq = (m.FrequencyType || m.frequencyType || m.Frequency || m.frequency || "").toString().trim().toLowerCase();
-                const dur = (m.DurationUnit || m.durationUnit || m.Duration || m.duration || "").toString().trim().toLowerCase();
-                const route = (m.Route || m.route || "").toString().trim().toLowerCase();
-                const instr = (m.Instructions || m.instructions || "").toString().trim().toLowerCase();
+                const mm = m as any;
+                const medName = (mm.Medication || mm.medication || "").toString().trim().toLowerCase();
+                const dosage = (mm.Dosage || mm.dosage || "").toString().trim().toLowerCase();
+                const freq = (mm.FrequencyType || mm.frequencyType || mm.Frequency || mm.frequency || "").toString().trim().toLowerCase();
+                const dur = (mm.DurationUnit || mm.durationUnit || mm.Duration || mm.duration || "").toString().trim().toLowerCase();
+                const route = (mm.Route || mm.route || "").toString().trim().toLowerCase();
+                const instr = (mm.Instructions || mm.instructions || "").toString().trim().toLowerCase();
                 const key = [medName, dosage, freq, dur, route, instr].join("|");
                 if (!seenMed.has(key)) {
                     seenMed.add(key);
@@ -122,11 +124,12 @@ export class PatientPrescriptionRepository {
 
             const incomingKeys = new Set<string>();
             for (const d of data.Diagnoses) {
-                const key = `${(d.Diagnosis || d.diagnosis || "").toString().trim().toLowerCase()}|${(d.DiagnosisConceptId || d.diagnosisConceptId || "").toString().trim()}`;
+                const dd = d as any;
+                const key = `${(dd.Diagnosis || dd.diagnosis || "").toString().trim().toLowerCase()}|${(dd.DiagnosisConceptId || dd.diagnosisConceptId || "").toString().trim()}`;
                 incomingKeys.add(key);
                 if (!existingMap.has(key)) {
                     // insert new diagnosis
-                    await diagRepo.save(diagRepo.create({ PrescriptionId: id, Diagnosis: d.Diagnosis || d.diagnosis, DiagnosisConceptId: d.DiagnosisConceptId || d.diagnosisConceptId }));
+                    await diagRepo.save(diagRepo.create({ PrescriptionId: id, Diagnosis: dd.Diagnosis || dd.diagnosis, DiagnosisConceptId: dd.DiagnosisConceptId || dd.diagnosisConceptId }));
                 }
             }
 
@@ -186,27 +189,28 @@ export class PatientPrescriptionRepository {
 
             const incomingMedKeys = new Set<string>();
             for (const m of data.Medications) {
+                const mm = m as any;
                 const key = [
-                    (m.Medication || m.medication || "").toString().trim().toLowerCase(),
-                    (m.Dosage || m.dosage || "").toString().trim().toLowerCase(),
-                    (m.FrequencyType || m.frequencyType || m.Frequency || m.frequency || "").toString().trim().toLowerCase(),
-                    (m.DurationUnit || m.durationUnit || m.Duration || m.duration || "").toString().trim().toLowerCase(),
-                    (m.Route || m.route || "").toString().trim().toLowerCase(),
-                    (m.Instructions || m.instructions || "").toString().trim().toLowerCase()
+                    (mm.Medication || mm.medication || "").toString().trim().toLowerCase(),
+                    (mm.Dosage || mm.dosage || "").toString().trim().toLowerCase(),
+                    (mm.FrequencyType || mm.frequencyType || mm.Frequency || mm.frequency || "").toString().trim().toLowerCase(),
+                    (mm.DurationUnit || mm.durationUnit || mm.Duration || mm.duration || "").toString().trim().toLowerCase(),
+                    (mm.Route || mm.route || "").toString().trim().toLowerCase(),
+                    (mm.Instructions || mm.instructions || "").toString().trim().toLowerCase()
                 ].join("|");
                 incomingMedKeys.add(key);
                 if (!existingMedMap.has(key)) {
                     // insert new medication (schedules/days ignored for now)
                     await medRepo.save(medRepo.create({
                         PrescriptionId: id,
-                        Medication: m.Medication || m.medication,
-                        ConceptId: m.ConceptId || m.conceptId,
-                        Dosage: m.Dosage || m.dosage,
-                        DurationValue: m.DurationValue || m.durationValue,
-                        DurationUnit: m.DurationUnit || m.durationUnit || m.Duration || m.duration,
-                        FrequencyType: m.FrequencyType || m.frequencyType || m.Frequency || m.frequency,
-                        Instructions: m.Instructions || m.instructions,
-                        Route: m.Route || m.route
+                        Medication: mm.Medication || mm.medication,
+                        ConceptId: mm.ConceptId || mm.conceptId,
+                        Dosage: mm.Dosage || mm.dosage,
+                        DurationValue: mm.DurationValue || mm.durationValue,
+                        DurationUnit: mm.DurationUnit || mm.durationUnit || mm.Duration || mm.duration,
+                        FrequencyType: mm.FrequencyType || mm.frequencyType || mm.Frequency || mm.frequency,
+                        Instructions: mm.Instructions || mm.instructions,
+                        Route: mm.Route || mm.route
                     }));
                 }
             }
