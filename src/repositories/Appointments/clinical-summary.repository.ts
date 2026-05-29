@@ -2,7 +2,7 @@ import { AppDataSource } from "../../config/database.js";
 import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { ClinicalNote } from "../../models/Appointments/clinical-note.model.js";
 import { PatientMedicalRecord } from "../../models/Appointments/patient-medical-record.model.js";
-import { PatientDocument } from "../../models/Appointments/patient-document.model.js";
+import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
 
@@ -30,10 +30,12 @@ export class ClinicalSummaryRepository {
             relations: ["Doctor"]
         });
 
-        // 4. Get Patient Documents (Original uploaded files)
-        const documentRepo = AppDataSource.getRepository(PatientDocument);
+        // 4. Get Medical Documents (uploaded files for this appointment)
+        const documentRepo = AppDataSource.getRepository(MedicalDocument);
         const documents = await documentRepo.find({
-            where: { AppointmentId: appointmentId }
+            where: { AppointmentId: appointmentId, IsDeleted: false },
+            relations: ["UploadedByUser"],
+            order: { CreatedAt: "DESC" }
         });
 
         // 5. Get Structured Prescriptions with full relations

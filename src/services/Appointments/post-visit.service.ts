@@ -8,6 +8,161 @@ import { PostVisitDocument } from "../../models/Appointments/post-visit-document
 
 export class PostVisitService {
     /**
+     * Share existing documents (blob URLs) directly without PDF generation.
+     * Sends clinical notes, medical records, prescriptions, and uploaded documents
+     * via the chosen channel (whatsapp / email / sms).
+     */
+    async shareDirectDocuments(appointmentId: number, data: {
+        channel: "whatsapp" | "email" | "sms";
+        documents: Array<{ fileName: string; blobUrl: string; documentType: string }>;
+        patientId: string;
+        createdBy?: string;
+    }) {
+        const appointment = await appointmentRepository.findById(appointmentId);
+        if (!appointment) throw new Error("Appointment not found");
+
+        const { channel, documents } = data;
+
+        // 1. Generate share token and link
+        const shareToken = uuidv4();
+        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
+        const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+        const shareLinkUrl = `${cleanBaseUrl}/view-summary/${shareToken}`;
+
+        const shareLink = await appointmentShareLinkRepository.create({
+            AppointmentId: appointmentId,
+            PatientId: appointment.UserId,
+            OrganizationId: appointment.OrgId,
+            HospitalId: appointment.HospitalId,
+            ShareToken: shareToken,
+            ShareLink: shareLinkUrl,
+            ExpiryAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            IsActive: true,
+            CreatedBy: data.createdBy || "SYSTEM"
+        });
+
+        // 2. Log each document as a PostVisitDocument record
+        const documentRecords: PostVisitDocument[] = [];
+        for (const doc of documents) {
+            let existing = await postVisitDocumentRepository.findOne({
+                AppointmentId: appointmentId,
+                FileName: doc.fileName,
+                IsDeleted: false
+            });
+
+            if (existing) {
+                await postVisitDocumentRepository.update(existing.Id, {
+                    BlobUrl: doc.blobUrl,
+                    GeneratedAt: new Date(),
+                    SentOnWhatsApp: existing.SentOnWhatsApp || channel === "whatsapp",
+                    SentOnEmail: existing.SentOnEmail || channel === "email",
+                    SentOnSMS: existing.SentOnSMS || channel === "sms",
+                    WhatsAppSentAt: channel === "whatsapp" ? new Date() : existing.WhatsAppSentAt,
+                    EmailSentAt: channel === "email" ? new Date() : existing.EmailSentAt,
+                    SmsSentAt: channel === "sms" ? new Date() : existing.SmsSentAt,
+                    WhatsAppSentTo: channel === "whatsapp" ? appointment.User.PhoneNumber : existing.WhatsAppSentTo,
+                    EmailSentTo: channel === "email" ? (appointment.User.Email ?? undefined) : existing.EmailSentTo,
+                    SmsSentTo: channel === "sms" ? appointment.User.PhoneNumber : existing.SmsSentTo,
+                    WhatsAppSentCount: (existing.WhatsAppSentCount || 0) + (channel === "whatsapp" ? 1 : 0),
+                    EmailSentCount: (existing.EmailSentCount || 0) + (channel === "email" ? 1 : 0),
+                    SmsSentCount: (existing.SmsSentCount || 0) + (channel === "sms" ? 1 : 0),
+                    ShareLinkId: shareLink.Id
+                });
+                const updated = await postVisitDocumentRepository.findById(existing.Id);
+                if (updated) documentRecords.push(updated);
+            } else {
+                const created = await postVisitDocumentRepository.create({
+                    AppointmentId: appointmentId,
+                    PatientId: appointment.UserId,
+                    DoctorId: appointment.DoctorId,
+                    OrganizationId: appointment.OrgId,
+                    HospitalId: appointment.HospitalId,
+                    DocumentType: doc.documentType,
+                    FileName: doc.fileName,
+                    BlobUrl: doc.blobUrl,
+                    GeneratedAt: new Date(),
+                    SentOnWhatsApp: channel === "whatsapp",
+                    SentOnEmail: channel === "email",
+                    SentOnSMS: channel === "sms",
+                    WhatsAppSentAt: channel === "whatsapp" ? new Date() : undefined,
+                    EmailSentAt: channel === "email" ? new Date() : undefined,
+                    SmsSentAt: channel === "sms" ? new Date() : undefined,
+                    WhatsAppSentTo: channel === "whatsapp" ? appointment.User.PhoneNumber : undefined,
+                    EmailSentTo: channel === "email" ? (appointment.User.Email ?? undefined) : undefined,
+                    SmsSentTo: channel === "sms" ? appointment.User.PhoneNumber : undefined,
+                    WhatsAppSentCount: channel === "whatsapp" ? 1 : 0,
+                    EmailSentCount: channel === "email" ? 1 : 0,
+                    SmsSentCount: channel === "sms" ? 1 : 0,
+                    ShareLinkId: shareLink.Id,
+                    IsPrimaryDocument: false,
+                    Status: "ACTIVE"
+                });
+                documentRecords.push(created);
+            }
+        }
+
+        const patientName = `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim();
+        const hospitalName = appointment.Hospital?.Name || "our hospital";
+
+        // 3. Send via channel
+        if (channel === "email" && appointment.User?.Email) {
+            try {
+                const templateData = {
+                    PatientName: patientName,
+                    HospitalName: hospitalName,
+                    AppointmentNumber: appointment.AppointmentNumber || appointment.Id,
+                    DoctorName: appointment.Doctor
+                        ? `${appointment.Doctor.FirstName} ${appointment.Doctor.LastName || ""}`.trim()
+                        : "N/A",
+                    VisitDate: new Date(appointment.AppointmentDate).toLocaleDateString("en-IN", {
+                        day: "2-digit", month: "short", year: "numeric"
+                    }),
+                    ShareLink: shareLinkUrl,
+                    DocumentCount: documents.length,
+                    Documents: documents.map(d => ({ name: d.fileName, url: d.blobUrl, type: d.documentType }))
+                };
+                await mailService.sendDynamicEmail("POST_VISIT_MEDICAL_RECORDS", appointment.User.Email, templateData);
+            } catch (err) {
+                console.error("[PostVisitService] Mail error:", err);
+            }
+        } else if (channel === "whatsapp" && appointment.User?.PhoneNumber) {
+            try {
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
+                const countryCode = appointment.User.CountryCode || "91";
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appointment.User.PhoneNumber.replace(/\D/g, "")}`;
+                const components = [
+                    { type: "header", parameters: [{ type: "text", text: hospitalName }] },
+                    { type: "body", parameters: [{ type: "text", text: patientName }, { type: "text", text: hospitalName }] },
+                    { type: "button", sub_type: "url", index: 0, parameters: [{ type: "text", text: shareToken }] }
+                ];
+                await whatsappService.sendTemplateMessage(normalizedPhone, "medical_patient_documents", "en", components);
+            } catch (err) {
+                console.error("[PostVisitService] WhatsApp error:", err);
+                throw err;
+            }
+        } else if (channel === "sms" && appointment.User?.PhoneNumber) {
+            try {
+                const { smsService } = await import("../Common/sms.service.js");
+                const countryCode = appointment.User.CountryCode || "91";
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appointment.User.PhoneNumber.replace(/\D/g, "")}`;
+                const message = `Hello ${patientName}, your medical documents from ${hospitalName} are ready. View them here: ${shareLinkUrl}`;
+                await smsService.sendSMS(normalizedPhone, message);
+            } catch (err) {
+                console.error("[PostVisitService] SMS error:", err);
+                throw err;
+            }
+        }
+
+        return {
+            success: true,
+            shareToken: shareLink.ShareToken,
+            shareLink: shareLink.ShareLink,
+            appointmentId,
+            documentCount: documentRecords.length
+        };
+    }
+
+    /**
      * Process clinical documents generated in frontend:
      * 1. Upload to Azure Blob Storage
      * 2. Track each in PostVisitDocuments table
@@ -206,10 +361,9 @@ export class PostVisitService {
         const shareLink = await appointmentShareLinkRepository.findByToken(token);
         if (!shareLink) throw new Error("Invalid or expired share link");
 
-        const documents = await postVisitDocumentRepository.findByAppointment(Number(shareLink.AppointmentId));
-        
-        // Filter by ShareLinkId to be extra secure
-        return documents.filter(d => Number(d.ShareLinkId) === Number(shareLink.Id));
+        // Return ALL post-visit documents for this appointment
+        // (no ShareLinkId filter — the token itself already secures access to this appointment)
+        return await postVisitDocumentRepository.findByAppointment(Number(shareLink.AppointmentId));
     }
 
     private getDocumentTypeFromFileName(fileName: string): string {

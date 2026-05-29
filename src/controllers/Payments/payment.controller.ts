@@ -144,6 +144,19 @@ export class PaymentController {
         }
     }
 
+    async getPaymentByAppointment(req: Request, res: Response) {
+        try {
+            const appointmentId = parseInt(req.params.appointmentId as string);
+            if (!appointmentId) {
+                return res.status(400).json(ApiResponse.error("Appointment ID is required."));
+            }
+            const result = await paymentService.getPaymentByAppointment(appointmentId);
+            return res.json(ApiResponse.success(result, "Payment details retrieved successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async getHospitalPaymentConfiguration(req: Request, res: Response) {
         try {
             const hospitalId = parseInt(req.params.hospitalId as string);

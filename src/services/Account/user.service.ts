@@ -76,6 +76,8 @@ export class UserService implements IUserService {
         if (data.Gender) newUser.Gender = data.Gender;
         if (data.DateOfBirth) newUser.DateOfBirth = data.DateOfBirth;
         if (data.BloodGroup) newUser.BloodGroup = data.BloodGroup;
+        if (data.Height) newUser.Height = data.Height;
+        if (data.Weight) newUser.Weight = data.Weight;
 
         newUser.Status = true;
         newUser.IsDeleted = false;
@@ -230,6 +232,8 @@ export class UserService implements IUserService {
         user.Relation = data.Relation ?? "Admin";
         user.ParentUserId = data.ParentUserId ?? null;
         user.Status = data.Status !== undefined ? data.Status : true;
+        user.Height = data.Height ?? null;
+        user.Weight = data.Weight ?? null;
 
         // 4. Update addresses
         let permData = data.PermanentAddress;

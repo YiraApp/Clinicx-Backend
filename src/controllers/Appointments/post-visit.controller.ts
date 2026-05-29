@@ -4,6 +4,40 @@ import { ApiResponse } from "../../utils/response.utils.js";
 
 export class PostVisitController {
     /**
+     * Share existing blob URL documents directly (no PDF generation needed)
+     */
+    async shareDirect(req: Request, res: Response) {
+        try {
+            const appointmentId = parseInt(req.params.appointmentId as string);
+            if (isNaN(appointmentId)) {
+                return res.status(400).json(ApiResponse.error("Invalid Appointment ID."));
+            }
+
+            const { channel, documents, patientId, createdBy } = req.body;
+
+            if (!channel || !["whatsapp", "email", "sms"].includes(channel)) {
+                return res.status(400).json(ApiResponse.error("Valid channel (whatsapp/email/sms) is required."));
+            }
+
+            if (!documents || !Array.isArray(documents) || documents.length === 0) {
+                return res.status(400).json(ApiResponse.error("At least one document is required."));
+            }
+
+            const result = await postVisitService.shareDirectDocuments(appointmentId, {
+                channel,
+                documents,
+                patientId,
+                createdBy
+            });
+
+            return res.json(ApiResponse.success(result, `Documents shared via ${channel} successfully.`));
+        } catch (error: any) {
+            console.error("Error in PostVisitController (shareDirect):", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
      * Upload clinical documents and generate a share link
      */
     async uploadDocuments(req: Request, res: Response) {

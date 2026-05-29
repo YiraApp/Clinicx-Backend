@@ -43,7 +43,15 @@ export class ClinicalSummaryService {
         const baseUrl = process.env.PATIENT_PORTAL_URL || "https://patient.clinicx.ai";
         const shareLink = `${baseUrl}/view-records?token=${shareToken}`;
 
-        // 3. Send Email if requested
+        // 3. Build document list for email (all uploaded documents for this appointment)
+        const documentLinks = (summary.documents || []).map((doc: any) => ({
+            name: doc.OriginalFileName || doc.FileName,
+            url: doc.BlobUrl,
+            category: doc.DocumentCategory,
+            type: doc.DocumentType
+        }));
+
+        // 4. Send Email if requested
         if (data.channels.email && data.email) {
             const templateData = {
                 PatientName: `${summary.appointment.User.FirstName} ${summary.appointment.User.LastName}`,
@@ -55,12 +63,17 @@ export class ClinicalSummaryService {
                     month: "short",
                     year: "numeric"
                 }),
-                ShareLink: shareLink
+                ShareLink: shareLink,
+                ClinicalNotesCount: (summary.clinicalNotes || []).length,
+                MedicalRecordsCount: (summary.medicalRecords || []).length,
+                PrescriptionsCount: (summary.prescriptions || []).length,
+                DocumentsCount: documentLinks.length,
+                Documents: documentLinks
             };
 
             await mailService.sendDynamicEmail("POST_VISIT_MEDICAL_RECORDS", data.email, templateData);
             
-            // 4. Log PostVisitDocument
+            // 5. Log PostVisitDocument for each uploaded document + the summary bundle
             await postVisitDocumentRepository.create({
                 AppointmentId: data.appointmentId,
                 PatientId: data.patientId,
@@ -68,7 +81,7 @@ export class ClinicalSummaryService {
                 HospitalId: summary.appointment.HospitalId,
                 DocumentType: "SUMMARY_BUNDLE",
                 FileName: `Summary_${data.appointmentId}.pdf`,
-                BlobUrl: shareLink, // Link to the portal view
+                BlobUrl: shareLink,
                 SentOnEmail: true,
                 EmailSentTo: data.email,
                 EmailSentAt: new Date(),
@@ -77,9 +90,38 @@ export class ClinicalSummaryService {
                 IsPrimaryDocument: true,
                 Status: "ACTIVE"
             });
+
+            // Log each individual document as sent
+            for (const doc of summary.documents || []) {
+                await postVisitDocumentRepository.create({
+                    AppointmentId: data.appointmentId,
+                    PatientId: data.patientId,
+                    OrganizationId: summary.appointment.OrgId,
+                    HospitalId: summary.appointment.HospitalId,
+                    DocumentType: doc.DocumentType || "DOCUMENT",
+                    FileName: doc.OriginalFileName || doc.FileName,
+                    BlobUrl: doc.BlobUrl,
+                    SentOnEmail: true,
+                    EmailSentTo: data.email,
+                    EmailSentAt: new Date(),
+                    ShareLinkId: shareLinkRecord.Id,
+                    CreatedBy: data.createdBy,
+                    IsPrimaryDocument: false,
+                    Status: "ACTIVE"
+                });
+            }
         }
         
-        return { success: true, shareLink };
+        return {
+            success: true,
+            shareLink,
+            summary: {
+                clinicalNotesCount: (summary.clinicalNotes || []).length,
+                medicalRecordsCount: (summary.medicalRecords || []).length,
+                prescriptionsCount: (summary.prescriptions || []).length,
+                documentsCount: documentLinks.length
+            }
+        };
     }
 }
 

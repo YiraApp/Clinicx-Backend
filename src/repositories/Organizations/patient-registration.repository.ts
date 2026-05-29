@@ -79,15 +79,16 @@ export class PatientRegistrationRepository {
             insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
         }
 
-        // Batch-load completed appointment counts for each patient in the current org/hospital context
-        const appointmentCounts = new Map<string, number>();
+        // Batch-load total and completed appointment counts for each patient in the current org/hospital context
+        const totalVisitsMap = new Map<string, number>();
+        const completedVisitsMap = new Map<string, number>();
         if (userIds.length > 0) {
             const appointmentQuery = AppDataSource.getRepository(Appointment)
                 .createQueryBuilder("a")
                 .select("UPPER(a.UserId)", "userId")
-                .addSelect("COUNT(*)", "count")
-                .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) })
-                .andWhere("LOWER(a.Status) = LOWER(:status)", { status: AppointmentStatus.Completed });
+                .addSelect("COUNT(*)", "totalVisits")
+                .addSelect("SUM(CASE WHEN LOWER(a.Status) = LOWER(:completedStatus) THEN 1 ELSE 0 END)", "completedVisits")
+                .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) });
 
             if (filters.organizationId) {
                 appointmentQuery.andWhere("a.OrgId = :orgId", { orgId: filters.organizationId });
@@ -97,10 +98,40 @@ export class PatientRegistrationRepository {
             }
 
             const appointmentsRaw = await appointmentQuery
+                .setParameter("completedStatus", AppointmentStatus.Completed)
                 .groupBy("UPPER(a.UserId)")
                 .getRawMany();
             appointmentsRaw.forEach((row: any) => {
-                appointmentCounts.set((row.userId || "").toUpperCase(), parseInt(row.count, 10) || 0);
+                const key = (row.userId || "").toUpperCase();
+                totalVisitsMap.set(key, parseInt(row.totalVisits, 10) || 0);
+                completedVisitsMap.set(key, parseInt(row.completedVisits, 10) || 0);
+            });
+        }
+
+        // Batch-load next future appointment for each patient
+        const nextAppointmentMap = new Map<string, string | null>();
+        if (userIds.length > 0) {
+            const nextAptQuery = AppDataSource.getRepository(Appointment)
+                .createQueryBuilder("a")
+                .select("UPPER(a.UserId)", "userId")
+                .addSelect("MIN(a.AppointmentDate)", "nextDate")
+                .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) })
+                .andWhere("a.AppointmentDate >= CAST(GETDATE() AS DATE)")
+                .andWhere("LOWER(a.Status) NOT IN (:...cancelledStatuses)", { cancelledStatuses: ["cancelled", "noshow", "completed"] });
+
+            if (filters.organizationId) {
+                nextAptQuery.andWhere("a.OrgId = :orgId", { orgId: filters.organizationId });
+            }
+            if (filters.hospitalId) {
+                nextAptQuery.andWhere("a.HospitalId = :hospId", { hospId: filters.hospitalId });
+            }
+
+            const nextAptRaw = await nextAptQuery
+                .groupBy("UPPER(a.UserId)")
+                .getRawMany();
+            nextAptRaw.forEach((row: any) => {
+                const key = (row.userId || "").toUpperCase();
+                nextAppointmentMap.set(key, row.nextDate || null);
             });
         }
 
@@ -144,6 +175,7 @@ export class PatientRegistrationRepository {
 
         const patients = registrations.map(pr => {
             const ins = insuranceMap.get(pr.UserId.toUpperCase());
+            const userIdKey = pr.UserId.toUpperCase();
             return {
                 id: pr.Id,
                 userId: pr.UserId,
@@ -175,6 +207,9 @@ export class PatientRegistrationRepository {
                 hospitalCode: pr.Hospital?.HospitalCode || pr.User?.UserRoles?.[0]?.Hospital?.HospitalCode,
                 roleId: pr.User?.UserRoles?.[0]?.RoleId,
                 roleName: "Patient",
+                totalVisits: totalVisitsMap.get(userIdKey) || 0,
+                completedVisits: completedVisitsMap.get(userIdKey) || 0,
+                nextAppointment: nextAppointmentMap.get(userIdKey) || null,
                 createdAt: pr.CreatedAt,
             };
         });

@@ -37,6 +37,8 @@ export interface UpdateUserRequest {
     Landmark?: string | undefined;
     Country?: string | undefined;
     
+    Height?: number | undefined;
+    Weight?: number | undefined;
     EmergencyContactName?: string | undefined;
     EmergencyContactPhone?: string | undefined;
     workspaces: UserRoleAssignment[];

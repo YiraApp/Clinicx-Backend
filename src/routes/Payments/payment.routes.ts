@@ -12,6 +12,7 @@ paymentRouter.get("/lookup/:transactionId", paymentController.lookupTransaction.
 paymentRouter.get("/billing", paymentController.getBillingList.bind(paymentController));
 paymentRouter.get("/bills", paymentController.getBillsList.bind(paymentController));
 paymentRouter.get("/detail/:paymentId", paymentController.getPaymentDetail.bind(paymentController));
+paymentRouter.get("/by-appointment/:appointmentId", paymentController.getPaymentByAppointment.bind(paymentController));
 paymentRouter.get("/hospital-configuration/:hospitalId", paymentController.getHospitalPaymentConfiguration.bind(paymentController));
 paymentRouter.post("/hospital-configuration", paymentController.saveHospitalPaymentConfiguration.bind(paymentController));
 

@@ -46,7 +46,7 @@ export class AppointmentRepository {
             .getMany();
     }
 
-    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string }): Promise<Appointment[]> {
+    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string, startDate?: string, endDate?: string, page?: number, pageSize?: number }): Promise<{ data: Appointment[], total: number }> {
         const queryBuilder = this.repo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")
             .leftJoinAndSelect("appointment.Doctor", "doctor")
@@ -63,17 +63,32 @@ export class AppointmentRepository {
             queryBuilder.andWhere("appointment.UserId = :userId", { userId: filters.userId });
         }
         if (filters.date) {
-            // Use CAST to ensure we compare only the date part in MSSQL
             queryBuilder.andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date: filters.date });
+        }
+        if (filters.startDate) {
+            queryBuilder.andWhere("CAST(appointment.AppointmentDate AS DATE) >= :startDate", { startDate: filters.startDate });
+        }
+        if (filters.endDate) {
+            queryBuilder.andWhere("CAST(appointment.AppointmentDate AS DATE) <= :endDate", { endDate: filters.endDate });
         }
         if (filters.status) {
             queryBuilder.andWhere("appointment.Status = :status", { status: filters.status });
         }
 
-        return await queryBuilder
+        const total = await queryBuilder.getCount();
+
+        const page = filters.page || 1;
+        const pageSize = filters.pageSize || 50;
+        const skip = (page - 1) * pageSize;
+
+        const data = await queryBuilder
             .orderBy("appointment.AppointmentDate", "DESC")
             .addOrderBy("appointment.StartTime", "ASC")
+            .skip(skip)
+            .take(pageSize)
             .getMany();
+
+        return { data, total };
     }
 
     async updateStatus(id: number, status: string): Promise<void> {

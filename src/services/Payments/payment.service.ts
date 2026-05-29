@@ -573,6 +573,36 @@ export class PaymentService {
         };
      }
 
+    async getPaymentByAppointment(appointmentId: number) {
+        const payment = await paymentRepository.findByAppointmentId(appointmentId);
+        if (!payment) return null;
+
+        return {
+            paymentId: payment.PaymentId,
+            transactionId: payment.TransactionId,
+            receiptNumber: payment.ReceiptNumber,
+            amount: payment.Amount,
+            currency: payment.Currency,
+            status: payment.Status,
+            paymentMethod: payment.PaymentMethod,
+            paymentGateway: payment.PaymentGateway,
+            transactionDate: payment.TransactionDate,
+            createdAt: payment.CreatedAt,
+            patientId: payment.PatientId,
+            patientName: payment.Patient ? `${payment.Patient.FirstName} ${payment.Patient.LastName}` : "—",
+            patientPhone: payment.Patient?.PhoneNumber || "—",
+            providerId: payment.ProviderId,
+            providerName: payment.Provider ? `Dr. ${payment.Provider.FirstName} ${payment.Provider.LastName}` : "—",
+            appointmentId: payment.AppointmentId,
+            appointmentDate: payment.Appointment?.AppointmentDate || null,
+            billStatus: payment.AppointmentBill?.BillStatus || null,
+            billTotal: payment.AppointmentBill?.TotalAmount || null,
+            billPaid: payment.AppointmentBill?.PaidAmount || null,
+            billDue: payment.AppointmentBill?.DueAmount || null,
+            failureReason: payment.FailureReason
+        };
+     }
+
     async getHospitalPaymentConfiguration(hospitalId: number) {
         const repo = AppDataSource.getRepository(HospitalPaymentConfiguration);
         let config = await repo.findOne({

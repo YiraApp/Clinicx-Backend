@@ -131,8 +131,8 @@ export class AppointmentService {
         return await this.attachMedicalAndInsurance(appointments);
     }
 
-    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string }) {
-        const appointments = await appointmentRepository.getAppointments(filters);
+    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string, startDate?: string, endDate?: string, page?: number, pageSize?: number }) {
+        const { data: appointments, total } = await appointmentRepository.getAppointments(filters);
         const enriched = await this.attachMedicalAndInsurance(appointments);
         const summary = {
             totalAppointments: appointments.length,
@@ -148,7 +148,7 @@ export class AppointmentService {
             else if (s === "paymentpending") summary.totalPaymentPending++;
             else if (s === "completed") summary.totalCompleted++;
         }
-        return { data: enriched, summary };
+        return { data: enriched, summary, total, page: filters.page || 1, pageSize: filters.pageSize || 50 };
     }
 
     async cancelAppointment(appointmentId: number, slotId: number) {

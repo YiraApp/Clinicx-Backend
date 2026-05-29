@@ -32,6 +32,8 @@ export interface CreateUserRequest {
     LoginURL?: string | undefined;
     IsMobileVerified?: boolean | undefined;
     IsEmailVerified?: boolean | undefined;
+    Height?: number | undefined;
+    Weight?: number | undefined;
     
     PermanentAddress?: AddressDTO | undefined;
     TemporaryAddress?: AddressDTO | undefined;

@@ -19,13 +19,21 @@ export class AppointmentController {
             const userId = req.query.userId ? String(req.query.userId) : undefined;
             const date = req.query.date ? String(req.query.date) : undefined;
             const status = req.query.status ? String(req.query.status) : undefined;
+            const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+            const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+            const page = req.query.page ? parseInt(String(req.query.page)) : undefined;
+            const pageSize = req.query.pageSize ? parseInt(String(req.query.pageSize)) : undefined;
 
-            const { data, summary } = await appointmentService.getAppointments({ orgId, hospitalId, userId, date, status });
+            const { data, summary, total, page: currentPage, pageSize: currentPageSize } = await appointmentService.getAppointments({ orgId, hospitalId, userId, date, status, startDate, endDate, page, pageSize });
             return res.json({
                 status: true,
                 message: "Success",
                 summary,
-                data
+                data,
+                total,
+                page: currentPage,
+                pageSize: currentPageSize,
+                totalPages: Math.ceil(total / currentPageSize)
             });
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));

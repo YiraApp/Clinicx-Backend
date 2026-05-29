@@ -57,7 +57,7 @@ export class OTPService {
         if (isEmail) {
             user = await userRepository.findByEmail(finalContact);
         } else {
-            user = await userRepository.findPrimaryByPhone(finalContact);
+            user = await userRepository.findByPhone(finalContact);
         }
 
         // Create OTP record in repository
@@ -213,25 +213,41 @@ export class OTPService {
         let verifiedField: 'email' | 'mobile' = isEmail ? 'email' : 'mobile';
 
         if (purpose === OTPPurpose.VERIFICATION) {
-            let user;
-            if (isEmail) {
-                user = await userRepository.findByEmail(lookupContact);
-                if (user && !user.IsEmailVerified) {
-                    user.IsEmailVerified = true;
-                    user.UpdatedAt = new Date();
-                    user.UpdatedBy = "SYSTEM_OTP";
-                    await userRepository.save(user);
+            try {
+                let userId: string | null = null;
+                if (isEmail) {
+                    const user = await userRepository.findByEmail(lookupContact);
+                    if (user) {
+                        userId = user.Id;
+                        if (!user.IsEmailVerified) {
+                            await userRepository.updateUser(userId, { IsEmailVerified: true });
+                            console.log(`[OTP] Email verified for user ${userId}`);
+                        } else {
+                            console.log(`[OTP] Email already verified for user ${userId}`);
+                        }
+                    } else {
+                        console.warn(`[OTP] No user found with email: ${lookupContact}`);
+                    }
+                } else {
+                    // Only update the primary user — sub-accounts share the same phone but should not be marked verified
+                    let user = await userRepository.findPrimaryByPhone(lookupContact);
+                    if (!user && countryCode) {
+                        user = await userRepository.findPrimaryByPhone(countryCode + lookupContact);
+                    }
+                    if (user) {
+                        userId = user.Id;
+                        if (!user.IsMobileVerified) {
+                            await userRepository.updateUser(userId, { IsMobileVerified: true });
+                            console.log(`[OTP] Mobile verified for primary user ${userId}`);
+                        } else {
+                            console.log(`[OTP] Mobile already verified for primary user ${userId}`);
+                        }
+                    } else {
+                        console.warn(`[OTP] No primary user found with phone: ${lookupContact}`);
+                    }
                 }
-            } else {
-                // Look up user by the 10-digit number
-                user = await userRepository.findPrimaryByPhone(lookupContact);
-
-                if (user && !user.IsMobileVerified) {
-                    user.IsMobileVerified = true;
-                    user.UpdatedAt = new Date();
-                    user.UpdatedBy = "SYSTEM_OTP";
-                    await userRepository.save(user);
-                }
+            } catch (updateError) {
+                console.error(`[OTP] Failed to update verification status:`, updateError);
             }
         }
 

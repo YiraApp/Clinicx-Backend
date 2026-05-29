@@ -31,6 +31,14 @@ export class PaymentRepository {
         });
     }
 
+    async findByAppointmentId(appointmentId: number): Promise<Payment | null> {
+        return await this.repo.findOne({
+            where: { AppointmentId: appointmentId, IsDeleted: false },
+            relations: ["Patient", "Provider", "Appointment", "AppointmentBill"],
+            order: { CreatedAt: "DESC" }
+        });
+    }
+
     async update(id: string, data: Partial<Payment>): Promise<void> {
         await this.repo.update(id, data);
     }
