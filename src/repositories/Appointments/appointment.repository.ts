@@ -46,7 +46,7 @@ export class AppointmentRepository {
             .getMany();
     }
 
-    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, date?: string, status?: string, startDate?: string, endDate?: string, page?: number, pageSize?: number }): Promise<{ data: Appointment[], total: number }> {
+    async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, doctorId?: string, date?: string, status?: string, startDate?: string, endDate?: string, page?: number, pageSize?: number }): Promise<{ data: Appointment[], total: number }> {
         const queryBuilder = this.repo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")
             .leftJoinAndSelect("appointment.Doctor", "doctor")
@@ -61,6 +61,9 @@ export class AppointmentRepository {
         }
         if (filters.userId) {
             queryBuilder.andWhere("appointment.UserId = :userId", { userId: filters.userId });
+        }
+        if (filters.doctorId) {
+            queryBuilder.andWhere("appointment.DoctorId = :doctorId", { doctorId: filters.doctorId });
         }
         if (filters.date) {
             queryBuilder.andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date: filters.date });

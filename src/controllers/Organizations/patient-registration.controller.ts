@@ -73,6 +73,7 @@ export class PatientRegistrationController {
             const search = req.query.search as string | undefined;
             const gender = req.query.gender as string | undefined;
             const status = req.query.status as string | undefined;
+            const doctorId = req.query.doctorId as string | undefined;
 
             if (!orgId) {
                 return res.status(400).json(ApiResponse.error("Organization ID is required."));
@@ -88,7 +89,8 @@ export class PatientRegistrationController {
                 hospitalId: hospitalId,
                 search: search,
                 gender: gender,
-                status: statusBool
+                status: statusBool,
+                doctorId: doctorId
             });
 
 

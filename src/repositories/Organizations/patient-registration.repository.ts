@@ -60,6 +60,13 @@ export class PatientRegistrationRepository {
             );
         }
 
+        if (filters.doctorId) {
+            query.andWhere(
+                `EXISTS (SELECT 1 FROM Appointments a WHERE a.UserId = u.Id AND a.DoctorId = :doctorId)`,
+                { doctorId: filters.doctorId }
+            );
+        }
+
 
 
         query.orderBy("pr.CreatedAt", "DESC");
