@@ -27,7 +27,7 @@ export class AppointmentService {
         status?: string;
     }): Promise<Appointment> {
 
-        return await AppDataSource.transaction(async (manager) => {
+        const newAppointment = await AppDataSource.transaction(async (manager) => {
             // 1. Check if slot exists and is available
             const slot = await healthcareProviderScheduleSlotRepository.findById(data.slotId);
             if (!slot) throw new Error("Slot not found.");
@@ -82,6 +82,86 @@ export class AppointmentService {
 
             return appointment;
         });
+
+        // Async task: create meeting redirection and send WhatsApp confirmation
+        try {
+            const enrichedAppointment = await appointmentRepository.findById(newAppointment.Id);
+            if (enrichedAppointment && enrichedAppointment.User?.PhoneNumber) {
+                const appt = enrichedAppointment;
+                const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
+
+                // 1. Create a MeetingRedirection record
+                const redirection = await meetingRedirectionService.createRedirection({
+                    AppointmentId: appt.Id,
+                    PatientId: appt.UserId,
+                    DoctorId: appt.DoctorId,
+                    HospitalId: appt.HospitalId,
+                    OrganizationId: appt.OrgId,
+                    MeetingUrl: appt.MeetingUrl || "",
+                    AppointmentDate: appt.AppointmentDate,
+                    StartTime: appt.StartTime
+                });
+
+                // 2. Format details for WhatsApp
+                const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim();
+                const doctorName = appt.Doctor 
+                    ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
+                    : "N/A";
+                const hospitalName = appt.Hospital?.Name || "our clinic";
+
+                const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
+                    day: "2-digit", month: "short", year: "numeric"
+                });
+                const timeStr = appt.StartTime ? appt.StartTime.slice(0, 5) : "";
+
+                const countryCode = appt.User.CountryCode || "91";
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appt.User.PhoneNumber.replace(/\D/g, "")}`;
+
+                // 3. Select the template based on consultation type
+                const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
+
+                const components: any[] = [
+                    {
+                        type: "header",
+                        parameters: [
+                            { type: "text", text: hospitalName }
+                        ]
+                    }
+                ];
+
+                const bodyParameters = [
+                    { type: "text", text: patientName },
+                    { type: "text", text: doctorName },
+                    { type: "text", text: hospitalName },
+                    { type: "text", text: dateStr },
+                    { type: "text", text: timeStr }
+                ];
+
+                components.push({
+                    type: "body",
+                    parameters: bodyParameters
+                });
+
+                if (appt.IsTeleConsultation) {
+                    components.push({
+                        type: "button",
+                        sub_type: "url",
+                        index: "0",
+                        parameters: [
+                            { type: "text", text: redirection.UrlId }
+                        ]
+                    });
+                }
+
+                await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
+                console.log(`[AppointmentService] WhatsApp appointment notification sent to ${normalizedPhone} using template ${templateName}`);
+            }
+        } catch (err) {
+            console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err);
+        }
+
+        return newAppointment;
     }
 
     async attachMedicalAndInsurance(appointments: Appointment[]) {

@@ -363,15 +363,15 @@ export class DashboardRepository {
                 COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayCheckIns,
                 COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayScheduled,
                 COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as todayWaiting,
-                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as todayPayments,
+                ISNULL(SUM(CASE WHEN CAST(p.TransactionDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND p.Status = 'Success' THEN p.Amount ELSE 0 END), 0) as todayPayments,
                 
                 -- Yesterday's Metrics (IST)
                 COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND a.Status = 'Arrived' THEN 1 END) as yesterdayCheckIns,
                 COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) THEN 1 END) as yesterdayScheduled,
                 COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as yesterdayWaiting,
-                SUM(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND a.Status IN ('Confirmed', 'Arrived', 'InProgress', 'Completed') THEN ISNULL(hp.ConsultationFee, 0) ELSE 0 END) as yesterdayPayments
+                ISNULL(SUM(CASE WHEN CAST(p.TransactionDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND p.Status = 'Success' THEN p.Amount ELSE 0 END), 0) as yesterdayPayments
             FROM Appointments a WITH (NOLOCK)
-            LEFT JOIN HealthcareProviders hp WITH (NOLOCK) ON a.DoctorId = hp.UserId
+            LEFT JOIN Payments p WITH (NOLOCK) ON a.Id = p.AppointmentId AND p.IsDeleted = 0
             LEFT JOIN PatientQueue q WITH (NOLOCK) ON a.Id = q.AppointmentId
             WHERE a.HospitalId = ${hospId} 
             AND a.AppointmentDate >= CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)

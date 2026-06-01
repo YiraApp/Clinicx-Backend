@@ -20,6 +20,7 @@ export class Hospital {
     @Column({ type: "varchar", length: 100, nullable: true })
     HospitalType?: string;
 
+
     @Column({ type: "varchar", length: 255 })
     Name: string;
 

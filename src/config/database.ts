@@ -53,6 +53,7 @@ import { PaymentLog } from "../models/Payments/payment-log.model.js";
 import { HospitalPaymentConfiguration } from "../models/Organizations/hospital-payment-configuration.model.js";
 import { AppointmentBill } from "../models/Payments/appointment-bill.model.js";
 import { AppointmentBillItem } from "../models/Payments/appointment-bill-item.model.js";
+import { MeetingRedirection } from "../models/Appointments/meeting-redirection.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -93,7 +94,8 @@ export const AppDataSource = new DataSource({
         ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
         PrescriptionDiagnosis, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
-        Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem
+        Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem,
+        MeetingRedirection
     ],
     extra: {
         encrypt: true,

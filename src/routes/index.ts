@@ -27,6 +27,7 @@ import patientSummaryRouter from "./Appointments/patient-summary.routes.js";
 import testSMSV2Routes from "./Common/test-sms-v2.routes.js";
 import whatsappRouter from "./Common/whatsapp.routes.js";
 import { paymentRouter } from "./Payments/payment.routes.js";
+import { meetingRedirectionRouter } from "./Appointments/meeting-redirection.routes.js";
 
 
 import { snomedRouter } from "../snomed/snomed.routes.js";
@@ -64,6 +65,7 @@ router.use("/test-sms", testSMSV2Routes);
 router.use("/whatsapp", whatsappRouter);
 router.use("/payments", paymentRouter);
 router.use("/snomed", snomedRouter);
+router.use("/redirections", meetingRedirectionRouter);
 
 
 router.get("/status", (req: any, res: any) => {

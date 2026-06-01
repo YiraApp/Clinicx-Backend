@@ -370,9 +370,15 @@ export class PatientRegistrationService {
         const userRepo = AppDataSource.getRepository(User);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
 
-        // 1. Find primary user(s) matching the search — no role filter, search all users
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+
+        // 1. Find primary user(s) matching the search — patient role only
         const query = userRepo.createQueryBuilder("u")
-            .where("u.IsDeleted = 0");
+            .innerJoin("u.UserRoles", "ur")
+            .where("u.IsDeleted = 0")
+            .andWhere("ur.RoleId = :patientRoleId", { patientRoleId: PATIENT_ROLE_ID })
+            .andWhere("ur.Status = 1")
+            .andWhere("ur.IsDeleted = 0");
 
         const orConditions = [];
         const params: any = {};
@@ -401,10 +407,14 @@ export class PatientRegistrationService {
         const phoneNumbers = [...new Set(matches.map(m => m.PhoneNumber).filter(Boolean))];
         if (phoneNumbers.length === 0) return [];
 
-        // 3. Fetch ALL users with those phone numbers (family group) — no role restriction
+        // 3. Fetch ALL users with those phone numbers (family group) — patient role only
         const allFamilyMembers = await userRepo.createQueryBuilder("u")
+            .innerJoin("u.UserRoles", "ur2")
             .where("u.IsDeleted = 0")
             .andWhere("u.PhoneNumber IN (:...phoneNumbers)", { phoneNumbers })
+            .andWhere("ur2.RoleId = :patientRoleId2", { patientRoleId2: PATIENT_ROLE_ID })
+            .andWhere("ur2.Status = 1")
+            .andWhere("ur2.IsDeleted = 0")
             .getMany();
 
         // 4. Check hospital/org registration for each user
