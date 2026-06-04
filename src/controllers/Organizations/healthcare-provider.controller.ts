@@ -46,7 +46,9 @@ export class HealthcareProviderController {
             const id = parseInt(req.params.id as string);
             if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
 
-            const result = await healthcareProviderService.getDoctorById(id);
+            const userId = req.query.userId as string | undefined;
+
+            const result = await healthcareProviderService.getDoctorById(id, userId);
             if (!result) return res.status(404).json(ApiResponse.error("Doctor not found"));
 
             return res.json(ApiResponse.success(result, "Doctor details fetched successfully."));
@@ -72,6 +74,7 @@ export class HealthcareProviderController {
             const id = parseInt(req.params.id as string);
             const hospitalId = parseInt(req.query.hospitalId as string);
             const { startDate, endDate } = req.query;
+            const userId = req.query.userId as string | undefined;
 
             if (isNaN(id) || isNaN(hospitalId)) {
                 return res.status(400).json(ApiResponse.error("Doctor ID and Hospital ID are required and must be valid numbers"));
@@ -81,7 +84,8 @@ export class HealthcareProviderController {
                 id, 
                 hospitalId, 
                 startDate as string, 
-                endDate as string
+                endDate as string,
+                userId
             );
             return res.json(ApiResponse.success(slots, "Doctor slots fetched successfully."));
         } catch (error: any) {

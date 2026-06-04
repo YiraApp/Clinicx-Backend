@@ -105,14 +105,19 @@ export class HealthcareProviderRepository {
     }
 
 
-    async getDoctorById(id: number): Promise<HealthcareProvider | null> {
-        return await this.repo.createQueryBuilder("hp")
+    async getDoctorById(id: number, userId?: string): Promise<HealthcareProvider | null> {
+        const query = this.repo.createQueryBuilder("hp")
             .leftJoinAndSelect("hp.User", "u")
             .leftJoinAndSelect("u.PermanentAddress", "pa")
             .leftJoinAndSelect("hp.Hospital", "h")
             .leftJoinAndSelect("hp.Availability", "avail", "avail.IsDeleted = 0")
-            .where("hp.Id = :id AND hp.IsDeleted = 0", { id })
-            .getOne();
+            .where("hp.Id = :id AND hp.IsDeleted = 0", { id });
+
+        if (userId) {
+            query.andWhere("hp.UserId = :userId", { userId });
+        }
+
+        return await query.getOne();
     }
 
     async getAllProvidersByUserId(userId: string, organizationId?: number): Promise<HealthcareProvider[]> {

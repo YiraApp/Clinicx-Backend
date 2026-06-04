@@ -4,6 +4,7 @@ import { AppDataSource } from "../../config/database.js";
 import { HealthcareProvider } from "../../models/Organizations/healthcare-provider.model.js";
 import { HealthcareProviderAvailability } from "../../models/Organizations/healthcare-provider-availability.model.js";
 import { roleRepository } from "../../repositories/Account/role.repository.js";
+import { userRoleRepository } from "../../repositories/Account/userrole.repository.js";
 import { healthcareProviderScheduleSlotRepository } from "../../repositories/Organizations/healthcare-provider-schedule-slot.repository.js";
 import { HealthcareProviderScheduleSlot } from "../../models/Organizations/healthcare-provider-schedule-slot.model.js";
 
@@ -24,6 +25,25 @@ export class HealthcareProviderService {
             if (!providerRole) throw new Error("CRITICAL: 'PROVIDER' role not found in database.");
 
             // 3. Sync User Profile and Assign Roles
+            const workspaces = [{
+                roleId: data.roleId || providerRole.Id,
+                organizationId: data.organizationId,
+                hospitalId: data.hospitalId
+            }];
+
+            // Preserve existing active roles to prevent deactivation
+            if (targetUserId) {
+                const existingRoles = await userRoleRepository.findByUserId(targetUserId);
+                for (const role of existingRoles) {
+                    workspaces.push({
+                        userRoleId: role.UserRoleId,
+                        roleId: role.RoleId,
+                        organizationId: role.OrganizationId,
+                        hospitalId: role.HospitalId
+                    });
+                }
+            }
+
             const userResult = await userService.updateUser({
                 Id: targetUserId, // Pass ID if found, otherwise updateUser will create new
                 FirstName: data.firstName,
@@ -32,11 +52,7 @@ export class HealthcareProviderService {
                 PhoneNumber: data.phone,
                 Password: data.password,
                 CountryCode : data.countryCode,
-                workspaces: [{
-                    roleId: data.roleId || providerRole.Id,
-                    organizationId: data.organizationId,
-                    hospitalId: data.hospitalId
-                }]
+                workspaces
             });
 
             // 4. Extract Final User ID directly from update result
@@ -158,9 +174,9 @@ export class HealthcareProviderService {
         };
     }
 
-    async getDoctorById(id: number): Promise<any> {
+    async getDoctorById(id: number, userId?: string): Promise<any> {
         // 1. Fetch the requested provider to get UserId and org context
-        const doctor = await healthcareProviderRepository.getDoctorById(id);
+        const doctor = await healthcareProviderRepository.getDoctorById(id, userId);
         if (!doctor) return null;
 
         // 2. Fetch ALL provider records for this user within the same org
@@ -249,6 +265,15 @@ export class HealthcareProviderService {
 
         return await AppDataSource.transaction(async (manager) => {
             // 1. Update User Profile (Personal Details & Address)
+            // Preserve existing active roles to prevent deactivation
+            const existingRoles = await userRoleRepository.findByUserId(provider.UserId);
+            const workspaces = existingRoles.map(role => ({
+                userRoleId: role.UserRoleId,
+                roleId: role.RoleId,
+                organizationId: role.OrganizationId,
+                hospitalId: role.HospitalId
+            }));
+
             const userUpdateData: any = {
                 Id: provider.UserId,
                 FirstName: data.firstName,
@@ -257,7 +282,8 @@ export class HealthcareProviderService {
                 PhoneNumber: data.phoneNumber,
                 Gender: data.gender,
                 DateOfBirth: data.dateOfBirth && data.dateOfBirth !== "" ? data.dateOfBirth : null,
-                PermanentAddress: data.permanentAddress
+                PermanentAddress: data.permanentAddress,
+                workspaces
             };
 
 
@@ -330,7 +356,11 @@ export class HealthcareProviderService {
         });
     }
 
-    async getDoctorSlots(providerId: number, hospitalId: number, startDate: string, endDate: string): Promise<any> {
+    async getDoctorSlots(providerId: number, hospitalId: number, startDate: string, endDate: string, userId?: string): Promise<any> {
+        if (userId) {
+            const provider = await healthcareProviderRepository.getDoctorById(providerId, userId);
+            if (!provider) throw new Error("Doctor not found or access denied.");
+        }
         const start = new Date(startDate);
         const end = new Date(endDate);
         return await healthcareProviderScheduleSlotRepository.getSlots(providerId, hospitalId, start, end);
@@ -418,12 +448,12 @@ export class HealthcareProviderService {
             while (currentDate <= end) {
                 const dayName = DAYS[currentDate.getDay()];
                 const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
-                // Determine effective templates: use dayTemplates if any, otherwise fallback to default full-day availability
-                const effectiveTemplates = dayTemplates.length > 0 ? dayTemplates : [{
-                    StartTime: "09:00",
-                    EndTime: "17:00",
-                    Status: true // available by default
-                }];
+                // Skip days where the doctor has no availability defined (off days)
+                if (dayTemplates.length === 0) {
+                    currentDate.setDate(currentDate.getDate() + 1);
+                    continue
+                }
+                const effectiveTemplates = dayTemplates;
                 // Use local date parts to avoid timezone shifting YYYY-MM-DD
                 const y = currentDate.getFullYear();
                 const m = String(currentDate.getMonth() + 1).padStart(2, "0");
