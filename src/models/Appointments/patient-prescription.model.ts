@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, Relation } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Relation } from "typeorm/index.js";
+import { User } from "../Account/user.model.js";
 import { PrescriptionDiagnosis } from "./prescription-diagnosis.model.js";
 import { PrescriptionMedication } from "./prescription-medication.model.js";
 
@@ -16,8 +17,12 @@ export class PatientPrescription {
     @Column({ type: "nvarchar", length: 255 })
     PatientId: string;
 
-    @Column({ type: "nvarchar", length: 255, nullable: true })
+    @Column({ type: "uniqueidentifier", nullable: true })
     DoctorId?: string;
+
+    @ManyToOne(() => User)
+    @JoinColumn({ name: "DoctorId" })
+    Doctor?: Relation<User>;
 
     @Column({ type: "datetime", nullable: true, default: () => "GETDATE()" })
     Date?: Date;

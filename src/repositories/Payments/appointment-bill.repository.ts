@@ -166,6 +166,7 @@ export class AppointmentBillRepository {
         orgId?: number;
         hospitalId?: number;
         providerId?: string;
+        patientId?: string;
         billStatus?: string;
         startDate?: string;
         endDate?: string;
@@ -173,7 +174,7 @@ export class AppointmentBillRepository {
         page?: number;
         limit?: number;
     }): Promise<{ data: AppointmentBill[]; total: number; totalCollected: number; totalPending: number }> {
-        const { orgId, hospitalId, providerId, billStatus, startDate, endDate, search, page = 1, limit = 20 } = filters;
+        const { orgId, hospitalId, providerId, patientId, billStatus, startDate, endDate, search, page = 1, limit = 20 } = filters;
 
         const qb = this.repo.createQueryBuilder("b")
             .leftJoinAndSelect("b.Patient", "patient")
@@ -187,6 +188,7 @@ export class AppointmentBillRepository {
         if (hospitalId) qb.andWhere("b.HospitalId = :hospitalId", { hospitalId });
         if (orgId) qb.andWhere("appointment.OrgId = :orgId", { orgId });
         if (providerId) qb.andWhere("b.ProviderId = :providerId", { providerId });
+        if (patientId) qb.andWhere("b.PatientId = :patientId", { patientId });
         if (billStatus) qb.andWhere("b.BillStatus = :billStatus", { billStatus });
         if (startDate) qb.andWhere("b.CreatedAt >= :startDate", { startDate: new Date(startDate) });
         if (endDate) {
@@ -217,6 +219,7 @@ export class AppointmentBillRepository {
         if (hospitalId) aggQb.andWhere("b.HospitalId = :hospitalId", { hospitalId });
         if (orgId) aggQb.andWhere("appointment.OrgId = :orgId", { orgId });
         if (providerId) aggQb.andWhere("b.ProviderId = :providerId", { providerId });
+        if (patientId) aggQb.andWhere("b.PatientId = :patientId", { patientId });
         if (startDate) aggQb.andWhere("b.CreatedAt >= :startDate", { startDate: new Date(startDate) });
         if (endDate) {
             const end = new Date(endDate);

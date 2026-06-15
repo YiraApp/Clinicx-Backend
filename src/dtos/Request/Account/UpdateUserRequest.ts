@@ -42,4 +42,5 @@ export interface UpdateUserRequest {
     EmergencyContactName?: string | undefined;
     EmergencyContactPhone?: string | undefined;
     workspaces: UserRoleAssignment[];
+    revokeTokens?: boolean | undefined;
 }

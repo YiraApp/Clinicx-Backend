@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from "uuid";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { patientRegistrationRepository } from "../../repositories/Organizations/patient-registration.repository.js";
 import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
@@ -129,6 +130,7 @@ export class PatientRegistrationService {
         const { userRegistrationLinkRepository } = await import("../../repositories/Organizations/user-registration-link.repository.js");
         
         const regLink = new UserRegistrationLink();
+        regLink.Token = uuidv4().toUpperCase();
         regLink.Email = email ?? null;
         regLink.PhoneNumber = phone ?? null;
         regLink.CountryCode = countryCode ?? "91";
@@ -204,7 +206,7 @@ export class PatientRegistrationService {
                         sub_type: "url",
                         index: 0,
                         parameters: [
-                            { type: "text", text: link }                      // Dynamic URL for the button
+                            { type: "text", text: savedLink.Token }           // Only the token — WhatsApp appends to template's URL prefix
                         ]
                     }
                 ];

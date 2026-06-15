@@ -19,14 +19,15 @@ export class PatientPrescriptionRepository {
 
         return await this.repo.find({
             where,
-            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days"],
+            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"],
             order: { CreatedAt: "DESC" }
         });
     }
 
     async findById(id: string): Promise<PatientPrescription | null> {
         return await this.repo.findOne({
-            where: { Id: id }
+            where: { Id: id },
+            relations: ["Doctor"]
         });
     }
 
@@ -37,7 +38,7 @@ export class PatientPrescriptionRepository {
 
         return await this.repo.find({
             where,
-            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days"],
+            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"],
             order: { CreatedAt: "DESC" }
         });
     }

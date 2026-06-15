@@ -25,7 +25,7 @@ export class HealthcareProviderService {
             if (!providerRole) throw new Error("CRITICAL: 'PROVIDER' role not found in database.");
 
             // 3. Sync User Profile and Assign Roles
-            const workspaces = [{
+            const workspaces: any[] = [{
                 roleId: data.roleId || providerRole.Id,
                 organizationId: data.organizationId,
                 hospitalId: data.hospitalId
@@ -52,7 +52,10 @@ export class HealthcareProviderService {
                 PhoneNumber: data.phone,
                 Password: data.password,
                 CountryCode : data.countryCode,
-                workspaces
+                Gender: data.gender,
+                DateOfBirth: data.dateOfBirth && data.dateOfBirth !== "" ? data.dateOfBirth : null,
+                workspaces,
+                revokeTokens: false
             });
 
             // 4. Extract Final User ID directly from update result
@@ -297,7 +300,7 @@ export class HealthcareProviderService {
                 userUpdateData.Country = data.country;
             }
 
-            await userService.updateUser(userUpdateData);
+            await userService.updateUser({ ...userUpdateData, revokeTokens: false });
 
             // 2. Update Provider Profile (Professional Details)
             const providerUpdateData: Partial<HealthcareProvider> = {
@@ -361,12 +364,14 @@ export class HealthcareProviderService {
             const provider = await healthcareProviderRepository.getDoctorById(providerId, userId);
             if (!provider) throw new Error("Doctor not found or access denied.");
         }
-        const start = new Date(startDate);
-        const end = new Date(endDate);
+        const [sy, sm, sd] = startDate.split("-").map(Number);
+        const [ey, em, ed] = endDate.split("-").map(Number);
+        const start = new Date(sy, sm - 1, sd);
+        const end = new Date(ey, em - 1, ed);
         return await healthcareProviderScheduleSlotRepository.getSlots(providerId, hospitalId, start, end);
     }
 
-    async generateSlotsForDateRange(providerId: number, hospitalId: number, startDate: string, endDate: string, slotDuration: number = 15, overwrite: boolean = false): Promise<any> {
+    async generateSlotsForDateRange(providerId: number, hospitalId: number, startDate: string, endDate: string, slotDuration: number = 15, buffer: number = 0, overwrite: boolean = false): Promise<any> {
         const provider = await healthcareProviderRepository.getDoctorById(providerId);
         if (!provider) throw new Error("Doctor not found.");
 
@@ -444,12 +449,15 @@ export class HealthcareProviderService {
             // 3. Generate new slots
             const newSlots: HealthcareProviderScheduleSlot[] = [];
             let currentDate = new Date(start);
+            const isSingleDay = startDate === endDate;
 
             while (currentDate <= end) {
                 const dayName = DAYS[currentDate.getDay()];
                 const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
-                // Skip days where the doctor has no availability defined (off days)
                 if (dayTemplates.length === 0) {
+                    if (isSingleDay) {
+                        throw new Error("DOCTOR_NOT_AVAILABLE_ON_DAY");
+                    }
                     currentDate.setDate(currentDate.getDate() + 1);
                     continue
                 }
@@ -502,7 +510,7 @@ export class HealthcareProviderService {
                             newSlots.push(slot);
                         }
 
-                        currentSlotMinutes += slotDuration;
+                        currentSlotMinutes += slotDuration + buffer;
                     }
                 });
 
@@ -535,6 +543,15 @@ export class HealthcareProviderService {
         today.setHours(0, 0, 0, 0);
         if (targetDate < today) {
             throw new Error("Cannot edit slots for previous days.");
+        }
+
+        // 2. Check if doctor has weekly availability for this day of the week
+        const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+        const dayName = DAYS[targetDate.getDay()];
+        const weeklyAvailability = provider.Availability || [];
+        const hasAvailability = weeklyAvailability.some((a: any) => a.DayOfWeek === dayName && !a.IsDeleted);
+        if (!hasAvailability) {
+            throw new Error("DOCTOR_NOT_AVAILABLE_ON_DAY");
         }
 
         return await AppDataSource.transaction(async (manager) => {

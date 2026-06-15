@@ -97,7 +97,7 @@ export class HealthcareProviderController {
         try {
             const id = parseInt(req.params.id as string);
             const hospitalId = parseInt(req.body.hospitalId as string);
-            const { startDate, endDate, slotDuration, overwrite } = req.body;
+            const { startDate, endDate, slotDuration, buffer, overwrite } = req.body;
 
             if (isNaN(id) || isNaN(hospitalId) || !startDate || !endDate) {
                 return res.status(400).json(ApiResponse.error("Missing or invalid parameters: id, hospitalId, startDate, endDate must be valid"));
@@ -109,6 +109,7 @@ export class HealthcareProviderController {
                 startDate, 
                 endDate,
                 slotDuration ? Number(slotDuration) : 15,
+                buffer ? Number(buffer) : 0,
                 overwrite === true || overwrite === 'true'
             );
             return res.json(ApiResponse.success(result, "Slots generated successfully."));

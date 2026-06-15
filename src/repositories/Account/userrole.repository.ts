@@ -17,7 +17,8 @@ export class UserRoleRepository implements IUserRoleRepository {
 
     async findAllByUserId(userId: string): Promise<UserRole[]> {
         return await this.repo.find({
-            where: { UserId: userId, IsDeleted: false }
+            where: { UserId: userId, IsDeleted: false },
+            relations: ["Role", "Organization", "Hospital"]
         });
     }
 

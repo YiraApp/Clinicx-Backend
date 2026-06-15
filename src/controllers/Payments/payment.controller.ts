@@ -75,11 +75,12 @@ export class PaymentController {
 
     async getBillsList(req: Request, res: Response) {
         try {
-            const { orgId, hospitalId, providerId, billStatus, startDate, endDate, search, page, limit } = req.query;
+            const { orgId, hospitalId, providerId, patientId, billStatus, startDate, endDate, search, page, limit } = req.query;
             const result = await paymentService.getBillsList({
                 orgId: orgId ? parseInt(orgId as string) : undefined,
                 hospitalId: hospitalId ? parseInt(hospitalId as string) : undefined,
                 providerId: providerId as string | undefined,
+                patientId: patientId as string | undefined,
                 billStatus: billStatus as string | undefined,
                 startDate: startDate as string | undefined,
                 endDate: endDate as string | undefined,

@@ -330,7 +330,11 @@ export class UserService implements IUserService {
             await userRoleRepository.saveAll(rolesToUpdate);
 
             // Revoke all existing sessions to force immediate role reflection on all devices
-            await tokenRepository.revokeAllUserTokens(user.Id);
+            if (data.revokeTokens !== false) {
+                await tokenRepository.revokeAllUserTokens(user.Id);
+            } else {
+                console.log(`[UserService] Skipping token revocation for user ${user.Id} because revokeTokens=false`);
+            }
 
             // Only notify for roles that are currently active (newly assigned or reactivated)
             const activeNewRoles = rolesToUpdate.filter(r => r.Status);
@@ -386,6 +390,18 @@ export class UserService implements IUserService {
         const isHealthcareProvider = await userRoleRepository.findByUserIdAndRoleId(primaryUser.Id, providerRoleId);
         const roles = await userRoleRepository.findAllByUserId(primaryUser.Id);
 
+        const providerAssignments = roles
+            .filter(r => r.RoleId === providerRoleId)
+            .map(r => ({
+                roleId: r.RoleId,
+                roleName: r.Role?.RoleName || r.RoleId,
+                status: r.Status,
+                organizationId: r.OrganizationId,
+                organizationName: r.Organization?.Name || null,
+                hospitalId: r.HospitalId,
+                hospitalName: r.Hospital?.Name || null
+            }));
+
         const userPayload = {
             id: primaryUser.Id,
             firstName: primaryUser.FirstName,
@@ -397,8 +413,11 @@ export class UserService implements IUserService {
                 roleName: r.Role?.RoleName || r.RoleId,
                 organizationId: r.OrganizationId,
                 hospitalId: r.HospitalId,
-                status: r.Status
-            }))
+                status: r.Status,
+                organizationName: r.Organization?.Name || null,
+                hospitalName: r.Hospital?.Name || null
+            })),
+            providerAssignments
         };
 
         if (isHealthcareProvider) {

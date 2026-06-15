@@ -440,6 +440,7 @@ export class PaymentService {
         orgId?: number;
         hospitalId?: number;
         providerId?: string;
+        patientId?: string;
         billStatus?: string;
         startDate?: string;
         endDate?: string;
