@@ -287,8 +287,8 @@ export class DashboardRepository {
         const skip = (page - 1) * pageSize;
         const orgsQuery = orgRepo.createQueryBuilder("org")
             .select([
-                "org.Id", "org.Name", "org.OrgCode", "org.OrganizationType", 
-                "org.Email", "org.MobileNumber", "org.CountryCode", 
+                "org.Id", "org.Name", "org.OrgCode", "org.OrganizationType",
+                "org.Email", "org.MobileNumber", "org.CountryCode",
                 "org.Address", "org.Status", "org.CreatedAt", "org.Website"
             ])
             .addSelect(subQuery => {
@@ -469,7 +469,7 @@ export class DashboardRepository {
                 appointmentsScheduled: statsRow.todayScheduled || 0,
                 waitingPatients: statsRow.todayWaiting || 0,
                 paymentsCollected: statsRow.todayPayments || 0,
-                
+
                 // Yesterday values for trend calculation in service
                 yesterdayCheckIns: statsRow.yesterdayCheckIns || 0,
                 yesterdayScheduled: statsRow.yesterdayScheduled || 0,
@@ -482,9 +482,9 @@ export class DashboardRepository {
                 description: `Performed by ${a.user} (${a.role})`,
                 time: a.timestamp,
                 type: "success",
-                iconType: a.ActivityMessage.includes("Check") ? "UserCheck" : 
-                          a.ActivityMessage.includes("Appointment") ? "Calendar" : 
-                          a.ActivityMessage.includes("Patient") ? "UserPlus" : "Activity"
+                iconType: a.ActivityMessage.includes("Check") ? "UserCheck" :
+                    a.ActivityMessage.includes("Appointment") ? "Calendar" :
+                        a.ActivityMessage.includes("Patient") ? "UserPlus" : "Activity"
             })),
             recentPatients: recentPatients.map((p: any) => ({
                 id: p.id,
