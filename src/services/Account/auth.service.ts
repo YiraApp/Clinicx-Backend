@@ -20,16 +20,21 @@ export class AuthService implements IAuthService {
         refreshTokenExpiry: Date,
         user: Partial<User> & { Roles: any[] }
     }> {
-        // Find user by Email OR PhoneNumber with Status: true and IsDeleted: false
+        // Find user by Email OR PhoneNumber (including inactive)
         const user = await this.userRepository.findOne({
             where: [
-                { Email: identity, Status: true, IsDeleted: false, IsPrimary: true },
-                { PhoneNumber: identity, Status: true, IsDeleted: false, IsPrimary: true }
+                { Email: identity, IsDeleted: false, IsPrimary: true },
+                { PhoneNumber: identity, IsDeleted: false, IsPrimary: true }
             ]
         });
 
         if (!user) {
             throw new Error("Invalid Mobile Or Email");
+        }
+
+        // Check if account is inactive
+        if (!user.Status) {
+            throw new Error("User account is inactive");
         }
 
         // Check password if provided and stored
