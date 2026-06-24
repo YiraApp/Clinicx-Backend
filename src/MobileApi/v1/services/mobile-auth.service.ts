@@ -9,63 +9,37 @@ import { User } from "../../../models/Account/user.model.js";
 
 export class MobileAuthService {
     /**
-     * Mobile login flow:
-     * - Email identity: authenticates with password and returns tokens directly.
-     * - Mobile (phone) identity: sends OTP and logs in without password upon verification.
+     * Sends (or resends) an OTP to the mobile user if they are registered and active with allowed roles.
      */
-    async login(
+    async sendOTP(
         identity: string,
-        password?: string,
         countryCode?: string,
-        deviceInfo?: string,
-        ipAddress?: string,
         isResend?: boolean
     ): Promise<{
         otpSent: boolean;
-        sessionId?: string;
-        contact?: string;
-        contactType?: OTPType;
+        sessionId: string;
+        contact: string;
+        contactType: OTPType;
         message: string;
-        accessToken?: string;
-        refreshToken?: string;
-        accessTokenExpiry?: Date;
-        refreshTokenExpiry?: Date;
-        user?: Partial<User> & { 
-            Roles: any[];
-            roleCount?: number;
-            hospitalCount?: number;
-            organizationCount?: number;
-        };
     }> {
-        // Detect if identity is email
+        // Detect if identity is email (throw error if it is)
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        const isEmail = emailRegex.test(identity);
-
-        if (!isEmail && isResend) {
-            const resendResult = await this.resendOTP(identity, countryCode);
-            return {
-                otpSent: resendResult.otpSent,
-                sessionId: resendResult.sessionId,
-                contact: resendResult.contact,
-                contactType: resendResult.contactType,
-                message: resendResult.message
-            };
+        if (emailRegex.test(identity)) {
+            throw new Error("Email cannot be used for OTP login");
         }
 
         let lookupIdentity = identity;
-        if (!isEmail) {
-            if (countryCode && identity.startsWith(countryCode)) {
-                lookupIdentity = identity.substring(countryCode.length);
-            } else if (identity.startsWith("91")) {
-                lookupIdentity = identity.substring(2);
-            }
+        if (countryCode && identity.startsWith(countryCode)) {
+            lookupIdentity = identity.substring(countryCode.length);
+        } else if (identity.startsWith("91")) {
+            lookupIdentity = identity.substring(2);
         }
 
         // Find user (ONLY primary, non-deleted user)
         const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
 
         if (!user) {
-            throw new Error("Invalid Mobile Or Email");
+            throw new Error("User not registered");
         }
 
         // Check if account is active
@@ -73,7 +47,7 @@ export class MobileAuthService {
             throw new Error("User account is inactive");
         }
 
-        // Fetch user roles and validate allowed Patient or Provider roles before proceeding
+        // Fetch user roles and validate allowed Patient or Provider roles before sending OTP
         const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
         const allowedRoleIds = [
             "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
@@ -84,8 +58,99 @@ export class MobileAuthService {
             throw new Error("Access denied. Only patients and providers can log in.");
         }
 
-        if (isEmail) {
-            // Email Login: require password and directly authenticate
+        const otpTarget = user.PhoneNumber;
+        if (!otpTarget) {
+            throw new Error("No phone number found for this user");
+        }
+
+        if (isResend) {
+            // Resend OTP via global OTP Service with LOGIN purpose
+            const result = await otpService.resendOTP(
+                otpTarget,
+                OTPPurpose.LOGIN,
+                countryCode || user.CountryCode || undefined
+            );
+
+            return {
+                otpSent: true,
+                sessionId: result.sessionId,
+                contact: otpTarget,
+                contactType: result.contactType,
+                message: result.message
+            };
+        } else {
+            // Send OTP using global OTP Service
+            const otpResult = await otpService.sendOTP(
+                otpTarget,
+                OTPPurpose.LOGIN,
+                countryCode || user.CountryCode || undefined
+            );
+
+            return {
+                otpSent: true,
+                sessionId: otpResult.sessionId,
+                contact: otpTarget,
+                contactType: otpResult.contactType,
+                message: otpResult.message
+            };
+        }
+    }
+
+    /**
+     * Unified mobile login flow:
+     * - Email loginType: authenticates with password and returns tokens.
+     * - Mobile loginType: verifies OTP using sessionId and password (as OTP code) and returns tokens.
+     */
+    async login(
+        identity: string,
+        password?: string, // Password for email, OTP code for mobile
+        loginType?: "email" | "mobile" | "mobileNumber",
+        sessionId?: string, // Required for mobile login
+        countryCode?: string,
+        deviceInfo?: string,
+        ipAddress?: string
+    ): Promise<{
+        accessToken: string;
+        refreshToken: string;
+        accessTokenExpiry: Date;
+        refreshTokenExpiry: Date;
+        id: string;
+        isMobileVerified: boolean;
+        isEmailVerified: boolean;
+        roleCount: number;
+        hospitalCount: number;
+        organizationCount: number;
+        roles: any[];
+        firstName: string | null;
+        lastName: string | null;
+        email: string | null;
+        phoneNumber: string;
+        countryCode: string | null;
+        gender: string | null;
+        dob: string | null;
+        height: string | null;
+        weight: string | null;
+        heightUnit: string;
+        weightUnit: string;
+    }> {
+        const type = loginType === "mobileNumber" ? "mobile" : (loginType || ( /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile" ));
+
+        if (type === "email") {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            const isEmail = emailRegex.test(identity);
+            if (!isEmail) {
+                throw new Error("Invalid email format");
+            }
+
+            const user = await mobileAuthRepository.findPrimaryUser(identity);
+            if (!user) {
+                throw new Error("Authentication failed. Please try again.");
+            }
+
+            if (!user.Status) {
+                throw new Error("Authentication failed. Please try again.");
+            }
+
             if (!password) {
                 throw new Error("Password is required for email login");
             }
@@ -96,7 +161,18 @@ export class MobileAuthService {
 
             const isMatch = await bcrypt.compare(password, user.PasswordHash);
             if (!isMatch) {
-                throw new Error("Invalid Password");
+                throw new Error("Authentication failed. Please try again.");
+            }
+
+            // Fetch user roles and validate allowed Patient or Provider roles before proceeding
+            const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+            const allowedRoleIds = [
+                "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
+                "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
+            ];
+            const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
+            if (mobileRoles.length === 0) {
+                throw new Error("Access denied. Only patients and providers can log in.");
             }
 
             // Generate tokens with 30d expiry
@@ -128,235 +204,164 @@ export class MobileAuthService {
             const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
             const uniqueOrganizations = new Set(mobileRoles.map(ur => ur.OrganizationId).filter(Boolean));
 
-            const userResponse: Partial<User> & { 
-                Roles: any[];
-                roleCount: number;
-                hospitalCount: number;
-                organizationCount: number;
-            } = {
-                Id: user.Id,
-                IsMobileVerified: user.IsMobileVerified,
-                IsEmailVerified: user.IsEmailVerified,
-                roleCount: uniqueRoles.size,
-                hospitalCount: uniqueHospitals.size,
-                organizationCount: uniqueOrganizations.size,
-                Roles: mobileRoles.map(ur => ({
-                    UserRoleId: ur.UserRoleId,
-                    RoleId: ur.RoleId,
-                    RoleName: ur.Role?.RoleName ?? null,
-                    OrganizationId: ur.OrganizationId ?? null,
-                    OrganizationName: ur.Organization?.Name ?? null,
-                    OrganizationCode: ur.Organization?.OrgCode ?? null,
-                    HospitalId: ur.HospitalId ?? null,
-                    HospitalName: ur.Hospital?.Name ?? null,
-                    HospitalCode: ur.Hospital?.HospitalCode ?? null,
-                    Status: ur.Status
-                }))
-            };
-            if (user.FirstName !== undefined) userResponse.FirstName = user.FirstName;
-            if (user.LastName !== undefined) userResponse.LastName = user.LastName;
-            if (user.Email !== undefined) userResponse.Email = user.Email;
-            userResponse.PhoneNumber = user.PhoneNumber;
-            if (user.CountryCode !== undefined) userResponse.CountryCode = user.CountryCode;
+            const uniqueRolesMap = new Map<string, any>();
+            for (const ur of mobileRoles) {
+                if (ur.RoleId) {
+                    const roleIdUpper = ur.RoleId.toUpperCase();
+                    if (!uniqueRolesMap.has(roleIdUpper)) {
+                        let roleName = ur.Role?.RoleName ?? null;
+                        if (roleIdUpper === "4FC67429-28AE-4106-93EF-436228282ED0" && roleName === "Patient") {
+                            roleName = "User/ Patient";
+                        }
+                        uniqueRolesMap.set(roleIdUpper, {
+                            roleId: ur.RoleId,
+                            roleName: roleName,
+                            status: ur.Status
+                        });
+                    }
+                }
+            }
+            const rolesList = Array.from(uniqueRolesMap.values());
 
             return {
-                otpSent: false,
-                message: "Login successful",
                 accessToken,
                 refreshToken,
                 accessTokenExpiry,
                 refreshTokenExpiry,
-                user: userResponse
+                id: user.Id,
+                isMobileVerified: user.IsMobileVerified,
+                isEmailVerified: user.IsEmailVerified,
+                roleCount: uniqueRoles.size,
+                hospitalCount: uniqueHospitals.size,
+                organizationCount: uniqueOrganizations.size,
+                roles: rolesList,
+                firstName: user.FirstName ?? null,
+                lastName: user.LastName ?? null,
+                email: user.Email ?? null,
+                phoneNumber: user.PhoneNumber,
+                countryCode: user.CountryCode ?? null,
+                gender: user.Gender ?? null,
+                dob: formatDOB(user.DateOfBirth),
+                height: user.Height != null ? String(user.Height) : null,
+                weight: user.Weight != null ? String(user.Weight) : null,
+                heightUnit: "cms",
+                weightUnit: "kgs"
             };
         } else {
-            // Mobile Login: no password required, send OTP directly
-            const otpTarget = user.PhoneNumber;
-            if (!otpTarget) {
-                throw new Error("No phone number found for this user");
+            // Mobile OTP Login: calls verification in login method
+            if (!sessionId) {
+                throw new Error("Session ID is required for mobile OTP login");
+            }
+            if (!password) {
+                throw new Error("OTP is required for mobile OTP login");
             }
 
-            // Send OTP using global OTP Service
-            const otpResult = await otpService.sendOTP(
-                otpTarget,
-                OTPPurpose.LOGIN,
-                countryCode || user.CountryCode || undefined
-            );
+            let lookupContact = identity;
+            if (countryCode && identity.startsWith(countryCode)) {
+                lookupContact = identity.substring(countryCode.length);
+            } else if (identity.startsWith("91")) {
+                lookupContact = identity.substring(2);
+            }
+
+            const verification = await userOTPRepository.verifyOTP(sessionId, lookupContact, password, OTPPurpose.LOGIN);
+            if (!verification.success) {
+                throw new Error("Invalid OTP. Please check the code and try again.");
+            }
+
+            const user = await mobileAuthRepository.findPrimaryUser(lookupContact);
+            if (!user) {
+                throw new Error("Authentication failed. Please try again.");
+            }
+
+            // Check if account is active
+            if (!user.Status) {
+                throw new Error("Authentication failed. Please try again.");
+            }
+
+            // Fetch user roles
+            const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+            const allowedRoleIds = [
+                "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
+                "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
+            ];
+            const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
+            if (mobileRoles.length === 0) {
+                throw new Error("Access denied. Only patients and providers can log in.");
+            }
+
+            // Generate tokens with 30d expiry
+            const payload = { userId: user.Id, email: user.Email };
+            const accessToken = generateAccessToken(payload, "30d");
+            const refreshToken = generateRefreshToken(payload, "30d");
+
+            const expiryMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+            const accessTokenExpiry = new Date(Date.now() + expiryMs);
+            const refreshTokenExpiry = new Date(Date.now() + expiryMs);
+
+            // Create session record
+            await tokenRepository.createToken({
+                UserId: user.Id,
+                AccessToken: accessToken,
+                RefreshToken: refreshToken,
+                AccessTokenExpiry: accessTokenExpiry,
+                RefreshTokenExpiry: refreshTokenExpiry,
+                IsRevoked: false,
+                ...(deviceInfo && { DeviceInfo: deviceInfo }),
+                ...(ipAddress && { IPAddress: ipAddress })
+            });
+
+            // Update LastLoginTime
+            user.LastLoginTime = new Date();
+            await mobileAuthRepository.saveUser(user);
+
+            const uniqueRoles = new Set(mobileRoles.map(ur => ur.RoleId).filter(Boolean));
+            const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
+            const uniqueOrganizations = new Set(mobileRoles.map(ur => ur.OrganizationId).filter(Boolean));
+
+            const uniqueRolesMap = new Map<string, any>();
+            for (const ur of mobileRoles) {
+                if (ur.RoleId) {
+                    const roleIdUpper = ur.RoleId.toUpperCase();
+                    if (!uniqueRolesMap.has(roleIdUpper)) {
+                        let roleName = ur.Role?.RoleName ?? null;
+                        if (roleIdUpper === "4FC67429-28AE-4106-93EF-436228282ED0" && roleName === "Patient") {
+                            roleName = "User/ Patient";
+                        }
+                        uniqueRolesMap.set(roleIdUpper, {
+                            roleId: ur.RoleId,
+                            roleName: roleName,
+                            status: ur.Status
+                        });
+                    }
+                }
+            }
+            const rolesList = Array.from(uniqueRolesMap.values());
 
             return {
-                otpSent: true,
-                sessionId: otpResult.sessionId,
-                contact: otpTarget,
-                contactType: otpResult.contactType,
-                message: otpResult.message
+                accessToken,
+                refreshToken,
+                accessTokenExpiry,
+                refreshTokenExpiry,
+                id: user.Id,
+                isMobileVerified: user.IsMobileVerified,
+                isEmailVerified: user.IsEmailVerified,
+                roleCount: uniqueRoles.size,
+                hospitalCount: uniqueHospitals.size,
+                organizationCount: uniqueOrganizations.size,
+                roles: rolesList,
+                firstName: user.FirstName ?? null,
+                lastName: user.LastName ?? null,
+                email: user.Email ?? null,
+                phoneNumber: user.PhoneNumber,
+                countryCode: user.CountryCode ?? null,
+                gender: user.Gender ?? null,
+                dob: formatDOB(user.DateOfBirth),
+                height: user.Height != null ? String(user.Height) : null,
+                weight: user.Weight != null ? String(user.Weight) : null,
+                heightUnit: "cms",
+                weightUnit: "kgs"
             };
         }
-    }
-
-    /**
-     * Resends the login OTP for mobile phone users.
-     */
-    async resendOTP(contact: string, countryCode?: string): Promise<{
-        otpSent: boolean;
-        sessionId: string;
-        contact: string;
-        contactType: OTPType;
-        message: string;
-    }> {
-        // Find if user is primary and active
-        const user = await mobileAuthRepository.findPrimaryUser(contact);
-        if (!user) {
-            throw new Error("Invalid Mobile Or Email");
-        }
-
-        if (!user.Status) {
-            throw new Error("User account is inactive");
-        }
-
-        // Resend OTP via global OTP Service with LOGIN purpose
-        const result = await otpService.resendOTP(
-            contact,
-            OTPPurpose.LOGIN,
-            countryCode || user.CountryCode || undefined
-        );
-
-        return {
-            otpSent: true,
-            sessionId: result.sessionId,
-            contact: contact,
-            contactType: result.contactType,
-            message: result.message
-        };
-    }
-
-    /**
-     * Completes login for mobile phone users after OTP verification.
-     */
-    async verifyAndLogin(
-        contact: string,
-        sessionId: string,
-        otp: string,
-        countryCode?: string,
-        deviceInfo?: string,
-        ipAddress?: string
-    ): Promise<{
-        accessToken: string;
-        refreshToken: string;
-        accessTokenExpiry: Date;
-        refreshTokenExpiry: Date;
-        user: Partial<User> & { 
-            Roles: any[];
-            roleCount?: number;
-            hospitalCount?: number;
-            organizationCount?: number;
-        };
-    }> {
-        // 1. Verify OTP using the repository logic (strip country code if mobile)
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        const isEmail = emailRegex.test(contact);
-        let lookupContact = contact;
-        if (!isEmail) {
-            if (countryCode && contact.startsWith(countryCode)) {
-                lookupContact = contact.substring(countryCode.length);
-            } else if (contact.startsWith("91")) {
-                lookupContact = contact.substring(2);
-            }
-        }
-
-        const verification = await userOTPRepository.verifyOTP(sessionId, lookupContact, otp, OTPPurpose.LOGIN);
-        if (!verification.success) {
-            throw new Error(verification.message);
-        }
-
-        // 2. Load primary user by contact
-        const user = await mobileAuthRepository.findPrimaryUser(lookupContact);
-        if (!user) {
-            throw new Error("User not found or is not primary");
-        }
-
-        // Check if account is active
-        if (!user.Status) {
-            throw new Error("User account is inactive");
-        }
-
-        // 3. Generate tokens with 30d expiry
-        const payload = { userId: user.Id, email: user.Email };
-        const accessToken = generateAccessToken(payload, "30d");
-        const refreshToken = generateRefreshToken(payload, "30d");
-
-        const expiryMs = 30 * 24 * 60 * 60 * 1000; // 30 days
-        const accessTokenExpiry = new Date(Date.now() + expiryMs);
-        const refreshTokenExpiry = new Date(Date.now() + expiryMs);
-
-        // 4. Create session record
-        await tokenRepository.createToken({
-            UserId: user.Id,
-            AccessToken: accessToken,
-            RefreshToken: refreshToken,
-            AccessTokenExpiry: accessTokenExpiry,
-            RefreshTokenExpiry: refreshTokenExpiry,
-            IsRevoked: false,
-            ...(deviceInfo && { DeviceInfo: deviceInfo }),
-            ...(ipAddress && { IPAddress: ipAddress })
-        });
-
-        // 5. Update LastLoginTime
-        user.LastLoginTime = new Date();
-        await mobileAuthRepository.saveUser(user);
-
-        // 6. Fetch user roles
-        const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
-        const allowedRoleIds = [
-            "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
-            "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
-        ];
-        const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
-        if (mobileRoles.length === 0) {
-            throw new Error("Access denied. Only patients and providers can log in.");
-        }
-
-        const uniqueRoles = new Set(mobileRoles.map(ur => ur.RoleId).filter(Boolean));
-        const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
-        const uniqueOrganizations = new Set(mobileRoles.map(ur => ur.OrganizationId).filter(Boolean));
-
-        // 7. Format user response
-        const userResponse: Partial<User> & { 
-            Roles: any[];
-            roleCount: number;
-            hospitalCount: number;
-            organizationCount: number;
-        } = {
-            Id: user.Id,
-            IsMobileVerified: user.IsMobileVerified,
-            IsEmailVerified: user.IsEmailVerified,
-            roleCount: uniqueRoles.size,
-            hospitalCount: uniqueHospitals.size,
-            organizationCount: uniqueOrganizations.size,
-            Roles: mobileRoles.map(ur => ({
-                UserRoleId: ur.UserRoleId,
-                RoleId: ur.RoleId,
-                RoleName: ur.Role?.RoleName ?? null,
-                OrganizationId: ur.OrganizationId ?? null,
-                OrganizationName: ur.Organization?.Name ?? null,
-                OrganizationCode: ur.Organization?.OrgCode ?? null,
-                HospitalId: ur.HospitalId ?? null,
-                HospitalName: ur.Hospital?.Name ?? null,
-                HospitalCode: ur.Hospital?.HospitalCode ?? null,
-                Status: ur.Status
-            }))
-        };
-        if (user.FirstName !== undefined) userResponse.FirstName = user.FirstName;
-        if (user.LastName !== undefined) userResponse.LastName = user.LastName;
-        if (user.Email !== undefined) userResponse.Email = user.Email;
-        userResponse.PhoneNumber = user.PhoneNumber;
-        if (user.CountryCode !== undefined) userResponse.CountryCode = user.CountryCode;
-
-        return {
-            accessToken,
-            refreshToken,
-            accessTokenExpiry,
-            refreshTokenExpiry,
-            user: userResponse
-        };
     }
 
     /**
@@ -396,6 +401,113 @@ export class MobileAuthService {
 
         return { accessToken: newAccessToken, refreshToken: newRefreshToken };
     }
+
+    /**
+     * Gets all organizations and their associated hospitals mapped to a user and role.
+     */
+    async getUserOrganizationHospitals(
+        userId: string,
+        roleId: string
+    ): Promise<any[]> {
+        const userRoles = await mobileAuthRepository.findUserRolesByRole(userId, roleId);
+
+        const orgMap = new Map<number, {
+            organizationId: number;
+            organizationName: string;
+            organizationCode: string | null;
+            hospitals: any[];
+        }>();
+
+        for (const ur of userRoles) {
+            if (ur.OrganizationId && ur.Organization) {
+                if (!orgMap.has(ur.OrganizationId)) {
+                    orgMap.set(ur.OrganizationId, {
+                        organizationId: ur.OrganizationId,
+                        organizationName: ur.Organization.Name,
+                        organizationCode: ur.Organization.OrgCode ?? null,
+                        hospitals: []
+                    });
+                }
+
+                const orgData = orgMap.get(ur.OrganizationId)!;
+
+                if (ur.HospitalId && ur.Hospital) {
+                    const exists = orgData.hospitals.some(h => h.hospitalId === ur.HospitalId);
+                    if (!exists) {
+                        orgData.hospitals.push({
+                            hospitalId: ur.Hospital.Id,
+                            hospitalCode: ur.Hospital.HospitalCode ?? null,
+                            hospitalName: ur.Hospital.Name,
+                            email: ur.Hospital.Email ?? null,
+                            mobileNumber: ur.Hospital.MobileNumber ?? null,
+                            countryCode: ur.Hospital.CountryCode ?? null,
+                            address: ur.Hospital.Address ?? null,
+                            helplineNumber: ur.Hospital.HelplineNumber ?? null,
+                            website: ur.Hospital.Website ?? null,
+                            city: ur.Hospital.City ?? null,
+                            state: ur.Hospital.State ?? null,
+                            country: ur.Hospital.Country ?? null,
+                            pincode: ur.Hospital.Pincode ?? null,
+                            status: ur.Hospital.Status ?? null,
+                            is24Hours: ur.Hospital.Is24Hours ?? null
+                        });
+                    }
+                } else if (!ur.HospitalId) {
+                    // Fallback to fetch all active hospitals under this organization
+                    const allOrgHospitals = await mobileAuthRepository.findHospitalsByOrganization(ur.OrganizationId);
+                    for (const hosp of allOrgHospitals) {
+                        const exists = orgData.hospitals.some(h => h.hospitalId === hosp.Id);
+                        if (!exists) {
+                            orgData.hospitals.push({
+                                hospitalId: hosp.Id,
+                                hospitalCode: hosp.HospitalCode ?? null,
+                                hospitalName: hosp.Name,
+                                email: hosp.Email ?? null,
+                                mobileNumber: hosp.MobileNumber ?? null,
+                                countryCode: hosp.CountryCode ?? null,
+                                address: hosp.Address ?? null,
+                                helplineNumber: hosp.HelplineNumber ?? null,
+                                website: hosp.Website ?? null,
+                                city: hosp.City ?? null,
+                                state: hosp.State ?? null,
+                                country: hosp.Country ?? null,
+                                pincode: hosp.Pincode ?? null,
+                                status: hosp.Status ?? null,
+                                is24Hours: hosp.Is24Hours ?? null
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        return Array.from(orgMap.values());
+    }
 }
 
 export const mobileAuthService = new MobileAuthService();
+
+function formatDOB(dob: any): string | null {
+    if (!dob) return null;
+    if (typeof dob === 'string') {
+        if (/^\d{2}-\d{2}-\d{4}$/.test(dob)) {
+            return dob;
+        }
+        const match = dob.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+            return `${match[3]}-${match[2]}-${match[1]}`;
+        }
+    }
+    try {
+        const dateObj = new Date(dob);
+        if (isNaN(dateObj.getTime())) {
+            return typeof dob === 'string' ? dob : null;
+        }
+        const day = String(dateObj.getUTCDate()).padStart(2, '0');
+        const month = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
+        const year = dateObj.getUTCFullYear();
+        return `${day}-${month}-${year}`;
+    } catch {
+        return typeof dob === 'string' ? dob : null;
+    }
+}

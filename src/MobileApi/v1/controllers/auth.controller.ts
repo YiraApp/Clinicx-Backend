@@ -6,11 +6,11 @@ import { ApiResponse } from "../../../utils/response.utils.js";
 /**
  * Handles mobile user login requests.
  * Email: authenticates with password directly.
- * Phone: dispatches OTP for login verification without password.
+ * Mobile: verifies OTP using sessionId and password (which is the OTP code).
  */
 export const login = async (req: Request, res: Response) => {
     try {
-        const { identity, password, countryCode, isResend, resend } = req.body;
+        const { identity, password, loginType, type, sessionId, countryCode } = req.body;
         if (!identity) {
             return res.status(400).json(ApiResponse.error("Identity is required"));
         }
@@ -18,19 +18,55 @@ export const login = async (req: Request, res: Response) => {
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const isResendFlag = isResend === true || resend === true;
-        const result = await mobileAuthService.login(identity, password, countryCode, deviceInfo, ipAddress, isResendFlag);
-        const successMessage = result.otpSent 
-            ? (isResendFlag ? "OTP resent successfully" : "OTP sent successfully") 
-            : "Login successful";
-        return res.json(ApiResponse.success(result, successMessage));
+        const resolvedType = loginType || type || ( /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile" );
+
+        const result = await mobileAuthService.login(
+            identity,
+            password,
+            resolvedType,
+            sessionId,
+            countryCode,
+            deviceInfo,
+            ipAddress
+        );
+
+        return res.json(ApiResponse.success(result, "Login successful! Welcome back."));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));
     }
 };
 
 /**
- * Handles resending OTP for mobile logins.
+ * Sends OTP to a mobile phone user if they exist and are active with Patient/Provider roles.
+ * Supports resending via optional `isResend` / `resend` body flag.
+ */
+export const sendOTP = async (req: Request, res: Response) => {
+    const { identity, countryCode, isResend, resend } = req.body;
+    const isResendFlag = isResend === true || resend === true;
+    try {
+        if (!identity) {
+            return res.status(400).json(ApiResponse.error("Identity (phone number) is required"));
+        }
+
+        const result = await mobileAuthService.sendOTP(identity, countryCode, isResendFlag);
+        const successMessage = isResendFlag ? "OTP resent successfully!" : "OTP sent successfully!";
+        return res.json(ApiResponse.success(result, successMessage));
+    } catch (error: any) {
+        if (error.message === "User not registered") {
+            return res.status(404).json(ApiResponse.error(error.message));
+        }
+        if (error.message.includes("Access denied")) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+        const errorMsg = isResendFlag 
+            ? "Could not resend OTP. Please try again." 
+            : "Failed to send OTP. Please try again later.";
+        return res.status(400).json(ApiResponse.error(errorMsg));
+    }
+};
+
+/**
+ * Handles resending OTP for mobile logins (legacy endpoint wrapper).
  */
 export const resendOTP = async (req: Request, res: Response) => {
     try {
@@ -39,15 +75,15 @@ export const resendOTP = async (req: Request, res: Response) => {
             return res.status(400).json(ApiResponse.error("Contact (phone number) is required"));
         }
 
-        const result = await mobileAuthService.resendOTP(contact, countryCode);
-        return res.json(ApiResponse.success(result, "OTP resent successfully"));
+        const result = await mobileAuthService.sendOTP(contact, countryCode, true);
+        return res.json(ApiResponse.success(result, "OTP resent successfully!"));
     } catch (error: any) {
-        return res.status(400).json(ApiResponse.error(error.message));
+        return res.status(400).json(ApiResponse.error("Could not resend OTP. Please try again."));
     }
 };
 
 /**
- * Verifies mobile OTP and issues authentication tokens.
+ * Verifies mobile OTP and issues authentication tokens (legacy endpoint wrapper).
  */
 export const verifyLogin = async (req: Request, res: Response) => {
     try {
@@ -59,8 +95,16 @@ export const verifyLogin = async (req: Request, res: Response) => {
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const result = await mobileAuthService.verifyAndLogin(contact, sessionId, otp, countryCode, deviceInfo, ipAddress);
-        return res.json(ApiResponse.success(result, "Login successful"));
+        const result = await mobileAuthService.login(
+            contact,
+            otp,
+            "mobile",
+            sessionId,
+            countryCode,
+            deviceInfo,
+            ipAddress
+        );
+        return res.json(ApiResponse.success(result, "Login successful! Welcome back."));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));
     }
@@ -122,6 +166,31 @@ export const resetPassword = async (req: Request, res: Response) => {
         }
         const result = await authService.resetPassword(token, newPassword);
         return res.json(ApiResponse.success(result, result.message));
+    } catch (error: any) {
+        return res.status(400).json(ApiResponse.error(error.message));
+    }
+};
+
+/**
+ * Fetches organizations and hospitals associated with a user's role.
+ */
+export const getRoleDetails = async (req: Request, res: Response) => {
+    try {
+        const { userId, roleId } = req.query;
+
+        if (!userId) {
+            return res.status(400).json(ApiResponse.error("userId is required"));
+        }
+        if (!roleId) {
+            return res.status(400).json(ApiResponse.error("roleId is required"));
+        }
+
+        const result = await mobileAuthService.getUserOrganizationHospitals(
+            String(userId),
+            String(roleId)
+        );
+
+        return res.json(ApiResponse.success(result, "Organizations and hospitals fetched successfully"));
     } catch (error: any) {
         return res.status(400).json(ApiResponse.error(error.message));
     }
