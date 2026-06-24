@@ -18,7 +18,8 @@ export class MobileAuthService {
         password?: string,
         countryCode?: string,
         deviceInfo?: string,
-        ipAddress?: string
+        ipAddress?: string,
+        isResend?: boolean
     ): Promise<{
         otpSent: boolean;
         sessionId?: string;
@@ -29,11 +30,27 @@ export class MobileAuthService {
         refreshToken?: string;
         accessTokenExpiry?: Date;
         refreshTokenExpiry?: Date;
-        user?: Partial<User> & { Roles: any[] };
+        user?: Partial<User> & { 
+            Roles: any[];
+            roleCount?: number;
+            hospitalCount?: number;
+            organizationCount?: number;
+        };
     }> {
         // Detect if identity is email
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const isEmail = emailRegex.test(identity);
+
+        if (!isEmail && isResend) {
+            const resendResult = await this.resendOTP(identity, countryCode);
+            return {
+                otpSent: resendResult.otpSent,
+                sessionId: resendResult.sessionId,
+                contact: resendResult.contact,
+                contactType: resendResult.contactType,
+                message: resendResult.message
+            };
+        }
 
         let lookupIdentity = identity;
         if (!isEmail) {
@@ -99,10 +116,22 @@ export class MobileAuthService {
             // Fetch user roles
             const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
 
-            const userResponse: Partial<User> & { Roles: any[] } = {
+            const uniqueRoles = new Set(userRoles.map(ur => ur.RoleId).filter(Boolean));
+            const uniqueHospitals = new Set(userRoles.map(ur => ur.HospitalId).filter(Boolean));
+            const uniqueOrganizations = new Set(userRoles.map(ur => ur.OrganizationId).filter(Boolean));
+
+            const userResponse: Partial<User> & { 
+                Roles: any[];
+                roleCount: number;
+                hospitalCount: number;
+                organizationCount: number;
+            } = {
                 Id: user.Id,
                 IsMobileVerified: user.IsMobileVerified,
                 IsEmailVerified: user.IsEmailVerified,
+                roleCount: uniqueRoles.size,
+                hospitalCount: uniqueHospitals.size,
+                organizationCount: uniqueOrganizations.size,
                 Roles: userRoles.map(ur => ({
                     UserRoleId: ur.UserRoleId,
                     RoleId: ur.RoleId,
@@ -206,7 +235,12 @@ export class MobileAuthService {
         refreshToken: string;
         accessTokenExpiry: Date;
         refreshTokenExpiry: Date;
-        user: Partial<User> & { Roles: any[] };
+        user: Partial<User> & { 
+            Roles: any[];
+            roleCount?: number;
+            hospitalCount?: number;
+            organizationCount?: number;
+        };
     }> {
         // 1. Verify OTP using the repository logic (strip country code if mobile)
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -264,11 +298,23 @@ export class MobileAuthService {
         // 6. Fetch user roles
         const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
 
+        const uniqueRoles = new Set(userRoles.map(ur => ur.RoleId).filter(Boolean));
+        const uniqueHospitals = new Set(userRoles.map(ur => ur.HospitalId).filter(Boolean));
+        const uniqueOrganizations = new Set(userRoles.map(ur => ur.OrganizationId).filter(Boolean));
+
         // 7. Format user response
-        const userResponse: Partial<User> & { Roles: any[] } = {
+        const userResponse: Partial<User> & { 
+            Roles: any[];
+            roleCount: number;
+            hospitalCount: number;
+            organizationCount: number;
+        } = {
             Id: user.Id,
             IsMobileVerified: user.IsMobileVerified,
             IsEmailVerified: user.IsEmailVerified,
+            roleCount: uniqueRoles.size,
+            hospitalCount: uniqueHospitals.size,
+            organizationCount: uniqueOrganizations.size,
             Roles: userRoles.map(ur => ({
                 UserRoleId: ur.UserRoleId,
                 RoleId: ur.RoleId,

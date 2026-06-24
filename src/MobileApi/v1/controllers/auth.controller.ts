@@ -10,7 +10,7 @@ import { ApiResponse } from "../../../utils/response.utils.js";
  */
 export const login = async (req: Request, res: Response) => {
     try {
-        const { identity, password, countryCode } = req.body;
+        const { identity, password, countryCode, isResend, resend } = req.body;
         if (!identity) {
             return res.status(400).json(ApiResponse.error("Identity is required"));
         }
@@ -18,8 +18,12 @@ export const login = async (req: Request, res: Response) => {
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const result = await mobileAuthService.login(identity, password, countryCode, deviceInfo, ipAddress);
-        return res.json(ApiResponse.success(result, result.otpSent ? "OTP sent successfully" : "Login successful"));
+        const isResendFlag = isResend === true || resend === true;
+        const result = await mobileAuthService.login(identity, password, countryCode, deviceInfo, ipAddress, isResendFlag);
+        const successMessage = result.otpSent 
+            ? (isResendFlag ? "OTP resent successfully" : "OTP sent successfully") 
+            : "Login successful";
+        return res.json(ApiResponse.success(result, successMessage));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));
     }
