@@ -73,6 +73,17 @@ export class MobileAuthService {
             throw new Error("User account is inactive");
         }
 
+        // Fetch user roles and validate allowed Patient or Provider roles before proceeding
+        const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+        const allowedRoleIds = [
+            "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
+            "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
+        ];
+        const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
+        if (mobileRoles.length === 0) {
+            throw new Error("Access denied. Only patients and providers can log in.");
+        }
+
         if (isEmail) {
             // Email Login: require password and directly authenticate
             if (!password) {
@@ -113,12 +124,9 @@ export class MobileAuthService {
             user.LastLoginTime = new Date();
             await mobileAuthRepository.saveUser(user);
 
-            // Fetch user roles
-            const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
-
-            const uniqueRoles = new Set(userRoles.map(ur => ur.RoleId).filter(Boolean));
-            const uniqueHospitals = new Set(userRoles.map(ur => ur.HospitalId).filter(Boolean));
-            const uniqueOrganizations = new Set(userRoles.map(ur => ur.OrganizationId).filter(Boolean));
+            const uniqueRoles = new Set(mobileRoles.map(ur => ur.RoleId).filter(Boolean));
+            const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
+            const uniqueOrganizations = new Set(mobileRoles.map(ur => ur.OrganizationId).filter(Boolean));
 
             const userResponse: Partial<User> & { 
                 Roles: any[];
@@ -132,7 +140,7 @@ export class MobileAuthService {
                 roleCount: uniqueRoles.size,
                 hospitalCount: uniqueHospitals.size,
                 organizationCount: uniqueOrganizations.size,
-                Roles: userRoles.map(ur => ({
+                Roles: mobileRoles.map(ur => ({
                     UserRoleId: ur.UserRoleId,
                     RoleId: ur.RoleId,
                     RoleName: ur.Role?.RoleName ?? null,
@@ -297,10 +305,18 @@ export class MobileAuthService {
 
         // 6. Fetch user roles
         const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+        const allowedRoleIds = [
+            "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
+            "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
+        ];
+        const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
+        if (mobileRoles.length === 0) {
+            throw new Error("Access denied. Only patients and providers can log in.");
+        }
 
-        const uniqueRoles = new Set(userRoles.map(ur => ur.RoleId).filter(Boolean));
-        const uniqueHospitals = new Set(userRoles.map(ur => ur.HospitalId).filter(Boolean));
-        const uniqueOrganizations = new Set(userRoles.map(ur => ur.OrganizationId).filter(Boolean));
+        const uniqueRoles = new Set(mobileRoles.map(ur => ur.RoleId).filter(Boolean));
+        const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
+        const uniqueOrganizations = new Set(mobileRoles.map(ur => ur.OrganizationId).filter(Boolean));
 
         // 7. Format user response
         const userResponse: Partial<User> & { 
@@ -315,7 +331,7 @@ export class MobileAuthService {
             roleCount: uniqueRoles.size,
             hospitalCount: uniqueHospitals.size,
             organizationCount: uniqueOrganizations.size,
-            Roles: userRoles.map(ur => ({
+            Roles: mobileRoles.map(ur => ({
                 UserRoleId: ur.UserRoleId,
                 RoleId: ur.RoleId,
                 RoleName: ur.Role?.RoleName ?? null,
