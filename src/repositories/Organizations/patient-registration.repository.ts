@@ -169,10 +169,12 @@ export class PatientRegistrationRepository {
             );
         }
 
-
-
-
-
+        if (filters.doctorId) {
+            statsQuery.andWhere(
+                `EXISTS (SELECT 1 FROM Appointments a WHERE a.UserId = u.Id AND a.DoctorId = :doctorId)`,
+                { doctorId: filters.doctorId }
+            );
+        }
 
         const stats = await statsQuery
             .select("COUNT(pr.Id)", "total")

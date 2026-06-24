@@ -55,7 +55,7 @@ export class APILogRepository {
                 "log.EntityId",
                 "log.EntityType"
             ])
-            .orderBy("log.UpdatedOn", "DESC")
+            .orderBy("log.LogId", "DESC")
             .skip(skip)
             .take(pageSize)
             .getManyAndCount();
@@ -76,7 +76,7 @@ export class APILogRepository {
             .createQueryBuilder("log")
             .where("log.RequestedOn >= :startDate", { startDate })
             .andWhere("log.RequestedOn <= :endDate", { endDate })
-            .orderBy("log.UpdatedOn", "DESC")
+            .orderBy("log.LogId", "DESC")
             .take(limit)
             .getMany();
     }
@@ -85,7 +85,7 @@ export class APILogRepository {
         return await this.repository
             .createQueryBuilder("log")
             .where("log.Method = :method", { method })
-            .orderBy("log.UpdatedOn", "DESC")
+            .orderBy("log.LogId", "DESC")
             .take(limit)
             .getMany();
     }
@@ -94,7 +94,7 @@ export class APILogRepository {
         return await this.repository
             .createQueryBuilder("log")
             .where("log.Path LIKE :path", { path: `%${path}%` })
-            .orderBy("log.UpdatedOn", "DESC")
+            .orderBy("log.LogId", "DESC")
             .take(limit)
             .getMany();
     }
@@ -103,7 +103,7 @@ export class APILogRepository {
         return await this.repository
             .createQueryBuilder("log")
             .where("log.ResponseStatusCode = :statusCode", { statusCode })
-            .orderBy("log.UpdatedOn", "DESC")
+            .orderBy("log.LogId", "DESC")
             .take(limit)
             .getMany();
     }

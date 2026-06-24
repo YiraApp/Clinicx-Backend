@@ -3,6 +3,7 @@ import type { Application } from 'express';
 import cors from 'cors';
 import { loggingMiddleware } from './middlewares/logging.middleware.js';
 import router from './routes/index.js';
+import { mobileRouterV1 } from './MobileApi/v1/routes/index.js';
 
 const app: Application = express();
 
@@ -15,6 +16,11 @@ app.use(loggingMiddleware);
 
 // API Routes
 app.use('/api', router);
+
+// Mobile Versioned API Routes
+app.use('/v1/api', mobileRouterV1);
+app.use('/api/v1/mobile', mobileRouterV1);
+app.use('/mobile/api/v1', mobileRouterV1);
 
 // Health Check
 app.get('/health', (req, res) => {

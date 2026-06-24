@@ -1,8 +1,16 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    ManyToOne,
+    JoinColumn,
+    Relation
+} from "typeorm/index.js";
 import { ConsentTemplate } from "./consent-template.model.js";
 
-@Entity({ name: "SignatureFields" })
-export class SignatureField {
+@Entity({ name: "ConsentTemplateFields" })
+export class ConsentTemplateField {
+
     @PrimaryGeneratedColumn()
     FieldId: number;
 
@@ -28,17 +36,7 @@ export class SignatureField {
     @Column({ type: "float", default: 50 })
     Height: number;
 
-    @Column({ type: "bit", default: 0 })
-    IncludeSignerName: boolean;
-
-    @Column({ type: "float", nullable: true })
-    NameBoxWidth?: number;
-
-    @Column({ type: "float", nullable: true })
-    NameBoxHeight?: number;
-
     @Column({ type: "nvarchar", length: 50 })
-
     FieldType: string;
 
     @Column({ type: "nvarchar", length: 100, nullable: true })

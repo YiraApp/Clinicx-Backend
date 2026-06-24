@@ -13,11 +13,15 @@ router.get("/templates", (req, res) => consentController.getTemplates(req, res))
 // Update an existing consent template (optionally with file upload)
 router.put("/templates/:id", upload.single("file"), (req, res) => consentController.updateTemplate(req, res));
 
+// Soft-delete a consent template
+router.delete("/templates/:id", (req, res) => consentController.deleteTemplate(req, res));
+
 // Send consent to patient
 router.post("/send", (req, res) => consentController.sendConsent(req, res));
 
 // Public endpoints for patient signing
 router.get("/request/:link", (req, res) => consentController.getConsentRequestByLink(req, res));
+router.get("/data/:link", (req, res) => consentController.getConsentData(req, res));
 router.post("/submit/:link", (req, res) => consentController.submitConsentSignature(req, res));
 
 // Internal endpoints for tracking

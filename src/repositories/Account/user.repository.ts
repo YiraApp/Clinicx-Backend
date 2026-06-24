@@ -33,6 +33,9 @@ export class UserRepository implements IUserRepository {
             if (filters.roleId) {
                 baseQuery.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
             }
+            if (filters.doctorId) {
+                baseQuery.innerJoin('u.Appointments', 'docApt', 'docApt.DoctorId = :doctorId', { doctorId: filters.doctorId });
+            }
         }
 
         // Count total users (filtered)
@@ -65,6 +68,9 @@ export class UserRepository implements IUserRepository {
             }
             if (filters.status !== undefined) roleCountsRaw.andWhere('u.Status = :status', { status: filters.status });
             if (filters.roleId) roleCountsRaw.andWhere('ur.RoleId = :roleId', { roleId: filters.roleId });
+            if (filters.doctorId) {
+                roleCountsRaw.innerJoin('u.Appointments', 'docApt', 'docApt.DoctorId = :doctorId', { doctorId: filters.doctorId });
+            }
         }
 
         const roleCounts = await roleCountsRaw
@@ -125,6 +131,10 @@ export class UserRepository implements IUserRepository {
 
         if (filters.gender) {
             query.andWhere('u.Gender = :gender', { gender: filters.gender });
+        }
+
+        if (filters.doctorId) {
+            query.innerJoin('u.Appointments', 'docApt', 'docApt.DoctorId = :doctorId', { doctorId: filters.doctorId });
         }
 
 

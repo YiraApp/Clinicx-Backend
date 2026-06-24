@@ -20,14 +20,14 @@ export class ConsentRequestRepository {
     async findByLink(link: string): Promise<ConsentRequest | null> {
         return await this.repo.findOne({
             where: { RequestLink: link },
-            relations: ["Patient", "Template", "Hospital", "Template.SignatureFields"]
+            relations: ["Patient", "Template", "Hospital", "Template.TemplateFields"]
         });
     }
 
     async findManyByLink(link: string): Promise<ConsentRequest[]> {
         return await this.repo.find({
             where: { RequestLink: link },
-            relations: ["Patient", "Template", "Hospital", "Template.SignatureFields"]
+            relations: ["Patient", "Template", "Hospital", "Template.TemplateFields"]
         });
     }
 

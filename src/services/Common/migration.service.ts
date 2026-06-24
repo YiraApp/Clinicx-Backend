@@ -11,7 +11,23 @@ export class MigrationService {
                 
                 // Consent Request Schema Updates
                 "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('ConsentRequests') AND name = 'SignedPdfUrl') ALTER TABLE ConsentRequests ADD SignedPdfUrl NVARCHAR(MAX) NULL;",
-                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('ConsentRequests') AND name = 'SignatureImageUrl') ALTER TABLE ConsentRequests ADD SignatureImageUrl NVARCHAR(MAX) NULL;"
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('ConsentRequests') AND name = 'SignatureImageUrl') ALTER TABLE ConsentRequests ADD SignatureImageUrl NVARCHAR(MAX) NULL;",
+
+                // Consent Template Fields Schema Updates
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('ConsentTemplateFields') AND name = 'FieldKey') ALTER TABLE ConsentTemplateFields ADD FieldKey NVARCHAR(100) NULL;",
+
+                // Password Reset Tokens Table
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PasswordResetTokens')
+                CREATE TABLE PasswordResetTokens (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    UserId UNIQUEIDENTIFIER NOT NULL,
+                    Token VARCHAR(500) NOT NULL,
+                    ExpiryTime DATETIME NOT NULL,
+                    IsUsed BIT DEFAULT 0,
+                    CreatedAt DATETIME DEFAULT GETDATE(),
+                    UsedAt DATETIME NULL,
+                    CONSTRAINT FK_PasswordResetTokens_Users FOREIGN KEY (UserId) REFERENCES Users(Id)
+                );`
             ];
 
             for (const query of queries) {

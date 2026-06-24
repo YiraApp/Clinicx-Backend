@@ -11,4 +11,5 @@ export interface ISidebarRepository {
     updateMenu(menuId: number, menuData: Partial<SidebarMenu>): Promise<SidebarMenu>;
     deleteMenu(menuId: number): Promise<void>;
     updateRoleSidebarMenus(roleId: string, menuIds: number[], orgId?: number | null, hospId?: number | null): Promise<void>;
+    hasMenuAccess(roleId: string, routePatterns: string[], orgId?: number | null, hospId?: number | null): Promise<boolean>;
 }

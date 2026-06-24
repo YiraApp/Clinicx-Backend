@@ -133,6 +133,13 @@ export class ConsentService {
     }
 
     /**
+     * Soft-deletes a consent template.
+     */
+    async deleteTemplate(templateId: number): Promise<void> {
+        await consentTemplateRepository.softDeleteTemplate(templateId);
+    }
+
+    /**
      * Gets the status of all consents for a specific date and hospital.
      */
     async getDailyConsentStatus(date: string, hospitalId: number): Promise<any[]> {
@@ -338,6 +345,55 @@ export class ConsentService {
     }
 
     /**
+     * Builds a map of FieldKey -> computed patient value for auto-filling template fields.
+     */
+    buildFieldValueMap(patient: any): Record<string, string> {
+        return {
+            "Patient Name": `${patient?.FirstName || ""} ${patient?.LastName || ""}`.trim(),
+            "Gender": patient?.Gender || "",
+            "Age": patient?.DateOfBirth ? String(Math.floor((new Date().getTime() - new Date(patient.DateOfBirth).getTime()) / 31557600000)) : "",
+            "Date Of Birth": patient?.DateOfBirth ? new Date(patient.DateOfBirth).toLocaleDateString("en-IN") : "",
+            "Phone Number": patient?.PhoneNumber || "",
+            "Email": patient?.Email || "",
+            "Blood Group": patient?.BloodGroup || "",
+            "Aadhar Number": patient?.AadharNumber || "",
+            "Height": patient?.Height ? `${patient.Height} cm` : "",
+            "Weight": patient?.Weight ? `${patient.Weight} kg` : "",
+            "Emergency Contact Name": patient?.EmergencyContactName || "",
+            "Emergency Contact Phone": patient?.EmergencyContactPhone || "",
+        };
+    }
+
+    /**
+     * Fetches all consent requests for a batch link with auto-filled field values.
+     */
+    async getConsentData(link: string) {
+        const requests = await consentRequestRepository.findManyByLink(link);
+        if (!requests || requests.length === 0) return null;
+
+        const patient = requests[0].Patient;
+        const fieldValueMap = this.buildFieldValueMap(patient);
+
+        return {
+            Patient: patient,
+            Hospital: requests[0].Hospital,
+            RequestLink: requests[0].RequestLink,
+            CreatedAt: requests[0].CreatedAt,
+            ExpiresAt: requests[0].ExpiresAt,
+            FieldValues: fieldValueMap,
+            Requests: requests.map(r => ({
+                Id: r.Id,
+                TemplateId: r.TemplateId,
+                Template: r.Template,
+                Status: r.Status,
+                SignedPdfUrl: r.SignedPdfUrl,
+                SignatureImageUrl: r.SignatureImageUrl,
+                SignedAt: r.SignedAt
+            }))
+        };
+    }
+
+    /**
      * Fetches all consent requests for a batch link.
      */
     async getConsentRequestByLink(link: string) {
@@ -381,9 +437,12 @@ export class ConsentService {
 
                     // C. Draw Signature based on Predefined Fields or Default
                     const pages = pdfDoc.getPages();
-                    const fields = request.Template?.SignatureFields || [];
+                    const fields = request.Template?.TemplateFields || [];
 
                     if (fields.length > 0) {
+                        const patient = firstRequest.Patient;
+                        const fieldValueMap = this.buildFieldValueMap(patient);
+
                         for (const field of fields) {
                             const page = pages[field.PageNumber - 1] || pages[pages.length - 1];
                             const { width: pWidth, height: pHeight } = page.getSize();
@@ -391,18 +450,47 @@ export class ConsentService {
                             const drawX = field.X - (field.Width / 2);
                             const drawY = pHeight - (field.Y + (field.Height / 2));
 
-                            page.drawImage(signatureImage, {
-                                x: drawX,
-                                y: drawY,
-                                width: field.Width,
-                                height: field.Height,
-                            });
-
-                            if (field.IncludeSignerName) {
-                                page.drawText(patientName, {
+                            if (field.FieldType === "Signature") {
+                                page.drawImage(signatureImage, {
                                     x: drawX,
-                                    y: drawY - 12,
-                                    size: 10,
+                                    y: drawY,
+                                    width: field.Width,
+                                    height: field.Height,
+                                });
+                            } else if (field.FieldType === "Date") {
+                                const dateText = field.FieldKey && fieldValueMap[field.FieldKey]
+                                    ? fieldValueMap[field.FieldKey]
+                                    : new Date().toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" });
+                                page.drawText(dateText, {
+                                    x: drawX,
+                                    y: drawY,
+                                    size: Math.min(field.Height, 12),
+                                    color: rgb(0.1, 0.1, 0.1),
+                                });
+                            } else if (field.FieldType === "Checkbox") {
+                                page.drawRectangle({
+                                    x: drawX,
+                                    y: drawY,
+                                    width: field.Width,
+                                    height: field.Height,
+                                    borderColor: rgb(0.1, 0.1, 0.1),
+                                    borderWidth: 1.5,
+                                    color: rgb(0.8, 0.9, 0.8),
+                                });
+                                page.drawText("✓", {
+                                    x: drawX + 4,
+                                    y: drawY + 2,
+                                    size: Math.min(field.Height - 4, 16),
+                                    color: rgb(0.1, 0.6, 0.1),
+                                });
+                            } else {
+                                const textValue = field.FieldKey && fieldValueMap[field.FieldKey]
+                                    ? fieldValueMap[field.FieldKey]
+                                    : patientName;
+                                page.drawText(textValue, {
+                                    x: drawX,
+                                    y: drawY,
+                                    size: Math.min(field.Height, 12),
                                     color: rgb(0.1, 0.1, 0.1),
                                 });
                             }

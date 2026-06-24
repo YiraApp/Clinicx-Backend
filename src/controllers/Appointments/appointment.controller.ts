@@ -17,6 +17,7 @@ export class AppointmentController {
             const orgId = req.query.orgId ? parseInt(String(req.query.orgId)) : undefined;
             const hospitalId = req.query.hospitalId ? parseInt(String(req.query.hospitalId)) : undefined;
             const userId = req.query.userId ? String(req.query.userId) : undefined;
+            const doctorId = req.query.doctorId ? String(req.query.doctorId) : undefined;
             const date = req.query.date ? String(req.query.date) : undefined;
             const status = req.query.status ? String(req.query.status) : undefined;
             const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
@@ -24,7 +25,7 @@ export class AppointmentController {
             const page = req.query.page ? parseInt(String(req.query.page)) : undefined;
             const pageSize = req.query.pageSize ? parseInt(String(req.query.pageSize)) : undefined;
 
-            const { data, summary, total, page: currentPage, pageSize: currentPageSize } = await appointmentService.getAppointments({ orgId, hospitalId, userId, date, status, startDate, endDate, page, pageSize });
+            const { data, summary, total, page: currentPage, pageSize: currentPageSize } = await appointmentService.getAppointments({ orgId, hospitalId, userId, doctorId, date, status, startDate, endDate, page, pageSize });
             return res.json({
                 status: true,
                 message: "Success",

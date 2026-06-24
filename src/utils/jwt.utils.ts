@@ -20,9 +20,9 @@ export interface TokenPayload {
  * @param payload - The data to include in the token.
  * @returns The signed JWT token.
  */
-export const generateAccessToken = (payload: TokenPayload): string => {
+export const generateAccessToken = (payload: TokenPayload, expiresIn?: string | number): string => {
     return jwt.sign(payload, JWT_SECRET, {
-        expiresIn: ACCESS_TOKEN_EXPIRY as any,
+        expiresIn: (expiresIn || ACCESS_TOKEN_EXPIRY) as any,
         issuer: JWT_ISSUER,
         audience: JWT_AUDIENCE
     });
@@ -33,9 +33,9 @@ export const generateAccessToken = (payload: TokenPayload): string => {
  * @param payload - The data to include in the token.
  * @returns The signed JWT token.
  */
-export const generateRefreshToken = (payload: TokenPayload): string => {
+export const generateRefreshToken = (payload: TokenPayload, expiresIn?: string | number): string => {
     return jwt.sign(payload, REFRESH_TOKEN_SECRET, {
-        expiresIn: REFRESH_TOKEN_EXPIRY as any,
+        expiresIn: (expiresIn || REFRESH_TOKEN_EXPIRY) as any,
         issuer: JWT_ISSUER,
         audience: JWT_AUDIENCE
     });

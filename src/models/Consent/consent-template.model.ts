@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
-import { SignatureField } from "./signature-field.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
 import { Organization } from "../Organizations/organization.model.js";
+import { ConsentTemplateField } from "./ConsentTemplateField.js";
 
 @Entity({ name: "ConsentTemplates" })
 export class ConsentTemplate {
@@ -52,6 +52,9 @@ export class ConsentTemplate {
     @Column({ type: "datetime", nullable: true })
     UpdatedAt?: Date;
 
-    @OneToMany(() => SignatureField, (field: SignatureField) => field.Template)
-    SignatureFields: Relation<SignatureField>[];
+    @OneToMany(
+        () => ConsentTemplateField,
+        (field: ConsentTemplateField) => field.Template
+    )
+    TemplateFields: Relation<ConsentTemplateField>[];
 }

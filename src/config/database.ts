@@ -28,7 +28,7 @@ import { PatientRegistration } from "../models/Organizations/patient-registratio
 import { PatientInsurance } from "../models/Organizations/patient-insurance.model.js";
 import { UserRegistrationLink } from "../models/Organizations/user-registration-link.model.js";
 import { ConsentTemplate } from "../models/Consent/consent-template.model.js";
-import { SignatureField } from "../models/Consent/signature-field.model.js";
+import { ConsentTemplateField } from "../models/Consent/ConsentTemplateField.js";
 import { Appointment } from "../models/Appointments/appointment.model.js";
 import { PatientQueue } from "../models/Appointments/patient-queue.model.js";
 import { PatientConsent } from "../models/Consent/patient-consent.model.js";
@@ -54,6 +54,7 @@ import { HospitalPaymentConfiguration } from "../models/Organizations/hospital-p
 import { AppointmentBill } from "../models/Payments/appointment-bill.model.js";
 import { AppointmentBillItem } from "../models/Payments/appointment-bill-item.model.js";
 import { MeetingRedirection } from "../models/Appointments/meeting-redirection.model.js";
+import { PasswordResetToken } from "../models/Account/password-reset-token.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -87,7 +88,7 @@ export const AppDataSource = new DataSource({
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
         HealthcareProvider, HealthcareProviderAvailability, HealthcareProviderScheduleSlot,
         PatientRegistration, PatientInsurance, UserRegistrationLink,
-        ConsentTemplate, SignatureField,
+        ConsentTemplate, ConsentTemplateField,
         Appointment, PatientQueue,
         PatientConsent, ConsentRequest,
         PatientVerification, PatientVerificationDocument,
@@ -95,7 +96,8 @@ export const AppDataSource = new DataSource({
         PrescriptionDiagnosis, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
         Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem,
-        MeetingRedirection
+        MeetingRedirection,
+        PasswordResetToken
     ],
     extra: {
         encrypt: true,

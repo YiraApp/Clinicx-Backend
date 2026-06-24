@@ -103,6 +103,14 @@ export class SidebarRepository implements ISidebarRepository {
         return savedMenu;
     }
 
+    async hasMenuAccess(roleId: string, routePatterns: string[], orgId?: number | null, hospId?: number | null): Promise<boolean> {
+        const roleMenus = await this.getRoleSidebarMenus(roleId, orgId, hospId);
+        return roleMenus.some(rm =>
+            rm.Menu?.Route &&
+            routePatterns.some(pattern => rm.Menu!.Route!.toLowerCase().includes(pattern.toLowerCase()))
+        );
+    }
+
     async updateMenu(menuId: number, menuData: Partial<SidebarMenu>): Promise<SidebarMenu> {
         await this.menuRepo.update(menuId, menuData);
         return await this.menuRepo.findOneBy({ MenuId: menuId }) as SidebarMenu;

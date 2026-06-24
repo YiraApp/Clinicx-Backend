@@ -1,17 +1,61 @@
 import type { Request, Response } from "express";
-import { authService } from "../../services/Account/auth.service.js";
-import { ApiResponse } from "../../utils/response.utils.js";
+import { mobileAuthService } from "../services/mobile-auth.service.js";
+import { authService } from "../../../services/Account/auth.service.js";
+import { ApiResponse } from "../../../utils/response.utils.js";
 
 /**
- * Handles user login requests.
+ * Handles mobile user login requests.
+ * Email: authenticates with password directly.
+ * Phone: dispatches OTP for login verification without password.
  */
 export const login = async (req: Request, res: Response) => {
     try {
-        const { identity, password, roleId } = req.body;
+        const { identity, password } = req.body;
+        if (!identity) {
+            return res.status(400).json(ApiResponse.error("Identity is required"));
+        }
+
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const result = await authService.login(identity, password, roleId, deviceInfo, ipAddress);
+        const result = await mobileAuthService.login(identity, password, deviceInfo, ipAddress);
+        return res.json(ApiResponse.success(result, result.otpSent ? "OTP sent successfully" : "Login successful"));
+    } catch (error: any) {
+        return res.status(401).json(ApiResponse.error(error.message));
+    }
+};
+
+/**
+ * Handles resending OTP for mobile logins.
+ */
+export const resendOTP = async (req: Request, res: Response) => {
+    try {
+        const { contact, countryCode } = req.body;
+        if (!contact) {
+            return res.status(400).json(ApiResponse.error("Contact (phone number) is required"));
+        }
+
+        const result = await mobileAuthService.resendOTP(contact, countryCode);
+        return res.json(ApiResponse.success(result, "OTP resent successfully"));
+    } catch (error: any) {
+        return res.status(400).json(ApiResponse.error(error.message));
+    }
+};
+
+/**
+ * Verifies mobile OTP and issues authentication tokens.
+ */
+export const verifyLogin = async (req: Request, res: Response) => {
+    try {
+        const { contact, sessionId, otp } = req.body;
+        if (!contact || !sessionId || !otp) {
+            return res.status(400).json(ApiResponse.error("Contact, sessionId, and OTP are required"));
+        }
+
+        const deviceInfo = req.headers["x-device-info"] as string;
+        const ipAddress = req.headers["x-ip-address"] as string;
+
+        const result = await mobileAuthService.verifyAndLogin(contact, sessionId, otp, deviceInfo, ipAddress);
         return res.json(ApiResponse.success(result, "Login successful"));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));
@@ -19,12 +63,12 @@ export const login = async (req: Request, res: Response) => {
 };
 
 /**
- * Handles token refresh requests.
+ * Handles mobile token refresh requests.
  */
 export const refreshToken = async (req: Request, res: Response) => {
     try {
         const { refreshToken } = req.body;
-        const result = await authService.refreshToken(refreshToken);
+        const result = await mobileAuthService.refreshToken(refreshToken);
         return res.json(ApiResponse.success(result, "Token refreshed successfully"));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));
@@ -32,7 +76,7 @@ export const refreshToken = async (req: Request, res: Response) => {
 };
 
 /**
- * Handles user logout.
+ * Handles mobile user logout.
  */
 export const logout = async (req: Request, res: Response) => {
     try {
@@ -45,7 +89,7 @@ export const logout = async (req: Request, res: Response) => {
 };
 
 /**
- * Handles forgot password requests.
+ * Handles mobile forgot password requests.
  */
 export const forgotPassword = async (req: Request, res: Response) => {
     try {
@@ -61,7 +105,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
 };
 
 /**
- * Handles password reset using a token.
+ * Handles mobile password reset using a token.
  */
 export const resetPassword = async (req: Request, res: Response) => {
     try {

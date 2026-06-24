@@ -71,7 +71,7 @@ export class DashboardRepository {
             WHERE Action IN ('CREATE', 'UPDATE', 'DELETE', 'LOGIN')
             ${orgId ? 'AND l.OrgId = ' + orgId : ''}
             ${hospId ? 'AND l.HospitalId = ' + hospId : ''}
-            ORDER BY UpdatedOn DESC;
+            ORDER BY l.LogId DESC;
         `;
 
         const recentActivity = await AppDataSource.query(recentActivityQuery);

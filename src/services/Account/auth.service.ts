@@ -1,9 +1,13 @@
 import bcrypt from "bcrypt";
+import { v4 as uuidv4 } from "uuid";
 import { AppDataSource } from "../../config/database.js";
 import { User } from "../../models/Account/user.model.js";
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from "../../utils/jwt.utils.js";
 import { tokenRepository } from "../../repositories/Account/token.repository.js";
 import { userRoleRepository } from "../../repositories/Account/userrole.repository.js";
+import { userRepository } from "../../repositories/Account/user.repository.js";
+import { passwordResetTokenRepository } from "../../repositories/Account/password-reset-token.repository.js";
+import { mailService } from "../../services/Mail/mail.service.js";
 import type { IAuthService } from "../../interfaces/Service/Account/IAuthService.js";
 
 /**
@@ -159,6 +163,72 @@ export class AuthService implements IAuthService {
         if (tokenRecord) {
             await tokenRepository.revokeToken(tokenRecord.TokenId);
         }
+    }
+
+    async forgotPassword(identity: string): Promise<{ message: string }> {
+        const user = await userRepository.findByEmail(identity) || await userRepository.findByPhone(identity);
+        if (!user) {
+            throw new Error("No account found with this email or phone number");
+        }
+
+        const resetToken = uuidv4();
+        const expiryTime = new Date();
+        expiryTime.setHours(expiryTime.getHours() + 24);
+
+        await passwordResetTokenRepository.invalidatePreviousTokens(user.Id);
+        await passwordResetTokenRepository.create({
+            UserId: user.Id,
+            Token: resetToken,
+            ExpiryTime: expiryTime,
+            IsUsed: false
+        });
+
+        const baseUrl = (process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173").replace(/\/+$/, "");
+        const resetUrl = `${baseUrl}/reset-password/${resetToken}`;
+        const expiryDateStr = expiryTime.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
+        if (user.Email) {
+            mailService.sendDynamicEmail("PASSWORD_RESET_EMAIL", user.Email, {
+                FirstName: user.FirstName || "User",
+                LastName: user.LastName || "",
+                Email: user.Email,
+                RequestedDateTime: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+                ExpiryTime: expiryDateStr,
+                ResetPasswordURL: resetUrl
+            }).catch(err => console.error("[AuthService] Failed to send password reset email:", err));
+        }
+
+        return {
+            message: "If an account exists with this email or phone, a password reset link has been sent."
+        };
+    }
+
+    async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+        const resetTokenRecord = await passwordResetTokenRepository.findByToken(token);
+
+        if (!resetTokenRecord) {
+            throw new Error("Invalid or expired reset token");
+        }
+
+        if (resetTokenRecord.ExpiryTime < new Date()) {
+            throw new Error("Reset token has expired");
+        }
+
+        if (resetTokenRecord.IsUsed) {
+            throw new Error("Reset token has already been used");
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        await userRepository.updateUser(resetTokenRecord.UserId, {
+            PasswordHash: hashedPassword
+        });
+
+        await passwordResetTokenRepository.markAsUsed(resetTokenRecord.Id);
+        await tokenRepository.revokeAllUserTokens(resetTokenRecord.UserId);
+
+        return { message: "Password has been reset successfully" };
     }
 }
 

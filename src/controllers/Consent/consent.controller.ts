@@ -131,6 +131,28 @@ export class ConsentController {
     }
 
     /**
+     * DELETE /api/consent/templates/:id
+     */
+    async deleteTemplate(req: Request, res: Response): Promise<void> {
+        try {
+            const templateId = parseInt(req.params.id as string);
+            if (isNaN(templateId)) {
+                res.status(400).json({ error: "Valid Template ID is required." });
+                return;
+            }
+
+            await consentService.deleteTemplate(templateId);
+
+            res.status(200).json({
+                message: "Consent template deleted successfully"
+            });
+        } catch (error: any) {
+            console.error("[Consent Controller] Error deleting template:", error.message);
+            res.status(500).json({ error: "Failed to delete consent template", detail: error.message });
+        }
+    }
+
+    /**
      * POST /api/consent/send
      */
     async sendConsent(req: Request, res: Response): Promise<void> {
@@ -254,6 +276,34 @@ export class ConsentController {
             return res.json(response);
         } catch (error: any) {
             console.error("[Consent Controller] Get Error:", error.message);
+            return res.status(500).json({ error: "Internal server error." });
+        }
+    }
+
+    /**
+     * GET /api/consent/data/:link
+     * Returns consent request data with pre-computed field values for auto-fill.
+     */
+    async getConsentData(req: Request, res: Response) {
+        try {
+            const link = req.params.link as string;
+            const data = await consentService.getConsentData(link);
+
+            if (!data) {
+                return res.status(404).json({ error: "Consent request not found." });
+            }
+
+            // Check for expiration
+            if (data.ExpiresAt && new Date() > new Date(data.ExpiresAt)) {
+                return res.status(410).json({
+                    error: "This consent link has expired.",
+                    detail: "Links are valid for 24 hours. Please request a new link from the front desk."
+                });
+            }
+
+            return res.json(data);
+        } catch (error: any) {
+            console.error("[Consent Controller] Get consent data error:", error.message);
             return res.status(500).json({ error: "Internal server error." });
         }
     }
