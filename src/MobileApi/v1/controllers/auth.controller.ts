@@ -10,7 +10,7 @@ import { ApiResponse } from "../../../utils/response.utils.js";
  */
 export const login = async (req: Request, res: Response) => {
     try {
-        const { identity, password } = req.body;
+        const { identity, password, countryCode } = req.body;
         if (!identity) {
             return res.status(400).json(ApiResponse.error("Identity is required"));
         }
@@ -18,7 +18,7 @@ export const login = async (req: Request, res: Response) => {
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const result = await mobileAuthService.login(identity, password, deviceInfo, ipAddress);
+        const result = await mobileAuthService.login(identity, password, countryCode, deviceInfo, ipAddress);
         return res.json(ApiResponse.success(result, result.otpSent ? "OTP sent successfully" : "Login successful"));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));
@@ -47,7 +47,7 @@ export const resendOTP = async (req: Request, res: Response) => {
  */
 export const verifyLogin = async (req: Request, res: Response) => {
     try {
-        const { contact, sessionId, otp } = req.body;
+        const { contact, sessionId, otp, countryCode } = req.body;
         if (!contact || !sessionId || !otp) {
             return res.status(400).json(ApiResponse.error("Contact, sessionId, and OTP are required"));
         }
@@ -55,7 +55,7 @@ export const verifyLogin = async (req: Request, res: Response) => {
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const result = await mobileAuthService.verifyAndLogin(contact, sessionId, otp, deviceInfo, ipAddress);
+        const result = await mobileAuthService.verifyAndLogin(contact, sessionId, otp, countryCode, deviceInfo, ipAddress);
         return res.json(ApiResponse.success(result, "Login successful"));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));

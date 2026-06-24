@@ -13,7 +13,13 @@ export class MobileAuthService {
      * - Email identity: authenticates with password and returns tokens directly.
      * - Mobile (phone) identity: sends OTP and logs in without password upon verification.
      */
-    async login(identity: string, password?: string, deviceInfo?: string, ipAddress?: string): Promise<{
+    async login(
+        identity: string,
+        password?: string,
+        countryCode?: string,
+        deviceInfo?: string,
+        ipAddress?: string
+    ): Promise<{
         otpSent: boolean;
         sessionId?: string;
         contact?: string;
@@ -29,8 +35,17 @@ export class MobileAuthService {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const isEmail = emailRegex.test(identity);
 
+        let lookupIdentity = identity;
+        if (!isEmail) {
+            if (countryCode && identity.startsWith(countryCode)) {
+                lookupIdentity = identity.substring(countryCode.length);
+            } else if (identity.startsWith("91")) {
+                lookupIdentity = identity.substring(2);
+            }
+        }
+
         // Find user (ONLY primary, non-deleted user)
-        const user = await mobileAuthRepository.findPrimaryUser(identity);
+        const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
 
         if (!user) {
             throw new Error("Invalid Mobile Or Email");
@@ -127,7 +142,7 @@ export class MobileAuthService {
             const otpResult = await otpService.sendOTP(
                 otpTarget,
                 OTPPurpose.LOGIN,
-                user.CountryCode || undefined
+                countryCode || user.CountryCode || undefined
             );
 
             return {
@@ -183,6 +198,7 @@ export class MobileAuthService {
         contact: string,
         sessionId: string,
         otp: string,
+        countryCode?: string,
         deviceInfo?: string,
         ipAddress?: string
     ): Promise<{
@@ -192,12 +208,16 @@ export class MobileAuthService {
         refreshTokenExpiry: Date;
         user: Partial<User> & { Roles: any[] };
     }> {
-        // 1. Verify OTP using the repository logic (strip country code 91 if mobile)
+        // 1. Verify OTP using the repository logic (strip country code if mobile)
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const isEmail = emailRegex.test(contact);
         let lookupContact = contact;
-        if (!isEmail && contact.startsWith("91")) {
-            lookupContact = contact.substring(2);
+        if (!isEmail) {
+            if (countryCode && contact.startsWith(countryCode)) {
+                lookupContact = contact.substring(countryCode.length);
+            } else if (contact.startsWith("91")) {
+                lookupContact = contact.substring(2);
+            }
         }
 
         const verification = await userOTPRepository.verifyOTP(sessionId, lookupContact, otp, OTPPurpose.LOGIN);
@@ -206,7 +226,7 @@ export class MobileAuthService {
         }
 
         // 2. Load primary user by contact
-        const user = await mobileAuthRepository.findPrimaryUser(contact);
+        const user = await mobileAuthRepository.findPrimaryUser(lookupContact);
         if (!user) {
             throw new Error("User not found or is not primary");
         }
