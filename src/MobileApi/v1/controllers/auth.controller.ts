@@ -2,6 +2,9 @@ import type { Request, Response } from "express";
 import { mobileAuthService } from "../services/mobile-auth.service.js";
 import { authService } from "../../../services/Account/auth.service.js";
 import { ApiResponse } from "../../../utils/response.utils.js";
+import { userDeviceService } from "../services/userdevice.service.js";
+import { verifyRefreshToken } from "../../../utils/jwt.utils.js";
+import { tokenRepository } from "../../../repositories/Account/token.repository.js";
 
 /**
  * Handles mobile user login requests.
@@ -12,7 +15,12 @@ export const login = async (req: Request, res: Response) => {
     try {
         const { identity, password, loginType, type, sessionId, countryCode } = req.body;
         if (!identity) {
-            return res.status(400).json(ApiResponse.error("Identity is required"));
+            return res.status(400).json({
+                status: false,
+                message: "Identity is required",
+                code: "IDENTITY_REQUIRED",
+                data: { code: "IDENTITY_REQUIRED" }
+            });
         }
 
         const deviceInfo = req.headers["x-device-info"] as string;
@@ -32,7 +40,38 @@ export const login = async (req: Request, res: Response) => {
 
         return res.json(ApiResponse.success(result, "Login successful! Welcome back."));
     } catch (error: any) {
-        return res.status(401).json(ApiResponse.error(error.message));
+        let code = "AUTHENTICATION_FAILED";
+        let status = 401;
+
+        if (error.message === "Invalid email format") {
+            code = "INVALID_EMAIL";
+            status = 400;
+        } else if (error.message === "Password is required for email login") {
+            code = "PASSWORD_REQUIRED";
+            status = 400;
+        } else if (error.message === "Account setup incomplete. Please contact support.") {
+            code = "INCOMPLETE_SETUP";
+            status = 400;
+        } else if (error.message === "Session ID is required for mobile OTP login") {
+            code = "SESSION_ID_REQUIRED";
+            status = 400;
+        } else if (error.message === "OTP is required for mobile OTP login") {
+            code = "OTP_REQUIRED";
+            status = 400;
+        } else if (error.message === "Invalid OTP. Please check the code and try again.") {
+            code = "INVALID_OTP";
+            status = 401;
+        } else if (error.message.includes("Access denied")) {
+            code = "ACCESS_DENIED";
+            status = 400;
+        }
+
+        return res.status(status).json({
+            status: false,
+            message: error.message,
+            code,
+            data: { code }
+        });
     }
 };
 
@@ -45,23 +84,50 @@ export const sendOTP = async (req: Request, res: Response) => {
     const isResendFlag = isResend === true || resend === true;
     try {
         if (!identity) {
-            return res.status(400).json(ApiResponse.error("Identity (phone number) is required"));
+            return res.status(400).json({
+                status: false,
+                message: "Identity (phone number) is required",
+                code: "IDENTITY_REQUIRED",
+                data: { code: "IDENTITY_REQUIRED" }
+            });
         }
 
         const result = await mobileAuthService.sendOTP(identity, countryCode, isResendFlag);
         const successMessage = isResendFlag ? "OTP resent successfully!" : "OTP sent successfully!";
         return res.json(ApiResponse.success(result, successMessage));
     } catch (error: any) {
+        let status = 400;
+        let code = "OTP_SEND_FAILED";
+        let message = error.message;
+
         if (error.message === "User not registered") {
-            return res.status(404).json(ApiResponse.error(error.message));
+            status = 404;
+            code = "USER_NOT_REGISTERED";
+        } else if (error.message.includes("Access denied")) {
+            status = 400;
+            code = "ACCESS_DENIED";
+        } else if (error.message === "User account is inactive") {
+            status = 400;
+            code = "INACTIVE_USER";
+        } else if (error.message === "Email cannot be used for OTP login") {
+            status = 400;
+            code = "EMAIL_NOT_ALLOWED";
+        } else if (error.message === "No phone number found for this user") {
+            status = 400;
+            code = "PHONE_NOT_FOUND";
+        } else {
+            message = isResendFlag 
+                ? "Could not resend OTP. Please try again." 
+                : "Failed to send OTP. Please try again later.";
+            code = isResendFlag ? "OTP_RESEND_FAILED" : "OTP_SEND_FAILED";
         }
-        if (error.message.includes("Access denied")) {
-            return res.status(400).json(ApiResponse.error(error.message));
-        }
-        const errorMsg = isResendFlag 
-            ? "Could not resend OTP. Please try again." 
-            : "Failed to send OTP. Please try again later.";
-        return res.status(400).json(ApiResponse.error(errorMsg));
+
+        return res.status(status).json({
+            status: false,
+            message,
+            code,
+            data: { code }
+        });
     }
 };
 
@@ -72,13 +138,23 @@ export const resendOTP = async (req: Request, res: Response) => {
     try {
         const { contact, countryCode } = req.body;
         if (!contact) {
-            return res.status(400).json(ApiResponse.error("Contact (phone number) is required"));
+            return res.status(400).json({
+                status: false,
+                message: "Contact (phone number) is required",
+                code: "CONTACT_REQUIRED",
+                data: { code: "CONTACT_REQUIRED" }
+            });
         }
 
         const result = await mobileAuthService.sendOTP(contact, countryCode, true);
         return res.json(ApiResponse.success(result, "OTP resent successfully!"));
     } catch (error: any) {
-        return res.status(400).json(ApiResponse.error("Could not resend OTP. Please try again."));
+        return res.status(400).json({
+            status: false,
+            message: "Could not resend OTP. Please try again.",
+            code: "OTP_RESEND_FAILED",
+            data: { code: "OTP_RESEND_FAILED" }
+        });
     }
 };
 
@@ -89,7 +165,12 @@ export const verifyLogin = async (req: Request, res: Response) => {
     try {
         const { contact, sessionId, otp, countryCode } = req.body;
         if (!contact || !sessionId || !otp) {
-            return res.status(400).json(ApiResponse.error("Contact, sessionId, and OTP are required"));
+            return res.status(400).json({
+                status: false,
+                message: "Contact, sessionId, and OTP are required",
+                code: "MISSING_FIELDS",
+                data: { code: "MISSING_FIELDS" }
+            });
         }
 
         const deviceInfo = req.headers["x-device-info"] as string;
@@ -106,7 +187,20 @@ export const verifyLogin = async (req: Request, res: Response) => {
         );
         return res.json(ApiResponse.success(result, "Login successful! Welcome back."));
     } catch (error: any) {
-        return res.status(401).json(ApiResponse.error(error.message));
+        let code = "AUTHENTICATION_FAILED";
+        let status = 401;
+        if (error.message === "Invalid OTP. Please check the code and try again.") {
+            code = "INVALID_OTP";
+        } else if (error.message.includes("Access denied")) {
+            code = "ACCESS_DENIED";
+            status = 400;
+        }
+        return res.status(status).json({
+            status: false,
+            message: error.message,
+            code,
+            data: { code }
+        });
     }
 };
 
@@ -119,7 +213,12 @@ export const refreshToken = async (req: Request, res: Response) => {
         const result = await mobileAuthService.refreshToken(refreshToken);
         return res.json(ApiResponse.success(result, "Token refreshed successfully"));
     } catch (error: any) {
-        return res.status(401).json(ApiResponse.error(error.message));
+        return res.status(401).json({
+            status: false,
+            message: error.message,
+            code: "REFRESH_TOKEN_FAILED",
+            data: { code: "REFRESH_TOKEN_FAILED" }
+        });
     }
 };
 
@@ -128,11 +227,46 @@ export const refreshToken = async (req: Request, res: Response) => {
  */
 export const logout = async (req: Request, res: Response) => {
     try {
-        const { refreshToken } = req.body;
-        await authService.logout(refreshToken);
+        const { refreshToken, fcmToken, deviceId, one, logoutAll, allDevices } = req.body;
+        
+        let userId: string | null = null;
+        if (refreshToken) {
+            // First decode using JWT utility to see if payload is valid
+            const payload = verifyRefreshToken(refreshToken);
+            if (payload && payload.userId) {
+                userId = payload.userId;
+            } else {
+                // If JWT verify fails (e.g. expired token), look up in DB to find associated UserId
+                const tokenRecord = await tokenRepository.findByRefreshToken(refreshToken);
+                if (tokenRecord) {
+                    userId = tokenRecord.UserId;
+                }
+            }
+        }
+
+        // Call the standard authService logout logic to revoke the session
+        if (refreshToken) {
+            await authService.logout(refreshToken);
+        }
+
+        // Deactivate push notification devices if we identified the user
+        if (userId) {
+            // Dual-mode logic:
+            // Single device logout: active only when 'one' is explicitly true.
+            // All devices logout: active when 'one' is not true, OR if logoutAll/allDevices is true.
+            const isSingleDeviceLogout = (one === true);
+            
+            await userDeviceService.deactivateDevices(userId, isSingleDeviceLogout, fcmToken, deviceId);
+        }
+
         return res.status(200).json(ApiResponse.success(null, "Logged out successfully"));
     } catch (error: any) {
-        return res.status(400).json(ApiResponse.error(error.message));
+        return res.status(400).json({
+            status: false,
+            message: error.message,
+            code: "LOGOUT_FAILED",
+            data: { code: "LOGOUT_FAILED" }
+        });
     }
 };
 
@@ -143,12 +277,22 @@ export const forgotPassword = async (req: Request, res: Response) => {
     try {
         const { identity } = req.body;
         if (!identity) {
-            return res.status(400).json(ApiResponse.error("Email or phone number is required"));
+            return res.status(400).json({
+                status: false,
+                message: "Email or phone number is required",
+                code: "IDENTITY_REQUIRED",
+                data: { code: "IDENTITY_REQUIRED" }
+            });
         }
         const result = await authService.forgotPassword(identity);
         return res.json(ApiResponse.success(result, result.message));
     } catch (error: any) {
-        return res.status(404).json(ApiResponse.error(error.message));
+        return res.status(404).json({
+            status: false,
+            message: error.message,
+            code: "FORGOT_PASSWORD_FAILED",
+            data: { code: "FORGOT_PASSWORD_FAILED" }
+        });
     }
 };
 
@@ -159,15 +303,30 @@ export const resetPassword = async (req: Request, res: Response) => {
     try {
         const { token, newPassword } = req.body;
         if (!token || !newPassword) {
-            return res.status(400).json(ApiResponse.error("Token and new password are required"));
+            return res.status(400).json({
+                status: false,
+                message: "Token and new password are required",
+                code: "MISSING_FIELDS",
+                data: { code: "MISSING_FIELDS" }
+            });
         }
         if (newPassword.length < 6) {
-            return res.status(400).json(ApiResponse.error("Password must be at least 6 characters"));
+            return res.status(400).json({
+                status: false,
+                message: "Password must be at least 6 characters",
+                code: "PASSWORD_TOO_SHORT",
+                data: { code: "PASSWORD_TOO_SHORT" }
+            });
         }
         const result = await authService.resetPassword(token, newPassword);
         return res.json(ApiResponse.success(result, result.message));
     } catch (error: any) {
-        return res.status(400).json(ApiResponse.error(error.message));
+        return res.status(400).json({
+            status: false,
+            message: error.message,
+            code: "RESET_PASSWORD_FAILED",
+            data: { code: "RESET_PASSWORD_FAILED" }
+        });
     }
 };
 
@@ -179,10 +338,20 @@ export const getRoleDetails = async (req: Request, res: Response) => {
         const { userId, roleId } = req.query;
 
         if (!userId) {
-            return res.status(400).json(ApiResponse.error("userId is required"));
+            return res.status(400).json({
+                status: false,
+                message: "userId is required",
+                code: "USER_ID_REQUIRED",
+                data: { code: "USER_ID_REQUIRED" }
+            });
         }
         if (!roleId) {
-            return res.status(400).json(ApiResponse.error("roleId is required"));
+            return res.status(400).json({
+                status: false,
+                message: "roleId is required",
+                code: "ROLE_ID_REQUIRED",
+                data: { code: "ROLE_ID_REQUIRED" }
+            });
         }
 
         const result = await mobileAuthService.getUserOrganizationHospitals(
@@ -192,6 +361,11 @@ export const getRoleDetails = async (req: Request, res: Response) => {
 
         return res.json(ApiResponse.success(result, "Organizations and hospitals fetched successfully"));
     } catch (error: any) {
-        return res.status(400).json(ApiResponse.error(error.message));
+        return res.status(400).json({
+            status: false,
+            message: error.message,
+            code: "GET_ROLE_DETAILS_FAILED",
+            data: { code: "GET_ROLE_DETAILS_FAILED" }
+        });
     }
 };

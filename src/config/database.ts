@@ -55,6 +55,7 @@ import { AppointmentBill } from "../models/Payments/appointment-bill.model.js";
 import { AppointmentBillItem } from "../models/Payments/appointment-bill-item.model.js";
 import { MeetingRedirection } from "../models/Appointments/meeting-redirection.model.js";
 import { PasswordResetToken } from "../models/Account/password-reset-token.model.js";
+import { UserDevice } from "../models/Account/userdevice.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -97,7 +98,8 @@ export const AppDataSource = new DataSource({
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
         Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem,
         MeetingRedirection,
-        PasswordResetToken
+        PasswordResetToken,
+        UserDevice
     ],
     extra: {
         encrypt: true,

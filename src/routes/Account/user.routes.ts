@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { userController } from "../../controllers/Account/user.controller.js";
 import { otpController } from "../../controllers/Account/otp.controller.js";
+import { authMiddleware } from "../../middlewares/auth.middleware.js";
 
 const userRouter = Router();
 
@@ -44,5 +45,11 @@ userRouter.patch("/toggleStatus/:id", userController.toggleStatus.bind(userContr
  * Body: { userId: string, newPassword: string }
  */
 userRouter.post("/updatePassword", userController.updatePassword.bind(userController));
+
+/**
+ * Patient profile endpoints.
+ */
+userRouter.get("/patient/profile", authMiddleware, userController.getPatientProfile.bind(userController));
+userRouter.post("/patient/profile", authMiddleware, userController.updatePatientProfile.bind(userController));
 
 export { userRouter };

@@ -18,6 +18,10 @@ import { hospitalRepository } from "../../repositories/Organizations/hospital.re
 import { addressRepository } from "../../repositories/Account/address.repository.js";
 import { Address } from "../../models/Account/address.model.js";
 import { tokenRepository } from "../../repositories/Account/token.repository.js";
+import { AppDataSource } from "../../config/database.js";
+import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
+import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
+import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 
 /**
  * Service implementation for User operations.
@@ -453,6 +457,245 @@ export class UserService implements IUserService {
         user.UpdatedAt = new Date();
 
         await userRepository.save(user);
+    }
+
+    /**
+     * Fetches details of the authenticated patient's profile.
+     */
+    async getPatientProfile(userId: string): Promise<any> {
+        // 1. Fetch user with addresses
+        const userRepo = AppDataSource.getRepository(User);
+        const user = await userRepo.findOne({
+            where: { Id: userId },
+            relations: ["PermanentAddress", "TemporaryAddress"]
+        });
+
+        if (!user) {
+            throw new Error("Patient not found");
+        }
+
+        // 2. Fetch patient registration details (allergies, medical history)
+        const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+        const patientReg = await patientRegRepo.findOne({
+            where: { UserId: userId, IsDeleted: false, Status: true }
+        });
+
+        // 3. Fetch patient insurance details
+        const patientInsRepo = AppDataSource.getRepository(PatientInsurance);
+        const patientIns = await patientInsRepo.findOne({
+            where: { UserId: userId, IsDeleted: false, Status: true }
+        });
+
+        // 4. Fetch latest prescriptions for medications
+        const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
+        const prescriptions = await prescriptionRepo.find({
+            where: { PatientId: userId },
+            relations: ["Medications"],
+            order: { Date: "DESC", CreatedAt: "DESC" }
+        });
+
+        // Collect all medications
+        const currentMedications: any[] = [];
+        const seenMeds = new Set<string>();
+        for (const presc of prescriptions) {
+            if (presc.Medications) {
+                for (const med of presc.Medications) {
+                    const medKey = `${med.Medication.trim().toLowerCase()}-${(med.Dosage || "").trim().toLowerCase()}`;
+                    if (!seenMeds.has(medKey)) {
+                        seenMeds.add(medKey);
+                        currentMedications.push({
+                            name: med.Medication,
+                            dosage: med.Dosage ?? null,
+                            frequency: med.FrequencyType ?? null
+                        });
+                    }
+                }
+            }
+        }
+
+        // Parse lists of allergies and chronic conditions safely
+        const parseList = (str: string | null | undefined): string[] => {
+            if (!str) return [];
+            try {
+                if (str.trim().startsWith("[") && str.trim().endsWith("]")) {
+                    return JSON.parse(str);
+                }
+            } catch {}
+            return str.split(",").map(s => s.trim()).filter(Boolean);
+        };
+
+        const allergies = patientReg ? parseList(patientReg.Allergies) : [];
+        const chronicConditions = patientReg ? parseList(patientReg.MedicalHistory) : [];
+
+        const addressStr = user.PermanentAddress
+            ? [user.PermanentAddress.AddressLine1, user.PermanentAddress.AddressLine2, user.PermanentAddress.City, user.PermanentAddress.State, user.PermanentAddress.Pincode, user.PermanentAddress.Country]
+                .filter(Boolean)
+                .join(", ")
+            : null;
+
+        const dateOfBirthStr = user.DateOfBirth 
+            ? (typeof user.DateOfBirth === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(user.DateOfBirth)
+                ? user.DateOfBirth
+                : new Date(user.DateOfBirth).toISOString().split('T')[0])
+            : null;
+
+        const responseData = {
+            personalInfo: {
+                firstName: user.FirstName ?? null,
+                lastName: user.LastName ?? null,
+                email: user.Email ?? null,
+                phone: user.PhoneNumber ?? null,
+                dateOfBirth: dateOfBirthStr,
+                gender: user.Gender ?? null,
+                address: addressStr || null,
+                emergencyContact: {
+                    name: user.EmergencyContactName ?? null,
+                    relationship: user.Relation ?? null,
+                    phone: user.EmergencyContactPhone ?? null
+                }
+            },
+            medicalInfo: {
+                bloodGroup: user.BloodGroup ?? null,
+                height: user.Height != null ? String(user.Height) : null,
+                weight: user.Weight != null ? String(user.Weight) : null,
+                allergies: allergies,
+                chronicConditions: chronicConditions,
+                currentMedications: currentMedications
+            },
+            insurance: {
+                provider: patientIns?.InsuranceProvider ?? null,
+                policyNumber: patientIns?.InsuranceNumber ?? null,
+                validUntil: null,
+                coverage: null
+            },
+            preferences: {
+                notifications: {
+                    appointments: true,
+                    medications: true,
+                    testResults: true,
+                    healthTips: false,
+                    marketing: false
+                },
+                privacy: {
+                    shareDataWithProviders: true,
+                    allowResearch: false,
+                    twoFactorAuth: true
+                }
+            }
+        };
+
+        return responseData;
+    }
+
+    /**
+     * Updates details of the authenticated patient's profile.
+     */
+    async updatePatientProfile(userId: string, profileData: any): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const user = await userRepo.findOne({
+            where: { Id: userId },
+            relations: ["PermanentAddress"]
+        });
+
+        if (!user) {
+            throw new Error("Patient not found");
+        }
+
+        // 1. Update basic personal info
+        const personal = profileData.personalInfo || {};
+        if (personal.firstName !== undefined) user.FirstName = personal.firstName;
+        if (personal.lastName !== undefined) user.LastName = personal.lastName;
+        if (personal.email !== undefined) user.Email = personal.email;
+        if (personal.phone !== undefined) user.PhoneNumber = personal.phone;
+        if (personal.dateOfBirth !== undefined) user.DateOfBirth = personal.dateOfBirth;
+        if (personal.gender !== undefined) user.Gender = personal.gender;
+
+        // Emergency Contact
+        const emergency = personal.emergencyContact || {};
+        if (emergency.name !== undefined) user.EmergencyContactName = emergency.name;
+        if (emergency.relationship !== undefined) user.Relation = emergency.relationship;
+        if (emergency.phone !== undefined) user.EmergencyContactPhone = emergency.phone;
+
+        // Medical basic info
+        const medical = profileData.medicalInfo || {};
+        if (medical.bloodGroup !== undefined) user.BloodGroup = medical.bloodGroup;
+        if (medical.height !== undefined) user.Height = medical.height ? Number(medical.height) : null;
+        if (medical.weight !== undefined) user.Weight = medical.weight ? Number(medical.weight) : null;
+
+        // 2. Parse and save Address if provided
+        if (personal.address !== undefined) {
+            let address = user.PermanentAddress;
+            if (!address) {
+                address = new Address();
+                address.AddressType = true;
+            }
+            address.AddressLine1 = personal.address;
+            const savedAddress = await AppDataSource.getRepository(Address).save(address);
+            user.PermanentAddressId = savedAddress.Id;
+        }
+
+        user.UpdatedAt = new Date();
+        await userRepo.save(user);
+
+        // 3. Save Allergies and Chronic Conditions into PatientRegistration
+        const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+        let patientReg = await patientRegRepo.findOne({
+            where: { UserId: userId, IsDeleted: false, Status: true }
+        });
+
+        if (!patientReg) {
+            patientReg = new PatientRegistration();
+            patientReg.UserId = userId;
+            patientReg.Status = true;
+            patientReg.IsDeleted = false;
+        }
+
+        if (medical.allergies !== undefined) {
+            patientReg.Allergies = Array.isArray(medical.allergies) 
+                ? JSON.stringify(medical.allergies) 
+                : String(medical.allergies);
+        }
+
+        if (medical.chronicConditions !== undefined) {
+            patientReg.MedicalHistory = Array.isArray(medical.chronicConditions)
+                ? JSON.stringify(medical.chronicConditions)
+                : String(medical.chronicConditions);
+        }
+
+        await patientRegRepo.save(patientReg);
+
+        // 4. Save Insurance Details
+        const insurance = profileData.insurance || {};
+        if (insurance.provider !== undefined || insurance.policyNumber !== undefined) {
+            const patientInsRepo = AppDataSource.getRepository(PatientInsurance);
+            let patientIns = await patientInsRepo.findOne({
+                where: { UserId: userId, IsDeleted: false, Status: true }
+            });
+
+            if (!patientIns) {
+                patientIns = new PatientInsurance();
+                patientIns.UserId = userId;
+                patientIns.Status = true;
+                patientIns.IsDeleted = false;
+                
+                const userRoleRepo = AppDataSource.getRepository(UserRole);
+                const userRole = await userRoleRepo.findOne({ where: { UserId: userId } });
+                patientIns.OrganizationId = userRole?.OrganizationId || 1;
+            }
+
+            if (insurance.provider !== undefined) {
+                patientIns.InsuranceProvider = insurance.provider;
+            }
+            if (insurance.policyNumber !== undefined) {
+                patientIns.InsuranceNumber = insurance.policyNumber;
+            }
+
+            if (patientIns.InsuranceProvider && patientIns.InsuranceNumber) {
+                await patientInsRepo.save(patientIns);
+            }
+        }
+
+        return { message: "Profile updated successfully" };
     }
 }
 

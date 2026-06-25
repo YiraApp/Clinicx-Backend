@@ -262,6 +262,42 @@ export class UserController {
             res.status(400).json(ApiResponse.error(error.message));
         }
     }
+
+    /**
+     * Fetches details of the authenticated patient's profile.
+     */
+    async getPatientProfile(req: Request, res: Response): Promise<void> {
+        try {
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+            if (!currentUserId) {
+                res.status(401).json(ApiResponse.error("Authentication required."));
+                return;
+            }
+
+            const result = await userService.getPatientProfile(currentUserId);
+            res.json(ApiResponse.success(result, "Patient profile details fetched successfully."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Updates details of the authenticated patient's profile.
+     */
+    async updatePatientProfile(req: Request, res: Response): Promise<void> {
+        try {
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+            if (!currentUserId) {
+                res.status(401).json(ApiResponse.error("Authentication required."));
+                return;
+            }
+
+            const result = await userService.updatePatientProfile(currentUserId, req.body);
+            res.json(ApiResponse.success(result, "Patient profile details updated successfully."));
+        } catch (error: any) {
+            res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const userController = new UserController();

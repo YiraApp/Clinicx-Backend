@@ -54,4 +54,14 @@ export interface IUserService {
      * Updates a user's password securely.
      */
     updatePassword(userId: string, newPassword: string): Promise<void>;
+
+    /**
+     * Fetches details of the authenticated patient's profile.
+     */
+    getPatientProfile(userId: string): Promise<any>;
+
+    /**
+     * Updates details of the authenticated patient's profile.
+     */
+    updatePatientProfile(userId: string, profileData: any): Promise<any>;
 }
