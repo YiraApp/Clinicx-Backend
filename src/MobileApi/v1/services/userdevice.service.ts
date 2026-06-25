@@ -1,10 +1,11 @@
 import { userDeviceRepository } from "../repositories/userdevice.repository.js";
 import { UserDevice } from "../../../models/Account/userdevice.model.js";
+import { PlatformType } from "../enums/platform.enum.js";
 
 export class UserDeviceService {
     async registerDeviceToken(
         userId: string,
-        platform?: string,
+        platform?: PlatformType,
         currentVersion?: string,
         fcmToken?: string,
         deviceId?: string

@@ -41,7 +41,7 @@ export const login = async (req: Request, res: Response) => {
         return res.json(ApiResponse.success(result, "Login successful! Welcome back."));
     } catch (error: any) {
         let code = "AUTHENTICATION_FAILED";
-        let status = 401;
+        let status = 400;
 
         if (error.message === "Invalid email format") {
             code = "INVALID_EMAIL";
@@ -60,7 +60,7 @@ export const login = async (req: Request, res: Response) => {
             status = 400;
         } else if (error.message === "Invalid OTP. Please check the code and try again.") {
             code = "INVALID_OTP";
-            status = 401;
+            status = 400;
         } else if (error.message.includes("Access denied")) {
             code = "ACCESS_DENIED";
             status = 400;
@@ -115,6 +115,9 @@ export const sendOTP = async (req: Request, res: Response) => {
         } else if (error.message === "No phone number found for this user") {
             status = 400;
             code = "PHONE_NOT_FOUND";
+        } else if (error.message.includes("Maximum OTP attempts reached")) {
+            status = 400;
+            code = "OTP_LIMIT_EXCEEDED";
         } else {
             message = isResendFlag 
                 ? "Could not resend OTP. Please try again." 
@@ -188,7 +191,7 @@ export const verifyLogin = async (req: Request, res: Response) => {
         return res.json(ApiResponse.success(result, "Login successful! Welcome back."));
     } catch (error: any) {
         let code = "AUTHENTICATION_FAILED";
-        let status = 401;
+        let status = 400;
         if (error.message === "Invalid OTP. Please check the code and try again.") {
             code = "INVALID_OTP";
         } else if (error.message.includes("Access denied")) {
@@ -213,7 +216,7 @@ export const refreshToken = async (req: Request, res: Response) => {
         const result = await mobileAuthService.refreshToken(refreshToken);
         return res.json(ApiResponse.success(result, "Token refreshed successfully"));
     } catch (error: any) {
-        return res.status(401).json({
+        return res.status(400).json({
             status: false,
             message: error.message,
             code: "REFRESH_TOKEN_FAILED",
@@ -369,3 +372,75 @@ export const getRoleDetails = async (req: Request, res: Response) => {
         });
     }
 };
+
+/**
+ * Updates recent organization, hospital, and role context for the authenticated user.
+ */
+export const updateRecentContext = async (req: Request, res: Response) => {
+    try {
+        const { recentRoleId, recentOrgId, recentHospitalId } = req.body;
+        
+        // Resolve authenticated user ID from token
+        const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+        if (!userId) {
+            return res.status(400).json({
+                status: false,
+                message: "User ID is required",
+                code: "USER_ID_REQUIRED",
+                data: { code: "USER_ID_REQUIRED" }
+            });
+        }
+
+        const updatedUser = await mobileAuthService.updateRecentContext(
+            userId,
+            recentRoleId,
+            recentOrgId ? parseInt(recentOrgId) : undefined,
+            recentHospitalId ? parseInt(recentHospitalId) : undefined
+        );
+
+        return res.json(ApiResponse.success({
+            userId: updatedUser.Id,
+            recentRoleId: updatedUser.RecentRoleId,
+            recentOrgId: updatedUser.RecentOrgId,
+            recentHospitalId: updatedUser.RecentHospitalId
+        }, "Recent context updated successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message,
+            code: "CONTEXT_UPDATE_FAILED",
+            data: { code: "CONTEXT_UPDATE_FAILED" }
+        });
+    }
+};
+
+/**
+ * Gets the profile and recent context details of the authenticated user.
+ */
+export const getUserData = async (req: Request, res: Response) => {
+    try {
+        const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+        if (!userId) {
+            return res.status(400).json({
+                status: false,
+                message: "User ID is required",
+                code: "USER_ID_REQUIRED",
+                data: { code: "USER_ID_REQUIRED" }
+            });
+        }
+
+        const userData = await mobileAuthService.getUserData(userId);
+        return res.json(ApiResponse.success(userData, "User profile and session context details fetched successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message,
+            code: "GET_USER_DATA_FAILED",
+            data: { code: "GET_USER_DATA_FAILED" }
+        });
+    }
+};
+
+

@@ -22,7 +22,8 @@ export class OTPService {
         countryCode?: string,
         templateCode?: string,
         customData?: Record<string, any>,
-        channel?: "sms" | "whatsapp"
+        channel?: "sms" | "whatsapp",
+        isMobile?: boolean
     ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
         // Detect if contact is email or phone
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -46,9 +47,10 @@ export class OTPService {
             }
         }
 
-        // Check daily attempt limit (Max 6 OTPs per 24 hours per purpose)
+        // Check daily attempt limit (Max 20 OTPs for mobile login, 5 OTPs for other purposes/channels per 24 hours)
+        const limit = (isMobile && purpose === OTPPurpose.LOGIN) ? 20 : 5;
         const dailyAttempts = await userOTPRepository.countDailyAttempts(finalContact, purpose);
-        if (dailyAttempts >= 5) {
+        if (dailyAttempts >= limit) {
             throw new Error("Maximum OTP attempts reached. Please try again after 24 hours.");
         }
 
@@ -145,7 +147,8 @@ export class OTPService {
         contact: string,
         purpose: OTPPurpose = OTPPurpose.VERIFICATION,
         countryCode?: string,
-        channel?: "sms" | "whatsapp"
+        channel?: "sms" | "whatsapp",
+        isMobile?: boolean
     ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const isEmail = emailRegex.test(contact);
@@ -166,7 +169,7 @@ export class OTPService {
         }
 
         // Send a new OTP
-        return await this.sendOTP(contact, purpose, countryCode, undefined, undefined, channel);
+        return await this.sendOTP(contact, purpose, countryCode, undefined, undefined, channel, isMobile);
     }
 
     /**

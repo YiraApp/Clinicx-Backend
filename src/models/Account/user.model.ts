@@ -110,6 +110,15 @@ export class User {
     @Column({ type: "nvarchar", length: 100, nullable: true })
     EmergencyContactPhone?: string | null;
 
+    @Column({ type: "int", nullable: true })
+    RecentOrgId?: number | null;
+
+    @Column({ type: "int", nullable: true })
+    RecentHospitalId?: number | null;
+
+    @Column({ type: "uniqueidentifier", nullable: true })
+    RecentRoleId?: string | null;
+
     @OneToMany(() => UserRole, (userRole) => userRole.User)
     UserRoles: Relation<UserRole>[];
 

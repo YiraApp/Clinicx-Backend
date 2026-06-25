@@ -47,8 +47,9 @@ export class MobileAuthService {
             throw new Error("User account is inactive");
         }
 
-        // Fetch user roles and validate allowed Patient or Provider roles before sending OTP
+        // Fetch user roles
         const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+        /*
         const allowedRoleIds = [
             "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
             "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
@@ -56,6 +57,11 @@ export class MobileAuthService {
         const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
         if (mobileRoles.length === 0) {
             throw new Error("Access denied. Only patients and providers can log in.");
+        }
+        */
+        const mobileRoles = userRoles;
+        if (mobileRoles.length === 0) {
+            throw new Error("Access denied. User has no assigned roles.");
         }
 
         const otpTarget = user.PhoneNumber;
@@ -68,7 +74,9 @@ export class MobileAuthService {
             const result = await otpService.resendOTP(
                 otpTarget,
                 OTPPurpose.LOGIN,
-                countryCode || user.CountryCode || undefined
+                countryCode || user.CountryCode || undefined,
+                undefined,
+                true
             );
 
             return {
@@ -83,7 +91,11 @@ export class MobileAuthService {
             const otpResult = await otpService.sendOTP(
                 otpTarget,
                 OTPPurpose.LOGIN,
-                countryCode || user.CountryCode || undefined
+                countryCode || user.CountryCode || undefined,
+                undefined,
+                undefined,
+                undefined,
+                true
             );
 
             return {
@@ -132,6 +144,9 @@ export class MobileAuthService {
         weight: string | null;
         heightUnit: string;
         weightUnit: string;
+        recentRoleId: string | null;
+        recentOrgId: number | null;
+        recentHospitalId: number | null;
     }> {
         const type = loginType === "mobileNumber" ? "mobile" : (loginType || ( /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile" ));
 
@@ -164,8 +179,9 @@ export class MobileAuthService {
                 throw new Error("Authentication failed. Please try again.");
             }
 
-            // Fetch user roles and validate allowed Patient or Provider roles before proceeding
+            // Fetch user roles
             const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+            /*
             const allowedRoleIds = [
                 "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
                 "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
@@ -173,6 +189,11 @@ export class MobileAuthService {
             const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
             if (mobileRoles.length === 0) {
                 throw new Error("Access denied. Only patients and providers can log in.");
+            }
+            */
+            const mobileRoles = userRoles;
+            if (mobileRoles.length === 0) {
+                throw new Error("Access denied. User has no assigned roles.");
             }
 
             // Generate tokens with 30d expiry
@@ -245,7 +266,10 @@ export class MobileAuthService {
                 height: user.Height != null ? String(user.Height) : null,
                 weight: user.Weight != null ? String(user.Weight) : null,
                 heightUnit: "cms",
-                weightUnit: "kgs"
+                weightUnit: "kgs",
+                recentRoleId: user.RecentRoleId ?? null,
+                recentOrgId: user.RecentOrgId ?? null,
+                recentHospitalId: user.RecentHospitalId ?? null
             };
         } else {
             // Mobile OTP Login: calls verification in login method
@@ -280,6 +304,7 @@ export class MobileAuthService {
 
             // Fetch user roles
             const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+            /*
             const allowedRoleIds = [
                 "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
                 "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
@@ -287,6 +312,11 @@ export class MobileAuthService {
             const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
             if (mobileRoles.length === 0) {
                 throw new Error("Access denied. Only patients and providers can log in.");
+            }
+            */
+            const mobileRoles = userRoles;
+            if (mobileRoles.length === 0) {
+                throw new Error("Access denied. User has no assigned roles.");
             }
 
             // Generate tokens with 30d expiry
@@ -359,7 +389,10 @@ export class MobileAuthService {
                 height: user.Height != null ? String(user.Height) : null,
                 weight: user.Weight != null ? String(user.Weight) : null,
                 heightUnit: "cms",
-                weightUnit: "kgs"
+                weightUnit: "kgs",
+                recentRoleId: user.RecentRoleId ?? null,
+                recentOrgId: user.RecentOrgId ?? null,
+                recentHospitalId: user.RecentHospitalId ?? null
             };
         }
     }
@@ -482,6 +515,117 @@ export class MobileAuthService {
         }
 
         return Array.from(orgMap.values());
+    }
+
+    /**
+     * Updates the user's recent session context (RecentRoleId, RecentOrgId, RecentHospitalId).
+     */
+    async updateRecentContext(
+        userId: string,
+        recentRoleId?: string,
+        recentOrgId?: number,
+        recentHospitalId?: number
+    ): Promise<User> {
+        const user = await mobileAuthRepository.findUserById(userId);
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        if (recentRoleId !== undefined) user.RecentRoleId = recentRoleId || null;
+        if (recentOrgId !== undefined) user.RecentOrgId = recentOrgId || null;
+        if (recentHospitalId !== undefined) user.RecentHospitalId = recentHospitalId || null;
+
+        return await mobileAuthRepository.saveUser(user);
+    }
+
+    /**
+     * Retrieves all profile and session context details for an authenticated user.
+     */
+    async getUserData(userId: string): Promise<{
+        id: string;
+        isMobileVerified: boolean;
+        isEmailVerified: boolean;
+        roleCount: number;
+        hospitalCount: number;
+        organizationCount: number;
+        roles: any[];
+        firstName: string | null;
+        lastName: string | null;
+        email: string | null;
+        phoneNumber: string;
+        countryCode: string | null;
+        gender: string | null;
+        dob: string | null;
+        height: string | null;
+        weight: string | null;
+        heightUnit: string;
+        weightUnit: string;
+        recentRoleId: string | null;
+        recentOrgId: number | null;
+        recentHospitalId: number | null;
+    }> {
+        const user = await mobileAuthRepository.findUserById(userId);
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        // Fetch user roles
+        const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+        /*
+        const allowedRoleIds = [
+            "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
+            "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
+        ];
+        const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
+        */
+        const mobileRoles = userRoles;
+
+        const uniqueRoles = new Set(mobileRoles.map(ur => ur.RoleId).filter(Boolean));
+        const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
+        const uniqueOrganizations = new Set(mobileRoles.map(ur => ur.OrganizationId).filter(Boolean));
+
+        const uniqueRolesMap = new Map<string, any>();
+        for (const ur of mobileRoles) {
+            if (ur.RoleId) {
+                const roleIdUpper = ur.RoleId.toUpperCase();
+                if (!uniqueRolesMap.has(roleIdUpper)) {
+                    let roleName = ur.Role?.RoleName ?? null;
+                    if (roleIdUpper === "4FC67429-28AE-4106-93EF-436228282ED0" && roleName === "Patient") {
+                        roleName = "User/ Patient";
+                    }
+                    uniqueRolesMap.set(roleIdUpper, {
+                        roleId: ur.RoleId,
+                        roleName: roleName,
+                        status: ur.Status
+                    });
+                }
+            }
+        }
+        const rolesList = Array.from(uniqueRolesMap.values());
+
+        return {
+            id: user.Id,
+            isMobileVerified: user.IsMobileVerified,
+            isEmailVerified: user.IsEmailVerified,
+            roleCount: uniqueRoles.size,
+            hospitalCount: uniqueHospitals.size,
+            organizationCount: uniqueOrganizations.size,
+            roles: rolesList,
+            firstName: user.FirstName ?? null,
+            lastName: user.LastName ?? null,
+            email: user.Email ?? null,
+            phoneNumber: user.PhoneNumber,
+            countryCode: user.CountryCode ?? null,
+            gender: user.Gender ?? null,
+            dob: formatDOB(user.DateOfBirth),
+            height: user.Height != null ? String(user.Height) : null,
+            weight: user.Weight != null ? String(user.Weight) : null,
+            heightUnit: "cms",
+            weightUnit: "kgs",
+            recentRoleId: user.RecentRoleId ?? null,
+            recentOrgId: user.RecentOrgId ?? null,
+            recentHospitalId: user.RecentHospitalId ?? null
+        };
     }
 }
 

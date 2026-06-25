@@ -39,6 +39,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/v1/mobile/auth/refresh",
         "/api/v1/mobile/auth/forgot-password",
         "/api/v1/mobile/auth/reset-password",
+        "/api/v1/mobile/auth/app-version",
         "/mobile/api/v1/auth/login",
         "/mobile/api/v1/auth/sendotp",
         "/mobile/api/v1/auth/verify-login",
@@ -46,13 +47,15 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/mobile/api/v1/auth/refresh",
         "/mobile/api/v1/auth/forgot-password",
         "/mobile/api/v1/auth/reset-password",
+        "/mobile/api/v1/auth/app-version",
         "/v1/api/auth/login",
         "/v1/api/auth/sendotp",
         "/v1/api/auth/verify-login",
         "/v1/api/auth/resend-otp",
         "/v1/api/auth/refresh",
         "/v1/api/auth/forgot-password",
-        "/v1/api/auth/reset-password"
+        "/v1/api/auth/reset-password",
+        "/v1/api/auth/app-version"
     ];
 
 

@@ -54,6 +54,15 @@ export class MobileAuthRepository {
     async saveUser(user: User): Promise<User> {
         return await this.userRepo.save(user);
     }
+
+    /**
+     * Finds user by ID.
+     */
+    async findUserById(userId: string): Promise<User | null> {
+        return await this.userRepo.findOne({
+            where: { Id: userId, IsDeleted: false }
+        });
+    }
 }
 
 export const mobileAuthRepository = new MobileAuthRepository();

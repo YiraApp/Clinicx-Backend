@@ -1,6 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm/index.js";
 import { User } from "./user.model.js";
 
+import { PlatformType } from "../../MobileApi/v1/enums/platform.enum.js";
+
 @Entity({ name: "UserDevices" })
 export class UserDevice {
     @PrimaryGeneratedColumn()
@@ -17,7 +19,7 @@ export class UserDevice {
     FCMToken: string;
 
     @Column({ type: "varchar", length: 50, nullable: true })
-    Platform?: string;
+    Platform?: PlatformType;
 
     @Column({ type: "varchar", length: 255, nullable: true })
     PhysicalDeviceId?: string;
