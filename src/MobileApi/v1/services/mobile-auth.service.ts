@@ -144,9 +144,10 @@ export class MobileAuthService {
         weight: string | null;
         heightUnit: string;
         weightUnit: string;
-        recentRoleId: string | null;
-        recentOrgId: number | null;
-        recentHospitalId: number | null;
+        latestRoleId: string | null;
+        latestOrgId: number | null;
+        latestHospitalId: number | null;
+        navigationId: string | null;
     }> {
         const type = loginType === "mobileNumber" ? "mobile" : (loginType || ( /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile" ));
 
@@ -217,6 +218,13 @@ export class MobileAuthService {
                 ...(ipAddress && { IPAddress: ipAddress })
             });
 
+            if (!user.LatestRoleId && mobileRoles.length > 0) {
+                const defaultRole = mobileRoles[0];
+                user.LatestRoleId = defaultRole.RoleId;
+                user.LatestOrgId = defaultRole.OrganizationId ?? null;
+                user.LatestHospitalId = defaultRole.HospitalId ?? null;
+            }
+
             // Update LastLoginTime
             user.LastLoginTime = new Date();
             await mobileAuthRepository.saveUser(user);
@@ -267,9 +275,10 @@ export class MobileAuthService {
                 weight: user.Weight != null ? String(user.Weight) : null,
                 heightUnit: "cms",
                 weightUnit: "kgs",
-                recentRoleId: user.RecentRoleId ?? null,
-                recentOrgId: user.RecentOrgId ?? null,
-                recentHospitalId: user.RecentHospitalId ?? null
+                latestRoleId: user.LatestRoleId ?? null,
+                latestOrgId: user.LatestOrgId ?? null,
+                latestHospitalId: user.LatestHospitalId ?? null,
+                navigationId: getNavigationId(user.LatestRoleId)
             };
         } else {
             // Mobile OTP Login: calls verification in login method
@@ -340,6 +349,13 @@ export class MobileAuthService {
                 ...(ipAddress && { IPAddress: ipAddress })
             });
 
+            if (!user.LatestRoleId && mobileRoles.length > 0) {
+                const defaultRole = mobileRoles[0];
+                user.LatestRoleId = defaultRole.RoleId;
+                user.LatestOrgId = defaultRole.OrganizationId ?? null;
+                user.LatestHospitalId = defaultRole.HospitalId ?? null;
+            }
+
             // Update LastLoginTime
             user.LastLoginTime = new Date();
             await mobileAuthRepository.saveUser(user);
@@ -390,9 +406,10 @@ export class MobileAuthService {
                 weight: user.Weight != null ? String(user.Weight) : null,
                 heightUnit: "cms",
                 weightUnit: "kgs",
-                recentRoleId: user.RecentRoleId ?? null,
-                recentOrgId: user.RecentOrgId ?? null,
-                recentHospitalId: user.RecentHospitalId ?? null
+                latestRoleId: user.LatestRoleId ?? null,
+                latestOrgId: user.LatestOrgId ?? null,
+                latestHospitalId: user.LatestHospitalId ?? null,
+                navigationId: getNavigationId(user.LatestRoleId)
             };
         }
     }
@@ -518,22 +535,22 @@ export class MobileAuthService {
     }
 
     /**
-     * Updates the user's recent session context (RecentRoleId, RecentOrgId, RecentHospitalId).
+     * Updates the user's latest session context (LatestRoleId, LatestOrgId, LatestHospitalId).
      */
-    async updateRecentContext(
+    async updateLatestContext(
         userId: string,
-        recentRoleId?: string,
-        recentOrgId?: number,
-        recentHospitalId?: number
+        latestRoleId?: string,
+        latestOrgId?: number,
+        latestHospitalId?: number
     ): Promise<User> {
         const user = await mobileAuthRepository.findUserById(userId);
         if (!user) {
             throw new Error("User not found");
         }
 
-        if (recentRoleId !== undefined) user.RecentRoleId = recentRoleId || null;
-        if (recentOrgId !== undefined) user.RecentOrgId = recentOrgId || null;
-        if (recentHospitalId !== undefined) user.RecentHospitalId = recentHospitalId || null;
+        if (latestRoleId !== undefined) user.LatestRoleId = latestRoleId || null;
+        if (latestOrgId !== undefined) user.LatestOrgId = latestOrgId || null;
+        if (latestHospitalId !== undefined) user.LatestHospitalId = latestHospitalId || null;
 
         return await mobileAuthRepository.saveUser(user);
     }
@@ -560,9 +577,10 @@ export class MobileAuthService {
         weight: string | null;
         heightUnit: string;
         weightUnit: string;
-        recentRoleId: string | null;
-        recentOrgId: number | null;
-        recentHospitalId: number | null;
+        latestRoleId: string | null;
+        latestOrgId: number | null;
+        latestHospitalId: number | null;
+        navigationId: string | null;
     }> {
         const user = await mobileAuthRepository.findUserById(userId);
         if (!user) {
@@ -579,6 +597,14 @@ export class MobileAuthService {
         const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
         */
         const mobileRoles = userRoles;
+
+        if (!user.LatestRoleId && mobileRoles.length > 0) {
+            const defaultRole = mobileRoles[0];
+            user.LatestRoleId = defaultRole.RoleId;
+            user.LatestOrgId = defaultRole.OrganizationId ?? null;
+            user.LatestHospitalId = defaultRole.HospitalId ?? null;
+            await mobileAuthRepository.saveUser(user);
+        }
 
         const uniqueRoles = new Set(mobileRoles.map(ur => ur.RoleId).filter(Boolean));
         const uniqueHospitals = new Set(mobileRoles.map(ur => ur.HospitalId).filter(Boolean));
@@ -622,9 +648,10 @@ export class MobileAuthService {
             weight: user.Weight != null ? String(user.Weight) : null,
             heightUnit: "cms",
             weightUnit: "kgs",
-            recentRoleId: user.RecentRoleId ?? null,
-            recentOrgId: user.RecentOrgId ?? null,
-            recentHospitalId: user.RecentHospitalId ?? null
+            latestRoleId: user.LatestRoleId ?? null,
+            latestOrgId: user.LatestOrgId ?? null,
+            latestHospitalId: user.LatestHospitalId ?? null,
+            navigationId: getNavigationId(user.LatestRoleId)
         };
     }
 }
@@ -653,5 +680,26 @@ function formatDOB(dob: any): string | null {
         return `${day}-${month}-${year}`;
     } catch {
         return typeof dob === 'string' ? dob : null;
+    }
+}
+
+export function getNavigationId(roleId: string | null | undefined): string | null {
+    if (!roleId) return null;
+    const roleIdUpper = roleId.toUpperCase();
+    switch (roleIdUpper) {
+        case "4FC67429-28AE-4106-93EF-436228282ED0": // Patient
+            return "1";
+        case "FE80173F-9DB3-4703-84A8-5C23E7CC493C": // Provider
+            return "2";
+        case "3956F98D-D835-4204-8D5B-72870E57FF76": // Front Desk
+            return "3";
+        case "FFE1811D-6200-407C-9BDD-3B89FA1BAF2B": // Hospital Admin
+            return "4";
+        case "6F92E889-9844-4C8F-A9E7-5A456F12A9C7": // Org Admin
+            return "5";
+        case "F6C3292F-BB06-4F43-9962-988E23087FD5": // Yira System Admin
+            return "6";
+        default:
+            return null;
     }
 }

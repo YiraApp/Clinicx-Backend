@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { mobileAuthService } from "../services/mobile-auth.service.js";
+import { mobileAuthService, getNavigationId } from "../services/mobile-auth.service.js";
 import { authService } from "../../../services/Account/auth.service.js";
 import { ApiResponse } from "../../../utils/response.utils.js";
 import { userDeviceService } from "../services/userdevice.service.js";
@@ -374,11 +374,11 @@ export const getRoleDetails = async (req: Request, res: Response) => {
 };
 
 /**
- * Updates recent organization, hospital, and role context for the authenticated user.
+ * Updates the user's latest session context.
  */
-export const updateRecentContext = async (req: Request, res: Response) => {
+export const updateLatestContext = async (req: Request, res: Response) => {
     try {
-        const { recentRoleId, recentOrgId, recentHospitalId } = req.body;
+        const { latestRoleId, latestOrgId, latestHospitalId } = req.body;
         
         // Resolve authenticated user ID from token
         const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
@@ -392,19 +392,20 @@ export const updateRecentContext = async (req: Request, res: Response) => {
             });
         }
 
-        const updatedUser = await mobileAuthService.updateRecentContext(
+        const updatedUser = await mobileAuthService.updateLatestContext(
             userId,
-            recentRoleId,
-            recentOrgId ? parseInt(recentOrgId) : undefined,
-            recentHospitalId ? parseInt(recentHospitalId) : undefined
+            latestRoleId,
+            latestOrgId ? parseInt(latestOrgId) : undefined,
+            latestHospitalId ? parseInt(latestHospitalId) : undefined
         );
 
         return res.json(ApiResponse.success({
             userId: updatedUser.Id,
-            recentRoleId: updatedUser.RecentRoleId,
-            recentOrgId: updatedUser.RecentOrgId,
-            recentHospitalId: updatedUser.RecentHospitalId
-        }, "Recent context updated successfully"));
+            latestRoleId: updatedUser.LatestRoleId,
+            latestOrgId: updatedUser.LatestOrgId,
+            latestHospitalId: updatedUser.LatestHospitalId,
+            navigationId: getNavigationId(updatedUser.LatestRoleId)
+        }, "Latest context updated successfully"));
     } catch (error: any) {
         return res.status(400).json({
             status: false,

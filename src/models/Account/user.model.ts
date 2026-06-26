@@ -111,13 +111,13 @@ export class User {
     EmergencyContactPhone?: string | null;
 
     @Column({ type: "int", nullable: true })
-    RecentOrgId?: number | null;
+    LatestOrgId?: number | null;
 
     @Column({ type: "int", nullable: true })
-    RecentHospitalId?: number | null;
+    LatestHospitalId?: number | null;
 
     @Column({ type: "uniqueidentifier", nullable: true })
-    RecentRoleId?: string | null;
+    LatestRoleId?: string | null;
 
     @OneToMany(() => UserRole, (userRole) => userRole.User)
     UserRoles: Relation<UserRole>[];

@@ -15,7 +15,13 @@ async function updateSchema() {
             "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[AppVersions]') AND type in (N'U')) BEGIN CREATE TABLE [dbo].[AppVersions] ( [Id] INT IDENTITY(1,1) PRIMARY KEY, [Platform] VARCHAR(50) NOT NULL, [Version] VARCHAR(50) NOT NULL, [MinVersion] VARCHAR(50) NOT NULL, [ForceUpdate] BIT NOT NULL DEFAULT 0, [Url] NVARCHAR(MAX) NULL, [IsLatest] BIT NOT NULL DEFAULT 1, [IsDeleted] BIT NOT NULL DEFAULT 0, [CreatedAt] DATETIME NOT NULL DEFAULT GETDATE(), [UpdatedAt] DATETIME NULL ); END",
             "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentOrgId') ALTER TABLE Users ADD RecentOrgId INT NULL;",
             "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentHospitalId') ALTER TABLE Users ADD RecentHospitalId INT NULL;",
-            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentRoleId') ALTER TABLE Users ADD RecentRoleId UNIQUEIDENTIFIER NULL;"
+            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentRoleId') ALTER TABLE Users ADD RecentRoleId UNIQUEIDENTIFIER NULL;",
+            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'LatestOrgId') ALTER TABLE Users ADD LatestOrgId INT NULL;",
+            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'LatestHospitalId') ALTER TABLE Users ADD LatestHospitalId INT NULL;",
+            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'LatestRoleId') ALTER TABLE Users ADD LatestRoleId UNIQUEIDENTIFIER NULL;",
+            "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentOrgId') ALTER TABLE Users DROP COLUMN RecentOrgId;",
+            "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentHospitalId') ALTER TABLE Users DROP COLUMN RecentHospitalId;",
+            "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentRoleId') ALTER TABLE Users DROP COLUMN RecentRoleId;"
         ];
 
         for (const query of queries) {
