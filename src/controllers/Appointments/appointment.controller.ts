@@ -76,6 +76,30 @@ export class AppointmentController {
         }
     }
 
+    async getPatientHospitalSummary(req: Request, res: Response) {
+        try {
+            const userId = String(req.params.userId);
+            const result = await appointmentService.getPatientHospitalSummary(userId);
+            return res.json(ApiResponse.success(result));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async getPatientAppointmentsByHospital(req: Request, res: Response) {
+        try {
+            const userId = String(req.params.userId);
+            const hospitalId = parseInt(req.params.hospitalId as string);
+            if (isNaN(hospitalId)) {
+                return res.status(400).json(ApiResponse.error("Invalid Hospital ID."));
+            }
+            const result = await appointmentService.getPatientAppointmentsByHospital(userId, hospitalId);
+            return res.json(ApiResponse.success(result));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async updateStatus(req: Request, res: Response) {
         try {
             const id = String(req.params.id);

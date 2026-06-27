@@ -36,6 +36,31 @@ export class AppointmentRepository {
         });
     }
 
+    async getPatientHospitalSummary(userId: string): Promise<Array<{ hospitalId: number, hospitalName: string, appointmentCount: number }>> {
+        const raw = await this.repo.createQueryBuilder("appointment")
+            .leftJoin("appointment.Hospital", "hospital")
+            .select("appointment.HospitalId", "hospitalId")
+            .addSelect("MAX(hospital.Name)", "hospitalName")
+            .addSelect("COUNT(appointment.Id)", "appointmentCount")
+            .where("appointment.UserId = :userId", { userId })
+            .groupBy("appointment.HospitalId")
+            .getRawMany();
+
+        return raw.map(r => ({
+            hospitalId: Number(r.hospitalId),
+            hospitalName: String(r.hospitalName || "Clinic"),
+            appointmentCount: Number(r.appointmentCount || 0)
+        }));
+    }
+
+    async getPatientAppointmentsByHospital(userId: string, hospitalId: number): Promise<Appointment[]> {
+        return await this.repo.find({
+            where: { UserId: userId, HospitalId: hospitalId },
+            relations: ["Doctor", "Hospital"],
+            order: { AppointmentDate: "DESC", StartTime: "DESC" }
+        });
+    }
+
     async getHospitalAppointments(hospitalId: number, date: string): Promise<Appointment[]> {
         return await this.repo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")

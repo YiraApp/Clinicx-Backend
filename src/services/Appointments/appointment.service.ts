@@ -230,6 +230,58 @@ export class AppointmentService {
         return await this.attachMedicalAndInsurance(enrichedAppointments);
     }
 
+    async getPatientHospitalSummary(userId: string) {
+        const hospitals = await appointmentRepository.getPatientHospitalSummary(userId);
+        
+        const allUserAppointments = await AppDataSource.getRepository(Appointment).find({
+            where: { UserId: userId },
+            select: ["Id", "Status"]
+        });
+
+        const stats = {
+            total: allUserAppointments.length,
+            confirmed: 0,
+            pending: 0,
+            completed: 0
+        };
+
+        for (const apt of allUserAppointments) {
+            const s = apt.Status?.toLowerCase() || "";
+            if (s === "confirmed" || s === "scheduled") stats.confirmed++;
+            else if (s === "pending" || s === "paymentpending") stats.pending++;
+            else if (s === "completed") stats.completed++;
+        }
+
+        return {
+            hospitals,
+            stats
+        };
+    }
+
+    async getPatientAppointmentsByHospital(userId: string, hospitalId: number) {
+        const appointments = await appointmentRepository.getPatientAppointmentsByHospital(userId, hospitalId);
+        const enrichedAppointments = [];
+        const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+
+        for (const appt of appointments) {
+            let specialty = "General Medicine";
+            if (appt.DoctorId) {
+                const provider = await AppDataSource.getRepository(HealthcareProvider).findOne({
+                    where: { UserId: appt.DoctorId, IsDeleted: false }
+                });
+                if (provider) {
+                    specialty = provider.Specialty || "General Medicine";
+                }
+            }
+            enrichedAppointments.push({
+                ...appt,
+                specialty
+            });
+        }
+
+        return await this.attachMedicalAndInsurance(enrichedAppointments);
+    }
+
     async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, doctorId?: string, date?: string, status?: string, startDate?: string, endDate?: string, page?: number, pageSize?: number }) {
         const { data: appointments, total } = await appointmentRepository.getAppointments(filters);
         const enriched = await this.attachMedicalAndInsurance(appointments);
