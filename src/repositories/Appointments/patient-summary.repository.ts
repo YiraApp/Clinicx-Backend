@@ -14,9 +14,23 @@ export class PatientSummaryRepository {
         });
         if (!user) return null;
 
-        const registration = await AppDataSource.getRepository(PatientRegistration).findOne({
-            where: { UserId: patientId, IsDeleted: false }
+        const registrationWhere: any = { UserId: patientId, IsDeleted: false };
+        if (orgId) {
+            registrationWhere.OrganizationId = orgId;
+        }
+        if (hospitalId) {
+            registrationWhere.HospitalId = hospitalId;
+        }
+
+        let registration = await AppDataSource.getRepository(PatientRegistration).findOne({
+            where: registrationWhere
         });
+
+        if (!registration && (orgId || hospitalId)) {
+            registration = await AppDataSource.getRepository(PatientRegistration).findOne({
+                where: { UserId: patientId, IsDeleted: false }
+            });
+        }
 
         const insurance = await AppDataSource.getRepository(PatientInsurance).findOne({
             where: { UserId: patientId, IsDeleted: false }
@@ -52,13 +66,18 @@ export class PatientSummaryRepository {
             relations: ["Doctor"]
         });
 
-        const allergies = registration?.Allergies
-            ? registration.Allergies.split(",").map((s: string) => s.trim()).filter(Boolean)
-            : [];
+        const parseList = (str: string | null | undefined): string[] => {
+            if (!str) return [];
+            try {
+                if (str.trim().startsWith("[") && str.trim().endsWith("]")) {
+                    return JSON.parse(str);
+                }
+            } catch {}
+            return str.split(",").map(s => s.trim()).filter(Boolean);
+        };
 
-        const conditions = registration?.MedicalHistory
-            ? registration.MedicalHistory.split(",").map((s: string) => s.trim()).filter(Boolean)
-            : [];
+        const allergies = parseList(registration?.Allergies);
+        const conditions = parseList(registration?.MedicalHistory);
 
         const addr = user.PermanentAddress;
         const address = addr
@@ -68,6 +87,7 @@ export class PatientSummaryRepository {
             : "";
 
         return {
+            patientId: registration?.Id || null,
             user: {
                 id: user.Id,
                 firstName: user.FirstName,
@@ -80,6 +100,11 @@ export class PatientSummaryRepository {
                 email: user.Email,
                 bloodGroup: user.BloodGroup,
                 address,
+                addressLine1: addr?.AddressLine1 || "",
+                addressLine2: addr?.AddressLine2 || "",
+                city: addr?.City || "",
+                state: addr?.State || "",
+                pincode: addr?.Pincode || "",
                 emergencyContactName: user.EmergencyContactName,
                 emergencyContactPhone: user.EmergencyContactPhone
             },

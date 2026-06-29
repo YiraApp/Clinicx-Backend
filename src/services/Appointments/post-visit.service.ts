@@ -169,7 +169,7 @@ export class PostVisitService {
      * 3. Generate a secure unified share link
      * 4. Link documents to the share link
      */
-    async processDocuments(appointmentId: number, files: Express.Multer.File[], channel?: string) {
+    async processDocuments(appointmentId: number, files: Express.Multer.File[], channel?: string, existingDocumentsJson?: string) {
         const appointment = await appointmentRepository.findById(appointmentId);
         if (!appointment) throw new Error("Appointment not found");
 
@@ -207,6 +207,7 @@ export class PostVisitService {
                 });
                 const updated = await postVisitDocumentRepository.findById(doc.Id);
                 if (updated) doc = updated;
+                documentRecords.push(doc);
             } else {
                 // Create new document record
                 doc = await postVisitDocumentRepository.create({
@@ -235,8 +236,77 @@ export class PostVisitService {
                     EmailSentCount: channel === 'email' ? 1 : 0,
                     Status: "ACTIVE"
                 });
+                documentRecords.push(doc);
             }
-            documentRecords.push(doc);
+        }
+
+        // Process existing documents passed by reference (no upload needed)
+        if (existingDocumentsJson) {
+            try {
+                const existingDocs = JSON.parse(existingDocumentsJson);
+                if (Array.isArray(existingDocs)) {
+                    for (const extDoc of existingDocs) {
+                        const { fileName, blobUrl, documentType } = extDoc;
+                        if (!fileName || !blobUrl) continue;
+
+                        let doc = await postVisitDocumentRepository.findOne({
+                            AppointmentId: appointmentId,
+                            FileName: fileName,
+                            IsDeleted: false
+                        });
+
+                        if (doc) {
+                            await postVisitDocumentRepository.update(doc.Id, {
+                                BlobUrl: blobUrl,
+                                GeneratedAt: new Date(),
+                                SentOnWhatsApp: doc.SentOnWhatsApp || channel === 'whatsapp',
+                                SentOnSMS: doc.SentOnSMS || channel === 'sms',
+                                SentOnEmail: doc.SentOnEmail || channel === 'email',
+                                WhatsAppSentAt: channel === 'whatsapp' ? new Date() : doc.WhatsAppSentAt,
+                                SmsSentAt: channel === 'sms' ? new Date() : doc.SmsSentAt,
+                                EmailSentAt: channel === 'email' ? new Date() : doc.EmailSentAt,
+                                WhatsAppSentTo: channel === 'whatsapp' ? appointment.User.PhoneNumber : doc.WhatsAppSentTo,
+                                SmsSentTo: channel === 'sms' ? appointment.User.PhoneNumber : doc.SmsSentTo,
+                                EmailSentTo: (channel === 'email' ? appointment.User.Email : doc.EmailSentTo) ?? undefined,
+                                WhatsAppSentCount: (doc.WhatsAppSentCount || 0) + (channel === 'whatsapp' ? 1 : 0),
+                                SmsSentCount: (doc.SmsSentCount || 0) + (channel === 'sms' ? 1 : 0),
+                                EmailSentCount: (doc.EmailSentCount || 0) + (channel === 'email' ? 1 : 0),
+                            });
+                            const updated = await postVisitDocumentRepository.findById(doc.Id);
+                            if (updated) documentRecords.push(updated);
+                        } else {
+                            const created = await postVisitDocumentRepository.create({
+                                AppointmentId: appointmentId,
+                                PatientId: appointment.UserId,
+                                DoctorId: appointment.DoctorId,
+                                OrganizationId: appointment.OrgId,
+                                HospitalId: appointment.HospitalId,
+                                DocumentType: documentType || this.getDocumentTypeFromFileName(fileName),
+                                FileName: fileName,
+                                BlobUrl: blobUrl,
+                                FileSize: 0,
+                                GeneratedAt: new Date(),
+                                SentOnWhatsApp: channel === 'whatsapp',
+                                SentOnSMS: channel === 'sms',
+                                SentOnEmail: channel === 'email',
+                                WhatsAppSentAt: channel === 'whatsapp' ? new Date() : undefined,
+                                SmsSentAt: channel === 'sms' ? new Date() : undefined,
+                                EmailSentAt: channel === 'email' ? new Date() : undefined,
+                                WhatsAppSentTo: channel === 'whatsapp' ? appointment.User.PhoneNumber : undefined,
+                                SmsSentTo: channel === 'sms' ? appointment.User.PhoneNumber : undefined,
+                                EmailSentTo: (channel === 'email' ? appointment.User.Email : undefined) ?? undefined,
+                                WhatsAppSentCount: channel === 'whatsapp' ? 1 : 0,
+                                SmsSentCount: channel === 'sms' ? 1 : 0,
+                                EmailSentCount: channel === 'email' ? 1 : 0,
+                                Status: "ACTIVE"
+                            });
+                            documentRecords.push(created);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("[PostVisitService] Error processing existingDocumentsJson:", err);
+            }
         }
 
         // 2. Create a secure Share Link for this visit summary

@@ -56,6 +56,15 @@ export class ConsentController {
 
             const templates = await consentService.getTemplates(hospitalId, organizationId);
 
+            if (!templates || templates.length === 0) {
+                res.status(200).json({
+                    status: "warning",
+                    message: "No templates found for this hospital",
+                    data: []
+                });
+                return;
+            }
+
             res.status(200).json({
                 status: "success",
                 message: "Templates fetched successfully",
