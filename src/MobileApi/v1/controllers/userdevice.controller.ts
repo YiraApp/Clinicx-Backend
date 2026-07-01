@@ -27,9 +27,16 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
         }
 
         if (!deviceId) {
-            return res.status(400).json({
+            return res.status(200).json({
                 status: false,
                 message: "Device ID (deviceId) is required"
+            });
+        }
+
+        if (!fcmToken) {
+            return res.status(200).json({
+                status: false,
+                message: "FCM token (fcmToken) is required"
             });
         }
 
@@ -37,7 +44,7 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
         const resolvedUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
 
         if (!resolvedUserId) {
-            return res.status(400).json({
+            return res.status(200).json({
                 status: false,
                 message: "User ID is required"
             });
@@ -65,7 +72,7 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
 
         return res.json(ApiResponse.success(responseData, "Device token registered successfully"));
     } catch (error: any) {
-        return res.status(400).json({
+        return res.status(200).json({
             status: false,
             message: error.message
         });

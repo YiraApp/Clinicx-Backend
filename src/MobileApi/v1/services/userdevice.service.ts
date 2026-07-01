@@ -5,13 +5,16 @@ import { PlatformType } from "../enums/platform.enum.js";
 export class UserDeviceService {
     async registerDeviceToken(
         userId: string,
-        platform?: PlatformType,
-        currentVersion?: string,
-        fcmToken?: string,
-        deviceId?: string
+        platform: PlatformType | undefined,
+        currentVersion: string | undefined,
+        fcmToken: string,
+        deviceId: string
     ): Promise<UserDevice> {
         if (!deviceId) {
             throw new Error("Device ID is required");
+        }
+        if (!fcmToken) {
+            throw new Error("FCM token is required");
         }
 
         let device = await userDeviceRepository.findByPhysicalDeviceId(deviceId);
@@ -19,17 +22,15 @@ export class UserDeviceService {
         if (device) {
             // Transfer ownership to current user or update details
             device.UserId = userId;
-            if (fcmToken) device.FCMToken = fcmToken;
+            device.FCMToken = fcmToken;
             if (platform) device.Platform = platform;
             if (currentVersion) device.CurrentVersion = currentVersion;
             device.IsActive = true;
             device.UpdatedAt = new Date();
         } else {
-            // For new devices, use a placeholder token if none was provided (to satisfy DB NOT NULL constraint)
-            const finalFcmToken = fcmToken || "placeholder-fcm-token";
             device = new UserDevice();
             device.UserId = userId;
-            device.FCMToken = finalFcmToken;
+            device.FCMToken = fcmToken;
             device.Platform = platform;
             device.PhysicalDeviceId = deviceId;
             device.CurrentVersion = currentVersion;
