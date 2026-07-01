@@ -15,7 +15,7 @@ authRouter.post("/logout", logout);
 authRouter.post("/forgot-password", forgotPassword);
 authRouter.post("/reset-password", resetPassword);
 authRouter.get("/roles/details", getRoleDetails);
-authRouter.post("/user-data", authMiddleware, getUserData);
+authRouter.get("/user-data", authMiddleware, getUserData);
 authRouter.post("/latest-context", authMiddleware, updateLatestContext);
 authRouter.post("/device-token", authMiddleware, registerDeviceToken);
 authRouter.get("/app-version", getLatestAppVersion);
