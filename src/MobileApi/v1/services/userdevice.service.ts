@@ -10,46 +10,31 @@ export class UserDeviceService {
         fcmToken?: string,
         deviceId?: string
     ): Promise<UserDevice> {
-        if (!fcmToken) {
-            throw new Error("FCM token is required");
+        if (!deviceId) {
+            throw new Error("Device ID is required");
         }
 
-        let device: UserDevice | null = null;
-
-        // 1. Try to find by physical deviceId first
-        if (deviceId) {
-            device = await userDeviceRepository.findByPhysicalDeviceId(deviceId);
-        }
+        let device = await userDeviceRepository.findByPhysicalDeviceId(deviceId);
 
         if (device) {
             // Transfer ownership to current user or update details
             device.UserId = userId;
-            device.FCMToken = fcmToken;
+            if (fcmToken) device.FCMToken = fcmToken;
             if (platform) device.Platform = platform;
             if (currentVersion) device.CurrentVersion = currentVersion;
             device.IsActive = true;
             device.UpdatedAt = new Date();
         } else {
-            // 2. If no physical device matched or deviceId is null, try to find by Token
-            const existingDevice = await userDeviceRepository.findByToken(fcmToken);
-            if (existingDevice && existingDevice.UserId === userId) {
-                device = existingDevice;
-                if (platform) device.Platform = platform;
-                if (currentVersion) device.CurrentVersion = currentVersion;
-                if (deviceId) device.PhysicalDeviceId = deviceId;
-                device.IsActive = true;
-                device.UpdatedAt = new Date();
-            } else {
-                // 3. Otherwise create a brand new device record
-                device = new UserDevice();
-                device.UserId = userId;
-                device.FCMToken = fcmToken;
-                device.Platform = platform;
-                device.PhysicalDeviceId = deviceId;
-                device.CurrentVersion = currentVersion;
-                device.IsActive = true;
-                device.CreatedAt = new Date();
-            }
+            // For new devices, use a placeholder token if none was provided (to satisfy DB NOT NULL constraint)
+            const finalFcmToken = fcmToken || "placeholder-fcm-token";
+            device = new UserDevice();
+            device.UserId = userId;
+            device.FCMToken = finalFcmToken;
+            device.Platform = platform;
+            device.PhysicalDeviceId = deviceId;
+            device.CurrentVersion = currentVersion;
+            device.IsActive = true;
+            device.CreatedAt = new Date();
         }
 
         return await userDeviceRepository.saveDevice(device);
