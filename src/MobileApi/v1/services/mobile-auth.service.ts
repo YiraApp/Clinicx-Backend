@@ -149,7 +149,7 @@ export class MobileAuthService {
         latestHospitalId: number | null;
         navigationId: string | null;
     }> {
-        const type = loginType === "mobileNumber" ? "mobile" : (loginType || ( /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile" ));
+        const type = loginType === "mobileNumber" ? "mobile" : (loginType || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile"));
 
         if (type === "email") {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
