@@ -421,7 +421,8 @@ export const updateLatestContext = async (req: Request, res: Response) => {
  */
 export const getUserData = async (req: Request, res: Response) => {
     try {
-        const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        const userId = req.body?.userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        const deviceId = req.body?.deviceId;
 
         if (!userId) {
             return res.status(400).json({
@@ -432,8 +433,8 @@ export const getUserData = async (req: Request, res: Response) => {
             });
         }
 
-        const userData = await mobileAuthService.getUserData(userId);
-        return res.json(ApiResponse.success(userData, "User profile and session context details fetched successfully"));
+        const userData = await mobileAuthService.getUserData(userId, deviceId);
+        return res.json(ApiResponse.success(userData, "User details fetched successfully"));
     } catch (error: any) {
         return res.status(400).json({
             status: false,
