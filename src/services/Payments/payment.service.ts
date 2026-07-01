@@ -64,9 +64,10 @@ export class PaymentService {
                 consultationFee: Number(data.amount),
                 config
             });
-        } else if (bill.BillStatus === "Pending" && Number(bill.SubTotal) !== Number(data.amount)) {
-            // Update the bill if it already exists but the requested amount has changed
-            bill = await appointmentBillRepository.updateBillBaseAmount(bill.AppointmentBillId, Number(data.amount), config);
+        }
+
+        if (bill.BillStatus === "Draft") {
+            throw new Error("Please generate the invoice before initiating online payment.");
         }
 
         // Use bill's DueAmount as the actual charge amount
@@ -471,12 +472,14 @@ export class PaymentService {
             patientPhone: b.Patient?.PhoneNumber || "—",
             providerId: b.ProviderId,
             providerName: b.Provider ? `Dr. ${b.Provider.FirstName} ${b.Provider.LastName}` : "—",
+            appointmentChain: (b as any).appointmentChain || [],
             items: (b.BillItems || []).map(i => ({
                 itemName: i.ItemName,
                 itemType: i.ItemType,
                 unitPrice: i.UnitPrice,
                 quantity: i.Quantity,
-                totalAmount: i.TotalAmount
+                totalAmount: i.TotalAmount,
+                appointmentId: i.AppointmentId || null
             }))
         }));
 
@@ -660,6 +663,29 @@ export class PaymentService {
         config.UpdatedAt = new Date();
 
         return await repo.save(config);
+    }
+
+    async updateBillDetails(
+        billId: string,
+        data: {
+            items: {
+                itemId?: string;
+                itemName: string;
+                itemType: string;
+                unitPrice: number;
+                quantity: number;
+                discountAmount: number;
+                gstPercentage?: number;
+            }[];
+            discountAmount: number;
+            notes?: string;
+        }
+    ) {
+        return await appointmentBillRepository.updateBillDetails(billId, data);
+    }
+
+    async generateInvoice(billId: string) {
+        return await appointmentBillRepository.generateInvoice(billId);
     }
 
 }

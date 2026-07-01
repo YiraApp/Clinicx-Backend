@@ -10,8 +10,8 @@ export class UserDeviceService {
         fcmToken?: string,
         deviceId?: string
     ): Promise<UserDevice> {
-        if (!fcmToken) {
-            throw new Error("FCM token is required");
+        if (!fcmToken && !deviceId) {
+            throw new Error("Either deviceId or FCM token is required");
         }
 
         let device: UserDevice | null = null;
@@ -24,12 +24,15 @@ export class UserDeviceService {
         if (device) {
             // Transfer ownership to current user or update details
             device.UserId = userId;
-            device.FCMToken = fcmToken;
+            if (fcmToken) device.FCMToken = fcmToken;
             if (platform) device.Platform = platform;
             if (currentVersion) device.CurrentVersion = currentVersion;
             device.IsActive = true;
             device.UpdatedAt = new Date();
         } else {
+            if (!fcmToken) {
+                throw new Error("FCM token is required to register a new device");
+            }
             // 2. If no physical device matched or deviceId is null, try to find by Token
             const existingDevice = await userDeviceRepository.findByToken(fcmToken);
             if (existingDevice && existingDevice.UserId === userId) {

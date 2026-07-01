@@ -100,6 +100,14 @@ export class Appointment {
     @Column({ type: "int", nullable: true })
     AppointmentNumber?: number;
 
+    @Index()
+    @Column({ type: "int", nullable: true })
+    ParentAppointmentId?: number | null;
+
+    @ManyToOne(() => Appointment)
+    @JoinColumn({ name: "ParentAppointmentId" })
+    ParentAppointment?: Relation<Appointment> | null;
+
     @OneToMany(() => PatientVerification, (verification) => verification.Appointment)
     Verifications: Relation<PatientVerification[]>;
 }

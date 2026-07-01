@@ -88,6 +88,9 @@ export class AppointmentBill {
     @Column({ type: "uniqueidentifier", nullable: true })
     UpdatedBy?: string | null;
 
+    @Column({ type: "bit", default: 1 })
+    AddConsultationFee: boolean;
+
     @Column({ type: "bit", default: 0 })
     IsDeleted: boolean;
 

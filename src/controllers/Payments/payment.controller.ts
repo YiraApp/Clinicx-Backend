@@ -180,7 +180,31 @@ export class PaymentController {
         }
     }
 
-}
+    async updateBillDetails(req: Request, res: Response) {
+        try {
+            const { billId } = req.params;
+            if (!billId) {
+                return res.status(400).json(ApiResponse.error("Bill ID is required."));
+            }
+            const result = await paymentService.updateBillDetails(billId as string, req.body);
+            return res.json(ApiResponse.success(result, "Bill details updated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 
+    async generateInvoice(req: Request, res: Response) {
+        try {
+            const { billId } = req.params;
+            if (!billId) {
+                return res.status(400).json(ApiResponse.error("Bill ID is required."));
+            }
+            const result = await paymentService.generateInvoice(billId as string);
+            return res.json(ApiResponse.success(result, "Invoice generated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+}
 
 export const paymentController = new PaymentController();

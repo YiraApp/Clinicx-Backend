@@ -21,7 +21,8 @@ async function updateSchema() {
             "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'LatestRoleId') ALTER TABLE Users ADD LatestRoleId UNIQUEIDENTIFIER NULL;",
             "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentOrgId') ALTER TABLE Users DROP COLUMN RecentOrgId;",
             "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentHospitalId') ALTER TABLE Users DROP COLUMN RecentHospitalId;",
-            "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentRoleId') ALTER TABLE Users DROP COLUMN RecentRoleId;"
+            "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentRoleId') ALTER TABLE Users DROP COLUMN RecentRoleId;",
+            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('AppointmentBillItems') AND name = 'AppointmentId') ALTER TABLE AppointmentBillItems ADD AppointmentId INT NULL;"
         ];
 
         for (const query of queries) {

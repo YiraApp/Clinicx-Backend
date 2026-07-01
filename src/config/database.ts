@@ -53,6 +53,8 @@ import { PaymentLog } from "../models/Payments/payment-log.model.js";
 import { HospitalPaymentConfiguration } from "../models/Organizations/hospital-payment-configuration.model.js";
 import { AppointmentBill } from "../models/Payments/appointment-bill.model.js";
 import { AppointmentBillItem } from "../models/Payments/appointment-bill-item.model.js";
+import { TreatmentPlan } from "../models/Payments/treatment-plan.model.js";
+import { AppointmentTreatmentPlan } from "../models/Payments/appointment-treatment-plan.model.js";
 import { MeetingRedirection } from "../models/Appointments/meeting-redirection.model.js";
 import { PasswordResetToken } from "../models/Account/password-reset-token.model.js";
 import { UserDevice } from "../models/Account/userdevice.model.js";
@@ -98,6 +100,7 @@ export const AppDataSource = new DataSource({
         PrescriptionDiagnosis, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
         Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem,
+        TreatmentPlan, AppointmentTreatmentPlan,
         MeetingRedirection,
         PasswordResetToken,
         UserDevice,

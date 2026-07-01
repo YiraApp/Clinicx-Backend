@@ -160,11 +160,11 @@ export class MobileAuthService {
 
             const user = await mobileAuthRepository.findPrimaryUser(identity);
             if (!user) {
-                throw new Error("Authentication failed. Please try again.");
+                throw new Error("Invalid emailid");
             }
 
             if (!user.Status) {
-                throw new Error("Authentication failed. Please try again.");
+                throw new Error("Invalid emailid");
             }
 
             if (!password) {
@@ -177,7 +177,7 @@ export class MobileAuthService {
 
             const isMatch = await bcrypt.compare(password, user.PasswordHash);
             if (!isMatch) {
-                throw new Error("Authentication failed. Please try again.");
+                throw new Error("Invalid password");
             }
 
             // Fetch user roles
@@ -558,7 +558,11 @@ export class MobileAuthService {
     /**
      * Retrieves all profile and session context details for an authenticated user.
      */
-    async getUserData(userId: string): Promise<{
+    async getUserData(userId: string, deviceId?: string): Promise<{
+        accessToken?: string;
+        refreshToken?: string;
+        accessTokenExpiry?: Date;
+        refreshTokenExpiry?: Date;
         id: string;
         isMobileVerified: boolean;
         isEmailVerified: boolean;
@@ -629,7 +633,36 @@ export class MobileAuthService {
         }
         const rolesList = Array.from(uniqueRolesMap.values());
 
+        let accessToken: string | undefined;
+        let refreshToken: string | undefined;
+        let accessTokenExpiry: Date | undefined;
+        let refreshTokenExpiry: Date | undefined;
+
+        if (deviceId) {
+            const payload = { userId: user.Id, email: user.Email };
+            accessToken = generateAccessToken(payload, "30d");
+            refreshToken = generateRefreshToken(payload, "30d");
+
+            const expiryMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+            accessTokenExpiry = new Date(Date.now() + expiryMs);
+            refreshTokenExpiry = new Date(Date.now() + expiryMs);
+
+            await tokenRepository.createToken({
+                UserId: user.Id,
+                AccessToken: accessToken,
+                RefreshToken: refreshToken,
+                AccessTokenExpiry: accessTokenExpiry,
+                RefreshTokenExpiry: refreshTokenExpiry,
+                IsRevoked: false,
+                DeviceInfo: deviceId
+            });
+        }
+
         return {
+            ...(accessToken && { accessToken }),
+            ...(refreshToken && { refreshToken }),
+            ...(accessTokenExpiry && { accessTokenExpiry }),
+            ...(refreshTokenExpiry && { refreshTokenExpiry }),
             id: user.Id,
             isMobileVerified: user.IsMobileVerified,
             isEmailVerified: user.IsEmailVerified,

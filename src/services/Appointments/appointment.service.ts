@@ -7,6 +7,7 @@ import { PatientQueue } from "../../models/Appointments/patient-queue.model.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
 import { AppointmentStatus, QueueStatus } from "../../enums/appointments.js";
+import { appointmentBillRepository } from "../../repositories/Payments/appointment-bill.repository.js";
 
 import { zoomService } from "../Common/zoom.service.js";
 
@@ -25,6 +26,10 @@ export class AppointmentService {
         createdBy?: string;
         isTeleConsultation?: boolean;
         status?: string;
+        parentAppointmentId?: number | null;
+        treatmentPlanIds?: string[];
+        customTreatmentPlans?: { name: string; amount: number }[];
+        discountAmount?: number;
     }): Promise<Appointment> {
 
         const newAppointment = await AppDataSource.transaction(async (manager) => {
@@ -67,18 +72,112 @@ export class AppointmentService {
                 AppointmentType: data.appointmentType || "Consultation",
                 Status: data.status || "Scheduled",
                 IsTeleConsultation: isTele,
+                ParentAppointmentId: data.parentAppointmentId || null,
 
                 MeetingUrl: meetingUrl,
                 CreatedBy: data.createdBy,
                 AppointmentNumber: appointmentNumber
             });
 
-            // 3. Mark Slot as Booked
+            // 5. Link Treatment Plans
+            if (data.treatmentPlanIds && data.treatmentPlanIds.length > 0) {
+                const { AppointmentTreatmentPlan } = await import("../../models/Payments/appointment-treatment-plan.model.js");
+                const { v4: uuidv4 } = await import("uuid");
+                for (const planId of data.treatmentPlanIds) {
+                    const link = manager.create(AppointmentTreatmentPlan, {
+                        AppointmentTreatmentPlanId: uuidv4(),
+                        AppointmentId: appointment.Id,
+                        TreatmentPlanId: planId,
+                        CreatedAt: new Date()
+                    });
+                    await manager.save(link);
+                }
+            }
+
+            // 5.5. Create & Link Custom Treatment Plans
+            if (data.customTreatmentPlans && data.customTreatmentPlans.length > 0) {
+                const { TreatmentPlan } = await import("../../models/Payments/treatment-plan.model.js");
+                const { AppointmentTreatmentPlan } = await import("../../models/Payments/appointment-treatment-plan.model.js");
+                const { v4: uuidv4 } = await import("uuid");
+                for (const customPlan of data.customTreatmentPlans) {
+                    if (!customPlan.name) continue;
+                    const newPlan = manager.create(TreatmentPlan, {
+                        TreatmentPlanId: uuidv4(),
+                        Name: customPlan.name,
+                        Amount: Number(customPlan.amount || 0),
+                        Status: "Active",
+                        OrgId: data.orgId,
+                        HospitalId: data.hospitalId,
+                        IsDeleted: false,
+                        CreatedAt: new Date()
+                    });
+                    await manager.save(newPlan);
+
+                    const link = manager.create(AppointmentTreatmentPlan, {
+                        AppointmentTreatmentPlanId: uuidv4(),
+                        AppointmentId: appointment.Id,
+                        TreatmentPlanId: newPlan.TreatmentPlanId,
+                        CreatedAt: new Date()
+                    });
+                    await manager.save(link);
+                }
+            }
+
+            // 6. Mark Slot as Booked
             await manager.update("HealthcareProviderScheduleSlots", data.slotId, {
                 IsBooked: true,
                 Status: "Booked",
                 UpdatedAt: new Date()
             });
+
+            // 7. Create/consolidate complete Appointment Bill immediately
+            const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+            const provider = await manager.findOne(HealthcareProvider, {
+                where: { UserId: data.doctorId }
+            });
+            const consultationFee = data.appointmentType === "Without Consultation" ? 0 : (provider?.ConsultationFee || 0);
+
+            // If it's a follow-up, locate the root parent appointment in the chain
+            let rootParentId: number | null = null;
+            if (appointment.ParentAppointmentId) {
+                const { Appointment: ApptModel } = await import("../../models/Appointments/appointment.model.js");
+                let currentId = appointment.ParentAppointmentId;
+                while (currentId) {
+                    const parentAppt = await manager.findOne(ApptModel, { where: { Id: currentId } });
+                    if (parentAppt) {
+                        rootParentId = parentAppt.Id;
+                        currentId = parentAppt.ParentAppointmentId || 0;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            let billAppended = false;
+            if (rootParentId) {
+                const parentBill = await appointmentBillRepository.findByAppointmentId(rootParentId);
+                if (parentBill) {
+                    await appointmentBillRepository.appendChildItemsToBill(parentBill.AppointmentBillId, appointment.Id, {
+                        consultationFee,
+                        treatmentPlanIds: data.treatmentPlanIds || [],
+                        customTreatmentPlans: data.customTreatmentPlans || [],
+                        discountAmount: data.discountAmount || 0
+                    });
+                    billAppended = true;
+                }
+            }
+
+            if (!billAppended) {
+                await appointmentBillRepository.createBillForAppointment(appointment.Id, {
+                    patientId: data.userId,
+                    providerId: data.doctorId,
+                    hospitalId: data.hospitalId,
+                    consultationFee,
+                    treatmentPlanIds: data.treatmentPlanIds || [],
+                    customTreatmentPlans: data.customTreatmentPlans || [],
+                    discountAmount: data.discountAmount || 0
+                });
+            }
 
             return appointment;
         });
@@ -166,8 +265,10 @@ export class AppointmentService {
 
     async attachMedicalAndInsurance(appointments: Appointment[]) {
         const userIds = [...new Set(appointments.map(a => a.UserId).filter(Boolean))];
+        const appointmentIds = appointments.map(a => a.Id).filter(Boolean);
         const medicalMap = new Map<string, PatientRegistration>();
         const insuranceMap = new Map<string, PatientInsurance>();
+        const plansMap = new Map<number, any[]>();
 
         if (userIds.length > 0) {
             const registrations = await AppDataSource.getRepository(PatientRegistration)
@@ -185,6 +286,27 @@ export class AppointmentService {
             insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
         }
 
+        if (appointmentIds.length > 0) {
+            try {
+                const { AppointmentTreatmentPlan } = await import("../../models/Payments/appointment-treatment-plan.model.js");
+                const links = await AppDataSource.getRepository(AppointmentTreatmentPlan)
+                    .createQueryBuilder("atp")
+                    .leftJoinAndSelect("atp.TreatmentPlan", "tp")
+                    .where("atp.AppointmentId IN (:...appointmentIds)", { appointmentIds })
+                    .getMany();
+
+                links.forEach(link => {
+                    if (link.TreatmentPlan) {
+                        const arr = plansMap.get(link.AppointmentId) || [];
+                        arr.push(link.TreatmentPlan);
+                        plansMap.set(link.AppointmentId, arr);
+                    }
+                });
+            } catch (error) {
+                console.error("Error attaching treatment plans:", error);
+            }
+        }
+
         return appointments.map(apt => {
             const reg = medicalMap.get(apt.UserId?.toUpperCase());
             const ins = insuranceMap.get(apt.UserId?.toUpperCase());
@@ -194,6 +316,7 @@ export class AppointmentService {
                 medicalHistory: reg?.MedicalHistory || null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,
+                treatmentPlans: plansMap.get(apt.Id) || []
             };
         });
     }
