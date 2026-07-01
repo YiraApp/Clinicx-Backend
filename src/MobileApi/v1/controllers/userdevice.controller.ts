@@ -9,7 +9,7 @@ import { appVersionService } from "../services/app-version.service.js";
  */
 export const registerDeviceToken = async (req: Request, res: Response) => {
     try {
-        const { userId, platform, currentVersion, fcmToken, deviceId } = req.body;
+        const { userId, platform, currentVersion, fcmToken, deviceId } = req.body || {};
 
         let normalizedPlatform: PlatformType | undefined;
         if (platform) {

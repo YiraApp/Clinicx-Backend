@@ -28,13 +28,11 @@ export class AppVersionService {
             return false;
         };
 
-        const updateAvailable = isLessThan(currentVersion, latest.Version);
+        const updateAvailable = currentVersion !== latest.Version && isLessThan(currentVersion, latest.Version);
         
         let forceUpdate = false;
-        if (latest.MinVersion && latest.MinVersion.trim() !== "") {
-            forceUpdate = isLessThan(currentVersion, latest.MinVersion) || (latest.ForceUpdate && updateAvailable);
-        } else {
-            forceUpdate = !!latest.ForceUpdate && updateAvailable;
+        if (updateAvailable) {
+            forceUpdate = !!latest.ForceUpdate;
         }
 
         return {
@@ -52,7 +50,9 @@ export class AppVersionService {
         version: string,
         minVersion: string,
         forceUpdate: boolean,
-        url?: string
+        url?: string,
+        maintenance?: boolean,
+        logout?: boolean
     ): Promise<AppVersion> {
         if (!platform || !version || !minVersion) {
             throw new Error("Platform, version, and minVersion are required");
@@ -68,6 +68,8 @@ export class AppVersionService {
         newAppVersion.MinVersion = minVersion;
         newAppVersion.ForceUpdate = forceUpdate;
         newAppVersion.Url = url;
+        newAppVersion.Maintenance = maintenance === true;
+        newAppVersion.Logout = logout === true;
         newAppVersion.IsLatest = true;
         newAppVersion.IsDeleted = false;
         newAppVersion.CreatedAt = new Date();

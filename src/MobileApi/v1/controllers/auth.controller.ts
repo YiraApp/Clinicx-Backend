@@ -43,7 +43,13 @@ export const login = async (req: Request, res: Response) => {
         let code = "AUTHENTICATION_FAILED";
         let status = 400;
 
-        if (error.message === "Invalid email format") {
+        if (error.message === "Invalid emailid") {
+            code = "INVALID_EMAILID";
+            status = 200;
+        } else if (error.message === "Invalid password") {
+            code = "INVALID_PASSWORD";
+            status = 200;
+        } else if (error.message === "Invalid email format") {
             code = "INVALID_EMAIL";
             status = 400;
         } else if (error.message === "Password is required for email login") {
@@ -66,12 +72,17 @@ export const login = async (req: Request, res: Response) => {
             status = 400;
         }
 
-        return res.status(status).json({
+        const responseBody: any = {
             status: false,
-            message: error.message,
-            code,
-            data: { code }
-        });
+            message: error.message
+        };
+
+        if (status !== 200) {
+            responseBody.code = code;
+            responseBody.data = { code };
+        }
+
+        return res.status(status).json(responseBody);
     }
 };
 
@@ -378,12 +389,12 @@ export const getRoleDetails = async (req: Request, res: Response) => {
  */
 export const updateLatestContext = async (req: Request, res: Response) => {
     try {
-        const { latestRoleId, latestOrgId, latestHospitalId } = req.body;
+        const { userId, latestRoleId, latestOrgId, latestHospitalId } = req.body || {};
         
-        // Resolve authenticated user ID from token
-        const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        // Resolve authenticated user ID from token or request body
+        const resolvedUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
 
-        if (!userId) {
+        if (!resolvedUserId) {
             return res.status(400).json({
                 status: false,
                 message: "User ID is required",
@@ -393,7 +404,7 @@ export const updateLatestContext = async (req: Request, res: Response) => {
         }
 
         const updatedUser = await mobileAuthService.updateLatestContext(
-            userId,
+            resolvedUserId,
             latestRoleId,
             latestOrgId ? parseInt(latestOrgId) : undefined,
             latestHospitalId ? parseInt(latestHospitalId) : undefined

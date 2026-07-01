@@ -1,5 +1,6 @@
 import { Entity, PrimaryColumn, Column, ManyToOne, JoinColumn, Relation } from "typeorm/index.js";
 import { AppointmentBill } from "./appointment-bill.model.js";
+import { Appointment } from "../Appointments/appointment.model.js";
 
 @Entity({ name: "AppointmentBillItems" })
 export class AppointmentBillItem {
@@ -12,6 +13,13 @@ export class AppointmentBillItem {
     @ManyToOne(() => AppointmentBill, (bill) => bill.BillItems)
     @JoinColumn({ name: "AppointmentBillId" })
     AppointmentBill?: Relation<AppointmentBill>;
+
+    @Column({ type: "int", nullable: true })
+    AppointmentId?: number | null;
+
+    @ManyToOne(() => Appointment)
+    @JoinColumn({ name: "AppointmentId" })
+    Appointment?: Relation<Appointment> | null;
 
     @Column({ type: "varchar", length: 50 })
     ItemType: string;

@@ -49,12 +49,23 @@ export class PostVisitController {
                 return res.status(400).json(ApiResponse.error("Invalid Appointment ID."));
             }
 
-            if (!files || files.length === 0) {
+            const existingDocsJson = req.body.existingDocuments;
+            let hasExistingDocs = false;
+            if (existingDocsJson) {
+                try {
+                    const parsed = JSON.parse(existingDocsJson);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        hasExistingDocs = true;
+                    }
+                } catch (e) {}
+            }
+
+            if ((!files || files.length === 0) && !hasExistingDocs) {
                 return res.status(400).json(ApiResponse.error("No documents provided for upload."));
             }
 
             const channel = req.body.channel as string;
-            const result = await postVisitService.processDocuments(appointmentId, files, channel);
+            const result = await postVisitService.processDocuments(appointmentId, files || [], channel, existingDocsJson);
             return res.json(ApiResponse.success(result, "Documents uploaded and share link generated successfully."));
         } catch (error: any) {
             console.error("Error in PostVisitController (upload):", error);

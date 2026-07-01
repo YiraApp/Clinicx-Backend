@@ -19,8 +19,6 @@ app.use('/api', router);
 
 // Mobile Versioned API Routes
 app.use('/v1/api', mobileRouterV1);
-app.use('/api/v1/mobile', mobileRouterV1);
-app.use('/mobile/api/v1', mobileRouterV1);
 
 // Health Check
 app.get('/health', (req, res) => {

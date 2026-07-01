@@ -2,6 +2,8 @@ import { AppDataSource } from "../../config/database.js";
 import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
 import { AppointmentBillItem } from "../../models/Payments/appointment-bill-item.model.js";
 import { HospitalPaymentConfiguration } from "../../models/Organizations/hospital-payment-configuration.model.js";
+import { TreatmentPlan } from "../../models/Payments/treatment-plan.model.js";
+import { Payment } from "../../models/Payments/payment.model.js";
 import { v4 as uuidv4 } from "uuid";
 
 export class AppointmentBillRepository {
@@ -99,6 +101,278 @@ export class AppointmentBillRepository {
         await this.itemRepo.save(item);
 
         return savedBill;
+    }
+
+    async createBillForAppointment(
+        appointmentId: number,
+        data: {
+            patientId: string;
+            providerId?: string;
+            hospitalId: number;
+            consultationFee: number;
+            treatmentPlanIds?: string[];
+            customTreatmentPlans?: { name: string; amount: number }[];
+            discountAmount?: number;
+        }
+    ): Promise<AppointmentBill> {
+        // Calculate Inclusive GST and Breakdowns using Hospital Config
+        const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
+        const config = await configRepo.findOne({
+            where: { HospitalId: data.hospitalId, IsDeleted: false }
+        });
+
+        const gstPct = config?.GstPercentage || 0;
+        const cgstPct = config?.CgstPercentage || 0;
+        const sgstPct = config?.SgstPercentage || 0;
+        const igstPct = config?.IgstPercentage || 0;
+
+        let subTotalSum = 0;
+        const itemsToCreate: any[] = [];
+
+        // 1. Consultation Item
+        if (data.consultationFee > 0) {
+            const totalItemAmt = data.consultationFee;
+            const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
+            const gst = parseFloat((totalItemAmt - sub).toFixed(2));
+            subTotalSum += sub;
+
+            itemsToCreate.push({
+                ItemType: "Consultation",
+                ItemName: "Consultation Fee",
+                Quantity: 1,
+                UnitPrice: sub,
+                DiscountAmount: 0,
+                GstPercentage: gstPct,
+                GstAmount: gst,
+                TotalAmount: totalItemAmt
+            });
+        }
+
+        // 2. Predefined Treatment Plans
+        if (data.treatmentPlanIds && data.treatmentPlanIds.length > 0) {
+            const planRepo = AppDataSource.getRepository(TreatmentPlan);
+            const plans = await planRepo.findByIds(data.treatmentPlanIds);
+            for (const plan of plans) {
+                const totalItemAmt = plan.Amount;
+                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
+                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
+                subTotalSum += sub;
+
+                itemsToCreate.push({
+                    ItemType: "TreatmentPlan",
+                    ItemReferenceId: plan.TreatmentPlanId,
+                    ItemName: plan.Name,
+                    Quantity: 1,
+                    UnitPrice: sub,
+                    DiscountAmount: 0,
+                    GstPercentage: gstPct,
+                    GstAmount: gst,
+                    TotalAmount: totalItemAmt
+                });
+            }
+        }
+
+        // 3. Custom Treatment Plans
+        if (data.customTreatmentPlans && data.customTreatmentPlans.length > 0) {
+            for (const cp of data.customTreatmentPlans) {
+                const totalItemAmt = cp.amount;
+                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
+                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
+                subTotalSum += sub;
+
+                itemsToCreate.push({
+                    ItemType: "TreatmentPlan",
+                    ItemName: cp.name,
+                    Quantity: 1,
+                    UnitPrice: sub,
+                    DiscountAmount: 0,
+                    GstPercentage: gstPct,
+                    GstAmount: gst,
+                    TotalAmount: totalItemAmt
+                });
+            }
+        }
+
+        // 4. NO bill number yet — bill starts as Draft
+        const overallDiscount = Number(data.discountAmount) || 0;
+        const finalTaxable = Math.max(0, subTotalSum - overallDiscount);
+
+        const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
+        const cgstAmount = parseFloat(((finalTaxable * cgstPct) / 100).toFixed(2));
+        const sgstAmount = parseFloat(((finalTaxable * sgstPct) / 100).toFixed(2));
+        const igstAmount = parseFloat(((finalTaxable * igstPct) / 100).toFixed(2));
+
+        const totalAmount = parseFloat((finalTaxable + finalGst).toFixed(2));
+
+        // Create main bill as DRAFT — no invoice number assigned yet
+        const bill = this.repo.create({
+            AppointmentBillId: uuidv4(),
+            AppointmentId: appointmentId,
+            PatientId: data.patientId,
+            ProviderId: data.providerId || null,
+            HospitalId: data.hospitalId,
+            BillNumber: `DFT-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`,          // Place holder, formal INV number assigned when invoice is generated
+            BillType: "Appointment",
+            SubTotal: subTotalSum,
+            DiscountAmount: overallDiscount,
+            GstAmount: finalGst,
+            CgstAmount: cgstAmount,
+            SgstAmount: sgstAmount,
+            IgstAmount: igstAmount,
+            TotalAmount: totalAmount,
+            PaidAmount: 0,
+            DueAmount: totalAmount,
+            BillStatus: "Draft",              // Draft until staff clicks Generate Invoice
+            CreatedAt: new Date()
+        });
+
+        const savedBill = await this.repo.save(bill);
+
+        // Create items
+        for (const it of itemsToCreate) {
+            const item = this.itemRepo.create({
+                AppointmentBillItemId: uuidv4(),
+                AppointmentBillId: savedBill.AppointmentBillId,
+                AppointmentId: appointmentId,
+                ...it,
+                CreatedAt: new Date()
+            });
+            await this.itemRepo.save(item);
+        }
+
+        return savedBill;
+    }
+
+    async appendChildItemsToBill(
+        billId: string,
+        appointmentId: number,
+        data: {
+            consultationFee: number;
+            treatmentPlanIds?: string[];
+            customTreatmentPlans?: { name: string; amount: number }[];
+            discountAmount?: number;
+        }
+    ): Promise<AppointmentBill> {
+        const bill = await this.repo.findOne({
+            where: { AppointmentBillId: billId },
+            relations: ["BillItems", "Hospital"]
+        });
+        if (!bill) throw new Error("Bill not found");
+
+        const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
+        const config = await configRepo.findOne({
+            where: { HospitalId: bill.HospitalId, IsDeleted: false }
+        });
+
+        const gstPct = config?.GstPercentage || 0;
+        const cgstPct = config?.CgstPercentage || 0;
+        const sgstPct = config?.SgstPercentage || 0;
+        const igstPct = config?.IgstPercentage || 0;
+
+        let subTotalSum = Number(bill.SubTotal) || 0;
+        const itemsToCreate: any[] = [];
+
+        // 1. Consultation Item
+        if (data.consultationFee > 0) {
+            const totalItemAmt = data.consultationFee;
+            const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
+            const gst = parseFloat((totalItemAmt - sub).toFixed(2));
+            subTotalSum += sub;
+
+            itemsToCreate.push({
+                ItemType: "Consultation",
+                ItemName: "Consultation Fee (Follow-up)",
+                Quantity: 1,
+                UnitPrice: sub,
+                DiscountAmount: 0,
+                GstPercentage: gstPct,
+                GstAmount: gst,
+                TotalAmount: totalItemAmt
+            });
+        }
+
+        // 2. Predefined Treatment Plans
+        if (data.treatmentPlanIds && data.treatmentPlanIds.length > 0) {
+            const plans = await AppDataSource.getRepository(TreatmentPlan).findByIds(data.treatmentPlanIds);
+            for (const plan of plans) {
+                const totalItemAmt = plan.Amount;
+                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
+                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
+                subTotalSum += sub;
+
+                itemsToCreate.push({
+                    ItemType: "TreatmentPlan",
+                    ItemReferenceId: plan.TreatmentPlanId,
+                    ItemName: plan.Name,
+                    Quantity: 1,
+                    UnitPrice: sub,
+                    DiscountAmount: 0,
+                    GstPercentage: gstPct,
+                    GstAmount: gst,
+                    TotalAmount: totalItemAmt
+                });
+            }
+        }
+
+        // 3. Custom Treatment Plans
+        if (data.customTreatmentPlans && data.customTreatmentPlans.length > 0) {
+            for (const cp of data.customTreatmentPlans) {
+                const totalItemAmt = cp.amount;
+                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
+                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
+                subTotalSum += sub;
+
+                itemsToCreate.push({
+                    ItemType: "TreatmentPlan",
+                    ItemName: cp.name,
+                    Quantity: 1,
+                    UnitPrice: sub,
+                    DiscountAmount: 0,
+                    GstPercentage: gstPct,
+                    GstAmount: gst,
+                    TotalAmount: totalItemAmt
+                });
+            }
+        }
+
+        const newDiscount = (Number(bill.DiscountAmount) || 0) + (Number(data.discountAmount) || 0);
+        const finalTaxable = Math.max(0, subTotalSum - newDiscount);
+        
+        const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
+        const cgstAmount = parseFloat(((finalTaxable * cgstPct) / 100).toFixed(2));
+        const sgstAmount = parseFloat(((finalTaxable * sgstPct) / 100).toFixed(2));
+        const igstAmount = parseFloat(((finalTaxable * igstPct) / 100).toFixed(2));
+
+        const totalAmount = parseFloat((finalTaxable + finalGst).toFixed(2));
+        const dueAmount = parseFloat((totalAmount - Number(bill.PaidAmount)).toFixed(2));
+
+        // Save items first
+        for (const it of itemsToCreate) {
+            const item = this.itemRepo.create({
+                AppointmentBillItemId: uuidv4(),
+                AppointmentBillId: bill.AppointmentBillId,
+                AppointmentId: appointmentId,
+                ...it,
+                CreatedAt: new Date()
+            });
+            await this.itemRepo.save(item);
+        }
+
+        // Update bill values
+        await this.repo.update(bill.AppointmentBillId, {
+            SubTotal: subTotalSum,
+            DiscountAmount: newDiscount,
+            GstAmount: finalGst,
+            CgstAmount: cgstAmount,
+            SgstAmount: sgstAmount,
+            IgstAmount: igstAmount,
+            TotalAmount: totalAmount,
+            DueAmount: dueAmount,
+            BillStatus: dueAmount <= 0 ? "Paid" : (Number(bill.PaidAmount) > 0 ? "PartiallyPaid" : "Pending"),
+            UpdatedAt: new Date()
+        });
+
+        return bill;
     }
 
     async updateBillOnPaymentSuccess(billId: string, paidAmount: number): Promise<void> {
@@ -231,7 +505,313 @@ export class AppointmentBillRepository {
         const totalCollected = parseFloat(agg?.collected || "0");
         const totalPending = parseFloat(agg?.pending || "0");
 
-        return { data, total, totalCollected, totalPending };
+        const { Appointment } = await import("../../models/Appointments/appointment.model.js");
+        const appRepo = AppDataSource.getRepository(Appointment);
+
+        const nonApptBills: AppointmentBill[] = [];
+        const rootBillMap = new Map<number, AppointmentBill>();
+
+        for (const bill of data) {
+            if (!bill.AppointmentId) {
+                nonApptBills.push(bill);
+                continue;
+            }
+
+            // Trace to the root parent appointment
+            let rootParentId = bill.AppointmentId;
+            let currentId = bill.AppointmentId;
+            while (true) {
+                const appt = await appRepo.findOne({ where: { Id: currentId } });
+                if (appt && appt.ParentAppointmentId) {
+                    currentId = appt.ParentAppointmentId;
+                    rootParentId = appt.ParentAppointmentId;
+                } else {
+                    break;
+                }
+            }
+
+            if (rootBillMap.has(rootParentId)) {
+                const rootBill = rootBillMap.get(rootParentId)!;
+                
+                // Merge items safely without duplicates
+                if (bill.BillItems) {
+                    for (const item of bill.BillItems) {
+                        const exists = rootBill.BillItems?.some(ri => ri.AppointmentBillItemId === item.AppointmentBillItemId);
+                        if (!exists) {
+                            rootBill.BillItems = rootBill.BillItems || [];
+                            rootBill.BillItems.push(item);
+                        }
+                    }
+                }
+
+                rootBill.SubTotal = parseFloat((Number(rootBill.SubTotal) + Number(bill.SubTotal)).toFixed(2));
+                rootBill.DiscountAmount = parseFloat((Number(rootBill.DiscountAmount) + Number(bill.DiscountAmount)).toFixed(2));
+                rootBill.GstAmount = parseFloat((Number(rootBill.GstAmount) + Number(bill.GstAmount)).toFixed(2));
+                rootBill.CgstAmount = parseFloat((Number(rootBill.CgstAmount) + Number(bill.CgstAmount)).toFixed(2));
+                rootBill.SgstAmount = parseFloat((Number(rootBill.SgstAmount) + Number(bill.SgstAmount)).toFixed(2));
+                rootBill.IgstAmount = parseFloat((Number(rootBill.IgstAmount) + Number(bill.IgstAmount)).toFixed(2));
+                rootBill.TotalAmount = parseFloat((Number(rootBill.TotalAmount) + Number(bill.TotalAmount)).toFixed(2));
+                rootBill.PaidAmount = parseFloat((Number(rootBill.PaidAmount) + Number(bill.PaidAmount)).toFixed(2));
+                rootBill.DueAmount = parseFloat((Number(rootBill.DueAmount) + Number(bill.DueAmount)).toFixed(2));
+                rootBill.BillStatus = rootBill.DueAmount <= 0 ? "Paid" : (rootBill.PaidAmount > 0 ? "PartiallyPaid" : "Pending");
+            } else {
+                const clone = {
+                    ...bill,
+                    BillItems: bill.BillItems ? [...bill.BillItems] : []
+                } as AppointmentBill;
+                rootBillMap.set(rootParentId, clone);
+            }
+        }
+
+        const consolidatedBills = Array.from(rootBillMap.values()).concat(nonApptBills);
+
+        // Attach appointment chain (parent + child visits) to each consolidated bill
+        const payRepo = AppDataSource.getRepository(Payment);
+        const billsWithChain = await Promise.all(consolidatedBills.map(async (bill) => {
+            if (!bill.AppointmentId) return { ...bill, appointmentChain: [] };
+
+            // Collect the full appointment chain starting from root
+            const chain: any[] = [];
+            const rootAppt = await appRepo.findOne({
+                where: { Id: bill.AppointmentId },
+                relations: ["Doctor"]
+            });
+            if (rootAppt) {
+                chain.push({
+                    id: rootAppt.Id,
+                    date: rootAppt.AppointmentDate,
+                    type: rootAppt.AppointmentType,
+                    reason: rootAppt.Reason,
+                    status: rootAppt.Status,
+                    providerName: rootAppt.Doctor
+                        ? `Dr. ${(rootAppt.Doctor as any).FirstName || ""} ${(rootAppt.Doctor as any).LastName || ""}`.trim()
+                        : null
+                });
+            }
+
+            // Find all descendants recursively
+            const findChildren = async (parentId: number) => {
+                const children = await appRepo.find({ where: { ParentAppointmentId: parentId } });
+                for (const child of children) {
+                    chain.push({
+                        id: child.Id,
+                        date: child.AppointmentDate,
+                        type: child.AppointmentType,
+                        reason: child.Reason,
+                        status: child.Status,
+                        providerName: null
+                    });
+                    await findChildren(child.Id);
+                }
+            };
+            await findChildren(bill.AppointmentId);
+
+            // Fetch items and payments for each visit in the chain
+            const enrichedChain = await Promise.all(chain.map(async (appt) => {
+                const apptPayments = await payRepo.find({
+                    where: { AppointmentId: appt.id }
+                });
+                
+                const apptItems = bill.BillItems ? bill.BillItems.filter(bi => {
+                    if (bi.AppointmentId === appt.id) return true;
+                    if (!bi.AppointmentId && appt.id === bill.AppointmentId) return true;
+                    return false;
+                }) : [];
+
+                return {
+                    ...appt,
+                    items: apptItems.map(item => ({
+                        itemName: item.ItemName,
+                        itemType: item.ItemType,
+                        unitPrice: Number(item.UnitPrice),
+                        quantity: Number(item.Quantity),
+                        totalAmount: Number(item.TotalAmount)
+                    })),
+                    payments: apptPayments.map(p => ({
+                        paymentId: p.PaymentId,
+                        amount: Number(p.Amount),
+                        method: p.PaymentMethod,
+                        transactionId: p.TransactionId,
+                        createdAt: p.CreatedAt
+                    }))
+                };
+            }));
+
+            return { ...bill, appointmentChain: enrichedChain };
+        }));
+
+        return { data: billsWithChain as any[], total, totalCollected, totalPending };
+    }
+
+    /**
+     * Generate Invoice: assigns a bill number and moves the bill from Draft → Pending.
+     * This is called when staff clicks "Generate Invoice" on the billing page.
+     */
+    async generateInvoice(billId: string): Promise<AppointmentBill> {
+        const bill = await this.repo.findOne({
+            where: { AppointmentBillId: billId, IsDeleted: false }
+        });
+        if (!bill) throw new Error("Bill not found.");
+        const isDraft = bill.BillStatus === "Draft" || !bill.BillNumber || bill.BillNumber.startsWith("DFT-");
+        if (!isDraft) throw new Error("Invoice already generated for this bill.");
+
+        const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
+        const config = await configRepo.findOne({
+            where: { HospitalId: bill.HospitalId, IsDeleted: false }
+        });
+
+        const prefix = config?.InvoicePrefix || "INV";
+        const seq = config?.InvoiceSequence || 1;
+        const billNumber = `${prefix}-${String(seq).padStart(6, "0")}-${Date.now().toString().slice(-4)}`;
+
+        if (config) {
+            await configRepo.update(config.HospitalPaymentConfigurationId, {
+                InvoiceSequence: seq + 1,
+                UpdatedAt: new Date()
+            });
+        }
+
+        const newStatus = Number(bill.DueAmount) <= 0
+            ? (Number(bill.PaidAmount) > 0 ? "Paid" : "Pending")
+            : (Number(bill.PaidAmount) > 0 ? "PartiallyPaid" : "Pending");
+
+        await this.repo.update(billId, {
+            BillNumber: billNumber,
+            BillStatus: newStatus,
+            UpdatedAt: new Date()
+        });
+
+        return (await this.findById(billId))!;
+    }
+
+    async updateBillDetails(
+        billId: string,
+        data: {
+            items: {
+                itemId?: string;
+                itemName: string;
+                itemType: string;
+                unitPrice: number;
+                quantity: number;
+                discountAmount: number;
+                gstPercentage?: number;
+                appointmentId?: string | number | null;
+            }[];
+            discountAmount: number; // General bill discount
+            notes?: string;
+        }
+    ): Promise<AppointmentBill> {
+        return await AppDataSource.transaction(async (manager) => {
+            const billRepo = manager.getRepository(AppointmentBill);
+            const itemRepo = manager.getRepository(AppointmentBillItem);
+
+            const bill = await billRepo.findOne({
+                where: { AppointmentBillId: billId, IsDeleted: false },
+                relations: ["BillItems", "Hospital"]
+            });
+            if (!bill) throw new Error("Bill not found.");
+            if (bill.BillStatus === "Paid") {
+                throw new Error("Cannot edit a fully paid bill.");
+            }
+
+            // 1. Fetch Hospital Payment Configuration for GST calculations
+            const configRepo = manager.getRepository(HospitalPaymentConfiguration);
+            const config = await configRepo.findOne({
+                where: { HospitalId: bill.HospitalId, IsDeleted: false }
+            });
+
+            const gstPct = config?.GstPercentage || 0;
+            const cgstPct = config?.CgstPercentage || 0;
+            const sgstPct = config?.SgstPercentage || 0;
+            const igstPct = config?.IgstPercentage || 0;
+
+            // 2. Clear old items
+            await itemRepo.delete({ AppointmentBillId: billId });
+
+            // 3. Insert new items and compute subtotal
+            let subTotalSum = 0;
+            let itemsDiscountSum = 0;
+            let gstSum = 0;
+
+            const savedItems: AppointmentBillItem[] = [];
+
+            for (const it of data.items) {
+                const qty = Number(it.quantity) || 1;
+                const price = Number(it.unitPrice) || 0;
+                const disc = Number(it.discountAmount) || 0;
+                const itemGstPct = it.gstPercentage !== undefined ? Number(it.gstPercentage) : gstPct;
+
+                // Base amount before discount and tax
+                const baseAmount = price * qty;
+                // Net taxable value
+                const taxableAmount = Math.max(0, baseAmount - disc);
+                
+                // GST calculations (exclusive)
+                const gstAmt = parseFloat(((taxableAmount * itemGstPct) / 100).toFixed(2));
+                const totalItemAmt = parseFloat((taxableAmount + gstAmt).toFixed(2));
+
+                subTotalSum += taxableAmount;
+                itemsDiscountSum += disc;
+                gstSum += gstAmt;
+
+                const item = itemRepo.create({
+                    AppointmentBillItemId: uuidv4(),
+                    AppointmentBillId: billId,
+                    AppointmentId: it.appointmentId ? Number(it.appointmentId) : null,
+                    ItemType: it.itemType || "Custom",
+                    ItemName: it.itemName,
+                    Quantity: qty,
+                    UnitPrice: price,
+                    DiscountAmount: disc,
+                    GstPercentage: itemGstPct,
+                    GstAmount: gstAmt,
+                    TotalAmount: totalItemAmt,
+                    CreatedAt: new Date()
+                });
+
+                const savedItem = await manager.save(AppointmentBillItem, item);
+                savedItems.push(savedItem);
+            }
+
+            // 4. Calculate overall totals
+            const overallDiscount = Number(data.discountAmount) || 0;
+            const totalDiscount = itemsDiscountSum + overallDiscount;
+
+            // If overall discount is applied, adjust subtotal/total
+            const finalTaxable = Math.max(0, subTotalSum - overallDiscount);
+            
+            // Recalculate tax based on final taxable amount (using the hospital configuration distribution)
+            const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
+            const cgstAmount = parseFloat(((finalTaxable * cgstPct) / 100).toFixed(2));
+            const sgstAmount = parseFloat(((finalTaxable * sgstPct) / 100).toFixed(2));
+            const igstAmount = parseFloat(((finalTaxable * igstPct) / 100).toFixed(2));
+
+            const totalAmount = parseFloat((finalTaxable + finalGst).toFixed(2));
+
+            if (totalAmount < Number(bill.PaidAmount)) {
+                throw new Error(`The new total amount (₹${totalAmount}) cannot be less than the already collected/paid amount (₹${bill.PaidAmount})`);
+            }
+
+            // Update the main bill record
+            await billRepo.update(billId, {
+                SubTotal: subTotalSum,
+                DiscountAmount: totalDiscount,
+                GstAmount: finalGst,
+                CgstAmount: cgstAmount,
+                SgstAmount: sgstAmount,
+                IgstAmount: igstAmount,
+                TotalAmount: totalAmount,
+                DueAmount: Math.max(0, totalAmount - Number(bill.PaidAmount)),
+                Notes: data.notes || bill.Notes,
+                UpdatedAt: new Date()
+            });
+
+            const updatedBill = await billRepo.findOne({
+                where: { AppointmentBillId: billId },
+                relations: ["BillItems", "Patient", "Provider", "Hospital"]
+            });
+            return updatedBill!;
+        });
     }
 }
 

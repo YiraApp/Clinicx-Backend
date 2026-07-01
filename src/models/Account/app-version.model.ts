@@ -31,6 +31,12 @@ export class AppVersion {
     @Column({ type: "datetime", default: () => "GETDATE()" })
     CreatedAt: Date;
 
+    @Column({ type: "bit", default: false })
+    Maintenance: boolean;
+
+    @Column({ type: "bit", default: false })
+    Logout: boolean;
+
     @Column({ type: "datetime", nullable: true })
     UpdatedAt?: Date;
 }
