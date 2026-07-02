@@ -131,7 +131,7 @@ export const registerNewAppVersion = async (req: Request, res: Response) => {
  */
 export const getVersionAndTokenStatus = async (req: Request, res: Response) => {
     try {
-        const { platform, currentVersion, deviceId } = req.body || {};
+        const { platform, currentVersion, deviceId, userId } = req.body || {};
 
         if (!platform) {
             return res.status(400).json({
@@ -189,7 +189,13 @@ export const getVersionAndTokenStatus = async (req: Request, res: Response) => {
         if (deviceId) {
             const dev = await userDeviceRepository.findByPhysicalDeviceId(String(deviceId));
             if (dev && dev.IsActive) {
-                tokenStatus = true;
+                if (userId) {
+                    if (dev.UserId === userId) {
+                        tokenStatus = true;
+                    }
+                } else {
+                    tokenStatus = true;
+                }
             }
         }
 

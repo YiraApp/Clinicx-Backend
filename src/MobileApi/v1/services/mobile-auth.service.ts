@@ -3,9 +3,12 @@ import { mobileAuthRepository } from "../repositories/mobile-auth.repository.js"
 import { userOTPRepository } from "../../../repositories/Account/userotp.repository.js";
 import { tokenRepository } from "../../../repositories/Account/token.repository.js";
 import { otpService } from "../../../services/Account/otp.service.js";
+import { mailService } from "../../../services/Mail/mail.service.js";
 import { OTPPurpose, OTPType } from "../../../enums/OTPType.enum.js";
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from "../../../utils/jwt.utils.js";
 import { User } from "../../../models/Account/user.model.js";
+import { AppDataSource } from "../../../config/database.js";
+import { UserOTP } from "../../../models/Account/userotp.model.js";
 
 export class MobileAuthService {
     /**
@@ -686,6 +689,343 @@ export class MobileAuthService {
             latestHospitalId: user.LatestHospitalId ?? null,
             navigationId: getNavigationId(user.LatestRoleId)
         };
+    }
+
+    async sendForgotPasswordOTP(identity: string, contactType?: string, isResend?: boolean, countryCode?: string): Promise<{
+        sessionId: string;
+        contact: string;
+        contactType: OTPType;
+        countryCode: string | null;
+        message: string;
+    }> {
+        const isEmail = contactType 
+            ? String(contactType).toUpperCase() === "EMAIL"
+            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+
+        let lookupIdentity = identity;
+        if (!isEmail) {
+            if (countryCode && identity.startsWith(countryCode)) {
+                lookupIdentity = identity.substring(countryCode.length);
+            } else if (identity.startsWith("91")) {
+                lookupIdentity = identity.substring(2);
+            }
+        }
+
+        const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
+        if (!user) {
+            throw new Error("User not registered");
+        }
+
+        if (!user.Status) {
+            throw new Error("User account is inactive");
+        }
+
+        const otpTarget = isEmail ? user.Email : user.PhoneNumber;
+        if (!otpTarget) {
+            throw new Error(isEmail ? "No email found for this user" : "No phone number found for this user");
+        }
+
+        // For email, templateCode is EMAIL_OTP_VERIFICATION.
+        const templateCode = isEmail ? "EMAIL_OTP_VERIFICATION" : undefined;
+
+        let otpResult;
+        if (isResend) {
+            otpResult = await otpService.resendOTP(
+                otpTarget,
+                OTPPurpose.PASSWORD_RESET,
+                isEmail ? undefined : (countryCode || user.CountryCode || undefined),
+                undefined,
+                !isEmail
+            );
+        } else {
+            otpResult = await otpService.sendOTP(
+                otpTarget,
+                OTPPurpose.PASSWORD_RESET,
+                isEmail ? undefined : (countryCode || user.CountryCode || undefined),
+                templateCode,
+                undefined,
+                undefined,
+                !isEmail
+            );
+        }
+
+        return {
+            sessionId: otpResult.sessionId,
+            contact: otpTarget,
+            contactType: otpResult.contactType,
+            countryCode: isEmail ? null : (countryCode || user.CountryCode || null),
+            message: otpResult.message
+        };
+    }
+
+    async resetPasswordWithOTP(
+        identity: string,
+        sessionId: string,
+        otp: string,
+        newPassword: string,
+        contactType?: string,
+        countryCode?: string
+    ): Promise<{ message: string }> {
+        const isEmail = contactType 
+            ? String(contactType).toUpperCase() === "EMAIL"
+            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+
+        let lookupIdentity = identity;
+        if (!isEmail) {
+            if (countryCode && identity.startsWith(countryCode)) {
+                lookupIdentity = identity.substring(countryCode.length);
+            } else if (identity.startsWith("91")) {
+                lookupIdentity = identity.substring(2);
+            }
+        }
+
+        // 1. Verify OTP first
+        const verification = await otpService.verifyOTP(
+            identity,
+            sessionId,
+            otp,
+            OTPPurpose.PASSWORD_RESET,
+            isEmail ? undefined : countryCode
+        );
+
+        if (!verification.success) {
+            throw new Error(verification.message);
+        }
+
+        // 2. Fetch primary user
+        const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        // 3. Update password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        user.PasswordHash = hashedPassword;
+        user.UpdatedAt = new Date();
+        await mobileAuthRepository.saveUser(user);
+
+        // 4. Revoke active tokens/sessions for safety
+        await tokenRepository.revokeAllUserTokens(user.Id);
+
+        // 5. Send email notification if user has a registered email address
+        if (user.Email) {
+            mailService.sendMail({
+                to: user.Email,
+                subject: "Yira - Password Changed Successfully",
+                body: `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Password Changed</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Segoe UI, Arial,sans-serif;">
+
+<table style="max-width:520px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.08);width:100%;">
+
+<tr>
+<td style="background:linear-gradient(120deg,#1a23d8,#3f5bff,#6f8dff);padding:20px;text-align:center;color:#fff;">
+    <img src="https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" width="70"/>
+    <h2 style="margin:10px 0 0;">Yira</h2>
+    <div style="font-size:12px;">Powering Healthcare with Clinicx</div>
+</td>
+</tr>
+
+<tr>
+<td style="padding:25px;color:#333;font-size:14px;line-height:1.6;">
+    <h1 style="text-align:center;color:#1920d9;font-size:20px;">Password Updated</h1>
+
+    <p>Hi <strong>${user.FirstName || 'User'}</strong>,</p>
+
+    <p>Your password for the account registered with mobile/email has been successfully changed.</p>
+
+    <p>If you didn't request this change, please contact support immediately.</p>
+
+    <p>
+        Regards,<br/>
+        <strong>Yira Health Tech Team</strong><br/>
+        contact@yira.ai
+    </p>
+</td>
+</tr>
+
+<tr>
+<td style="background:#f4f6fb;text-align:center;padding:15px;font-size:11px;color:#777;">
+    © 2026 Yira Health Tech Pvt Ltd.
+</td>
+</tr>
+
+</table>
+
+</body>
+</html>
+                `
+            }).catch(err => console.error("[AuthService] Failed to send password change confirmation email:", err));
+        }
+
+        return { message: "Password has been reset successfully" };
+    }
+
+    async verifyForgotPasswordOTP(
+        identity: string,
+        sessionId: string,
+        otp: string,
+        contactType?: string,
+        countryCode?: string
+    ): Promise<{ success: boolean; message: string; contact: string; contactType: OTPType; countryCode: string | null }> {
+        const isEmail = contactType 
+            ? String(contactType).toUpperCase() === "EMAIL"
+            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+
+        const verification = await otpService.verifyOTP(
+            identity,
+            sessionId,
+            otp,
+            OTPPurpose.PASSWORD_RESET,
+            isEmail ? undefined : countryCode
+        );
+
+        if (!verification.success) {
+            throw new Error(verification.message);
+        }
+
+        let resolvedCountryCode = countryCode || null;
+        let lookupIdentity = identity;
+        if (!isEmail) {
+            if (countryCode && identity.startsWith(countryCode)) {
+                lookupIdentity = identity.substring(countryCode.length);
+            } else if (identity.startsWith("91")) {
+                lookupIdentity = identity.substring(2);
+            }
+            if (!resolvedCountryCode) {
+                const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
+                if (user) {
+                    resolvedCountryCode = user.CountryCode || null;
+                }
+            }
+        }
+
+        return { 
+            success: true, 
+            message: "OTP verified successfully",
+            contact: lookupIdentity,
+            contactType: isEmail ? OTPType.EMAIL : OTPType.MOBILE,
+            countryCode: isEmail ? null : resolvedCountryCode
+        };
+    }
+
+    async changePasswordWithOTPVerification(
+        identity: string,
+        newPassword: string,
+        contactType?: string,
+        countryCode?: string
+    ): Promise<{ message: string }> {
+        const isEmail = contactType 
+            ? String(contactType).toUpperCase() === "EMAIL"
+            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+
+        let lookupIdentity = identity;
+        if (!isEmail) {
+            if (countryCode && identity.startsWith(countryCode)) {
+                lookupIdentity = identity.substring(countryCode.length);
+            } else if (identity.startsWith("91")) {
+                lookupIdentity = identity.substring(2);
+            }
+        }
+
+        // Verify that OTP was recently verified (within last 10 minutes)
+        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+        const verifiedOtp = await AppDataSource.getRepository(UserOTP).findOne({
+            where: {
+                Contact: lookupIdentity,
+                IsExpired: true,
+                Purpose: OTPPurpose.PASSWORD_RESET
+            },
+            order: { UpdatedDate: "DESC" }
+        });
+
+        if (!verifiedOtp || !verifiedOtp.UpdatedDate || verifiedOtp.UpdatedDate < tenMinutesAgo) {
+            throw new Error("OTP verification is required before resetting password");
+        }
+
+        // Fetch primary user
+        const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        // Update password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        user.PasswordHash = hashedPassword;
+        user.UpdatedAt = new Date();
+        await mobileAuthRepository.saveUser(user);
+
+        // Revoke active tokens/sessions for safety
+        await tokenRepository.revokeAllUserTokens(user.Id);
+
+        // Send email notification if user has a registered email address
+        if (user.Email) {
+            mailService.sendMail({
+                to: user.Email,
+                subject: "Yira - Password Changed Successfully",
+                body: `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Password Changed</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Segoe UI, Arial,sans-serif;">
+
+<table style="max-width:520px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.08);width:100%;">
+
+<tr>
+<td style="background:linear-gradient(120deg,#1a23d8,#3f5bff,#6f8dff);padding:20px;text-align:center;color:#fff;">
+    <img src="https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" width="70"/>
+    <h2 style="margin:10px 0 0;">Yira</h2>
+    <div style="font-size:12px;">Powering Healthcare with Clinicx</div>
+</td>
+</tr>
+
+<tr>
+<td style="padding:25px;color:#333;font-size:14px;line-height:1.6;">
+    <h1 style="text-align:center;color:#1920d9;font-size:20px;">Password Updated</h1>
+
+    <p>Hi <strong>${user.FirstName || 'User'}</strong>,</p>
+
+    <p>Your password for the account registered with mobile/email has been successfully changed.</p>
+
+    <p>If you didn't request this change, please contact support immediately.</p>
+
+    <p>
+        Regards,<br/>
+        <strong>Yira Health Tech Team</strong><br/>
+        contact@yira.ai
+    </p>
+</td>
+</tr>
+
+<tr>
+<td style="background:#f4f6fb;text-align:center;padding:15px;font-size:11px;color:#777;">
+    © 2026 Yira Health Tech Pvt Ltd.
+</td>
+</tr>
+
+</table>
+
+</body>
+</html>
+                `
+            }).catch(err => console.error("[AuthService] Failed to send password change confirmation email:", err));
+        }
+
+        return { message: "Password has been reset successfully" };
     }
 }
 

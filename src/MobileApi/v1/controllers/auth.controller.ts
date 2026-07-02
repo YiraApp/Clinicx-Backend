@@ -26,7 +26,7 @@ export const login = async (req: Request, res: Response) => {
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const resolvedType = loginType || type || ( /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile" );
+        const resolvedType = loginType || type || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile");
 
         const result = await mobileAuthService.login(
             identity,
@@ -130,8 +130,8 @@ export const sendOTP = async (req: Request, res: Response) => {
             status = 400;
             code = "OTP_LIMIT_EXCEEDED";
         } else {
-            message = isResendFlag 
-                ? "Could not resend OTP. Please try again." 
+            message = isResendFlag
+                ? "Could not resend OTP. Please try again."
                 : "Failed to send OTP. Please try again later.";
             code = isResendFlag ? "OTP_RESEND_FAILED" : "OTP_SEND_FAILED";
         }
@@ -242,7 +242,7 @@ export const refreshToken = async (req: Request, res: Response) => {
 export const logout = async (req: Request, res: Response) => {
     try {
         const { refreshToken, fcmToken, deviceId, one, logoutAll, allDevices } = req.body;
-        
+
         let userId: string | null = null;
         if (refreshToken) {
             // First decode using JWT utility to see if payload is valid
@@ -269,7 +269,7 @@ export const logout = async (req: Request, res: Response) => {
             // Single device logout: active only when 'one' is explicitly true.
             // All devices logout: active when 'one' is not true, OR if logoutAll/allDevices is true.
             const isSingleDeviceLogout = (one === true);
-            
+
             await userDeviceService.deactivateDevices(userId, isSingleDeviceLogout, fcmToken, deviceId);
         }
 
@@ -289,57 +289,83 @@ export const logout = async (req: Request, res: Response) => {
  */
 export const forgotPassword = async (req: Request, res: Response) => {
     try {
-        const { identity } = req.body;
+        const { identity, contactType, isResend, countryCode } = req.body;
         if (!identity) {
-            return res.status(400).json({
+            return res.status(200).json({
                 status: false,
-                message: "Email or phone number is required",
-                code: "IDENTITY_REQUIRED",
-                data: { code: "IDENTITY_REQUIRED" }
+                message: "identity is required"
             });
         }
-        const result = await authService.forgotPassword(identity);
-        return res.json(ApiResponse.success(result, result.message));
+        if (!contactType) {
+            return res.status(200).json({
+                status: false,
+                message: "contactType is required"
+            });
+        }
+
+        const normalizedType = String(contactType).toLowerCase();
+        if (normalizedType !== "email" && normalizedType !== "mobile") {
+            return res.status(200).json({
+                status: false,
+                message: "contactType must be 'email' or 'mobile'"
+            });
+        }
+
+        const isEmail = (normalizedType === "email");
+
+        if (!isEmail && !countryCode) {
+            return res.status(200).json({
+                status: false,
+                message: "Country code (countryCode) is required for mobile recovery"
+            });
+        }
+
+        const result = await mobileAuthService.sendForgotPasswordOTP(identity, contactType, isResend, countryCode);
+        return res.json(ApiResponse.success(result, "OTP sent successfully"));
     } catch (error: any) {
-        return res.status(404).json({
+        return res.status(200).json({
             status: false,
-            message: error.message,
-            code: "FORGOT_PASSWORD_FAILED",
-            data: { code: "FORGOT_PASSWORD_FAILED" }
+            message: error.message
         });
     }
 };
 
 /**
- * Handles mobile password reset using a token.
+ * Handles mobile password reset using OTP.
  */
 export const resetPassword = async (req: Request, res: Response) => {
     try {
-        const { token, newPassword } = req.body;
-        if (!token || !newPassword) {
-            return res.status(400).json({
+        const { identity, sessionId, otp, newPassword, contactType, countryCode } = req.body;
+        if (!identity || !sessionId || !otp || !newPassword) {
+            return res.status(200).json({
                 status: false,
-                message: "Token and new password are required",
-                code: "MISSING_FIELDS",
-                data: { code: "MISSING_FIELDS" }
+                message: "Identity, sessionId, otp, and newPassword are required"
             });
         }
+
+        const isEmail = contactType
+            ? String(contactType).toUpperCase() === "EMAIL"
+            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+
+        if (!isEmail && !countryCode) {
+            return res.status(200).json({
+                status: false,
+                message: "Country code (countryCode) is required for mobile recovery"
+            });
+        }
+
         if (newPassword.length < 6) {
-            return res.status(400).json({
+            return res.status(200).json({
                 status: false,
-                message: "Password must be at least 6 characters",
-                code: "PASSWORD_TOO_SHORT",
-                data: { code: "PASSWORD_TOO_SHORT" }
+                message: "Password must be at least 6 characters"
             });
         }
-        const result = await authService.resetPassword(token, newPassword);
-        return res.json(ApiResponse.success(result, result.message));
+        const result = await mobileAuthService.resetPasswordWithOTP(identity, sessionId, otp, newPassword, contactType, countryCode);
+        return res.json(ApiResponse.success(null, result.message));
     } catch (error: any) {
-        return res.status(400).json({
+        return res.status(200).json({
             status: false,
-            message: error.message,
-            code: "RESET_PASSWORD_FAILED",
-            data: { code: "RESET_PASSWORD_FAILED" }
+            message: error.message
         });
     }
 };
@@ -390,7 +416,7 @@ export const getRoleDetails = async (req: Request, res: Response) => {
 export const updateLatestContext = async (req: Request, res: Response) => {
     try {
         const { userId, latestRoleId, latestOrgId, latestHospitalId } = req.body || {};
-        
+
         // Resolve authenticated user ID from token or request body
         const resolvedUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
 
@@ -452,6 +478,136 @@ export const getUserData = async (req: Request, res: Response) => {
             message: error.message,
             code: "GET_USER_DATA_FAILED",
             data: { code: "GET_USER_DATA_FAILED" }
+        });
+    }
+};
+
+/**
+ * Verifies password reset OTP for mobile users.
+ */
+export const verifyOTP = async (req: Request, res: Response) => {
+    try {
+        const { identity, sessionId, otp, contactType, countryCode } = req.body;
+        if (!identity) {
+            return res.status(200).json({
+                status: false,
+                message: "identity is required"
+            });
+        }
+        if (!contactType) {
+            return res.status(200).json({
+                status: false,
+                message: "contactType is required"
+            });
+        }
+        if (!sessionId) {
+            return res.status(200).json({
+                status: false,
+                message: "sessionId is required"
+            });
+        }
+        if (!otp) {
+            return res.status(200).json({
+                status: false,
+                message: "otp is required"
+            });
+        }
+
+        const normalizedType = String(contactType).toLowerCase();
+        if (normalizedType !== "email" && normalizedType !== "mobile") {
+            return res.status(200).json({
+                status: false,
+                message: "contactType must be 'email' or 'mobile'"
+            });
+        }
+
+        const isEmail = (normalizedType === "email");
+
+        if (!isEmail && !countryCode) {
+            return res.status(200).json({
+                status: false,
+                message: "Country code (countryCode) is required for mobile recovery"
+            });
+        }
+
+        const result = await mobileAuthService.verifyForgotPasswordOTP(identity, sessionId, otp, contactType, countryCode);
+        return res.json(ApiResponse.success(result, result.message));
+    } catch (error: any) {
+        return res.status(200).json({
+            status: false,
+            message: error.message
+        });
+    }
+};
+
+/**
+ * Handles mobile password reset after successful OTP verification.
+ */
+export const changePassword = async (req: Request, res: Response) => {
+    try {
+        const { identity, newPassword, confirmPassword, contactType, countryCode } = req.body;
+        if (!identity) {
+            return res.status(200).json({
+                status: false,
+                message: "identity is required"
+            });
+        }
+        if (!contactType) {
+            return res.status(200).json({
+                status: false,
+                message: "contactType is required"
+            });
+        }
+        if (!newPassword) {
+            return res.status(200).json({
+                status: false,
+                message: "newPassword is required"
+            });
+        }
+        if (!confirmPassword) {
+            return res.status(200).json({
+                status: false,
+                message: "confirmPassword is required"
+            });
+        }
+
+        if (newPassword !== confirmPassword) {
+            return res.status(200).json({
+                status: false,
+                message: "newPassword and confirmPassword do not match"
+            });
+        }
+
+        const normalizedType = String(contactType).toLowerCase();
+        if (normalizedType !== "email" && normalizedType !== "mobile") {
+            return res.status(200).json({
+                status: false,
+                message: "contactType must be 'email' or 'mobile'"
+            });
+        }
+
+        const isEmail = (normalizedType === "email");
+
+        if (!isEmail && !countryCode) {
+            return res.status(200).json({
+                status: false,
+                message: "Country code (countryCode) is required for mobile recovery"
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(200).json({
+                status: false,
+                message: "Password must be at least 6 characters"
+            });
+        }
+
+        const result = await mobileAuthService.changePasswordWithOTPVerification(identity, newPassword, contactType, countryCode);
+        return res.json(ApiResponse.success(null, result.message));
+    } catch (error: any) {
+        return res.status(200).json({
+            status: false,
+            message: error.message
         });
     }
 };
