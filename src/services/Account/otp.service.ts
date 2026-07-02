@@ -47,12 +47,14 @@ export class OTPService {
             }
         }
 
+        /*
         // Check daily attempt limit (Max 20 OTPs for mobile login, 5 OTPs for other purposes/channels per 24 hours)
         const limit = (isMobile && purpose === OTPPurpose.LOGIN) ? 20 : 5;
         const dailyAttempts = await userOTPRepository.countDailyAttempts(finalContact, purpose);
         if (dailyAttempts >= limit) {
             throw new Error("Maximum OTP attempts reached. Please try again after 24 hours.");
         }
+        */
 
         // Optional: Find user for personalized email (don't throw error if not found)
         let user;
@@ -69,7 +71,7 @@ export class OTPService {
         let emailTemplate = templateCode;
         if (!emailTemplate) {
             switch (purpose) {
-                case OTPPurpose.PASSWORD_RESET: emailTemplate = "PASSWORD_RESET_OTP"; break;
+                case OTPPurpose.PASSWORD_RESET: emailTemplate = "EMAIL_OTP_VERIFICATION"; break;
                 case OTPPurpose.LOGIN: emailTemplate = "LOGIN_OTP"; break;
                 default: emailTemplate = "EMAIL_OTP_VERIFICATION";
             }
@@ -80,6 +82,7 @@ export class OTPService {
             try {
                 await mailService.sendDynamicEmail(emailTemplate, finalContact, {
                     FirstName: user?.FirstName || "User",
+                    LastName: user?.LastName || "",
                     OTP: otp,
                     ExpiryMinutes: 10,
                     SessionId: sessionId,

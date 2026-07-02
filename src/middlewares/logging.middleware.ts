@@ -39,6 +39,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/v1/mobile/auth/refresh",
         "/api/v1/mobile/auth/forgot-password",
         "/api/v1/mobile/auth/reset-password",
+        "/api/v1/mobile/auth/forgot_password",
+        "/api/v1/mobile/auth/verify_otp",
+        "/api/v1/mobile/auth/change_password",
+        "/api/v1/mobile/auth/reset_password",
         "/api/v1/mobile/auth/app-version",
         "/mobile/api/v1/auth/login",
         "/mobile/api/v1/auth/sendotp",
@@ -47,6 +51,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/mobile/api/v1/auth/refresh",
         "/mobile/api/v1/auth/forgot-password",
         "/mobile/api/v1/auth/reset-password",
+        "/mobile/api/v1/auth/forgot_password",
+        "/mobile/api/v1/auth/verify_otp",
+        "/mobile/api/v1/auth/change_password",
+        "/mobile/api/v1/auth/reset_password",
         "/mobile/api/v1/auth/app-version",
         "/v1/api/auth/login",
         "/v1/api/auth/sendotp",
@@ -55,6 +63,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/refresh",
         "/v1/api/auth/forgot-password",
         "/v1/api/auth/reset-password",
+        "/v1/api/auth/forgot_password",
+        "/v1/api/auth/verify_otp",
+        "/v1/api/auth/change_password",
+        "/v1/api/auth/reset_password",
         "/v1/api/auth/app-version"
     ];
 

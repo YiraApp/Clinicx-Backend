@@ -321,7 +321,8 @@ export const forgotPassword = async (req: Request, res: Response) => {
         }
 
         const result = await mobileAuthService.sendForgotPasswordOTP(identity, contactType, isResend, countryCode);
-        return res.json(ApiResponse.success(result, "OTP sent successfully"));
+        const successMessage = isResend === true || String(isResend) === "true" ? "OTP resent successfully!" : "OTP sent successfully!";
+        return res.json(ApiResponse.success(result, successMessage));
     } catch (error: any) {
         return res.status(200).json({
             status: false,

@@ -80,25 +80,43 @@ export class UserOTPRepository {
         message: string,
         contactType?: OTPType
     }> {
-        // Find OTP record by sessionId and contact
-        let query = this.repo.createQueryBuilder('u')
-            .where('u.SessionId = :sessionId', { sessionId })
-            .andWhere('u.Contact = :contact', { contact })
-            .andWhere('u.IsExpired = :isExpired', { isExpired: false });
+        // 1. Find OTP record by sessionId
+        const otpBySession = await this.repo.findOne({
+            where: { SessionId: sessionId }
+        });
 
-        // If purpose is provided, verify it matches (e.g., PASSWORD_RESET OTP can't be used for LOGIN)
-        if (purpose) {
-            query.andWhere('u.Purpose = :purpose', { purpose });
-        }
-
-        const userOTP = await query.getOne();
-
-        if (!userOTP) {
+        if (!otpBySession) {
             return { 
                 success: false, 
-                message: "Invalid session, contact, or purpose. OTP not found." 
+                message: "Invalid session. OTP request not found." 
             };
         }
+
+        // 2. Verify contact matches
+        if (otpBySession.Contact !== contact) {
+            return { 
+                success: false, 
+                message: "Invalid contact details for this verification session." 
+            };
+        }
+
+        // 3. Verify purpose matches if provided
+        if (purpose && otpBySession.Purpose !== purpose) {
+            return { 
+                success: false, 
+                message: "The requested OTP purpose does not match this session." 
+            };
+        }
+
+        // 4. Verify OTP is not already expired/used
+        if (otpBySession.IsExpired) {
+            return { 
+                success: false, 
+                message: "This OTP has already been used or invalidated. Please request a new one." 
+            };
+        }
+
+        const userOTP = otpBySession;
 
         // Check if OTP has expired - prevents old OTP usage
         if (new Date() > userOTP.ExpiryTime) {

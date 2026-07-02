@@ -457,6 +457,7 @@ export class PaymentService {
             billType: b.BillType,
             billStatus: b.BillStatus,
             subTotal: b.SubTotal,
+            discountAmount: b.DiscountAmount,
             gstAmount: b.GstAmount,
             totalAmount: b.TotalAmount,
             paidAmount: b.PaidAmount,
@@ -478,6 +479,7 @@ export class PaymentService {
                 itemType: i.ItemType,
                 unitPrice: i.UnitPrice,
                 quantity: i.Quantity,
+                discountAmount: i.DiscountAmount || 0,
                 totalAmount: i.TotalAmount,
                 appointmentId: i.AppointmentId || null
             }))

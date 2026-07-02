@@ -591,7 +591,10 @@ export class AppointmentBillRepository {
 
             // Find all descendants recursively
             const findChildren = async (parentId: number) => {
-                const children = await appRepo.find({ where: { ParentAppointmentId: parentId } });
+                const children = await appRepo.find({
+                    where: { ParentAppointmentId: parentId },
+                    relations: ["Doctor"]
+                });
                 for (const child of children) {
                     chain.push({
                         id: child.Id,
@@ -599,7 +602,9 @@ export class AppointmentBillRepository {
                         type: child.AppointmentType,
                         reason: child.Reason,
                         status: child.Status,
-                        providerName: null
+                        providerName: child.Doctor
+                            ? `Dr. ${(child.Doctor as any).FirstName || ""} ${(child.Doctor as any).LastName || ""}`.trim()
+                            : null
                     });
                     await findChildren(child.Id);
                 }
@@ -625,6 +630,7 @@ export class AppointmentBillRepository {
                         itemType: item.ItemType,
                         unitPrice: Number(item.UnitPrice),
                         quantity: Number(item.Quantity),
+                        discountAmount: Number(item.DiscountAmount),
                         totalAmount: Number(item.TotalAmount)
                     })),
                     payments: apptPayments.map(p => ({
@@ -750,7 +756,7 @@ export class AppointmentBillRepository {
                 const gstAmt = parseFloat(((taxableAmount * itemGstPct) / 100).toFixed(2));
                 const totalItemAmt = parseFloat((taxableAmount + gstAmt).toFixed(2));
 
-                subTotalSum += taxableAmount;
+                subTotalSum += baseAmount;
                 itemsDiscountSum += disc;
                 gstSum += gstAmt;
 
@@ -778,7 +784,7 @@ export class AppointmentBillRepository {
             const totalDiscount = itemsDiscountSum + overallDiscount;
 
             // If overall discount is applied, adjust subtotal/total
-            const finalTaxable = Math.max(0, subTotalSum - overallDiscount);
+            const finalTaxable = Math.max(0, (subTotalSum - itemsDiscountSum) - overallDiscount);
             
             // Recalculate tax based on final taxable amount (using the hospital configuration distribution)
             const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
