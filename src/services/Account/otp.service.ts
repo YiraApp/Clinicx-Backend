@@ -59,9 +59,9 @@ export class OTPService {
         // Optional: Find user for personalized email (don't throw error if not found)
         let user;
         if (isEmail) {
-            user = await userRepository.findByEmail(finalContact);
+            user = await userRepository.findPrimaryByEmail(finalContact);
         } else {
-            user = await userRepository.findByPhone(finalContact);
+            user = await userRepository.findPrimaryByPhone(finalContact);
         }
 
         // Create OTP record in repository
@@ -193,13 +193,13 @@ export class OTPService {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const isEmail = emailRegex.test(contact);
 
-        // Normalize contact for lookup (strip 91 if mobile or use provided contact if countryCode exists)
+        // Normalize contact for lookup (strip country code prefix if present)
         let lookupContact = contact;
         if (!isEmail) {
-            if (contact.startsWith("91") && !countryCode) {
+            if (countryCode && contact.startsWith(countryCode)) {
+                lookupContact = contact.substring(countryCode.length);
+            } else if (contact.startsWith("91")) {
                 lookupContact = contact.substring(2);
-            } else if (countryCode) {
-                lookupContact = contact; // If countryCode passed, contact is assumed to be 10 digits
             }
         }
 
@@ -222,7 +222,7 @@ export class OTPService {
             try {
                 let userId: string | null = null;
                 if (isEmail) {
-                    const user = await userRepository.findByEmail(lookupContact);
+                    const user = await userRepository.findPrimaryByEmail(lookupContact);
                     if (user) {
                         userId = user.Id;
                         if (!user.IsEmailVerified) {

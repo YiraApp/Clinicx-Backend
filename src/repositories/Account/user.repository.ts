@@ -253,6 +253,12 @@ export class UserRepository implements IUserRepository {
         });
     }
 
+    async findPrimaryByEmail(email: string): Promise<User | null> {
+        return await this.repo.findOne({
+            where: { Email: email, IsPrimary: true, IsDeleted: false }
+        });
+    }
+
     async countUsersByPhone(phone: string): Promise<number> {
         return await this.repo.count({
             where: { PhoneNumber: phone, IsDeleted: false }

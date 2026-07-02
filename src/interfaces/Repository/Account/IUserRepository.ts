@@ -10,6 +10,11 @@ export interface IUserRepository {
     findPrimaryByPhone(phone: string): Promise<User | null>;
 
     /**
+     * Finds the primary user for a given email address.
+     */
+    findPrimaryByEmail(email: string): Promise<User | null>;
+
+    /**
      * Counts the number of users associated with a phone number.
      */
     countUsersByPhone(phone: string): Promise<number>;
