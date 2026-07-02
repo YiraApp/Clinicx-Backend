@@ -376,7 +376,7 @@ export class PaymentService {
             try {
                 const isIndia = user.PhoneNumber.startsWith("91") || (!user.PhoneNumber.startsWith("+") && user.CountryCode === "91");
                 const normalizedPhone = user.PhoneNumber.startsWith("+") ? user.PhoneNumber : `+${user.CountryCode || "91"}${user.PhoneNumber}`;
-                
+
                 const message = `Dear ${user.FirstName || "Patient"}, complete your ClinicX payment of Rs.${data.amount} here: ${paymentLink}`;
                 await smsService.sendSMS(normalizedPhone, message);
                 console.log(`[Payment link] SMS sent to ${user.PhoneNumber}`);
@@ -575,7 +575,7 @@ export class PaymentService {
             orgName: (p.Appointment as any)?.Organization?.Name || "—",
             failureReason: p.FailureReason
         };
-     }
+    }
 
     async getPaymentByAppointment(appointmentId: number) {
         const payment = await paymentRepository.findByAppointmentId(appointmentId);
@@ -605,7 +605,7 @@ export class PaymentService {
             billDue: payment.AppointmentBill?.DueAmount || null,
             failureReason: payment.FailureReason
         };
-     }
+    }
 
     async getHospitalPaymentConfiguration(hospitalId: number) {
         const repo = AppDataSource.getRepository(HospitalPaymentConfiguration);
