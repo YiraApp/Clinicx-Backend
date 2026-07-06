@@ -16,15 +16,24 @@ export class AppointmentRepository {
         });
     }
 
-    async getDoctorAppointments(doctorId: string, date: string): Promise<Appointment[]> {
-        return await this.repo.createQueryBuilder("appointment")
+    async getDoctorAppointments(doctorId: string, date: string, orgId?: number, hospitalId?: number): Promise<Appointment[]> {
+        const query = this.repo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")
             .leftJoinAndSelect("appointment.Doctor", "doctor")
             .leftJoinAndSelect("appointment.Hospital", "hospital")
             .leftJoinAndSelect("appointment.Verifications", "verifications")
             .where("appointment.DoctorId = :doctorId", { doctorId })
-            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date })
-            .orderBy("appointment.StartTime", "ASC")
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :date", { date });
+
+        if (orgId !== undefined && !isNaN(orgId)) {
+            query.andWhere("appointment.OrgId = :orgId", { orgId });
+        }
+
+        if (hospitalId !== undefined && !isNaN(hospitalId)) {
+            query.andWhere("appointment.HospitalId = :hospitalId", { hospitalId });
+        }
+
+        return await query.orderBy("appointment.StartTime", "ASC")
             .getMany();
     }
 

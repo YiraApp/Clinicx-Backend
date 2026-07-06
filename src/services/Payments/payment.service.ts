@@ -451,39 +451,43 @@ export class PaymentService {
     }) {
         const { data, total, totalCollected, totalPending } = await appointmentBillRepository.getBillsList(filters);
 
-        const formatted = data.map(b => ({
-            billId: b.AppointmentBillId,
-            billNumber: b.BillNumber,
-            billType: b.BillType,
-            billStatus: b.BillStatus,
-            subTotal: b.SubTotal,
-            discountAmount: b.DiscountAmount,
-            gstAmount: b.GstAmount,
-            totalAmount: b.TotalAmount,
-            paidAmount: b.PaidAmount,
-            dueAmount: b.DueAmount,
-            createdAt: b.CreatedAt,
-            appointmentId: b.AppointmentId,
-            appointmentDate: b.Appointment?.AppointmentDate || null,
-            hospitalId: b.HospitalId,
-            hospitalName: (b as any).Hospital?.Name || "—",
-            orgName: (b.Appointment as any)?.Organization?.Name || "—",
-            patientId: b.PatientId,
-            patientName: b.Patient ? `${b.Patient.FirstName} ${b.Patient.LastName}` : "—",
-            patientPhone: b.Patient?.PhoneNumber || "—",
-            providerId: b.ProviderId,
-            providerName: b.Provider ? `Dr. ${b.Provider.FirstName} ${b.Provider.LastName}` : "—",
-            appointmentChain: (b as any).appointmentChain || [],
-            items: (b.BillItems || []).map(i => ({
-                itemName: i.ItemName,
-                itemType: i.ItemType,
-                unitPrice: i.UnitPrice,
-                quantity: i.Quantity,
-                discountAmount: i.DiscountAmount || 0,
-                totalAmount: i.TotalAmount,
-                appointmentId: i.AppointmentId || null
-            }))
-        }));
+        const formatted = data.map(b => {
+            const provider = b.Provider || b.Appointment?.Doctor;
+            return {
+                billId: b.AppointmentBillId,
+                billNumber: b.BillNumber,
+                billType: b.BillType,
+                billStatus: b.BillStatus,
+                subTotal: b.SubTotal,
+                discountAmount: b.DiscountAmount,
+                gstAmount: b.GstAmount,
+                totalAmount: b.TotalAmount,
+                paidAmount: b.PaidAmount,
+                dueAmount: b.DueAmount,
+                createdAt: b.CreatedAt,
+                appointmentId: b.AppointmentId,
+                appointmentDate: b.Appointment?.AppointmentDate || null,
+                hospitalId: b.HospitalId,
+                hospitalName: (b as any).Hospital?.Name || "—",
+                orgName: (b.Appointment as any)?.Organization?.Name || "—",
+                patientId: b.PatientId,
+                patientName: b.Patient ? `${b.Patient.FirstName} ${b.Patient.LastName}` : "—",
+                patientPhone: b.Patient?.PhoneNumber || "—",
+                providerId: provider?.Id || null,
+                providerName: provider ? `Dr. ${provider.FirstName} ${provider.LastName}` : "—",
+                notes: b.Notes || "",
+                appointmentChain: (b as any).appointmentChain || [],
+                items: (b.BillItems || []).map(i => ({
+                    itemName: i.ItemName,
+                    itemType: i.ItemType,
+                    unitPrice: i.UnitPrice,
+                    quantity: i.Quantity,
+                    discountAmount: i.DiscountAmount || 0,
+                    totalAmount: i.TotalAmount,
+                    appointmentId: i.AppointmentId || null
+                }))
+            };
+        });
 
         return {
             data: formatted,
@@ -681,6 +685,8 @@ export class PaymentService {
             }[];
             discountAmount: number;
             notes?: string;
+            gstPercentage?: number;
+            gstAmount?: number;
         }
     ) {
         return await appointmentBillRepository.updateBillDetails(billId, data);

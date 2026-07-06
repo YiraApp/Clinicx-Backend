@@ -45,7 +45,9 @@ export class AppointmentController {
         try {
             const doctorId = String(req.params.doctorId);
             const date = String(req.query.date);
-            const result = await appointmentService.getDoctorAppointments(doctorId, date);
+            const orgId = req.query.orgId ? parseInt(String(req.query.orgId)) : undefined;
+            const hospitalId = req.query.hospitalId ? parseInt(String(req.query.hospitalId)) : undefined;
+            const result = await appointmentService.getDoctorAppointments(doctorId, date, orgId, hospitalId);
             return res.json(ApiResponse.success(result));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));

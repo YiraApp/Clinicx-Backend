@@ -28,7 +28,7 @@ export class AppointmentService {
         status?: string;
         parentAppointmentId?: number | null;
         treatmentPlanIds?: string[];
-        customTreatmentPlans?: { name: string; amount: number }[];
+        customTreatmentPlans?: { name: string; amount: number; description?: string }[];
         discountAmount?: number;
     }): Promise<Appointment> {
 
@@ -104,6 +104,7 @@ export class AppointmentService {
                     const newPlan = manager.create(TreatmentPlan, {
                         TreatmentPlanId: uuidv4(),
                         Name: customPlan.name,
+                        Description: customPlan.description || null,
                         Amount: Number(customPlan.amount || 0),
                         Status: "Active",
                         OrgId: data.orgId,
@@ -141,16 +142,21 @@ export class AppointmentService {
             let rootParentId: number | null = null;
             if (appointment.ParentAppointmentId) {
                 const { Appointment: ApptModel } = await import("../../models/Appointments/appointment.model.js");
-                let currentId = appointment.ParentAppointmentId;
-                while (currentId) {
-                    const parentAppt = await manager.findOne(ApptModel, { where: { Id: currentId } });
-                    if (parentAppt) {
-                        rootParentId = parentAppt.Id;
-                        currentId = parentAppt.ParentAppointmentId || 0;
-                    } else {
-                        break;
-                    }
-                }
+                 let currentId = appointment.ParentAppointmentId;
+                 const visitedAppts = new Set<number>();
+                 while (currentId) {
+                     if (visitedAppts.has(currentId)) {
+                         break;
+                     }
+                     visitedAppts.add(currentId);
+                     const parentAppt = await manager.findOne(ApptModel, { where: { Id: currentId } });
+                     if (parentAppt) {
+                         rootParentId = parentAppt.Id;
+                         currentId = parentAppt.ParentAppointmentId || 0;
+                     } else {
+                         break;
+                     }
+                 }
             }
 
             let billAppended = false;
@@ -321,8 +327,8 @@ export class AppointmentService {
         });
     }
 
-    async getDoctorAppointments(doctorId: string, dateStr: string) {
-        return await appointmentRepository.getDoctorAppointments(doctorId, dateStr);
+    async getDoctorAppointments(doctorId: string, dateStr: string, orgId?: number, hospitalId?: number) {
+        return await appointmentRepository.getDoctorAppointments(doctorId, dateStr, orgId, hospitalId);
     }
 
     async getHospitalAppointments(hospitalId: number, dateStr: string) {

@@ -53,11 +53,12 @@ export class DashboardController {
         try {
             const doctorId = req.query.doctorId as string;
             const hospId = req.query.hospId ? parseInt(req.query.hospId as string) : undefined;
+            const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : undefined;
             if (!doctorId || !hospId) {
                 res.status(400).json(ApiResponse.error("Doctor ID and Hospital ID are required"));
                 return;
             }
-            const data = await dashboardService.getDoctorDashboardData(doctorId, hospId);
+            const data = await dashboardService.getDoctorDashboardData(doctorId, hospId, orgId);
             res.status(200).json(ApiResponse.success(data, "Doctor dashboard data retrieved successfully"));
         } catch (error) {
             console.error("Error fetching doctor dashboard data:", error);

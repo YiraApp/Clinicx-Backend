@@ -61,7 +61,34 @@ export class OTPService {
         if (isEmail) {
             user = await userRepository.findPrimaryByEmail(finalContact);
         } else {
-            user = await userRepository.findPrimaryByPhone(finalContact);
+            // Also clean phone prefix for lookup if needed
+            let phoneLookup = finalContact;
+            const cleanPhone = finalContact.startsWith("+") ? finalContact.slice(1) : finalContact;
+            if (cleanPhone.startsWith("91") && cleanPhone.length === 12) {
+                phoneLookup = cleanPhone.substring(2);
+            }
+            user = await userRepository.findPrimaryByPhone(phoneLookup);
+        }
+
+        // Validate patient role before generating/sending OTP if purpose is LOGIN
+        if (purpose === OTPPurpose.LOGIN) {
+            if (!user) {
+                throw new Error("No account found with this details. Please register first.");
+            }
+
+            const { userRoleRepository } = await import("../../repositories/Account/userrole.repository.js");
+            const roles = await userRoleRepository.findAllByUserId(user.Id);
+            const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+            
+            const hasActivePatientRole = roles.some(r => 
+                r.RoleId.toUpperCase() === PATIENT_ROLE_ID.toUpperCase() && 
+                r.Status && 
+                !r.IsDeleted
+            );
+
+            if (!hasActivePatientRole) {
+                throw new Error("No patient account found for this mobile number.");
+            }
         }
 
         // Create OTP record in repository

@@ -89,8 +89,8 @@ export class DashboardService implements IDashboardService {
         };
     }
 
-    async getDoctorDashboardData(doctorId: string, hospId: number) {
-        return await dashboardRepository.getDoctorDashboardStats(doctorId, hospId);
+    async getDoctorDashboardData(doctorId: string, hospId: number, orgId?: number) {
+        return await dashboardRepository.getDoctorDashboardStats(doctorId, hospId, orgId);
     }
 
     private formatUptime(seconds: number): string {

@@ -111,11 +111,15 @@ export class AppointmentBillRepository {
             hospitalId: number;
             consultationFee: number;
             treatmentPlanIds?: string[];
-            customTreatmentPlans?: { name: string; amount: number }[];
+            customTreatmentPlans?: { name: string; amount: number; description?: string }[];
             discountAmount?: number;
         }
     ): Promise<AppointmentBill> {
         // Calculate Inclusive GST and Breakdowns using Hospital Config
+        const { Appointment } = await import("../../models/Appointments/appointment.model.js");
+        const appt = await AppDataSource.getRepository(Appointment).findOne({ where: { Id: appointmentId } });
+        const resolvedProviderId = data.providerId || appt?.DoctorId || null;
+
         const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
         const config = await configRepo.findOne({
             where: { HospitalId: data.hospitalId, IsDeleted: false }
@@ -209,7 +213,7 @@ export class AppointmentBillRepository {
             AppointmentBillId: uuidv4(),
             AppointmentId: appointmentId,
             PatientId: data.patientId,
-            ProviderId: data.providerId || null,
+            ProviderId: resolvedProviderId,
             HospitalId: data.hospitalId,
             BillNumber: `DFT-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`,          // Place holder, formal INV number assigned when invoice is generated
             BillType: "Appointment",
@@ -249,7 +253,7 @@ export class AppointmentBillRepository {
         data: {
             consultationFee: number;
             treatmentPlanIds?: string[];
-            customTreatmentPlans?: { name: string; amount: number }[];
+            customTreatmentPlans?: { name: string; amount: number; description?: string }[];
             discountAmount?: number;
         }
     ): Promise<AppointmentBill> {
@@ -455,6 +459,7 @@ export class AppointmentBillRepository {
             .leftJoinAndSelect("b.Provider", "provider")
             .leftJoinAndSelect("b.Hospital", "hospital")
             .leftJoinAndSelect("b.Appointment", "appointment")
+            .leftJoinAndSelect("appointment.Doctor", "doctor")
             .leftJoinAndSelect("appointment.Organization", "org")
             .leftJoinAndSelect("b.BillItems", "items")
             .where("b.IsDeleted = :deleted", { deleted: false });
@@ -506,7 +511,35 @@ export class AppointmentBillRepository {
         const totalPending = parseFloat(agg?.pending || "0");
 
         const { Appointment } = await import("../../models/Appointments/appointment.model.js");
+        const { In } = await import("typeorm/index.js");
         const appRepo = AppDataSource.getRepository(Appointment);
+
+        // Batch load appointment chain in memory to eliminate N+1 queries
+        const apptCache = new Map<number, any>();
+        let currentIdsToFetch = data.map(b => b.AppointmentId).filter(Boolean) as number[];
+
+        while (currentIdsToFetch.length > 0) {
+            const idsToQuery = Array.from(new Set(currentIdsToFetch.filter(id => !apptCache.has(id))));
+            if (idsToQuery.length === 0) {
+                break;
+            }
+
+            const appts = await appRepo.find({ where: { Id: In(idsToQuery) } });
+            for (const id of idsToQuery) {
+                apptCache.set(id, null); // default to null
+            }
+            for (const app of appts) {
+                apptCache.set(app.Id, app);
+            }
+
+            const parentIds: number[] = [];
+            for (const app of appts) {
+                if (app.ParentAppointmentId) {
+                    parentIds.push(app.ParentAppointmentId);
+                }
+            }
+            currentIdsToFetch = parentIds;
+        }
 
         const nonApptBills: AppointmentBill[] = [];
         const rootBillMap = new Map<number, AppointmentBill>();
@@ -517,11 +550,16 @@ export class AppointmentBillRepository {
                 continue;
             }
 
-            // Trace to the root parent appointment
+            // Trace to the root parent appointment using cached in-memory entries
             let rootParentId = bill.AppointmentId;
             let currentId = bill.AppointmentId;
-            while (true) {
-                const appt = await appRepo.findOne({ where: { Id: currentId } });
+            const visitedAppts = new Set<number>();
+            while (currentId) {
+                if (visitedAppts.has(currentId)) {
+                    break;
+                }
+                visitedAppts.add(currentId);
+                const appt = apptCache.get(currentId);
                 if (appt && appt.ParentAppointmentId) {
                     currentId = appt.ParentAppointmentId;
                     rootParentId = appt.ParentAppointmentId;
@@ -705,6 +743,8 @@ export class AppointmentBillRepository {
             }[];
             discountAmount: number; // General bill discount
             notes?: string;
+            gstPercentage?: number;
+            gstAmount?: number;
         }
     ): Promise<AppointmentBill> {
         return await AppDataSource.transaction(async (manager) => {
@@ -726,10 +766,26 @@ export class AppointmentBillRepository {
                 where: { HospitalId: bill.HospitalId, IsDeleted: false }
             });
 
-            const gstPct = config?.GstPercentage || 0;
-            const cgstPct = config?.CgstPercentage || 0;
-            const sgstPct = config?.SgstPercentage || 0;
-            const igstPct = config?.IgstPercentage || 0;
+            const configGst = config?.GstPercentage || 0;
+            const configCgst = config?.CgstPercentage || 0;
+            const configSgst = config?.SgstPercentage || 0;
+            const configIgst = config?.IgstPercentage || 0;
+
+            const gstPct = data.gstPercentage !== undefined && data.gstPercentage !== null ? Number(data.gstPercentage) : configGst;
+
+            let cgstPct = 0;
+            let sgstPct = 0;
+            let igstPct = 0;
+
+            if (configGst > 0) {
+                cgstPct = (gstPct * configCgst) / configGst;
+                sgstPct = (gstPct * configSgst) / configGst;
+                igstPct = (gstPct * configIgst) / configGst;
+            } else {
+                cgstPct = gstPct / 3;
+                sgstPct = gstPct / 3;
+                igstPct = gstPct / 3;
+            }
 
             // 2. Clear old items
             await itemRepo.delete({ AppointmentBillId: billId });
@@ -787,10 +843,28 @@ export class AppointmentBillRepository {
             const finalTaxable = Math.max(0, (subTotalSum - itemsDiscountSum) - overallDiscount);
             
             // Recalculate tax based on final taxable amount (using the hospital configuration distribution)
-            const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
-            const cgstAmount = parseFloat(((finalTaxable * cgstPct) / 100).toFixed(2));
-            const sgstAmount = parseFloat(((finalTaxable * sgstPct) / 100).toFixed(2));
-            const igstAmount = parseFloat(((finalTaxable * igstPct) / 100).toFixed(2));
+            const customGstAmount = data.gstAmount !== undefined && data.gstAmount !== null ? Number(data.gstAmount) : null;
+            const finalGst = customGstAmount !== null ? customGstAmount : parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
+
+            let cgstAmount = 0;
+            let sgstAmount = 0;
+            let igstAmount = 0;
+
+            if (customGstAmount !== null) {
+                if (gstPct > 0) {
+                    cgstAmount = parseFloat(((customGstAmount * cgstPct) / gstPct).toFixed(2));
+                    sgstAmount = parseFloat(((customGstAmount * sgstPct) / gstPct).toFixed(2));
+                    igstAmount = parseFloat(((customGstAmount * igstPct) / gstPct).toFixed(2));
+                } else {
+                    cgstAmount = parseFloat((customGstAmount / 3).toFixed(2));
+                    sgstAmount = parseFloat((customGstAmount / 3).toFixed(2));
+                    igstAmount = parseFloat((customGstAmount / 3).toFixed(2));
+                }
+            } else {
+                cgstAmount = parseFloat(((finalTaxable * cgstPct) / 100).toFixed(2));
+                sgstAmount = parseFloat(((finalTaxable * sgstPct) / 100).toFixed(2));
+                igstAmount = parseFloat(((finalTaxable * igstPct) / 100).toFixed(2));
+            }
 
             const totalAmount = parseFloat((finalTaxable + finalGst).toFixed(2));
 
@@ -808,7 +882,7 @@ export class AppointmentBillRepository {
                 IgstAmount: igstAmount,
                 TotalAmount: totalAmount,
                 DueAmount: Math.max(0, totalAmount - Number(bill.PaidAmount)),
-                Notes: data.notes || bill.Notes,
+                Notes: data.notes !== undefined ? data.notes : bill.Notes,
                 UpdatedAt: new Date()
             });
 

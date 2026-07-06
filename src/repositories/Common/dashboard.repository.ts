@@ -500,7 +500,7 @@ export class DashboardRepository {
         };
     }
 
-    async getDoctorDashboardStats(doctorId: string, hospId: number) {
+    async getDoctorDashboardStats(doctorId: string, hospId: number, orgId?: number) {
         const statsQuery = `
             SELECT 
                 -- Today's Appointments
@@ -516,24 +516,48 @@ export class DashboardRepository {
                 COUNT(CASE WHEN AppointmentType IN ('New', 'Consultation', 'New Patient') THEN 1 END) as newPatientsToday
             FROM Appointments WITH (NOLOCK)
             WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+            ${orgId ? `AND OrgId = ${orgId}` : ''}
             AND CAST(AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE);
         `;
 
         const patientStatsQuery = `
             SELECT 
-                -- Total Patients for this doctor
-                (SELECT COUNT(DISTINCT UserId) FROM Appointments WITH (NOLOCK) WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}) as totalPatients,
+                -- Total Patients for this doctor (only active, non-deleted users with active Patient UserRole)
+                (SELECT COUNT(DISTINCT a.UserId) 
+                 FROM Appointments a WITH (NOLOCK) 
+                 INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
+                 INNER JOIN UserRoles ur WITH (NOLOCK) ON ur.UserId = a.UserId 
+                   AND ur.OrganizationId = a.OrgId
+                   AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
+                   AND ur.Status = 1
+                   AND ur.IsDeleted = 0
+                 WHERE a.DoctorId = '${doctorId}' 
+                   AND a.HospitalId = ${hospId} 
+                   ${orgId ? `AND a.OrgId = ${orgId}` : ''}
+                   AND u.Status = 1 
+                   AND u.IsDeleted = 0
+                ) as totalPatients,
                 
                 -- New this week (Patients whose FIRST appointment with this doctor is this week in IST)
                 (SELECT COUNT(DISTINCT a1.UserId) 
                  FROM Appointments a1 WITH (NOLOCK)
+                 INNER JOIN Users u1 WITH (NOLOCK) ON a1.UserId = u1.Id
+                 INNER JOIN UserRoles ur1 WITH (NOLOCK) ON ur1.UserId = a1.UserId 
+                   AND ur1.OrganizationId = a1.OrgId
+                   AND ur1.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
+                   AND ur1.Status = 1
+                   AND ur1.IsDeleted = 0
                  WHERE a1.DoctorId = '${doctorId}' 
                  AND a1.HospitalId = ${hospId}
+                 ${orgId ? `AND a1.OrgId = ${orgId}` : ''}
+                 AND u1.Status = 1 
+                 AND u1.IsDeleted = 0
                  AND a1.AppointmentDate >= DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
                  AND NOT EXISTS (
                      SELECT 1 FROM Appointments a2 WITH (NOLOCK)
                      WHERE a2.UserId = a1.UserId 
                      AND a2.DoctorId = a1.DoctorId 
+                     ${orgId ? `AND a2.OrgId = ${orgId}` : ''}
                      AND a2.AppointmentDate < DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
                  )) as newPatientsThisWeek;
         `;
@@ -550,12 +574,20 @@ export class DashboardRepository {
                 a.Status as status
             FROM Appointments a WITH (NOLOCK)
             INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
+            INNER JOIN UserRoles ur WITH (NOLOCK) ON ur.UserId = a.UserId 
+              AND ur.OrganizationId = a.OrgId
+              AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
+              AND ur.Status = 1
+              AND ur.IsDeleted = 0
             WHERE a.DoctorId = '${doctorId}' AND a.HospitalId = ${hospId}
-            AND a.Status = 'Completed'
+            ${orgId ? `AND a.OrgId = ${orgId}` : ''}
+            AND a.Status IN ('Completed', 'Confirmed', 'Arrived', 'InProgress', 'Scheduled')
+            AND u.Status = 1
+            AND u.IsDeleted = 0
             ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
         `;
 
-        console.log(`Fetching Doctor Dashboard stats for Doctor: ${doctorId}, Hospital: ${hospId}`);
+        console.log(`Fetching Doctor Dashboard stats for Doctor: ${doctorId}, Hospital: ${hospId}, Org: ${orgId}`);
 
         const [statsResults, patientResults, recentPatientsResult, weeklyStats, monthlyStats] = await Promise.all([
             AppDataSource.query(statsQuery),
@@ -568,6 +600,7 @@ export class DashboardRepository {
                     COUNT(DISTINCT UserId) as patients
                 FROM Appointments WITH (NOLOCK)
                 WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+                ${orgId ? `AND OrgId = ${orgId}` : ''}
                 AND AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
                 GROUP BY FORMAT(AppointmentDate, 'ddd'), CAST(AppointmentDate AS DATE)
                 ORDER BY CAST(AppointmentDate AS DATE) ASC;
@@ -579,6 +612,7 @@ export class DashboardRepository {
                     COUNT(DISTINCT UserId) as patients
                 FROM Appointments WITH (NOLOCK)
                 WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
+                ${orgId ? `AND OrgId = ${orgId}` : ''}
                 AND AppointmentDate >= CAST(DATEADD(month, -5, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
                 GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
                 ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;

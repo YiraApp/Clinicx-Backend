@@ -21,6 +21,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/auth/register",
         "/api/auth/forgot-password",
         "/api/auth/reset-password",
+        "/api/users/sendOTP",
+        "/api/users/verifyOTP",
         "/health",
         "/api/roles",
         "/api/consent/request",
