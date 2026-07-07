@@ -35,7 +35,7 @@ export class SMSService {
         }
 
         const message = this.replacePlaceholders(template.Message, data);
-        
+
         let templateIdToUse = this.templateId;
         if (templateCode === "CONSENT_SMS") {
             templateIdToUse = "1707177867188357697";

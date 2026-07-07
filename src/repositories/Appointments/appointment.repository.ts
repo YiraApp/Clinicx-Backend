@@ -40,7 +40,7 @@ export class AppointmentRepository {
     async getPatientAppointments(userId: string): Promise<Appointment[]> {
         return await this.repo.find({
             where: { UserId: userId },
-            relations: ["Doctor", "Doctor.User", "Hospital"],
+            relations: ["Doctor", "Hospital"],
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
     }

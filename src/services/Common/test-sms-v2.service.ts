@@ -8,10 +8,10 @@ export class TestSMSV2Service {
         // Variation 1: Original text provided by user with "Hello, your" prefix
         // Variation 3: Using the known working message structure from other IDs
         const message = `Hello, Your One Time Password (OTP) for Yira AI Mobile Application login authentication is ${otp} - YIRA AI`;
-        
+
         // Variation 2 (Commented out): If Variation 1 fails, we might need to check for hidden dots or different wording.
         // const message = `Hello, Your One Time Password (OTP) for Yira AI Mobile Application login authentication is ${otp} - YIRA AI`;
-        
+
         const templateId = "1707177856235480750";
 
         console.log(`[Test SMS V2] Sending with Template ID: ${templateId}`);
