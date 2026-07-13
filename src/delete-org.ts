@@ -1,4 +1,4 @@
-mport { AppDataSource } from "./config/database.js";
+import { AppDataSource } from "./config/database.js";
 
 async function deleteOrg() {
     const orgId = 3;
