@@ -122,7 +122,7 @@ export class UserController {
             const roleId = (req.query.roleId as string) || undefined;
             
             const headerOrgId = req.headers["x-org-id"] as string;
-            const headerHospId = req.headers["x-hosp-id"] as string;
+            const headerHospId = (req.headers["x-hospital-id"] || req.headers["x-hosp-id"]) as string;
 
             if (!headerOrgId || !headerHospId) {
                 res.status(403).json(ApiResponse.error("Organization or Hospital identification missing."));
@@ -296,6 +296,42 @@ export class UserController {
             res.json(ApiResponse.success(result, "Patient profile details updated successfully."));
         } catch (error: any) {
             res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Fetches all family relations (parent and siblings/children) of the authenticated user.
+     */
+    async getRelations(req: Request, res: Response): Promise<void> {
+        try {
+            const currentUserId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+            if (!currentUserId) {
+                res.status(401).json(ApiResponse.error("Authentication required."));
+                return;
+            }
+
+            const result = await userService.getUserRelations(currentUserId);
+            res.json(ApiResponse.success(result, "User relations fetched successfully."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * Fetches all roles/workspaces assigned to the specified userId.
+     */
+    async getUserRoles(req: Request, res: Response): Promise<void> {
+        try {
+            const { userId } = req.params;
+            if (!userId) {
+                res.status(400).json(ApiResponse.error("User ID is required."));
+                return;
+            }
+
+            const result = await userService.getUserRoles(userId as string);
+            res.json(ApiResponse.success(result, "User roles fetched successfully."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
         }
     }
 }

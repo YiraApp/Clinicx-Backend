@@ -28,6 +28,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/consent/request",
         "/api/consent/data",
         "/api/consent/submit",
+        "/api/redirections",
         "/favicon.ico",
         "/robots.txt",
         "/api/test-sms",

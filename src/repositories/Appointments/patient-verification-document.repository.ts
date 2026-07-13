@@ -33,6 +33,13 @@ export class PatientVerificationDocumentRepository {
             return await this.repo.save(newItem);
         }
     }
+
+    async delete(appointmentId: number, type: string): Promise<void> {
+        const existing = await this.findByType(appointmentId, type);
+        if (existing) {
+            await this.repo.delete(existing.Id);
+        }
+    }
 }
 
 export const patientVerificationDocumentRepository = new PatientVerificationDocumentRepository();

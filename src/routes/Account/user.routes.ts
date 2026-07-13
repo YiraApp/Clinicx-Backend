@@ -51,5 +51,7 @@ userRouter.post("/updatePassword", userController.updatePassword.bind(userContro
  */
 userRouter.get("/patient/profile", authMiddleware, userController.getPatientProfile.bind(userController));
 userRouter.post("/patient/profile", authMiddleware, userController.updatePatientProfile.bind(userController));
+userRouter.get("/relations", authMiddleware, userController.getRelations.bind(userController));
+userRouter.get("/roles/:userId", authMiddleware, userController.getUserRoles.bind(userController));
 
 export { userRouter };

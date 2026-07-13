@@ -12,6 +12,7 @@ router.use(authMiddleware);
 router.get("/:appointmentId", (req, res) => verificationController.getStatus(req, res));
 router.post("/:appointmentId/upload", upload.single("file"), (req, res) => verificationController.uploadDocument(req, res));
 router.patch("/:appointmentId/status", (req, res) => verificationController.updateStatus(req, res));
+router.delete("/:appointmentId/document", (req, res) => verificationController.deleteDocument(req, res));
 router.post("/:appointmentId/complete", (req, res) => verificationController.completeCheckin(req, res));
 
 export default router;

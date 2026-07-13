@@ -22,6 +22,7 @@ import { AppDataSource } from "../../config/database.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
+import { PatientMedicalRecord } from "../../models/Appointments/patient-medical-record.model.js";
 
 /**
  * Service implementation for User operations.
@@ -345,31 +346,29 @@ export class UserService implements IUserService {
 
             if (activeNewRoles.length > 0 && user!.Email) {
                 for (const ur of activeNewRoles) {
-                    try {
-                        const role = await roleRepository.findById(ur.RoleId);
-                        let orgName = "N/A";
-                        let hospitalName = "N/A (Organization Level)";
+                    const role = await roleRepository.findById(ur.RoleId);
+                    let orgName = "N/A";
+                    let hospitalName = "N/A (Organization Level)";
 
-                        if (ur.OrganizationId) {
-                            const org = await organizationRepository.findById(ur.OrganizationId);
-                            if (org) orgName = org.Name;
-                        }
-
-                        if (ur.HospitalId) {
-                            const hospital = await hospitalRepository.findById(ur.HospitalId);
-                            if (hospital) hospitalName = hospital.Name;
-                        }
-
-                        await mailService.sendDynamicEmail("NEW_ROLE_ASSIGNED", user!.Email, {
-                            firstName: user!.FirstName,
-                            roleName: role?.RoleName || "Member",
-                            organizationName: orgName,
-                            hospitalName: hospitalName,
-                            link: `${process.env.FRONTEND_URL}/login`
-                        });
-                    } catch (mailErr) {
-                        console.error("[UserService] Failed to send role assignment email:", mailErr);
+                    if (ur.OrganizationId) {
+                        const org = await organizationRepository.findById(ur.OrganizationId);
+                        if (org) orgName = org.Name;
                     }
+
+                    if (ur.HospitalId) {
+                        const hospital = await hospitalRepository.findById(ur.HospitalId);
+                        if (hospital) hospitalName = hospital.Name;
+                    }
+
+                    mailService.sendDynamicEmail("NEW_ROLE_ASSIGNED", user!.Email, {
+                        firstName: user!.FirstName,
+                        roleName: role?.RoleName || "Member",
+                        organizationName: orgName,
+                        hospitalName: hospitalName,
+                        link: `${process.env.FRONTEND_URL}/login`
+                    }).catch(mailErr => {
+                        console.error("[UserService] Failed to send role assignment email in background:", mailErr);
+                    });
                 }
             }
         }
@@ -491,22 +490,68 @@ export class UserService implements IUserService {
         const prescriptions = await prescriptionRepo.find({
             where: { PatientId: userId },
             relations: ["Medications"],
-            order: { Date: "DESC", CreatedAt: "DESC" }
+            order: { CreatedAt: "DESC", Date: "DESC" },
+            take: 10
         });
 
-        // Collect all medications
+        const formatDate = (d: Date | null): string | null => {
+            if (!d) return null;
+            return d.toISOString().split("T")[0];
+        };
+
         const currentMedications: any[] = [];
         const seenMeds = new Set<string>();
+        const now = new Date();
+
         for (const presc of prescriptions) {
-            if (presc.Medications) {
-                for (const med of presc.Medications) {
-                    const medKey = `${med.Medication.trim().toLowerCase()}-${(med.Dosage || "").trim().toLowerCase()}`;
+            if (!presc.Medications) continue;
+            const rxDate = presc.Date ? new Date(presc.Date) : (presc.CreatedAt ? new Date(presc.CreatedAt) : new Date());
+
+            for (const med of presc.Medications) {
+                const medKey = `${med.Medication.trim().toLowerCase()}-${(med.Dosage || "").trim().toLowerCase()}`;
+                
+                let isActive = true;
+                let endDateVal: Date | null = null;
+                
+                let durationVal = med.DurationValue;
+                let durationUnit = med.DurationUnit ? med.DurationUnit.toLowerCase().trim() : "";
+
+                // If DurationValue is not set but DurationUnit contains a text duration (e.g. "10 days")
+                if (!durationVal && durationUnit) {
+                    const match = durationUnit.match(/^(\d+)\s*(.*)$/);
+                    if (match) {
+                        durationVal = parseInt(match[1], 10);
+                        durationUnit = match[2].trim();
+                    }
+                }
+
+                if (durationVal && durationUnit) {
+                    const endDate = new Date(rxDate.getTime());
+
+                    if (durationUnit.includes("day") || durationUnit === "d") {
+                        endDate.setDate(endDate.getDate() + durationVal);
+                    } else if (durationUnit.includes("week") || durationUnit === "w") {
+                        endDate.setDate(endDate.getDate() + (durationVal * 7));
+                    } else if (durationUnit.includes("month") || durationUnit === "m") {
+                        endDate.setMonth(endDate.getMonth() + durationVal);
+                    } else {
+                        endDate.setDate(endDate.getDate() + durationVal);
+                    }
+
+                    isActive = endDate >= now;
+                    endDateVal = endDate;
+                }
+
+                if (isActive) {
                     if (!seenMeds.has(medKey)) {
                         seenMeds.add(medKey);
                         currentMedications.push({
                             name: med.Medication,
                             dosage: med.Dosage ?? null,
-                            frequency: med.FrequencyType ?? null
+                            frequency: med.FrequencyType ?? null,
+                            startDate: formatDate(rxDate),
+                            endDate: formatDate(endDateVal),
+                            duration: med.DurationValue && med.DurationUnit ? `${med.DurationValue} ${med.DurationUnit}` : null
                         });
                     }
                 }
@@ -539,6 +584,24 @@ export class UserService implements IUserService {
                 : new Date(user.DateOfBirth).toISOString().split('T')[0])
             : null;
 
+        // Fetch latest vitals from PatientMedicalRecord if not set on the user directly
+        let bloodPressure = user.BloodPressure || null;
+        let heartRate = user.HeartRate || null;
+        let temperature = user.Temperature || null;
+
+        if (!bloodPressure || !heartRate || !temperature) {
+            const pmrRepo = AppDataSource.getRepository(PatientMedicalRecord);
+            const latestRecord = await pmrRepo.findOne({
+                where: { PatientId: userId },
+                order: { Date: "DESC", CreatedAt: "DESC" }
+            });
+            if (latestRecord) {
+                if (!bloodPressure) bloodPressure = latestRecord.BloodPressure || null;
+                if (!heartRate) heartRate = latestRecord.HeartRate || null;
+                if (!temperature) temperature = latestRecord.Temperature || null;
+            }
+        }
+
         const responseData = {
             personalInfo: {
                 firstName: user.FirstName ?? null,
@@ -550,7 +613,7 @@ export class UserService implements IUserService {
                 address: addressStr || null,
                 emergencyContact: {
                     name: user.EmergencyContactName ?? null,
-                    relationship: user.Relation ?? null,
+                    relationship: user.EmergencyContactRelation ?? null,
                     phone: user.EmergencyContactPhone ?? null
                 }
             },
@@ -558,6 +621,10 @@ export class UserService implements IUserService {
                 bloodGroup: user.BloodGroup ?? null,
                 height: user.Height != null ? String(user.Height) : null,
                 weight: user.Weight != null ? String(user.Weight) : null,
+                bloodPressure: bloodPressure,
+                heartRate: heartRate,
+                temperature: temperature,
+                spO2: user.SpO2 ?? null,
                 allergies: allergies,
                 chronicConditions: chronicConditions,
                 currentMedications: currentMedications
@@ -613,7 +680,7 @@ export class UserService implements IUserService {
         // Emergency Contact
         const emergency = personal.emergencyContact || {};
         if (emergency.name !== undefined) user.EmergencyContactName = emergency.name;
-        if (emergency.relationship !== undefined) user.Relation = emergency.relationship;
+        if (emergency.relationship !== undefined) user.EmergencyContactRelation = emergency.relationship;
         if (emergency.phone !== undefined) user.EmergencyContactPhone = emergency.phone;
 
         // Medical basic info
@@ -621,6 +688,10 @@ export class UserService implements IUserService {
         if (medical.bloodGroup !== undefined) user.BloodGroup = medical.bloodGroup;
         if (medical.height !== undefined) user.Height = medical.height ? Number(medical.height) : null;
         if (medical.weight !== undefined) user.Weight = medical.weight ? Number(medical.weight) : null;
+        if (medical.bloodPressure !== undefined) user.BloodPressure = medical.bloodPressure;
+        if (medical.heartRate !== undefined) user.HeartRate = medical.heartRate;
+        if (medical.temperature !== undefined) user.Temperature = medical.temperature;
+        if (medical.spO2 !== undefined) user.SpO2 = medical.spO2;
 
         // 2. Parse and save Address if provided
         if (personal.address !== undefined) {
@@ -696,6 +767,90 @@ export class UserService implements IUserService {
         }
 
         return { message: "Profile updated successfully" };
+    }
+
+    async getUserRelations(userId: string): Promise<any[]> {
+        const userRepo = AppDataSource.getRepository(User);
+        const user = await userRepo.findOne({
+            where: { Id: userId, IsDeleted: false }
+        });
+
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        // Family members share the same phone number
+        const familyMembers = await userRepo.find({
+            where: { PhoneNumber: user.PhoneNumber, IsDeleted: false },
+            order: {
+                IsPrimary: "DESC",
+                CreatedAt: "ASC"
+            }
+        });
+
+        if (familyMembers.length === 0) return [];
+
+        // Filter family members who have at least one Patient role in UserRoles
+        const patientRoles = await AppDataSource.query(
+            `SELECT UserId FROM UserRoles ur
+             LEFT JOIN Roles r ON ur.RoleId = r.Id
+             WHERE ur.UserId IN (${familyMembers.map(m => `'${m.Id}'`).join(",")}) 
+               AND r.RoleName = 'Patient' 
+               AND ur.IsDeleted = 0`
+        );
+        const patientUserIds = new Set(patientRoles.map((r: any) => r.UserId));
+
+        // Filter the family members list - always include the current user/query user
+        const patientFamilyMembers = familyMembers.filter(m => patientUserIds.has(m.Id) || m.Id === userId);
+
+        if (patientFamilyMembers.length === 0) return [];
+
+        // Primary user is the one marked IsPrimary, or fall back to current user
+        const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || patientFamilyMembers.find(m => m.Id === userId) || patientFamilyMembers[0]!;
+        const childMembers = patientFamilyMembers.filter(m => m.Id !== primaryMember.Id);
+
+        const primaryResponse = {
+            id: primaryMember.Id,
+            firstName: primaryMember.FirstName,
+            lastName: primaryMember.LastName,
+            name: `${primaryMember.FirstName || ""} ${primaryMember.LastName || ""}`.trim(),
+            phone: primaryMember.PhoneNumber,
+            email: primaryMember.Email,
+            gender: primaryMember.Gender,
+            dateOfBirth: primaryMember.DateOfBirth,
+            relation: primaryMember.Relation || "Self",
+            isPrimary: primaryMember.IsPrimary,
+            relations: childMembers.map((member: User) => ({
+                id: member.Id,
+                firstName: member.FirstName,
+                lastName: member.LastName,
+                name: `${member.FirstName || ""} ${member.LastName || ""}`.trim(),
+                phone: member.PhoneNumber,
+                email: member.Email,
+                gender: member.Gender,
+                dateOfBirth: member.DateOfBirth,
+                relation: member.Relation || "Self",
+                isPrimary: member.IsPrimary
+            }))
+        };
+
+        return [primaryResponse];
+    }
+
+    async getUserRoles(userId: string): Promise<any[]> {
+        const userRoles = await userRoleRepository.findByUserId(userId);
+        return userRoles.map(ur => ({
+            UserRoleId: ur.UserRoleId,
+            RoleId: ur.RoleId,
+            RoleName: ur.Role?.RoleName ?? null,
+            OrganizationId: ur.OrganizationId ?? null,
+            OrganizationName: ur.Organization?.Name ?? null,
+            OrganizationCode: ur.Organization?.OrgCode ?? null,
+            HospitalId: ur.HospitalId ?? null,
+            HospitalName: ur.Hospital?.Name ?? null,
+            HospitalCode: ur.Hospital?.HospitalCode ?? null,
+            Status: ur.Status
+        }));
     }
 }
 

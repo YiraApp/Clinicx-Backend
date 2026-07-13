@@ -378,6 +378,7 @@ export class PatientRegistrationService {
         const query = userRepo.createQueryBuilder("u")
             .innerJoin("u.UserRoles", "ur")
             .where("u.IsDeleted = 0")
+            .andWhere("u.Status = :statusActive", { statusActive: true })
             .andWhere("ur.RoleId = :patientRoleId", { patientRoleId: PATIENT_ROLE_ID })
             .andWhere("ur.Status = 1")
             .andWhere("ur.IsDeleted = 0");
@@ -405,82 +406,137 @@ export class PatientRegistrationService {
         const matches = await query.getMany();
         if (matches.length === 0) return [];
 
-        // 2. Get all unique phone numbers from matches to find family members
+        // 2. Get unique phone numbers and parent IDs of matched users to resolve whole family groups
         const phoneNumbers = [...new Set(matches.map(m => m.PhoneNumber).filter(Boolean))];
-        if (phoneNumbers.length === 0) return [];
+        const parentIds = new Set<string>();
+        matches.forEach(m => {
+            if (m.ParentUserId) {
+                parentIds.add(m.ParentUserId.toUpperCase());
+            } else {
+                parentIds.add(m.Id.toUpperCase());
+            }
+        });
 
-        // 3. Fetch ALL users with those phone numbers (family group) — patient role only
-        const allFamilyMembers = await userRepo.createQueryBuilder("u")
+        // 3. Fetch ALL users in these family groups (by phone number OR parent ID link) — patient role only
+        const familyQuery = userRepo.createQueryBuilder("u")
             .innerJoin("u.UserRoles", "ur2")
             .where("u.IsDeleted = 0")
-            .andWhere("u.PhoneNumber IN (:...phoneNumbers)", { phoneNumbers })
+            .andWhere("u.Status = :statusActive", { statusActive: true })
             .andWhere("ur2.RoleId = :patientRoleId2", { patientRoleId2: PATIENT_ROLE_ID })
             .andWhere("ur2.Status = 1")
-            .andWhere("ur2.IsDeleted = 0")
-            .getMany();
+            .andWhere("ur2.IsDeleted = 0");
 
-        // 4. Check hospital/org registration for each user
-        let registeredUserIds = new Set<string>();
-        if (hospitalId || organizationId) {
-            const regQuery = regRepo.createQueryBuilder("pr")
-                .select("pr.UserId")
-                .where("pr.IsDeleted = 0");
-            if (hospitalId) {
-                regQuery.andWhere("pr.HospitalId = :hospitalId", { hospitalId });
-            } else if (organizationId) {
-                regQuery.andWhere("pr.OrganizationId = :organizationId", { organizationId });
-            }
-            const regs = await regQuery.getMany();
-            registeredUserIds = new Set(regs.map(r => r.UserId.toUpperCase()));
+        const familyConditions = [];
+        const familyParams: any = { statusActive: true, patientRoleId2: PATIENT_ROLE_ID };
+
+        if (phoneNumbers.length > 0) {
+            familyConditions.push("u.PhoneNumber IN (:...phoneNumbers)");
+            familyParams.phoneNumbers = phoneNumbers;
+        }
+        if (parentIds.size > 0) {
+            const parentIdsArr = Array.from(parentIds);
+            familyConditions.push("u.ParentUserId IN (:...parentIdsArr)");
+            familyConditions.push("u.Id IN (:...parentIdsArr)");
+            familyParams.parentIdsArr = parentIdsArr;
         }
 
-        // 5. Group by PhoneNumber
-        const groupsMap = new Map<string, { primary: any, relations: any[] }>();
+        if (familyConditions.length > 0) {
+            familyQuery.andWhere(`(${familyConditions.join(' OR ')})`, familyParams);
+        }
 
+        const allFamilyMembers = await familyQuery.getMany();
+
+        // 4. Check hospital/org registration for each user via UserRoles table
+        let registeredUserIds = new Set<string>();
+        let hasCheckedRegistration = false;
+        if (hospitalId || organizationId) {
+            hasCheckedRegistration = true;
+            const { UserRole } = await import("../../models/Account/userrole.model.js");
+            const userRoleRepo = AppDataSource.getRepository(UserRole);
+
+            const urQuery = userRoleRepo.createQueryBuilder("ur")
+                .select(["ur.UserRoleId", "ur.UserId"])
+                .where("ur.IsDeleted = :deleted", { deleted: false })
+                .andWhere("ur.Status = :active", { active: true })
+                .andWhere("ur.RoleId = :patientRoleId", { patientRoleId: PATIENT_ROLE_ID });
+
+            if (hospitalId) {
+                urQuery.andWhere("ur.HospitalId = :hospitalId", { hospitalId });
+            } else if (organizationId) {
+                urQuery.andWhere("ur.OrganizationId = :organizationId", { organizationId });
+            }
+            const urs = await urQuery.getMany();
+            registeredUserIds = new Set(urs.map(r => r.UserId.toUpperCase()));
+        }
+
+        console.log("=== QUICKCHECK DEBUG ===");
+        console.log("Filters received:", filters);
+        console.log("hasCheckedRegistration:", hasCheckedRegistration);
+        console.log("registeredUserIds count:", registeredUserIds.size);
+        console.log("registeredUserIds content:", Array.from(registeredUserIds));
+        console.log("=========================");
+
+        // 5. Group by phone number (resolving parent's phone number for children if their own is null)
+        const userPhoneMap = new Map<string, string>();
         allFamilyMembers.forEach(u => {
-            const phone = u.PhoneNumber;
-            if (!groupsMap.has(phone)) {
-                groupsMap.set(phone, { primary: null, relations: [] });
+            if (u.PhoneNumber) {
+                userPhoneMap.set(u.Id.toUpperCase(), u.PhoneNumber);
+            }
+        });
+
+        const tempGroups = new Map<string, any[]>();
+        allFamilyMembers.forEach(u => {
+            let phone = u.PhoneNumber;
+            if (!phone && u.ParentUserId) {
+                phone = userPhoneMap.get(u.ParentUserId.toUpperCase()) || "";
+            }
+            if (!phone) {
+                phone = "unknown";
             }
 
-            const group = groupsMap.get(phone)!;
-            const isRegisteredAtHospital = registeredUserIds.size === 0 || registeredUserIds.has(u.Id.toUpperCase());
+            const isRegisteredAtHospital = !hasCheckedRegistration || registeredUserIds.has(u.Id.toUpperCase());
 
-            const userData = {
+            if (!tempGroups.has(phone)) {
+                tempGroups.set(phone, []);
+            }
+
+            tempGroups.get(phone)!.push({
                 id: u.Id,
                 name: `${u.FirstName || ""} ${u.LastName || ""}`.trim(),
                 firstName: u.FirstName,
                 lastName: u.LastName,
                 email: u.Email,
-                phone: u.PhoneNumber,
+                phone: u.PhoneNumber || phone,
                 gender: u.Gender,
                 dateOfBirth: u.DateOfBirth,
                 relation: u.Relation,
                 isPrimary: u.IsPrimary,
                 status: u.Status,
                 bloodGroup: u.BloodGroup,
-                // Key flag: is this person registered at the current hospital?
                 isRegisteredAtHospital,
-                // Action hint for frontend
                 action: isRegisteredAtHospital ? "book" : "register_and_book"
-            };
-
-            if (u.IsPrimary || u.Relation === "Self" || !u.Relation) {
-                // If no primary set yet, first match becomes primary
-                if (!group.primary) {
-                    group.primary = userData;
-                } else {
-                    group.relations.push(userData);
-                }
-            } else {
-                group.relations.push(userData);
-            }
+            });
         });
 
-        return Array.from(groupsMap.values()).map(g => ({
-            primary: g.primary || g.relations[0],
-            relations: g.primary ? g.relations : g.relations.slice(1)
-        }));
+        const groups = Array.from(tempGroups.entries()).map(([phone, members]) => {
+            let primaryIndex = members.findIndex(m => m.isPrimary);
+            if (primaryIndex === -1) {
+                primaryIndex = members.findIndex(m => m.relation === "Self" || !m.relation);
+            }
+            if (primaryIndex === -1) {
+                primaryIndex = 0;
+            }
+
+            const primary = members[primaryIndex];
+            const relations = members.filter((_, idx) => idx !== primaryIndex);
+
+            return {
+                primary,
+                relations
+            };
+        });
+
+        return groups;
     }
 }
 

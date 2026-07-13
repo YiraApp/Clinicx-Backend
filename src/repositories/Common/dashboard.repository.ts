@@ -410,21 +410,27 @@ export class DashboardRepository {
             ORDER BY LogId DESC;
         `;
 
-        // 3. Recent Patients (Limit 6)
+        // 3. Recent Patients (Limit 6, Unique by patient ID)
         const recentPatientsQuery = `
-            SELECT TOP 6
-                a.UserId as id,
-                u.FirstName + ' ' + u.LastName as name,
-                u.Gender as gender,
-                DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
-                a.AppointmentDate as lastVisit,
-                a.Reason as condition,
-                a.Status as status
-            FROM Appointments a WITH (NOLOCK)
-            INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
-            WHERE a.HospitalId = ${hospId}
-            AND a.Status = 'Completed'
-            ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
+            WITH RankedAppointments AS (
+                SELECT 
+                    a.UserId as id,
+                    u.FirstName + ' ' + u.LastName as name,
+                    u.Gender as gender,
+                    DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
+                    a.AppointmentDate as lastVisit,
+                    a.Reason as condition,
+                    a.Status as status,
+                    ROW_NUMBER() OVER (PARTITION BY a.UserId ORDER BY a.AppointmentDate DESC, a.StartTime DESC) as rn
+                FROM Appointments a WITH (NOLOCK)
+                INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
+                WHERE a.HospitalId = ${hospId}
+                AND a.Status = 'Completed'
+            )
+            SELECT TOP 6 id, name, gender, age, lastVisit, condition, status
+            FROM RankedAppointments
+            WHERE rn = 1
+            ORDER BY lastVisit DESC;
         `;
 
         // 4. Weekly Stats (Last 7 days)
@@ -562,29 +568,35 @@ export class DashboardRepository {
                  )) as newPatientsThisWeek;
         `;
 
-        // 3. Recent Patients for this Doctor (Limit 6)
+        // 3. Recent Patients for this Doctor (Limit 6, Unique by patient ID)
         const recentPatientsQuery = `
-            SELECT TOP 6
-                a.UserId as id,
-                u.FirstName + ' ' + u.LastName as name,
-                u.Gender as gender,
-                DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
-                a.AppointmentDate as lastVisit,
-                a.Reason as condition,
-                a.Status as status
-            FROM Appointments a WITH (NOLOCK)
-            INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
-            INNER JOIN UserRoles ur WITH (NOLOCK) ON ur.UserId = a.UserId 
-              AND ur.OrganizationId = a.OrgId
-              AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
-              AND ur.Status = 1
-              AND ur.IsDeleted = 0
-            WHERE a.DoctorId = '${doctorId}' AND a.HospitalId = ${hospId}
-            ${orgId ? `AND a.OrgId = ${orgId}` : ''}
-            AND a.Status IN ('Completed', 'Confirmed', 'Arrived', 'InProgress', 'Scheduled')
-            AND u.Status = 1
-            AND u.IsDeleted = 0
-            ORDER BY a.AppointmentDate DESC, a.StartTime DESC;
+            WITH RankedAppointments AS (
+                SELECT 
+                    a.UserId as id,
+                    u.FirstName + ' ' + u.LastName as name,
+                    u.Gender as gender,
+                    DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
+                    a.AppointmentDate as lastVisit,
+                    a.Reason as condition,
+                    a.Status as status,
+                    ROW_NUMBER() OVER (PARTITION BY a.UserId ORDER BY a.AppointmentDate DESC, a.StartTime DESC) as rn
+                FROM Appointments a WITH (NOLOCK)
+                INNER JOIN Users u WITH (NOLOCK) ON a.UserId = u.Id
+                INNER JOIN UserRoles ur WITH (NOLOCK) ON ur.UserId = a.UserId 
+                  AND ur.OrganizationId = a.OrgId
+                  AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
+                  AND ur.Status = 1
+                  AND ur.IsDeleted = 0
+                WHERE a.DoctorId = '${doctorId}' AND a.HospitalId = ${hospId}
+                ${orgId ? `AND a.OrgId = ${orgId}` : ''}
+                AND a.Status IN ('Completed', 'Confirmed', 'Arrived', 'InProgress', 'Scheduled')
+                AND u.Status = 1
+                AND u.IsDeleted = 0
+            )
+            SELECT TOP 6 id, name, gender, age, lastVisit, condition, status
+            FROM RankedAppointments
+            WHERE rn = 1
+            ORDER BY lastVisit DESC;
         `;
 
         console.log(`Fetching Doctor Dashboard stats for Doctor: ${doctorId}, Hospital: ${hospId}, Org: ${orgId}`);

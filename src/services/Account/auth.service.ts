@@ -91,7 +91,62 @@ export class AuthService implements IAuthService {
             }
         }
 
-        const userResponse: Partial<User> & { Roles: any[] } = {
+        // Fetch family relations by shared phone number
+        const familyMembers = await this.userRepository.find({
+            where: { PhoneNumber: user.PhoneNumber, IsDeleted: false },
+            order: {
+                IsPrimary: "DESC",
+                CreatedAt: "ASC"
+            }
+        });
+
+        let relations: any[] = [];
+        if (familyMembers.length > 0) {
+            // Filter family members who have at least one Patient role in UserRoles
+            const patientRoles = await AppDataSource.query(
+                `SELECT UserId FROM UserRoles ur
+                 LEFT JOIN Roles r ON ur.RoleId = r.Id
+                 WHERE ur.UserId IN (${familyMembers.map(m => `'${m.Id}'`).join(",")}) 
+                   AND r.RoleName = 'Patient' 
+                   AND ur.IsDeleted = 0`
+            );
+            const patientUserIds = new Set(patientRoles.map((r: any) => r.UserId));
+
+            // Filter the family members list - always include the current user/query user
+            const patientFamilyMembers = familyMembers.filter(m => patientUserIds.has(m.Id) || m.Id === user.Id);
+
+            if (patientFamilyMembers.length > 0) {
+                const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || patientFamilyMembers.find(m => m.Id === user.Id) || patientFamilyMembers[0]!;
+                const childMembers = patientFamilyMembers.filter(m => m.Id !== primaryMember.Id);
+
+                relations = [{
+                    id: primaryMember.Id,
+                    firstName: primaryMember.FirstName,
+                    lastName: primaryMember.LastName,
+                    name: `${primaryMember.FirstName || ""} ${primaryMember.LastName || ""}`.trim(),
+                    phone: primaryMember.PhoneNumber,
+                    email: primaryMember.Email,
+                    gender: primaryMember.Gender,
+                    dateOfBirth: primaryMember.DateOfBirth,
+                    relation: primaryMember.Relation || "Self",
+                    isPrimary: primaryMember.IsPrimary,
+                    relations: childMembers.map((member: User) => ({
+                        id: member.Id,
+                        firstName: member.FirstName,
+                        lastName: member.LastName,
+                        name: `${member.FirstName || ""} ${member.LastName || ""}`.trim(),
+                        phone: member.PhoneNumber,
+                        email: member.Email,
+                        gender: member.Gender,
+                        dateOfBirth: member.DateOfBirth,
+                        relation: member.Relation || "Self",
+                        isPrimary: member.IsPrimary
+                    }))
+                }];
+            }
+        }
+
+        const userResponse: Partial<User> & { Roles: any[], Relations: any[] } = {
             Id: user.Id,
             IsMobileVerified: user.IsMobileVerified,
             IsEmailVerified: user.IsEmailVerified,
@@ -106,7 +161,8 @@ export class AuthService implements IAuthService {
                 HospitalName: ur.Hospital?.Name ?? null,
                 HospitalCode: ur.Hospital?.HospitalCode ?? null,
                 Status: ur.Status
-            }))
+            })),
+            Relations: relations
         };
         if (user.FirstName !== undefined) userResponse.FirstName = user.FirstName;
         if (user.LastName !== undefined) userResponse.LastName = user.LastName;

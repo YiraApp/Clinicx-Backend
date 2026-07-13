@@ -67,7 +67,13 @@ export class PaymentService {
         }
 
         if (bill.BillStatus === "Draft") {
-            throw new Error("Please generate the invoice before initiating online payment.");
+            // Automatically generate the invoice (finalizing it from Draft to Pending state)
+            // to allow online payment initialization to proceed seamlessly
+            await appointmentBillRepository.generateInvoice(bill.AppointmentBillId);
+            const updatedBill = await appointmentBillRepository.findByAppointmentId(data.appointmentId);
+            if (updatedBill) {
+                bill = updatedBill;
+            }
         }
 
         // Use bill's DueAmount as the actual charge amount

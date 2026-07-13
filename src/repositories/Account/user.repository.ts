@@ -115,10 +115,15 @@ export class UserRepository implements IUserRepository {
         }
 
         if (filters.search) {
-            query.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
-                { search: `%${filters.search}%` }
-            );
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(filters.search.trim());
+            if (isUuid) {
+                query.andWhere('u.Id = :uuidSearch', { uuidSearch: filters.search.trim() });
+            } else {
+                query.andWhere(
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    { search: `%${filters.search}%` }
+                );
+            }
         }
 
         if (filters.status !== undefined) {
@@ -138,7 +143,7 @@ export class UserRepository implements IUserRepository {
         }
 
 
-        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
+        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'COALESCE(ur.UpdatedAt, ur.CreatedAt)';
 
         if (filters?.currentUserId) {
             query.addSelect('CASE WHEN u.Id = :currentUserId THEN 0 ELSE 1 END', 'priority');
@@ -157,9 +162,21 @@ export class UserRepository implements IUserRepository {
         // Transformation logic (similar to getUsers but filtered for this org)
         const transformedData = users.map(u => {
             const rolesMap = new Map<string, any>();
+            let contextRole: any = null;
 
             u.UserRoles?.forEach(ur => {
                 if (!ur.Role || ur.OrganizationId !== organizationId) return;
+
+                // Capture the role record matching the filters (hospitalId if filters.hospitalId is set, else org-wide)
+                if (filters.hospitalId) {
+                    if (ur.HospitalId === filters.hospitalId) {
+                        contextRole = ur;
+                    }
+                } else {
+                    if (!contextRole || (ur.CreatedAt > contextRole.CreatedAt)) {
+                        contextRole = ur;
+                    }
+                }
 
                 if (!rolesMap.has(ur.Role.Id)) {
                     rolesMap.set(ur.Role.Id, {
@@ -197,6 +214,10 @@ export class UserRepository implements IUserRepository {
                 }
             });
 
+            const joinedDate = contextRole 
+                ? (contextRole.UpdatedAt || contextRole.CreatedAt) 
+                : u.CreatedAt;
+
             return {
                 id: u.Id,
                 firstName: u.FirstName,
@@ -213,7 +234,7 @@ export class UserRepository implements IUserRepository {
                 isActive: u.Status,
                 isParentOrgUser: u.IsPrimary,
                 lastLogin: u.LastLoginTime,
-                createdAt: u.CreatedAt,
+                createdAt: joinedDate,
                 appointments: u.Appointments || [],
                 roles: Array.from(rolesMap.values()).map(r => ({
                     RoleId: r.RoleId,

@@ -108,9 +108,10 @@ export class PatientRegistrationController {
             const globalSearch = req.query.globalSearch === 'true';
             
             const orgId = req.headers["x-org-id"] ? parseInt(req.headers["x-org-id"] as string) : undefined;
+            const rawHospId = req.headers["x-hospital-id"] || req.headers["x-hosp-id"];
             const hospitalId = req.query.hospitalId 
                 ? parseInt(req.query.hospitalId as string) 
-                : (req.headers["x-hosp-id"] ? parseInt(req.headers["x-hosp-id"] as string) : undefined);
+                : (rawHospId ? parseInt(rawHospId as string) : undefined);
 
             const result = await patientRegistrationService.quickCheck({ mobile, email, name, organizationId: orgId, hospitalId, globalSearch });
             return res.json(ApiResponse.success(result, "Quick check completed successfully."));

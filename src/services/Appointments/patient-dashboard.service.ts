@@ -111,7 +111,7 @@ export class PatientDashboardService {
             for (const med of p.Medications) {
                 let isActive = true;
                 let refillDueStr = "N/A";
-                
+
                 let durationVal = med.DurationValue;
                 let durationUnit = med.DurationUnit ? med.DurationUnit.toLowerCase().trim() : "";
 
@@ -154,7 +154,7 @@ export class PatientDashboardService {
 
         // 6. Fetch pending actions
         const pendingActions = [];
-        
+
         // Check outstanding bills
         const unpaidBills = await AppDataSource.getRepository(AppointmentBill).find({
             where: { PatientId: userId, IsDeleted: false }

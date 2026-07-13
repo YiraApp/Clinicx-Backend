@@ -74,6 +74,10 @@ export class VerificationService {
         // This will automatically handle the patient queue logic
         await appointmentService.updateAppointmentStatus(appointmentId, AppointmentStatus.Arrived);
     }
+
+    async deleteDocument(appointmentId: number, type: string): Promise<void> {
+        await patientVerificationDocumentRepository.delete(appointmentId, type);
+    }
 }
 
 export const verificationService = new VerificationService();

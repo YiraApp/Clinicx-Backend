@@ -40,9 +40,9 @@ export class AppointmentBillRepository {
         const sgstPct = config?.SgstPercentage || 0;
         const igstPct = config?.IgstPercentage || 0;
 
-        const totalAmount = consultationFee;
-        const subTotal = parseFloat((totalAmount / (1 + (gstPct / 100))).toFixed(2));
-        const gstAmount = parseFloat((totalAmount - subTotal).toFixed(2));
+        const subTotal = consultationFee;
+        const gstAmount = parseFloat(((subTotal * gstPct) / 100).toFixed(2));
+        const totalAmount = parseFloat((subTotal + gstAmount).toFixed(2));
         
         const cgstAmount = parseFloat(((subTotal * cgstPct) / 100).toFixed(2));
         const sgstAmount = parseFloat(((subTotal * sgstPct) / 100).toFixed(2));
@@ -135,16 +135,16 @@ export class AppointmentBillRepository {
 
         // 1. Consultation Item
         if (data.consultationFee > 0) {
-            const totalItemAmt = data.consultationFee;
-            const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
-            const gst = parseFloat((totalItemAmt - sub).toFixed(2));
-            subTotalSum += sub;
+            const unitPrice = data.consultationFee;
+            const gst = parseFloat(((unitPrice * gstPct) / 100).toFixed(2));
+            const totalItemAmt = parseFloat((unitPrice + gst).toFixed(2));
+            subTotalSum += unitPrice;
 
             itemsToCreate.push({
                 ItemType: "Consultation",
                 ItemName: "Consultation Fee",
                 Quantity: 1,
-                UnitPrice: sub,
+                UnitPrice: unitPrice,
                 DiscountAmount: 0,
                 GstPercentage: gstPct,
                 GstAmount: gst,
@@ -157,17 +157,17 @@ export class AppointmentBillRepository {
             const planRepo = AppDataSource.getRepository(TreatmentPlan);
             const plans = await planRepo.findByIds(data.treatmentPlanIds);
             for (const plan of plans) {
-                const totalItemAmt = plan.Amount;
-                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
-                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
-                subTotalSum += sub;
+                const unitPrice = plan.Amount;
+                const gst = parseFloat(((unitPrice * gstPct) / 100).toFixed(2));
+                const totalItemAmt = parseFloat((unitPrice + gst).toFixed(2));
+                subTotalSum += unitPrice;
 
                 itemsToCreate.push({
                     ItemType: "TreatmentPlan",
                     ItemReferenceId: plan.TreatmentPlanId,
                     ItemName: plan.Name,
                     Quantity: 1,
-                    UnitPrice: sub,
+                    UnitPrice: unitPrice,
                     DiscountAmount: 0,
                     GstPercentage: gstPct,
                     GstAmount: gst,
@@ -179,16 +179,16 @@ export class AppointmentBillRepository {
         // 3. Custom Treatment Plans
         if (data.customTreatmentPlans && data.customTreatmentPlans.length > 0) {
             for (const cp of data.customTreatmentPlans) {
-                const totalItemAmt = cp.amount;
-                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
-                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
-                subTotalSum += sub;
+                const unitPrice = cp.amount;
+                const gst = parseFloat(((unitPrice * gstPct) / 100).toFixed(2));
+                const totalItemAmt = parseFloat((unitPrice + gst).toFixed(2));
+                subTotalSum += unitPrice;
 
                 itemsToCreate.push({
                     ItemType: "TreatmentPlan",
                     ItemName: cp.name,
                     Quantity: 1,
-                    UnitPrice: sub,
+                    UnitPrice: unitPrice,
                     DiscountAmount: 0,
                     GstPercentage: gstPct,
                     GstAmount: gst,
@@ -278,16 +278,16 @@ export class AppointmentBillRepository {
 
         // 1. Consultation Item
         if (data.consultationFee > 0) {
-            const totalItemAmt = data.consultationFee;
-            const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
-            const gst = parseFloat((totalItemAmt - sub).toFixed(2));
-            subTotalSum += sub;
+            const unitPrice = data.consultationFee;
+            const gst = parseFloat(((unitPrice * gstPct) / 100).toFixed(2));
+            const totalItemAmt = parseFloat((unitPrice + gst).toFixed(2));
+            subTotalSum += unitPrice;
 
             itemsToCreate.push({
                 ItemType: "Consultation",
                 ItemName: "Consultation Fee (Follow-up)",
                 Quantity: 1,
-                UnitPrice: sub,
+                UnitPrice: unitPrice,
                 DiscountAmount: 0,
                 GstPercentage: gstPct,
                 GstAmount: gst,
@@ -299,17 +299,17 @@ export class AppointmentBillRepository {
         if (data.treatmentPlanIds && data.treatmentPlanIds.length > 0) {
             const plans = await AppDataSource.getRepository(TreatmentPlan).findByIds(data.treatmentPlanIds);
             for (const plan of plans) {
-                const totalItemAmt = plan.Amount;
-                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
-                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
-                subTotalSum += sub;
+                const unitPrice = plan.Amount;
+                const gst = parseFloat(((unitPrice * gstPct) / 100).toFixed(2));
+                const totalItemAmt = parseFloat((unitPrice + gst).toFixed(2));
+                subTotalSum += unitPrice;
 
                 itemsToCreate.push({
                     ItemType: "TreatmentPlan",
                     ItemReferenceId: plan.TreatmentPlanId,
                     ItemName: plan.Name,
                     Quantity: 1,
-                    UnitPrice: sub,
+                    UnitPrice: unitPrice,
                     DiscountAmount: 0,
                     GstPercentage: gstPct,
                     GstAmount: gst,
@@ -321,16 +321,16 @@ export class AppointmentBillRepository {
         // 3. Custom Treatment Plans
         if (data.customTreatmentPlans && data.customTreatmentPlans.length > 0) {
             for (const cp of data.customTreatmentPlans) {
-                const totalItemAmt = cp.amount;
-                const sub = parseFloat((totalItemAmt / (1 + (gstPct / 100))).toFixed(2));
-                const gst = parseFloat((totalItemAmt - sub).toFixed(2));
-                subTotalSum += sub;
+                const unitPrice = cp.amount;
+                const gst = parseFloat(((unitPrice * gstPct) / 100).toFixed(2));
+                const totalItemAmt = parseFloat((unitPrice + gst).toFixed(2));
+                subTotalSum += unitPrice;
 
                 itemsToCreate.push({
                     ItemType: "TreatmentPlan",
                     ItemName: cp.name,
                     Quantity: 1,
-                    UnitPrice: sub,
+                    UnitPrice: unitPrice,
                     DiscountAmount: 0,
                     GstPercentage: gstPct,
                     GstAmount: gst,
@@ -404,9 +404,9 @@ export class AppointmentBillRepository {
         const sgstPct = config?.SgstPercentage || 0;
         const igstPct = config?.IgstPercentage || 0;
 
-        const totalAmount = newConsultationFee;
-        const subTotal = parseFloat((totalAmount / (1 + (gstPct / 100))).toFixed(2));
-        const gstAmount = parseFloat((totalAmount - subTotal).toFixed(2));
+        const subTotal = newConsultationFee;
+        const gstAmount = parseFloat(((subTotal * gstPct) / 100).toFixed(2));
+        const totalAmount = parseFloat((subTotal + gstAmount).toFixed(2));
         
         const cgstAmount = parseFloat(((subTotal * cgstPct) / 100).toFixed(2));
         const sgstAmount = parseFloat(((subTotal * sgstPct) / 100).toFixed(2));
@@ -482,7 +482,8 @@ export class AppointmentBillRepository {
             );
         }
 
-        qb.orderBy("b.CreatedAt", "DESC")
+        qb.addSelect("COALESCE(b.UpdatedAt, b.CreatedAt)", "latest_activity")
+          .orderBy("latest_activity", "DESC")
           .skip((page - 1) * limit)
           .take(limit);
 
@@ -835,8 +836,9 @@ export class AppointmentBillRepository {
                 savedItems.push(savedItem);
             }
 
-            // 4. Calculate overall totals
-            const overallDiscount = Number(data.discountAmount) || 0;
+            // 4. Calculate overall totals and clamp overall discount to not exceed remaining subtotal
+            const maxOverallDiscount = Math.max(0, subTotalSum - itemsDiscountSum);
+            const overallDiscount = Math.min(Number(data.discountAmount) || 0, maxOverallDiscount);
             const totalDiscount = itemsDiscountSum + overallDiscount;
 
             // If overall discount is applied, adjust subtotal/total

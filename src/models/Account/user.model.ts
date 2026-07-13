@@ -110,6 +110,21 @@ export class User {
     @Column({ type: "nvarchar", length: 100, nullable: true })
     EmergencyContactPhone?: string | null;
 
+    @Column({ type: "varchar", length: 50, nullable: true })
+    EmergencyContactRelation?: string | null;
+
+    @Column({ type: "varchar", length: 50, nullable: true })
+    BloodPressure?: string | null;
+
+    @Column({ type: "varchar", length: 50, nullable: true })
+    HeartRate?: string | null;
+
+    @Column({ type: "varchar", length: 50, nullable: true })
+    Temperature?: string | null;
+
+    @Column({ type: "varchar", length: 50, nullable: true })
+    SpO2?: string | null;
+
     @Column({ type: "int", nullable: true })
     LatestOrgId?: number | null;
 

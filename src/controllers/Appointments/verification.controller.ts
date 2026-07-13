@@ -98,6 +98,28 @@ export class VerificationController {
             res.status(500).json({ status: "error", message: error.message || "Failed to complete checkin" });
         }
     }
+
+    async deleteDocument(req: Request, res: Response): Promise<void> {
+        try {
+            const appointmentId = parseInt(req.params.appointmentId as string);
+            const { type } = req.body;
+
+            if (isNaN(appointmentId) || !type) {
+                res.status(400).json({ status: "error", message: "AppointmentId and type are required." });
+                return;
+            }
+
+            await verificationService.deleteDocument(appointmentId, type);
+
+            res.status(200).json({
+                status: "success",
+                message: `${type} deleted successfully`
+            });
+        } catch (error: any) {
+            console.error("[Verification Controller] Error deleting document:", error.message);
+            res.status(500).json({ status: "error", message: "Failed to delete document" });
+        }
+    }
 }
 
 export const verificationController = new VerificationController();

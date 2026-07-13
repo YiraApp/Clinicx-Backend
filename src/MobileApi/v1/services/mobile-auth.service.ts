@@ -150,6 +150,7 @@ export class MobileAuthService {
         latestRoleId: string | null;
         latestOrgId: number | null;
         latestHospitalId: number | null;
+        latestUserRole: string | null;
         navigationId: string | null;
     }> {
         const type = loginType === "mobileNumber" ? "mobile" : (loginType || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile"));
@@ -255,6 +256,14 @@ export class MobileAuthService {
             }
             const rolesList = Array.from(uniqueRolesMap.values());
 
+            let latestUserRole: string | null = null;
+            if (user.LatestRoleId) {
+                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === user.LatestRoleId?.toUpperCase());
+                if (matched) {
+                    latestUserRole = matched.Role?.RoleName ?? null;
+                }
+            }
+
             return {
                 accessToken,
                 refreshToken,
@@ -281,6 +290,7 @@ export class MobileAuthService {
                 latestRoleId: user.LatestRoleId ?? null,
                 latestOrgId: user.LatestOrgId ?? null,
                 latestHospitalId: user.LatestHospitalId ?? null,
+                latestUserRole,
                 navigationId: getNavigationId(user.LatestRoleId)
             };
         } else {
@@ -386,6 +396,14 @@ export class MobileAuthService {
             }
             const rolesList = Array.from(uniqueRolesMap.values());
 
+            let latestUserRole: string | null = null;
+            if (user.LatestRoleId) {
+                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === user.LatestRoleId?.toUpperCase());
+                if (matched) {
+                    latestUserRole = matched.Role?.RoleName ?? null;
+                }
+            }
+
             return {
                 accessToken,
                 refreshToken,
@@ -412,6 +430,7 @@ export class MobileAuthService {
                 latestRoleId: user.LatestRoleId ?? null,
                 latestOrgId: user.LatestOrgId ?? null,
                 latestHospitalId: user.LatestHospitalId ?? null,
+                latestUserRole,
                 navigationId: getNavigationId(user.LatestRoleId)
             };
         }
@@ -587,6 +606,7 @@ export class MobileAuthService {
         latestRoleId: string | null;
         latestOrgId: number | null;
         latestHospitalId: number | null;
+        latestUserRole: string | null;
         navigationId: string | null;
     }> {
         const user = await mobileAuthRepository.findUserById(userId);
@@ -661,6 +681,14 @@ export class MobileAuthService {
             });
         }
 
+        let latestUserRole: string | null = null;
+        if (user.LatestRoleId) {
+            const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === user.LatestRoleId?.toUpperCase());
+            if (matched) {
+                latestUserRole = matched.Role?.RoleName ?? null;
+            }
+        }
+
         return {
             ...(accessToken && { accessToken }),
             ...(refreshToken && { refreshToken }),
@@ -687,6 +715,7 @@ export class MobileAuthService {
             latestRoleId: user.LatestRoleId ?? null,
             latestOrgId: user.LatestOrgId ?? null,
             latestHospitalId: user.LatestHospitalId ?? null,
+            latestUserRole,
             navigationId: getNavigationId(user.LatestRoleId)
         };
     }
