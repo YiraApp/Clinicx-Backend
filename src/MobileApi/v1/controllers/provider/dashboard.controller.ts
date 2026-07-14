@@ -183,3 +183,101 @@ export const getPatientOverview = async (req: Request, res: Response) => {
         });
     }
 };
+
+/**
+ * Retrieves the patient's detailed profile (info, contact, vitals, medical, and insurance).
+ */
+export const getPatientProfile = async (req: Request, res: Response) => {
+    try {
+        const { patientId, orgId, hospitalId } = req.body;
+
+        if (!patientId || orgId === undefined || hospitalId === undefined) {
+            return res.status(400).json({
+                status: false,
+                message: "Missing required fields: patientId, orgId, and hospitalId are all required in request body"
+            });
+        }
+
+        const parsedOrgId = Number(orgId);
+        const parsedHospitalId = Number(hospitalId);
+
+        if (isNaN(parsedOrgId) || isNaN(parsedHospitalId)) {
+            return res.status(400).json({
+                status: false,
+                message: "Invalid parameters: orgId and hospitalId must be valid numbers"
+            });
+        }
+
+        const result = await mobileDashboardService.getPatientProfile(patientId, parsedOrgId, parsedHospitalId);
+
+        return res.json(ApiResponse.success(result, "Patient profile data retrieved successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to retrieve patient profile details"
+        });
+    }
+};
+
+/**
+ * Retrieves the sidebar menu for the user based on role, organization, and hospital.
+ */
+export const getSidebarMenu = async (req: Request, res: Response) => {
+    try {
+        const { roleId, orgId, hospitalId, hospId } = req.body;
+
+        if (!roleId) {
+            return res.status(400).json({
+                status: false,
+                message: "Missing required field: roleId is required in request body"
+            });
+        }
+
+        const resolvedOrgId = orgId !== undefined ? Number(orgId) : null;
+        const resolvedHospitalId = (hospitalId !== undefined ? Number(hospitalId) : (hospId !== undefined ? Number(hospId) : null));
+
+        const parsedOrgId = resolvedOrgId && !isNaN(resolvedOrgId) ? resolvedOrgId : null;
+        const parsedHospitalId = resolvedHospitalId && !isNaN(resolvedHospitalId) ? resolvedHospitalId : null;
+
+        const { sidebarService } = await import("../../../../services/Common/sidebar.service.js");
+        const menu = await sidebarService.getSidebarMenu(
+            roleId as string,
+            parsedOrgId,
+            parsedHospitalId
+        );
+
+        const flattenMenus = (items: any[]): any[] => {
+            let result: any[] = [];
+            if (!Array.isArray(items)) return result;
+            for (const item of items) {
+                if (item) {
+                    result.push(item);
+                    if (item.children && item.children.length > 0) {
+                        result = result.concat(flattenMenus(item.children));
+                    }
+                }
+            }
+            return result;
+        };
+
+        const flatList = flattenMenus(menu);
+        
+        const mappedData = flatList.map((item, idx) => ({
+            title: item.MenuName,
+            taskCode: (idx + 1).toString(),
+            taskId: item.MenuId,
+            ImagePath: item.ImagePath || ""
+        }));
+
+        return res.json({
+            status: true,
+            message: "SideMenu Details fetched successfully",
+            data: mappedData
+        });
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to retrieve sidebar menu"
+        });
+    }
+};

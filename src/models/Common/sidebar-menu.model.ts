@@ -14,6 +14,9 @@ export class SidebarMenu {
     @Column({ type: "varchar", length: 50, nullable: true })
     Icon?: string;
 
+    @Column({ type: "varchar", length: 255, nullable: true })
+    ImagePath?: string;
+
     @Column({ type: "int", nullable: true })
     ParentMenuId?: number;
 

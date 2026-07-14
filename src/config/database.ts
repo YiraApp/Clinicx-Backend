@@ -125,6 +125,19 @@ export const initializeDatabase = async () => {
         console.log(`📡 Attempting to connect to database at: ${process.env.DB_PORT}`);
         await AppDataSource.initialize();
         console.log("✅ Database connected");
+
+        // Ensure ImagePath column exists on SidebarMenus table in a production-safe way
+        await AppDataSource.query(`
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[SidebarMenus]') 
+                  AND name = 'ImagePath'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[SidebarMenus] ADD [ImagePath] varchar(255) NULL;
+            END
+        `);
+        console.log("✅ Database schema verified for ImagePath column");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

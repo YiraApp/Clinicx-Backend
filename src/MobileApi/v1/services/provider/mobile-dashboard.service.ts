@@ -7,6 +7,7 @@ import { PatientRegistration } from "../../../../models/Organizations/patient-re
 import { clinicalNoteRepository } from "../../../../repositories/Appointments/clinical-note.repository.js";
 import { ClinicalNote } from "../../../../models/Appointments/clinical-note.model.js";
 import { PatientInsurance } from "../../../../models/Organizations/patient-insurance.model.js";
+import { PatientMedicalRecord } from "../../../../models/Appointments/patient-medical-record.model.js";
 
 export class MobileDashboardService {
     async getProviderDashboard(userId: string, hospId: number, orgId: number): Promise<any> {
@@ -701,6 +702,136 @@ export class MobileDashboardService {
                 initial_registration,
                 last_check_in_visit,
                 next_scheduled_appointment
+            }
+        };
+    }
+
+    async getPatientProfile(patientId: string, orgId: number, hospitalId: number): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const regRepo = AppDataSource.getRepository(PatientRegistration);
+        const appointmentRepo = AppDataSource.getRepository(Appointment);
+        const insuranceRepo = AppDataSource.getRepository(PatientInsurance);
+        const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
+
+        const user = await userRepo.findOne({
+            where: { Id: patientId },
+            relations: ["PermanentAddress", "TemporaryAddress"]
+        });
+
+        if (!user) {
+            throw new Error("Patient not found");
+        }
+
+        const reg = await regRepo.findOne({
+            where: { UserId: patientId, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+        });
+
+        const insurance = await insuranceRepo.findOne({
+            where: { UserId: patientId, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+        });
+
+        const appointments = await appointmentRepo.find({
+            where: { UserId: patientId, OrgId: orgId, HospitalId: hospitalId },
+            order: { AppointmentDate: "DESC", StartTime: "DESC" }
+        });
+
+        const latestRecord = await medicalRecordRepo.findOne({
+            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            order: { CreatedAt: "DESC" }
+        });
+
+        // Resolve last visit date
+        const formatDateSlash = (dateInput: Date | string | null | undefined) => {
+            if (!dateInput) return "";
+            const d = new Date(dateInput);
+            if (isNaN(d.getTime())) return "";
+            return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+        };
+
+        const lastVisitDate = appointments.length > 0
+            ? formatDateSlash(appointments[0].AppointmentDate)
+            : "None";
+
+        // Resolve age
+        let age_label = "None";
+        if (user.DateOfBirth) {
+            const dob = new Date(user.DateOfBirth);
+            const today = new Date();
+            let age = today.getFullYear() - dob.getFullYear();
+            const m = today.getMonth() - dob.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) {
+                age--;
+            }
+            age_label = `${age} yrs`;
+        }
+
+        // Resolve gender
+        const genderStr = (user.Gender || "").trim().toLowerCase();
+        let gender = "Other";
+        if (genderStr === "male" || genderStr === "m") {
+            gender = "Male";
+        } else if (genderStr === "female" || genderStr === "f") {
+            gender = "Female";
+        }
+
+        // Resolve location
+        const addr = user.PermanentAddress || user.TemporaryAddress;
+        let location = "";
+        if (addr) {
+            location = [addr.City, addr.State].filter(Boolean).join(", ");
+        }
+
+        // Resolve latest vitals
+        const latest_vitals = {
+            blood_pressure: {
+                value: latestRecord?.BloodPressure || "None",
+                unit: "mmHg"
+            },
+            pulse: {
+                value: latestRecord?.HeartRate || "None",
+                unit: "bpm"
+            },
+            temperature: {
+                value: latestRecord?.Temperature || "None",
+                unit: "°F"
+            },
+            spo2: {
+                value: "None", // Not in DB schema
+                unit: "%"
+            },
+            weight: {
+                value: latestRecord?.Weight || "None",
+                unit: "kg"
+            },
+            height: {
+                value: latestRecord?.Height || "None",
+                unit: "cm"
+            }
+        };
+
+        return {
+            patient_info: {
+                patient_id: user.Id,
+                patient_number: reg ? `YRA${String(reg.Id).padStart(4, "0")}` : "YRA0000",
+                appointment_id: appointments.length > 0 ? String(appointments[0].Id) : "None",
+                name: `${user.FirstName || ""} ${user.LastName || ""}`.trim(),
+                age: age_label,
+                gender,
+                last_visit: lastVisitDate
+            },
+            contact_information: {
+                phone: user.PhoneNumber || "",
+                email: user.Email || "",
+                location: location || "None"
+            },
+            latest_vitals,
+            medical_information: {
+                blood_group: user.BloodGroup || "None"
+            },
+            insurance: {
+                provider: insurance?.InsuranceProvider || "None",
+                policy_number: insurance?.InsuranceNumber || "None",
+                valid_till: "None"
             }
         };
     }

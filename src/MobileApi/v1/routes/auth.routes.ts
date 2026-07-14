@@ -2,7 +2,7 @@ import { Router } from "express";
 import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPassword, resetPassword, getRoleDetails, updateLatestContext, getUserData, verifyOTP, changePassword } from "../controllers/auth.controller.js";
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
-import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview } from "../controllers/provider/dashboard.controller.js";
+import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getSidebarMenu } from "../controllers/provider/dashboard.controller.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
 const authRouter = Router();
@@ -24,6 +24,8 @@ authRouter.post("/clinical-data", authMiddleware, getClinicalData);
 authRouter.post("/patients", authMiddleware, getPatientsList);
 authRouter.get("/patients/filters", authMiddleware, getPatientsFilters);
 authRouter.post("/patient/overview", authMiddleware, getPatientOverview);
+authRouter.post("/patient/details", authMiddleware, getPatientProfile);
+authRouter.post("/sidebar", authMiddleware, getSidebarMenu);
 authRouter.post("/latest-context", authMiddleware, updateLatestContext);
 authRouter.post("/device-token", authMiddleware, registerDeviceToken);
 authRouter.get("/app-version", getLatestAppVersion);
