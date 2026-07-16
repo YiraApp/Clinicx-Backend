@@ -75,7 +75,7 @@ export class HealthcareProviderService {
                 RegistrationNumber: data.registrationNumber,
                 Qualification: data.qualification,
                 Experience: data.experience,
-                ConsultationFee: data.consultationFee,
+                ConsultationFee: data.consultationFee !== undefined && data.consultationFee !== null && data.consultationFee !== "" ? Number(data.consultationFee) : 0,
                 Bio: data.bio
             };
 
@@ -311,7 +311,7 @@ export class HealthcareProviderService {
                 RegistrationNumber: data.registrationNumber,
                 Qualification: data.qualification,
                 Experience: data.experience,
-                ConsultationFee: data.consultationFee,
+                ConsultationFee: data.consultationFee !== undefined && data.consultationFee !== null && data.consultationFee !== "" ? Number(data.consultationFee) : 0,
                 Bio: data.bio,
                 Status: data.status !== undefined ? data.status : provider.Status
             };
@@ -368,7 +368,8 @@ export class HealthcareProviderService {
         const [ey, em, ed] = endDate.split("-").map(Number);
         const start = new Date(sy, sm - 1, sd);
         const end = new Date(ey, em - 1, ed);
-        return await healthcareProviderScheduleSlotRepository.getSlots(providerId, hospitalId, start, end);
+        const slots = await healthcareProviderScheduleSlotRepository.getSlots(providerId, hospitalId, start, end);
+        return slots;
     }
 
     async generateSlotsForDateRange(providerId: number, hospitalId: number, startDate: string, endDate: string, slotDuration: number = 15, buffer: number = 0, overwrite: boolean = false): Promise<any> {

@@ -113,6 +113,16 @@ export class AppointmentController {
         }
     }
 
+    async reschedule(req: Request, res: Response) {
+        try {
+            const id = String(req.params.id);
+            const result = await appointmentService.rescheduleAppointment(parseInt(id), req.body);
+            return res.json(ApiResponse.success(result, "Appointment rescheduled successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async cancel(req: Request, res: Response) {
         try {
             const id = String(req.params.id);

@@ -498,8 +498,16 @@ export class AppointmentService {
                 }
             }
 
-            // If status is "Cancelled", update queue status
+            // If status is "Cancelled", update queue status and free up schedule slot
             if (statusLower === AppointmentStatus.Cancelled.toLowerCase()) {
+                const appointment = await manager.findOne(Appointment, { where: { Id: appointmentId } });
+                if (appointment && appointment.SlotId) {
+                    await manager.update("HealthcareProviderScheduleSlots", appointment.SlotId, {
+                        IsBooked: false,
+                        Status: "Available",
+                        UpdatedAt: new Date()
+                    });
+                }
                 const queueEntry = await manager.findOne(PatientQueue, { where: { AppointmentId: appointmentId } });
                 if (queueEntry) {
                     await manager.update(PatientQueue, queueEntry.Id, { 
@@ -509,6 +517,50 @@ export class AppointmentService {
             }
         });
     }
+
+    async rescheduleAppointment(appointmentId: number, data: { newSlotId: number; newDoctorId: string; newDate: string; startTime: string; endTime: string }) {
+        return await AppDataSource.transaction(async (manager) => {
+            const appointment = await manager.findOne(Appointment, { where: { Id: appointmentId } });
+            if (!appointment) throw new Error("Appointment not found.");
+
+            // 1. Release old slot (if slot exists and is changed)
+            if (appointment.SlotId && appointment.SlotId !== data.newSlotId) {
+                await manager.update("HealthcareProviderScheduleSlots", appointment.SlotId, {
+                    IsBooked: false,
+                    Status: "Available",
+                    UpdatedAt: new Date()
+                });
+            }
+
+            // 2. Book new slot
+            await manager.update("HealthcareProviderScheduleSlots", data.newSlotId, {
+                IsBooked: true,
+                Status: "Booked",
+                UpdatedAt: new Date()
+            });
+
+            // 3. Update appointment details
+            await manager.update(Appointment, appointmentId, {
+                SlotId: data.newSlotId,
+                DoctorId: data.newDoctorId,
+                AppointmentDate: new Date(data.newDate),
+                StartTime: data.startTime,
+                EndTime: data.endTime,
+                UpdatedAt: new Date()
+            });
+
+            // 4. Update queue if queue exists
+            const queueEntry = await manager.findOne(PatientQueue, { where: { AppointmentId: appointmentId } });
+            if (queueEntry) {
+                await manager.update(PatientQueue, queueEntry.Id, {
+                    DoctorId: data.newDoctorId
+                });
+            }
+
+            return await manager.findOne(Appointment, { where: { Id: appointmentId } });
+        });
+    }
+
     async createInstantMeeting(topic: string = "Instant Consultation") {
         return await zoomService.createMeeting(topic);
     }

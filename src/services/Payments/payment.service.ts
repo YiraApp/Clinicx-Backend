@@ -591,7 +591,44 @@ export class PaymentService {
 
     async getPaymentByAppointment(appointmentId: number) {
         const payment = await paymentRepository.findByAppointmentId(appointmentId);
-        if (!payment) return null;
+        if (!payment) {
+            try {
+                const { AppointmentBill } = await import("../../models/Payments/appointment-bill.model.js");
+                const bill = await AppDataSource.getRepository(AppointmentBill).findOne({
+                    where: { AppointmentId: appointmentId, IsDeleted: false },
+                    relations: ["Patient", "Provider", "Appointment"]
+                });
+                if (bill) {
+                    return {
+                        paymentId: null,
+                        transactionId: null,
+                        receiptNumber: bill.BillNumber,
+                        amount: Number(bill.TotalAmount || 0),
+                        currency: "INR",
+                        status: bill.BillStatus === "Paid" ? "Success" : "Pending",
+                        paymentMethod: "—",
+                        paymentGateway: "—",
+                        transactionDate: null,
+                        createdAt: bill.CreatedAt,
+                        patientId: bill.PatientId,
+                        patientName: bill.Patient ? `${bill.Patient.FirstName} ${bill.Patient.LastName}`.trim() : "—",
+                        patientPhone: bill.Patient?.PhoneNumber || "—",
+                        providerId: bill.ProviderId,
+                        providerName: bill.Provider ? `Dr. ${bill.Provider.FirstName} ${bill.Provider.LastName}` : "—",
+                        appointmentId: bill.AppointmentId,
+                        appointmentDate: bill.Appointment?.AppointmentDate || null,
+                        billStatus: bill.BillStatus,
+                        billTotal: Number(bill.TotalAmount || 0),
+                        billPaid: Number(bill.PaidAmount || 0),
+                        billDue: Number(bill.DueAmount || 0),
+                        failureReason: null
+                    };
+                }
+            } catch (err) {
+                console.error("Error fetching bill by appointment:", err);
+            }
+            return null;
+        }
 
         return {
             paymentId: payment.PaymentId,

@@ -11,6 +11,7 @@ appointmentRouter.get("/patient/:userId", appointmentController.getPatientAppoin
 appointmentRouter.get("/patient/:userId/hospitals", appointmentController.getPatientHospitalSummary.bind(appointmentController));
 appointmentRouter.get("/patient/:userId/hospital/:hospitalId", appointmentController.getPatientAppointmentsByHospital.bind(appointmentController));
 appointmentRouter.patch("/:id/status", appointmentController.updateStatus.bind(appointmentController));
+appointmentRouter.patch("/:id/reschedule", appointmentController.reschedule.bind(appointmentController));
 appointmentRouter.post("/:id/cancel", appointmentController.cancel.bind(appointmentController));
 appointmentRouter.post("/instant-meeting", appointmentController.createInstantMeeting.bind(appointmentController));
 

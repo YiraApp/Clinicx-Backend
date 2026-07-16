@@ -14,6 +14,8 @@ import { Hospital } from "../models/Organizations/hospital.model.js";
 import { APILog } from "../models/Logs/apilog.model.js";
 import { SidebarMenu } from "../models/Common/sidebar-menu.model.js";
 import { RoleSidebarMenu } from "../models/Common/role-sidebar-menu.model.js";
+import { MobileSidebarMenu } from "../models/Common/mobile-sidebar-menu.model.js";
+import { RoleMobileSidebarMenu } from "../models/Common/role-mobile-sidebar-menu.model.js";
 import { Template } from "../models/Common/template.model.js";
 import { MainSpecialty } from "../models/Masters/main-specialty.model.js";
 import { MainSubSpecialty } from "../models/Masters/main-subspecialty.model.js";
@@ -87,7 +89,7 @@ export const AppDataSource = new DataSource({
     synchronize: false,
     entities: [
         User, UserToken, UserOTP, Address, Role, UserRole,
-        Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, Template,
+        Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, MobileSidebarMenu, RoleMobileSidebarMenu, Template,
         MainSpecialty, MainSubSpecialty, MainDepartment,
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
         HealthcareProvider, HealthcareProviderAvailability, HealthcareProviderScheduleSlot,
@@ -137,7 +139,54 @@ export const initializeDatabase = async () => {
                 ALTER TABLE [dbo].[SidebarMenus] ADD [ImagePath] varchar(255) NULL;
             END
         `);
-        console.log("✅ Database schema verified for ImagePath column");
+
+        // Ensure UseImage column exists on SidebarMenus table
+        await AppDataSource.query(`
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[SidebarMenus]') 
+                  AND name = 'UseImage'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[SidebarMenus] ADD [UseImage] bit NOT NULL DEFAULT 0;
+            END
+        `);
+
+        // Ensure MobileSidebarMenus table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'MobileSidebarMenus')
+            BEGIN
+                CREATE TABLE MobileSidebarMenus (
+                    MenuId INT IDENTITY(1,1) PRIMARY KEY,
+                    MenuName VARCHAR(100) NOT NULL,
+                    Route VARCHAR(255) NULL,
+                    Icon VARCHAR(50) NULL,
+                    ImagePath VARCHAR(255) NULL,
+                    UseImage BIT NOT NULL DEFAULT 0,
+                    OrderNo INT NULL,
+                    Status BIT DEFAULT 1 NOT NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL
+                );
+            END
+        `);
+
+        // Ensure RoleMobileSidebarMenus table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RoleMobileSidebarMenus')
+            BEGIN
+                CREATE TABLE RoleMobileSidebarMenus (
+                    RoleMobileSidebarMenuId INT IDENTITY(1,1) PRIMARY KEY,
+                    RoleId UNIQUEIDENTIFIER NOT NULL,
+                    MenuId INT NOT NULL,
+                    OrganizationId INT NULL,
+                    HospitalId INT NULL,
+                    Status BIT DEFAULT 1 NOT NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    FOREIGN KEY (MenuId) REFERENCES MobileSidebarMenus(MenuId)
+                );
+            END
+        `);
+        console.log("✅ Database schema verified for ImagePath, UseImage, and Mobile Sidebar tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

@@ -240,33 +240,19 @@ export const getSidebarMenu = async (req: Request, res: Response) => {
         const parsedHospitalId = resolvedHospitalId && !isNaN(resolvedHospitalId) ? resolvedHospitalId : null;
 
         const { sidebarService } = await import("../../../../services/Common/sidebar.service.js");
-        const menu = await sidebarService.getSidebarMenu(
+        const menu = await sidebarService.getMobileSidebarMenu(
             roleId as string,
             parsedOrgId,
             parsedHospitalId
         );
 
-        const flattenMenus = (items: any[]): any[] => {
-            let result: any[] = [];
-            if (!Array.isArray(items)) return result;
-            for (const item of items) {
-                if (item) {
-                    result.push(item);
-                    if (item.children && item.children.length > 0) {
-                        result = result.concat(flattenMenus(item.children));
-                    }
-                }
-            }
-            return result;
-        };
-
-        const flatList = flattenMenus(menu);
-        
-        const mappedData = flatList.map((item, idx) => ({
+        const mappedData = menu.map((item) => ({
             title: item.MenuName,
-            taskCode: (idx + 1).toString(),
-            taskId: item.MenuId,
-            ImagePath: item.ImagePath || ""
+            taskCode: item.TaskCode || "",
+            taskId: item.TaskId || "",
+            ImagePath: item.ImagePath || "",
+            icon: item.Icon || "",
+            useImage: item.UseImage ? 1 : 0
         }));
 
         return res.json({

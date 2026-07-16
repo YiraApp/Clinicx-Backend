@@ -3,6 +3,8 @@ import { RoleSidebarMenu } from "../../models/Common/role-sidebar-menu.model.js"
 import type { ISidebarRepository } from "../../interfaces/Repository/Common/ISidebarRepository.js";
 
 import { SidebarMenu } from "../../models/Common/sidebar-menu.model.js";
+import { MobileSidebarMenu } from "../../models/Common/mobile-sidebar-menu.model.js";
+import { RoleMobileSidebarMenu } from "../../models/Common/role-mobile-sidebar-menu.model.js";
 
 /**
  * Repository for Sidebar operations.
@@ -10,6 +12,8 @@ import { SidebarMenu } from "../../models/Common/sidebar-menu.model.js";
 export class SidebarRepository implements ISidebarRepository {
     private repo = AppDataSource.getRepository(RoleSidebarMenu);
     private menuRepo = AppDataSource.getRepository(SidebarMenu);
+    private mobileRepo = AppDataSource.getRepository(RoleMobileSidebarMenu);
+    private mobileMenuRepo = AppDataSource.getRepository(MobileSidebarMenu);
 
     async getRoleSidebarMenus(roleId: string, orgId?: number | null, hospId?: number | null): Promise<RoleSidebarMenu[]> {
         // Fetch all potential records for this role across all levels (Global, Org, Hosp)
@@ -187,6 +191,129 @@ export class SidebarRepository implements ISidebarRepository {
                         // Actually, the priority system picks the most specific one, 
                         // so if we want to inherit, we should just remove the specific record.
                         await transactionalEntityManager.delete(RoleSidebarMenu, existingRecord.RoleSidebarMenuId);
+                    }
+                }
+            }
+        });
+    }
+
+    async getRoleMobileSidebarMenus(roleId: string, orgId?: number | null, hospId?: number | null): Promise<RoleMobileSidebarMenu[]> {
+        const query = this.mobileRepo.createQueryBuilder("rsm")
+            .leftJoinAndSelect("rsm.Menu", "menu")
+            .where("rsm.RoleId = :roleId", { roleId });
+
+        const contextConditions = ["(rsm.OrganizationId IS NULL AND rsm.HospitalId IS NULL)"];
+        const params: any = { roleId };
+
+        if (orgId) {
+            contextConditions.push("(rsm.OrganizationId = :orgId AND rsm.HospitalId IS NULL)");
+            params.orgId = orgId;
+            
+            if (hospId) {
+                contextConditions.push("(rsm.OrganizationId = :orgId AND rsm.HospitalId = :hospId)");
+                params.hospId = hospId;
+            }
+        }
+        
+        query.andWhere(`(${contextConditions.join(" OR ")})`, params);
+        
+        const allRecords = await query.getMany();
+        const menuMap = new Map<number, RoleMobileSidebarMenu>();
+
+        for (const record of allRecords) {
+            const existing = menuMap.get(record.MenuId);
+            if (!existing) {
+                menuMap.set(record.MenuId, record);
+                continue;
+            }
+
+            const getPriority = (r: RoleMobileSidebarMenu) => {
+                if (r.HospitalId) return 2;
+                if (r.OrganizationId) return 1;
+                return 0;
+            };
+
+            if (getPriority(record) > getPriority(existing)) {
+                menuMap.set(record.MenuId, record);
+            }
+        }
+
+        return Array.from(menuMap.values())
+            .filter(r => r.Status === true && r.Menu && r.Menu.Status === true)
+            .sort((a, b) => (a.Menu.OrderNo || 0) - (b.Menu.OrderNo || 0));
+    }
+
+    async getAllMobileMenus(): Promise<MobileSidebarMenu[]> {
+        return await this.mobileMenuRepo.find({
+            where: { Status: true },
+            order: { OrderNo: "ASC" }
+        });
+    }
+
+    async createMobileMenu(menuData: Partial<MobileSidebarMenu>): Promise<MobileSidebarMenu> {
+        const menu = this.mobileMenuRepo.create(menuData);
+        return await this.mobileMenuRepo.save(menu);
+    }
+
+    async updateMobileMenu(menuId: number, menuData: Partial<MobileSidebarMenu>): Promise<MobileSidebarMenu> {
+        await this.mobileMenuRepo.update(menuId, menuData);
+        return await this.mobileMenuRepo.findOneBy({ MenuId: menuId }) as MobileSidebarMenu;
+    }
+
+    async deleteMobileMenu(menuId: number): Promise<void> {
+        await this.mobileMenuRepo.update(menuId, { Status: false });
+    }
+
+    async updateRoleMobileSidebarMenus(roleId: string, menuIds: number[], orgId?: number | null, hospId?: number | null): Promise<void> {
+        await AppDataSource.transaction(async (transactionalEntityManager) => {
+            let baselineRecords: RoleMobileSidebarMenu[] = [];
+            if (hospId) {
+                baselineRecords = await this.getRoleMobileSidebarMenus(roleId, orgId, null);
+            } else if (orgId) {
+                baselineRecords = await this.getRoleMobileSidebarMenus(roleId, null, null);
+            } else {
+                baselineRecords = [];
+            }
+
+            const baselineIds = baselineRecords.map(r => r.MenuId);
+            const allPossibleMenus = await this.mobileMenuRepo.find({ where: { Status: true } });
+
+            const query = transactionalEntityManager.createQueryBuilder(RoleMobileSidebarMenu, "rsm")
+                .where("rsm.RoleId = :roleId", { roleId });
+
+            if (orgId) query.andWhere("rsm.OrganizationId = :orgId", { orgId });
+            else query.andWhere("rsm.OrganizationId IS NULL");
+
+            if (hospId) query.andWhere("rsm.HospitalId = :hospId", { hospId });
+            else query.andWhere("rsm.HospitalId IS NULL");
+
+            const currentScopeRecords = await query.getMany();
+            const currentScopeMap = new Map<number, RoleMobileSidebarMenu>();
+            currentScopeRecords.forEach(r => currentScopeMap.set(r.MenuId, r));
+
+            for (const menu of allPossibleMenus) {
+                const menuId = menu.MenuId;
+                const isTargetActive = menuIds.includes(menuId);
+                const isInheritedActive = baselineIds.includes(menuId);
+                const existingRecord = currentScopeMap.get(menuId);
+
+                if (isTargetActive !== isInheritedActive) {
+                    if (existingRecord) {
+                        await transactionalEntityManager.update(RoleMobileSidebarMenu, existingRecord.RoleMobileSidebarMenuId, { 
+                            Status: isTargetActive 
+                        });
+                    } else {
+                        const newRecord = new RoleMobileSidebarMenu();
+                        newRecord.RoleId = roleId;
+                        newRecord.MenuId = menuId;
+                        newRecord.OrganizationId = orgId ?? null;
+                        newRecord.HospitalId = hospId ?? null;
+                        newRecord.Status = isTargetActive;
+                        await transactionalEntityManager.save(RoleMobileSidebarMenu, newRecord);
+                    }
+                } else {
+                    if (existingRecord) {
+                        await transactionalEntityManager.delete(RoleMobileSidebarMenu, existingRecord.RoleMobileSidebarMenuId);
                     }
                 }
             }

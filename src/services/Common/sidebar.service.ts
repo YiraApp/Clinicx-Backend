@@ -91,6 +91,33 @@ export class SidebarService implements ISidebarService {
     async updateSidebarPermissions(roleId: string, menuIds: number[], orgId?: number | null, hospId?: number | null): Promise<void> {
         await sidebarRepository.updateRoleSidebarMenus(roleId, menuIds, orgId, hospId);
     }
+
+    // Mobile Sidebar Operations
+    async getMobileSidebarMenu(roleId: string, orgId?: number | null, hospId?: number | null): Promise<any[]> {
+        const roleMenus = await sidebarRepository.getRoleMobileSidebarMenus(roleId, orgId, hospId);
+        const menus = roleMenus.map(rm => rm.Menu);
+        return menus.sort((a: any, b: any) => (a.OrderNo || 0) - (b.OrderNo || 0));
+    }
+
+    async getAllMobileMenus(): Promise<any[]> {
+        return await sidebarRepository.getAllMobileMenus();
+    }
+
+    async createMobileMenu(menuData: any): Promise<any> {
+        return await sidebarRepository.createMobileMenu(menuData);
+    }
+
+    async updateMobileMenu(menuId: number, menuData: any): Promise<any> {
+        return await sidebarRepository.updateMobileMenu(menuId, menuData);
+    }
+
+    async deleteMobileMenu(menuId: number): Promise<void> {
+        await sidebarRepository.deleteMobileMenu(menuId);
+    }
+
+    async updateMobileSidebarPermissions(roleId: string, menuIds: number[], orgId?: number | null, hospId?: number | null): Promise<void> {
+        await sidebarRepository.updateRoleMobileSidebarMenus(roleId, menuIds, orgId, hospId);
+    }
 }
 
 export const sidebarService = new SidebarService();

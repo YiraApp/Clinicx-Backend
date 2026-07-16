@@ -1,0 +1,30 @@
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from "typeorm/index.js";
+import { MobileSidebarMenu } from "./mobile-sidebar-menu.model.js";
+
+@Entity({ name: "RoleMobileSidebarMenus" })
+export class RoleMobileSidebarMenu {
+    @PrimaryGeneratedColumn()
+    RoleMobileSidebarMenuId: number;
+
+    @Column({ type: "uniqueidentifier" })
+    RoleId: string;
+
+    @Column({ type: "int" })
+    MenuId: number;
+
+    @ManyToOne(() => MobileSidebarMenu)
+    @JoinColumn({ name: "MenuId" })
+    Menu: MobileSidebarMenu;
+
+    @Column({ type: "int", nullable: true })
+    OrganizationId: number | null;
+
+    @Column({ type: "int", nullable: true })
+    HospitalId: number | null;
+
+    @Column({ type: "bit", default: 1 })
+    Status: boolean;
+
+    @CreateDateColumn({ type: "datetime", default: () => "getdate()" })
+    CreatedAt: Date;
+}
