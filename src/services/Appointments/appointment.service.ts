@@ -351,7 +351,10 @@ export class AppointmentService {
                 isNewRegistration,
                 isHospitalMapped: true
             },
-            appointment
+            appointment,
+            dynamicLink: (appointment as any)?.dynamicLink || null,
+            videoCallUrl: (appointment as any)?.videoCallUrl || appointment?.MeetingUrl || null,
+            redirectionUrlId: (appointment as any)?.redirectionUrlId || null
         };
     }
 
@@ -546,7 +549,38 @@ export class AppointmentService {
             return appointment;
         });
 
-        // Async task: create meeting redirection and send WhatsApp confirmation
+        // Generate meeting redirection dynamically for teleconsultation / video call appointments
+        let redirectionUrlId: string | null = null;
+        let dynamicLink: string | null = null;
+
+        try {
+            const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
+            if (newAppointment.IsTeleConsultation || newAppointment.MeetingUrl) {
+                const redirection = await meetingRedirectionService.getOrCreateRedirection({
+                    AppointmentId: newAppointment.Id,
+                    PatientId: newAppointment.UserId,
+                    DoctorId: newAppointment.DoctorId,
+                    HospitalId: newAppointment.HospitalId,
+                    OrganizationId: newAppointment.OrgId,
+                    MeetingUrl: newAppointment.MeetingUrl || "",
+                    AppointmentDate: newAppointment.AppointmentDate,
+                    StartTime: newAppointment.StartTime
+                });
+                if (redirection && redirection.UrlId) {
+                    redirectionUrlId = redirection.UrlId;
+                    const baseUrl = (process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173").replace(/\/+$/, "");
+                    dynamicLink = `${baseUrl}/redirections?urlid=${redirection.UrlId}`;
+                }
+            }
+        } catch (redirErr) {
+            console.error("[AppointmentService] Error creating meeting redirection:", redirErr);
+        }
+
+        (newAppointment as any).dynamicLink = dynamicLink;
+        (newAppointment as any).videoCallUrl = dynamicLink || newAppointment.MeetingUrl || null;
+        (newAppointment as any).redirectionUrlId = redirectionUrlId;
+
+        // Async task: send WhatsApp confirmation with dynamic video call link
         try {
             const enrichedAppointment = await appointmentRepository.findById(newAppointment.Id);
             if (enrichedAppointment && enrichedAppointment.User?.PhoneNumber) {
@@ -554,8 +588,7 @@ export class AppointmentService {
                 const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
 
-                // 1. Create a MeetingRedirection record
-                const redirection = await meetingRedirectionService.createRedirection({
+                const redirection = await meetingRedirectionService.getOrCreateRedirection({
                     AppointmentId: appt.Id,
                     PatientId: appt.UserId,
                     DoctorId: appt.DoctorId,
@@ -566,7 +599,7 @@ export class AppointmentService {
                     StartTime: appt.StartTime
                 });
 
-                // 2. Format details for WhatsApp
+                // Format details for WhatsApp
                 const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim();
                 const doctorName = appt.Doctor 
                     ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
@@ -581,7 +614,7 @@ export class AppointmentService {
                 const countryCode = appt.User.CountryCode || "91";
                 const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appt.User.PhoneNumber.replace(/\D/g, "")}`;
 
-                // 3. Select the template based on consultation type
+                // Select template based on consultation type
                 const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
 
                 const components: any[] = [

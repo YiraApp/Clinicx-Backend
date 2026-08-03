@@ -41,6 +41,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/patients/quick-check",
         "/api/users/checkPrimary",
         "/api/Account/checkPrimary",
+        "/api/otp/checkPrimary",
+        "/api/default-organizations",
         "/api/appointments/book-from-pulse",
         "/api/v1/mobile/auth/login",
         "/api/v1/mobile/auth/sendotp",

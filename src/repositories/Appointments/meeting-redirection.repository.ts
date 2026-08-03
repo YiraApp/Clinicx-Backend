@@ -15,6 +15,13 @@ export class MeetingRedirectionRepository {
         });
     }
 
+    async findByAppointmentId(appointmentId: number): Promise<MeetingRedirection | null> {
+        return await this.repo.findOne({
+            where: { AppointmentId: appointmentId, IsActive: true },
+            order: { CreatedAt: "DESC" }
+        });
+    }
+
     async update(id: number, data: Partial<MeetingRedirection>): Promise<void> {
         await this.repo.update(id, data);
     }

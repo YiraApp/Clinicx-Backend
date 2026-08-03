@@ -30,6 +30,27 @@ export class MeetingRedirectionService {
         });
     }
 
+    async getOrCreateRedirection(data: {
+        AppointmentId: number;
+        PatientId: string;
+        DoctorId: string;
+        HospitalId: number;
+        OrganizationId: number;
+        MeetingUrl: string;
+        AppointmentDate: Date | string;
+        StartTime?: string;
+    }): Promise<MeetingRedirection> {
+        const existing = await meetingRedirectionRepository.findByAppointmentId(data.AppointmentId);
+        if (existing) {
+            if (data.MeetingUrl && existing.MeetingUrl !== data.MeetingUrl) {
+                await meetingRedirectionRepository.update(existing.Id, { MeetingUrl: data.MeetingUrl });
+                existing.MeetingUrl = data.MeetingUrl;
+            }
+            return existing;
+        }
+        return await this.createRedirection(data);
+    }
+
     async getRedirectionDetails(urlId: string): Promise<MeetingRedirection | null> {
         const redirection = await meetingRedirectionRepository.findByUrlId(urlId);
         if (!redirection) {

@@ -51,17 +51,46 @@ export class ZoomService {
      * @param startTime Optional start time (for scheduled meetings)
      * @param duration Optional duration in minutes
      */
+    /**
+     * Generates a Jitsi Meet URL
+     */
+    generateJitsiUrl(roomName?: string): string {
+        const domain = process.env.JITSI_DOMAIN || "meet.jit.si";
+        const room = roomName || `ClinicX-${Math.floor(10000000 + Math.random() * 90000000)}`;
+        return `https://${domain}/${room}`;
+    }
+
+    /**
+     * Creates a Zoom or Jitsi meeting.
+     * @param topic Meeting topic
+     * @param startTime Optional start time (for scheduled meetings)
+     * @param duration Optional duration in minutes
+     */
     async createMeeting(topic: string, startTime?: Date, duration: number = 30): Promise<ZoomMeetingResponse> {
         try {
-            const accessToken = await this.getAccessToken();
-            
-            // If no credentials, return a simulated response for development
-            if (accessToken === "MOCK_TOKEN") {
+            if (process.env.VIDEO_PROVIDER === "jitsi") {
+                const jitsiUrl = this.generateJitsiUrl();
                 const mockId = Math.floor(Math.random() * 10000000000);
                 return {
                     id: mockId,
-                    join_url: `https://zoom.us/j/${mockId}`,
-                    start_url: `https://zoom.us/s/${mockId}`,
+                    join_url: jitsiUrl,
+                    start_url: jitsiUrl,
+                    topic: topic,
+                    start_time: startTime?.toISOString(),
+                    duration: duration
+                };
+            }
+
+            const accessToken = await this.getAccessToken();
+            
+            // If no credentials, return a Jitsi / simulated meeting link for instant join
+            if (accessToken === "MOCK_TOKEN") {
+                const mockId = Math.floor(Math.random() * 10000000000);
+                const jitsiUrl = this.generateJitsiUrl(`ClinicX-Consultation-${mockId}`);
+                return {
+                    id: mockId,
+                    join_url: jitsiUrl,
+                    start_url: jitsiUrl,
                     topic: topic,
                     start_time: startTime?.toISOString(),
                     duration: duration
@@ -99,12 +128,13 @@ export class ZoomService {
             return data;
         } catch (error: any) {
             console.error("Zoom Service Error:", error.message);
-            // Fallback for development if Zoom service fails
+            // Fallback to Jitsi meeting URL if Zoom service fails
             const fallbackId = Math.floor(Math.random() * 10000000000);
+            const fallbackJitsiUrl = this.generateJitsiUrl(`ClinicX-Fallback-${fallbackId}`);
             return {
                 id: fallbackId,
-                join_url: `https://zoom.us/j/${fallbackId}`,
-                start_url: `https://zoom.us/s/${fallbackId}`,
+                join_url: fallbackJitsiUrl,
+                start_url: fallbackJitsiUrl,
                 topic: topic,
                 start_time: startTime?.toISOString(),
                 duration: duration
