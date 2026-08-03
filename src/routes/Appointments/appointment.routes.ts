@@ -4,6 +4,7 @@ import { appointmentController } from "../../controllers/Appointments/appointmen
 const appointmentRouter = Router();
 
 appointmentRouter.post("/book", appointmentController.book.bind(appointmentController));
+appointmentRouter.post("/book-from-pulse", appointmentController.bookFromPulse.bind(appointmentController));
 appointmentRouter.get("/", appointmentController.getAppointments.bind(appointmentController));
 appointmentRouter.get("/doctor/:doctorId", appointmentController.getDoctorAppointments.bind(appointmentController));
 appointmentRouter.get("/hospital", appointmentController.getHospitalAppointments.bind(appointmentController));

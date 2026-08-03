@@ -3,6 +3,15 @@ import { appointmentService } from "../../services/Appointments/appointment.serv
 import { ApiResponse } from "../../utils/response.utils.js";
 
 export class AppointmentController {
+    async bookFromPulse(req: Request, res: Response) {
+        try {
+            const result = await appointmentService.bookAppointmentFromPulse(req.body);
+            return res.status(201).json(ApiResponse.success(result, "Patient verified/registered, assigned to hospital, and appointment booked successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async book(req: Request, res: Response) {
         try {
             const result = await appointmentService.bookAppointment(req.body);

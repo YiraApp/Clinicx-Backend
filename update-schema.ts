@@ -22,7 +22,8 @@ async function updateSchema() {
             "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentOrgId') ALTER TABLE Users DROP COLUMN RecentOrgId;",
             "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentHospitalId') ALTER TABLE Users DROP COLUMN RecentHospitalId;",
             "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RecentRoleId') ALTER TABLE Users DROP COLUMN RecentRoleId;",
-            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('AppointmentBillItems') AND name = 'AppointmentId') ALTER TABLE AppointmentBillItems ADD AppointmentId INT NULL;"
+            "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('AppointmentBillItems') AND name = 'AppointmentId') ALTER TABLE AppointmentBillItems ADD AppointmentId INT NULL;",
+            "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[DefaultOrganizations]') AND type in (N'U')) BEGIN CREATE TABLE [dbo].[DefaultOrganizations] ( [Id] INT IDENTITY(1,1) PRIMARY KEY, [OrganizationId] INT NOT NULL, [HospitalId] INT NULL, [OrganizationName] VARCHAR(255) NULL, [HospitalName] VARCHAR(255) NULL, [IsDefault] BIT NOT NULL DEFAULT 1, [Status] BIT NOT NULL DEFAULT 1, [CreatedAt] DATETIME NOT NULL DEFAULT GETDATE(), [UpdatedAt] DATETIME NULL, [CreatedBy] VARCHAR(100) NULL, [UpdatedBy] VARCHAR(100) NULL ); END"
         ];
 
         for (const query of queries) {

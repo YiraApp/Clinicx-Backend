@@ -9,14 +9,357 @@ import { PatientInsurance } from "../../models/Organizations/patient-insurance.m
 import { AppointmentStatus, QueueStatus } from "../../enums/appointments.js";
 import { appointmentBillRepository } from "../../repositories/Payments/appointment-bill.repository.js";
 
+import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
 import { zoomService } from "../Common/zoom.service.js";
+import { mailService } from "../Mail/mail.service.js";
 
 export class AppointmentService {
-    async bookAppointment(data: {
-        userId: string;
+    async bookAppointmentFromPulse(data: {
+        token?: string;
+        patientName?: string;
+        patientPhone?: string;
+        patientEmail?: string;
+        gender?: string;
+        dob?: string;
+        userId?: string;
         doctorId: string;
         hospitalId: number;
         orgId: number;
+        slotId: number;
+        appointmentDate: string;
+        startTime: string;
+        endTime: string;
+        reason?: string;
+        appointmentType?: string;
+        isTeleConsultation?: boolean;
+        createdBy?: string;
+        reportUrl?: string;
+        parsedSummary?: string;
+    }) {
+        // 1. Mandatory Mobile Number check
+        const rawPhone = data.patientPhone || "";
+        const cleanPhone = rawPhone.replace(/[^\d]/g, "");
+
+        if (!cleanPhone || cleanPhone.length < 10) {
+            throw new Error("Patient mobile number is required to allocate or register the patient.");
+        }
+
+        if (!data.orgId || !data.hospitalId) {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault) {
+                if (!data.orgId) data.orgId = activeDefault.OrganizationId;
+                if (!data.hospitalId) data.hospitalId = activeDefault.HospitalId;
+            }
+        }
+
+        if (!data.orgId || !data.hospitalId) {
+            throw new Error("OrganizationId and HospitalId could not be resolved.");
+        }
+
+        const { User } = await import("../../models/Account/user.model.js");
+        const { UserRole } = await import("../../models/Account/userrole.model.js");
+        const { Role } = await import("../../models/Account/role.model.js");
+        const { v4: uuidv4 } = await import("uuid");
+
+        const userRepo = AppDataSource.getRepository(User);
+        const last10Digits = cleanPhone.slice(-10);
+
+        // 2. Fetch all users registered under this phone number (Primary + Family Dependents)
+        const existingFamilyUsers = await userRepo.createQueryBuilder("u")
+            .where("u.IsDeleted = 0")
+            .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
+                phone: cleanPhone,
+                last10: `%${last10Digits}`
+            })
+            .orderBy("u.IsPrimary", "DESC")
+            .addOrderBy("u.CreatedAt", "ASC")
+            .getMany();
+
+        let targetUser: InstanceType<typeof User> | null = null;
+        let isNewRegistration = false;
+
+        if (existingFamilyUsers.length === 0) {
+            // Case A: NO user exists for this phone number -> Create Primary User
+            isNewRegistration = true;
+            targetUser = new User();
+            targetUser.Id = uuidv4();
+            targetUser.IsPrimary = true;
+            targetUser.Relation = "Self";
+
+            const nameParts = (data.patientName || "Pulse Patient").trim().split(" ");
+            targetUser.FirstName = nameParts[0];
+            targetUser.LastName = nameParts.slice(1).join(" ") || "";
+            targetUser.Email = data.patientEmail || `${last10Digits}@yira.ai`;
+            targetUser.PhoneNumber = cleanPhone;
+            targetUser.Status = true;
+            targetUser.IsDeleted = false;
+            await userRepo.save(targetUser);
+        } else {
+            // Case B: Primary User exists for this phone number!
+            const parentId = (data as any).parentUserId || (data as any).ParentUserId;
+            const primaryUser = (parentId ? existingFamilyUsers.find(u => u.Id.toLowerCase() === String(parentId).toLowerCase()) : null) || existingFamilyUsers.find(u => u.IsPrimary) || existingFamilyUsers[0]!;
+            const reqName = (data.patientName || "").trim().toLowerCase();
+            const reqEmail = (data.patientEmail || "").trim().toLowerCase();
+
+            // Match by UserId
+            if (data.userId) {
+                targetUser = existingFamilyUsers.find(u => u.Id.toLowerCase() === data.userId!.toLowerCase()) || null;
+                if (!targetUser) {
+                    targetUser = await userRepo.findOne({ where: { Id: data.userId, IsDeleted: false } });
+                }
+            }
+
+            // Match by Full Name
+            if (!targetUser && reqName) {
+                targetUser = existingFamilyUsers.find(u => {
+                    const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim().toLowerCase();
+                    return fullName === reqName || u.FirstName?.toLowerCase() === reqName;
+                }) || null;
+            }
+
+            // Match by Email
+            if (!targetUser && reqEmail) {
+                targetUser = existingFamilyUsers.find(u => u.Email?.toLowerCase() === reqEmail) || null;
+            }
+
+            // Match by Relation (e.g., Spouse, Child, Father, Mother, Brother, Sister)
+            const reqRelation = ((data as any).relation || "").trim().toLowerCase();
+            if (!targetUser && reqRelation && reqRelation !== "self") {
+                targetUser = existingFamilyUsers.find(u => u.Relation?.toLowerCase() === reqRelation) || null;
+            }
+
+            // If no exact match among existing family members:
+            if (!targetUser) {
+                const primaryFullName = `${primaryUser.FirstName || ''} ${primaryUser.LastName || ''}`.trim().toLowerCase();
+                if (!reqName || reqName === primaryFullName || primaryUser.FirstName?.toLowerCase() === reqName) {
+                    targetUser = primaryUser;
+                } else {
+                    // Create a Dependent / Secondary User linked to the Primary User (Do NOT duplicate primary user!)
+                    isNewRegistration = true;
+                    targetUser = new User();
+                    targetUser.Id = uuidv4();
+                    targetUser.IsPrimary = false;
+                    targetUser.ParentUserId = parentId || primaryUser.Id;
+                    targetUser.Relation = (data as any).relation || "Dependent";
+
+                    const nameParts = reqName.split(" ");
+                    targetUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Family";
+                    targetUser.LastName = nameParts.slice(1).join(" ") || "Member";
+                    targetUser.Email = data.patientEmail || `${last10Digits}_dep@yira.ai`;
+                    targetUser.PhoneNumber = cleanPhone;
+                    targetUser.Status = true;
+                    targetUser.IsDeleted = false;
+                    await userRepo.save(targetUser);
+                }
+            }
+        }
+
+        // Update name/email if user exists and has placeholder info
+        if (targetUser && data.patientName && (!targetUser.FirstName || targetUser.FirstName === "Pulse" || targetUser.FirstName === "Patient")) {
+            const nameParts = data.patientName.trim().split(" ");
+            targetUser.FirstName = nameParts[0];
+            targetUser.LastName = nameParts.slice(1).join(" ") || "";
+            if (data.patientEmail && (!targetUser.Email || targetUser.Email.includes("@yira.ai"))) {
+                targetUser.Email = data.patientEmail;
+            }
+            await userRepo.save(targetUser);
+        }
+
+        // Send Welcome Credentials Email for new registrations
+        if (isNewRegistration && targetUser.Email && !targetUser.Email.endsWith("@yira.ai")) {
+            mailService.sendDynamicEmail("WELCOME_EMAIL", targetUser.Email, {
+                FirstName: targetUser.FirstName,
+                LastName: targetUser.LastName || "",
+                RoleMessage: "Welcome to Yira / ClinX! Your patient account has been created via Pulse Health Camp.",
+                Email: targetUser.Email,
+                Password: "Registered via Health Camp",
+                Role: "Patient",
+                OrganizationName: "Yira Hospitals",
+                LoginURL: process.env.CLIENT_URL || "https://pulse.yira.ai/"
+            }).catch((mailErr: any) => {
+                console.error("[Mail] Welcome email error in bookAppointmentFromPulse:", mailErr);
+            });
+        }
+
+        // 3. Ensure Organization & Hospital Assignment in UserRoles & PatientRegistrations
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+        const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+
+        const existingRoleMapping = await userRoleRepo.findOne({
+            where: { UserId: targetUser.Id, OrganizationId: data.orgId, HospitalId: data.hospitalId, IsDeleted: false }
+        });
+
+        if (!existingRoleMapping) {
+            const roleRepo = AppDataSource.getRepository(Role);
+            const patientRole = await roleRepo.findOne({ where: { RoleName: "Patient" } });
+            const roleId = patientRole ? patientRole.Id : "00000000-0000-0000-0000-000000000000";
+
+            const userRole = new UserRole();
+            userRole.UserId = targetUser.Id;
+            userRole.RoleId = roleId;
+            userRole.OrganizationId = data.orgId;
+            userRole.HospitalId = data.hospitalId;
+            userRole.Status = true;
+            userRole.IsDeleted = false;
+            await userRoleRepo.save(userRole);
+        }
+
+        const existingPatientReg = await patientRegRepo.findOne({
+            where: { UserId: targetUser.Id, OrganizationId: data.orgId, HospitalId: data.hospitalId }
+        });
+
+        if (!existingPatientReg) {
+            const patientReg = new PatientRegistration();
+            patientReg.UserId = targetUser.Id;
+            patientReg.OrganizationId = data.orgId;
+            patientReg.HospitalId = data.hospitalId;
+            patientReg.Status = true;
+            patientReg.IsDeleted = false;
+            await patientRegRepo.save(patientReg);
+        }
+
+        // 4. Book Appointment for the resolved Patient (Primary or Dependent)
+        const appointment = await this.bookAppointment({
+            userId: targetUser.Id,
+            doctorId: data.doctorId,
+            hospitalId: data.hospitalId,
+            orgId: data.orgId,
+            slotId: data.slotId,
+            appointmentDate: data.appointmentDate,
+            startTime: data.startTime,
+            endTime: data.endTime,
+            reason: data.reason,
+            appointmentType: data.appointmentType,
+            isTeleConsultation: data.isTeleConsultation,
+            createdBy: data.createdBy || "PulseWhatsApp"
+        });
+
+        // 5. If Report Blob URL is provided from Pulse, save into MedicalDocuments (Patient Records UI) & PostVisitDocuments tables
+        const reportUrl = data.reportUrl || (data as any).ReportUrl || (data as any).report_url;
+        if (reportUrl && appointment && appointment.Id) {
+            try {
+                // A. Save into MedicalDocuments table (Patient Records tab in ClinX)
+                const { MedicalDocument } = await import("../../models/Appointments/medical-document.model.js");
+                const { medicalDocumentRepository } = await import("../../repositories/Appointments/medical-document.repository.js");
+
+                const medDoc = new MedicalDocument();
+                medDoc.AppointmentId = appointment.Id;
+                medDoc.PatientId = targetUser.Id;
+                medDoc.DoctorId = appointment.DoctorId || data.doctorId;
+                medDoc.OrganizationId = data.orgId;
+                medDoc.HospitalId = data.hospitalId;
+                medDoc.DocumentCategory = "Health Camp Report";
+                medDoc.DocumentType = "Pulse Health Report";
+                medDoc.FileName = `Pulse_Report_${data.token || appointment.Id}.pdf`;
+                medDoc.OriginalFileName = `Pulse_Report_${data.token || appointment.Id}.pdf`;
+                medDoc.BlobUrl = reportUrl;
+                medDoc.MimeType = "application/pdf";
+                medDoc.FileExtension = ".pdf";
+                medDoc.UploadedSource = "PulseWhatsApp";
+                medDoc.UploadedByUserId = targetUser.Id;
+                medDoc.IsPatientUploaded = true;
+                medDoc.Status = "ACTIVE";
+                medDoc.IsDeleted = false;
+                medDoc.CreatedAt = new Date();
+                medDoc.CreatedBy = "PulseWhatsApp";
+
+                await medicalDocumentRepository.save(medDoc);
+                console.log(`[Pulse Integration] Successfully saved report Blob URL into MedicalDocuments for Appointment ID: ${appointment.Id}`);
+
+                // B. Save into PostVisitDocuments table (Post Visit Consultation Bundle)
+                const { postVisitDocumentRepository } = await import("../../repositories/Appointments/post-visit-document.repository.js");
+
+                await postVisitDocumentRepository.create({
+                    AppointmentId: appointment.Id,
+                    PatientId: targetUser.Id,
+                    DoctorId: appointment.DoctorId || data.doctorId,
+                    OrganizationId: data.orgId,
+                    HospitalId: data.hospitalId,
+                    DocumentType: "Pulse Health Report",
+                    FileName: `Pulse_Report_${data.token || appointment.Id}.pdf`,
+                    BlobUrl: reportUrl,
+                    Status: "ACTIVE",
+                    IsDeleted: false,
+                    CreatedAt: new Date(),
+                    GeneratedAt: new Date(),
+                    CreatedBy: "PulseWhatsApp"
+                });
+                console.log(`[Pulse Integration] Successfully saved report Blob URL into PostVisitDocuments for Appointment ID: ${appointment.Id}`);
+            } catch (docErr) {
+                console.error("[Pulse Integration] Error saving report URL into ClinX document tables:", docErr);
+            }
+        }
+
+        // 6. If Parsed Medical Summary is provided from Pulse and is valid (not empty or generic salutation/placeholder), save into ClinicalNotes
+        const rawSummary = data.parsedSummary || (data as any).ParsedSummary || (data as any).parsed_summary;
+        const isValidSummary = (summary?: string): boolean => {
+            if (!summary || typeof summary !== "string") return false;
+            let clean = summary.trim();
+            if (!clean || clean.length < 5) return false;
+
+            // Strip leading 'Summary:', 'Patient:', 'Notes:' prefixes
+            clean = clean.replace(/^(summary|patient|note|notes)\s*:\s*/i, "").trim();
+            // Strip leading salutations ('Mr.', 'Mrs.', 'Ms.', 'Dr.')
+            clean = clean.replace(/^(mr\.|mr|mrs\.|mrs|ms\.|ms|dr\.|dr)\s*/i, "").trim();
+
+            if (!clean || clean.length < 8) return false;
+
+            const lower = clean.toLowerCase();
+            if (
+                lower === "no parsed summary available." ||
+                lower === "medical records processed successfully. key health metrics reviewed." ||
+                lower === "status" ||
+                lower === "status is" ||
+                lower === "normal" ||
+                lower === "report"
+            ) {
+                return false;
+            }
+
+            return true;
+        };
+
+        if (isValidSummary(rawSummary) && appointment && appointment.Id) {
+            try {
+                const { clinicalNoteRepository } = await import("../../repositories/Appointments/clinical-note.repository.js");
+                await clinicalNoteRepository.create({
+                    AppointmentId: appointment.Id,
+                    PatientId: targetUser.Id,
+                    DoctorId: appointment.DoctorId || data.doctorId,
+                    OrganizationId: data.orgId,
+                    HospitalId: data.hospitalId,
+                    Notes: rawSummary.trim(),
+                    CreatedBy: "Pulse AI Parser",
+                    CreatedAt: new Date()
+                });
+                console.log(`[Pulse Integration] Successfully saved parsed summary into ClinicalNotes for Appointment ID: ${appointment.Id}`);
+            } catch (noteErr) {
+                console.error("[Pulse Integration] Error saving parsed summary into ClinicalNotes table:", noteErr);
+            }
+        }
+
+        return {
+            patient: {
+                userId: targetUser.Id,
+                fullName: `${targetUser.FirstName} ${targetUser.LastName}`.trim(),
+                phoneNumber: targetUser.PhoneNumber,
+                email: targetUser.Email,
+                relation: targetUser.Relation || (targetUser.IsPrimary ? "Self" : "Dependent"),
+                isPrimary: targetUser.IsPrimary ?? false,
+                organizationId: data.orgId,
+                hospitalId: data.hospitalId,
+                isNewRegistration,
+                isHospitalMapped: true
+            },
+            appointment
+        };
+    }
+
+    async bookAppointment(data: {
+        userId: string;
+        doctorId: string;
+        hospitalId?: number;
+        orgId?: number;
         slotId: number;
         appointmentDate: string;
         startTime: string;
@@ -31,6 +374,21 @@ export class AppointmentService {
         customTreatmentPlans?: { name: string; amount: number; description?: string }[];
         discountAmount?: number;
     }): Promise<Appointment> {
+
+        if (!data.orgId || !data.hospitalId) {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault) {
+                if (!data.orgId) data.orgId = activeDefault.OrganizationId;
+                if (!data.hospitalId) data.hospitalId = activeDefault.HospitalId;
+            }
+        }
+
+        if (!data.orgId || !data.hospitalId) {
+            throw new Error("OrganizationId and HospitalId could not be resolved.");
+        }
+
+        const orgId = data.orgId;
+        const hospitalId = data.hospitalId;
 
         const newAppointment = await AppDataSource.transaction(async (manager) => {
             // 1. Check if slot exists and is available
@@ -54,7 +412,7 @@ export class AppointmentService {
             // 3. Generate Appointment Number
             const appointmentDate = new Date(data.appointmentDate);
             const appointmentNumber = await appointmentRepository.getNextAppointmentNumber(
-                data.hospitalId,
+                hospitalId,
                 appointmentDate
             );
 
@@ -62,8 +420,8 @@ export class AppointmentService {
             const appointment = await appointmentRepository.create({
                 UserId: data.userId,
                 DoctorId: data.doctorId,
-                HospitalId: data.hospitalId,
-                OrgId: data.orgId,
+                HospitalId: hospitalId,
+                OrgId: orgId,
                 SlotId: data.slotId,
                 AppointmentDate: appointmentDate,
                 StartTime: data.startTime,
@@ -177,7 +535,7 @@ export class AppointmentService {
                 await appointmentBillRepository.createBillForAppointment(appointment.Id, {
                     patientId: data.userId,
                     providerId: data.doctorId,
-                    hospitalId: data.hospitalId,
+                    hospitalId: hospitalId,
                     consultationFee,
                     treatmentPlanIds: data.treatmentPlanIds || [],
                     customTreatmentPlans: data.customTreatmentPlans || [],

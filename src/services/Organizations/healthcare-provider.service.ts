@@ -8,6 +8,8 @@ import { userRoleRepository } from "../../repositories/Account/userrole.reposito
 import { healthcareProviderScheduleSlotRepository } from "../../repositories/Organizations/healthcare-provider-schedule-slot.repository.js";
 import { HealthcareProviderScheduleSlot } from "../../models/Organizations/healthcare-provider-schedule-slot.model.js";
 
+import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
+
 export class HealthcareProviderService {
     async onboardProvider(data: any): Promise<any> {
         return await AppDataSource.transaction(async (manager) => {
@@ -128,6 +130,14 @@ export class HealthcareProviderService {
     }
 
     async getDoctors(page: number, pageSize: number, filters: any): Promise<any> {
+        if (!filters?.organizationId || !filters?.hospitalId) {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault) {
+                if (!filters.organizationId) filters.organizationId = activeDefault.OrganizationId;
+                if (!filters.hospitalId) filters.hospitalId = activeDefault.HospitalId;
+            }
+        }
+
         const result = await healthcareProviderRepository.getDoctors(page, pageSize, filters);
 
         // Group provider rows by UserId so each doctor appears once

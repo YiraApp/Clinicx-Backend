@@ -423,17 +423,21 @@ export class UserService implements IUserService {
             providerAssignments
         };
 
+        const familyMembers = await this.getUserRelations(primaryUser.Id).catch(() => []);
+
         if (isHealthcareProvider) {
             return {
                 exists: true,
                 message: "User is already a healthcare provider.",
-                user: userPayload
+                user: userPayload,
+                familyMembers
             };
         }
 
         return {
             exists: true,
-            user: userPayload
+            user: userPayload,
+            familyMembers
         };
     }
 

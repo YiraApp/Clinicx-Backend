@@ -62,6 +62,8 @@ import { PasswordResetToken } from "../models/Account/password-reset-token.model
 import { UserDevice } from "../models/Account/userdevice.model.js";
 import { AppVersion } from "../models/Account/app-version.model.js";
 
+import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
+
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
     console.log("--- Azure Environment Debug ---");
@@ -89,7 +91,7 @@ export const AppDataSource = new DataSource({
     synchronize: false,
     entities: [
         User, UserToken, UserOTP, Address, Role, UserRole,
-        Organization, Hospital, APILog, SidebarMenu, RoleSidebarMenu, MobileSidebarMenu, RoleMobileSidebarMenu, Template,
+        Organization, Hospital, DefaultOrganization, APILog, SidebarMenu, RoleSidebarMenu, MobileSidebarMenu, RoleMobileSidebarMenu, Template,
         MainSpecialty, MainSubSpecialty, MainDepartment,
         HospitalSpecialty, HospitalSubSpecialty, HospitalDepartment,
         HealthcareProvider, HealthcareProviderAvailability, HealthcareProviderScheduleSlot,
@@ -127,6 +129,17 @@ export const initializeDatabase = async () => {
         console.log(`📡 Attempting to connect to database at: ${process.env.DB_PORT}`);
         await AppDataSource.initialize();
         console.log("✅ Database connected");
+
+        // Ensure IX_APILogs_OrgId_HospitalId index exists on APILogs table for dashboard performance
+        await AppDataSource.query(`
+            IF NOT EXISTS (
+                SELECT * FROM sys.indexes 
+                WHERE name = 'IX_APILogs_OrgId_HospitalId'
+            )
+            BEGIN
+                EXEC('CREATE NONCLUSTERED INDEX IX_APILogs_OrgId_HospitalId ON APILogs (OrgId, HospitalId)');
+            END
+        `);
 
         // Ensure ImagePath column exists on SidebarMenus table in a production-safe way
         await AppDataSource.query(`
@@ -186,7 +199,28 @@ export const initializeDatabase = async () => {
                 );
             END
         `);
-        console.log("✅ Database schema verified for ImagePath, UseImage, and Mobile Sidebar tables");
+
+        // Ensure DefaultOrganizations table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DefaultOrganizations')
+            BEGIN
+                CREATE TABLE DefaultOrganizations (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    OrganizationId INT NOT NULL,
+                    HospitalId INT NULL,
+                    OrganizationName VARCHAR(255) NULL,
+                    HospitalName VARCHAR(255) NULL,
+                    IsDefault BIT DEFAULT 1 NOT NULL,
+                    Status BIT DEFAULT 1 NOT NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    UpdatedAt DATETIME NULL,
+                    CreatedBy VARCHAR(100) NULL,
+                    UpdatedBy VARCHAR(100) NULL
+                );
+            END
+        `);
+
+        console.log("✅ Database schema verified for DefaultOrganizations and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;
