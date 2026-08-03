@@ -43,6 +43,7 @@ router.use("/auth", authRouter);
 router.use("/roles", rolesRouter);
 router.use("/users", userRouter);
 router.use("/Account", otpRouter);
+router.use("/otp", otpRouter);
 router.use("/sidebar", sidebarRouter);
 router.use("/organizations", organizationRouter);
 router.use("/default-organizations", defaultOrganizationRouter);

@@ -71,20 +71,49 @@ export class HealthcareProviderController {
 
     async getSlots(req: Request, res: Response) {
         try {
-            const id = parseInt(req.params.id as string);
-            const hospitalId = parseInt(req.query.hospitalId as string);
-            const { startDate, endDate } = req.query;
+            const rawId = req.params.id as string;
+            const rawHospId = req.query.hospitalId as string;
+            const dateQuery = (req.query.date as string) || (req.query.startDate as string);
+            const endDateQuery = (req.query.endDate as string) || dateQuery;
             const userId = req.query.userId as string | undefined;
 
-            if (isNaN(id) || isNaN(hospitalId)) {
-                return res.status(400).json(ApiResponse.error("Doctor ID and Hospital ID are required and must be valid numbers"));
+            let providerId: number = parseInt(rawId);
+            let hospitalId: number = parseInt(rawHospId);
+
+            // If rawId is a UUID string (UserId), resolve provider by UserId
+            if (isNaN(providerId)) {
+                const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+                const { AppDataSource } = await import("../../config/database.js");
+                const provider = await AppDataSource.getRepository(HealthcareProvider).findOne({
+                    where: { UserId: rawId, IsDeleted: false }
+                });
+                if (provider) {
+                    providerId = provider.Id;
+                    if (isNaN(hospitalId)) {
+                        hospitalId = provider.HospitalId;
+                    }
+                }
             }
 
+            // Fallback for hospitalId if missing
+            if (isNaN(hospitalId)) {
+                const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+                const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+                hospitalId = activeDefault?.HospitalId || 19;
+            }
+
+            if (isNaN(providerId)) {
+                return res.status(400).json(ApiResponse.error("Invalid Doctor ID"));
+            }
+
+            const startDate = dateQuery || new Date().toISOString().split("T")[0];
+            const endDate = endDateQuery || startDate;
+
             const slots = await healthcareProviderService.getDoctorSlots(
-                id, 
-                hospitalId, 
-                startDate as string, 
-                endDate as string,
+                providerId,
+                hospitalId,
+                startDate,
+                endDate,
                 userId
             );
             return res.json(ApiResponse.success(slots, "Doctor slots fetched successfully."));
