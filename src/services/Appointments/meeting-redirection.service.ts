@@ -42,10 +42,16 @@ export class MeetingRedirectionService {
     }): Promise<MeetingRedirection> {
         const existing = await meetingRedirectionRepository.findByAppointmentId(data.AppointmentId);
         if (existing) {
-            if (data.MeetingUrl && existing.MeetingUrl !== data.MeetingUrl) {
-                await meetingRedirectionRepository.update(existing.Id, { MeetingUrl: data.MeetingUrl });
-                existing.MeetingUrl = data.MeetingUrl;
-            }
+            const dateObj = typeof data.AppointmentDate === 'string' ? new Date(data.AppointmentDate) : data.AppointmentDate;
+            const updates: any = { IsActive: true };
+            if (data.MeetingUrl && existing.MeetingUrl !== data.MeetingUrl) updates.MeetingUrl = data.MeetingUrl;
+            if (data.AppointmentDate) updates.AppointmentDate = dateObj;
+            if (data.StartTime) updates.StartTime = data.StartTime;
+            if (data.DoctorId) updates.DoctorId = data.DoctorId;
+            if (data.HospitalId) updates.HospitalId = data.HospitalId;
+            
+            await meetingRedirectionRepository.update(existing.Id, updates);
+            Object.assign(existing, updates);
             return existing;
         }
         return await this.createRedirection(data);

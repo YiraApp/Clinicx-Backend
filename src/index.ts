@@ -15,6 +15,10 @@ const startServer = async () => {
         await initializeDatabase();
         await MigrationService.ensureLogIndexes();
 
+        // Start automated background appointment reminder scheduler (checks every 60s for 10-minute reminders)
+        const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
+        appointmentReminderService.startScheduler(60);
+
         app.listen(port, () => {
             console.log(`Server is running on port ${port}`);
         });

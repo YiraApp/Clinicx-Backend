@@ -71,31 +71,44 @@ export class WhatsAppService {
       throw new Error("Missing WhatsApp template name. Set WHATSAPP_TEMPLATE_NAME or pass templateId in the request.");
     }
 
-    const body = {
-      messaging_product: "whatsapp",
-      to,
-      type: "template",
-      template: {
-        name: templateName,
-        language: {
-          code: languageCode || WHATSAPP_TEMPLATE_LANGUAGE,
+    const makeRequest = async (comps?: any[]) => {
+      const body = {
+        messaging_product: "whatsapp",
+        to,
+        type: "template",
+        template: {
+          name: templateName,
+          language: {
+            code: languageCode || WHATSAPP_TEMPLATE_LANGUAGE,
+          },
+          ...(comps && comps.length > 0 ? { components: comps } : {}),
         },
-        ...(components ? { components } : {}),
-      },
+      };
+
+      const response = await fetch(buildGraphApiUrl(), {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify(body),
+      });
+
+      const responseBody = await response.json();
+      return { ok: response.ok, status: response.status, body: responseBody };
     };
 
-    const response = await fetch(buildGraphApiUrl(), {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify(body),
-    });
+    let result = await makeRequest(components);
 
-    const responseBody = await response.json();
-    if (!response.ok) {
-      throw new Error(`WhatsApp Graph API error: ${response.status} ${JSON.stringify(responseBody)}`);
+    // If Meta returns error about button component mismatch, retry automatically without button component
+    if (!result.ok && components && JSON.stringify(result.body).includes("Template does not contain button components")) {
+      console.warn(`[WhatsAppService] Template '${templateName}' does not have button components on Meta. Retrying without button...`);
+      const bodyOnlyComponents = components.filter(c => c.type !== "button");
+      result = await makeRequest(bodyOnlyComponents);
     }
 
-    return responseBody;
+    if (!result.ok) {
+      throw new Error(`WhatsApp Graph API error: ${result.status} ${JSON.stringify(result.body)}`);
+    }
+
+    return result.body;
   }
 
   async sendSampleMessage(to?: string): Promise<any> {

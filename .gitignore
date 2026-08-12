@@ -26,3 +26,11 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# OAuth & Secret credentials
+credentials.json
+token.json
+*client_secret*.json
+google-meet-test/
+yira-google-meet/
+

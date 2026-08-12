@@ -82,7 +82,7 @@ export class ZoomService {
             }
 
             const accessToken = await this.getAccessToken();
-            
+
             // If no credentials, return a Jitsi / simulated meeting link for instant join
             if (accessToken === "MOCK_TOKEN") {
                 const mockId = Math.floor(Math.random() * 10000000000);
