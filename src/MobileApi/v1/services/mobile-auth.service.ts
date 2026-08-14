@@ -52,7 +52,6 @@ export class MobileAuthService {
 
         // Fetch user roles
         const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
-        /*
         const allowedRoleIds = [
             "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
             "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
@@ -60,11 +59,6 @@ export class MobileAuthService {
         const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
         if (mobileRoles.length === 0) {
             throw new Error("Access denied. Only patients and providers can log in.");
-        }
-        */
-        const mobileRoles = userRoles;
-        if (mobileRoles.length === 0) {
-            throw new Error("Access denied. User has no assigned roles.");
         }
 
         const otpTarget = user.PhoneNumber;
@@ -326,7 +320,6 @@ export class MobileAuthService {
 
             // Fetch user roles
             const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
-            /*
             const allowedRoleIds = [
                 "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
                 "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
@@ -334,11 +327,6 @@ export class MobileAuthService {
             const mobileRoles = userRoles.filter(ur => ur.RoleId && allowedRoleIds.includes(ur.RoleId.toUpperCase()));
             if (mobileRoles.length === 0) {
                 throw new Error("Access denied. Only patients and providers can log in.");
-            }
-            */
-            const mobileRoles = userRoles;
-            if (mobileRoles.length === 0) {
-                throw new Error("Access denied. User has no assigned roles.");
             }
 
             // Generate tokens with 30d expiry

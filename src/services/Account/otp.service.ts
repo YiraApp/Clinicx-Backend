@@ -79,14 +79,16 @@ export class OTPService {
             const { userRoleRepository } = await import("../../repositories/Account/userrole.repository.js");
             const roles = await userRoleRepository.findAllByUserId(user.Id);
             const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+            const PROVIDER_ROLE_ID = "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
             
-            const hasActivePatientRole = roles.some(r => 
-                r.RoleId.toUpperCase() === PATIENT_ROLE_ID.toUpperCase() && 
+            const hasActiveMobileRole = roles.some(r => 
+                (r.RoleId.toUpperCase() === PATIENT_ROLE_ID.toUpperCase() || 
+                 r.RoleId.toUpperCase() === PROVIDER_ROLE_ID.toUpperCase()) && 
                 r.Status && 
                 !r.IsDeleted
             );
 
-            if (!hasActivePatientRole) {
+            if (!hasActiveMobileRole) {
                 throw new Error("No patient account found for this mobile number.");
             }
         }

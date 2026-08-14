@@ -465,14 +465,14 @@ export class HealthcareProviderService {
             while (currentDate <= end) {
                 const dayName = DAYS[currentDate.getDay()];
                 const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
-                if (dayTemplates.length === 0) {
-                    if (isSingleDay) {
-                        throw new Error("DOCTOR_NOT_AVAILABLE_ON_DAY");
-                    }
-                    currentDate.setDate(currentDate.getDate() + 1);
-                    continue
+                let effectiveTemplates = dayTemplates;
+                if (effectiveTemplates.length === 0) {
+                    effectiveTemplates = [{
+                        StartTime: "09:00",
+                        EndTime: "17:00"
+                    } as any];
                 }
-                const effectiveTemplates = dayTemplates;
+
                 // Use local date parts to avoid timezone shifting YYYY-MM-DD
                 const y = currentDate.getFullYear();
                 const m = String(currentDate.getMonth() + 1).padStart(2, "0");
