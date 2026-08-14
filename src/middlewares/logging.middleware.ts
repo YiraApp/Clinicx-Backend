@@ -107,10 +107,6 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     requestLog.IPAddress = ip;
     requestLog.DeviceInfo = (req.headers["user-agent"] || "").substring(0, 500);
 
-    if (process.env.NODE_ENV !== 'production') {
-        console.log(`[DEBUG] Audit Log IP: ${ip} | Path: ${req.path}`);
-    }
-
     // Truncate and mask RequestBody
     if (req.body) {
         let body = { ...req.body };
@@ -118,6 +114,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         if (body.Password) body.Password = "********";
         const bodyStr = JSON.stringify(body);
         requestLog.RequestBody = bodyStr.length > 2000 ? bodyStr.substring(0, 2000) + "... [truncated]" : bodyStr;
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+        console.log(`[DEBUG] Request Method: ${req.method} | Path: ${req.path} | Body: ${requestLog.RequestBody || '{}'}`);
     }
 
     requestLog.RequestHeaders = JSON.stringify(req.headers).substring(0, 2000);
@@ -225,6 +225,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
             requestLog.ResponseStatusCode = res.statusCode;
             requestLog.ResponseTimeMs = durationMs;
             requestLog.UpdatedOn = new Date();
+
+            if (process.env.NODE_ENV !== 'production') {
+                console.log(`[DEBUG] Response Status: ${res.statusCode} | Path: ${req.path} | Duration: ${durationMs}ms | Body: ${requestLog.Response}`);
+            }
 
             // Fire and forget
             saveLog();

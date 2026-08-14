@@ -3,6 +3,13 @@ import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPas
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
 import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getSidebarMenu } from "../controllers/provider/dashboard.controller.js";
+import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots } from "../controllers/provider/appointment.controller.js";
+import { mobileSnomedController } from "../controllers/snomed.controller.js";
+import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
+import { mobileMedicalRecordController } from "../controllers/provider/medical-record.controller.js";
+import { mobilePrescriptionController } from "../controllers/provider/prescription.controller.js";
+import { mobileMedicalDocumentController } from "../controllers/provider/medical-document.controller.js";
+import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
 const authRouter = Router();
@@ -20,6 +27,11 @@ authRouter.post("/reset_password", resetPassword);
 authRouter.get("/roles/details", getRoleDetails);
 authRouter.get("/user-data", authMiddleware, getUserData);
 authRouter.post("/dashboard", authMiddleware, getProviderDashboard);
+authRouter.post("/appointment-dashboard", authMiddleware, getAppointmentDashboard);
+authRouter.post("/book-appointment", authMiddleware, bookAppointment);
+authRouter.post("/update-appointment-status", authMiddleware, updateAppointmentStatus);
+authRouter.post("/doctor-slots", authMiddleware, getMobileDoctorSlots);
+authRouter.post("/doctor-slots/deploy", authMiddleware, deployMobileDoctorSlots);
 authRouter.post("/clinical-data", authMiddleware, getClinicalData);
 authRouter.post("/patients", authMiddleware, getPatientsList);
 authRouter.get("/patients/filters", authMiddleware, getPatientsFilters);
@@ -31,5 +43,31 @@ authRouter.post("/device-token", authMiddleware, registerDeviceToken);
 authRouter.get("/app-version", getLatestAppVersion);
 authRouter.post("/app-version/status", getVersionAndTokenStatus);
 authRouter.post("/app-version", authMiddleware, registerNewAppVersion);
+
+// SNOMED CT Search
+authRouter.get("/snomed/search", authMiddleware, (req, res) => mobileSnomedController.search(req, res));
+
+// Clinical Notes
+authRouter.get("/clinical-notes/patient/:patientId", authMiddleware, (req, res) => mobileClinicalNoteController.getPatientNotes(req, res));
+authRouter.post("/clinical-notes", authMiddleware, (req, res) => mobileClinicalNoteController.addNote(req, res));
+authRouter.put("/clinical-notes/:id", authMiddleware, (req, res) => mobileClinicalNoteController.updateNote(req, res));
+authRouter.delete("/clinical-notes/:id", authMiddleware, (req, res) => mobileClinicalNoteController.deleteNote(req, res));
+
+// Medical Records
+authRouter.get("/medical-records/patient/:patientId", authMiddleware, (req, res) => mobileMedicalRecordController.getPatientRecords(req, res));
+authRouter.post("/medical-records", authMiddleware, (req, res) => mobileMedicalRecordController.addRecord(req, res));
+authRouter.put("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.updateRecord(req, res));
+authRouter.delete("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.deleteRecord(req, res));
+
+// Prescriptions
+authRouter.get("/prescriptions/patient/:patientId", authMiddleware, (req, res) => mobilePrescriptionController.getPatientPrescriptions(req, res));
+authRouter.post("/prescriptions", authMiddleware, (req, res) => mobilePrescriptionController.addPrescription(req, res));
+authRouter.put("/prescriptions/:id", authMiddleware, (req, res) => mobilePrescriptionController.updatePrescription(req, res));
+authRouter.delete("/prescriptions/:id", authMiddleware, (req, res) => mobilePrescriptionController.deletePrescription(req, res));
+
+// Medical Documents
+authRouter.get("/medical-documents/patient/:patientId", authMiddleware, (req, res) => mobileMedicalDocumentController.getPatientDocuments(req, res));
+authRouter.post("/medical-documents", authMiddleware, upload.array("files"), (req, res) => mobileMedicalDocumentController.uploadDocuments(req, res));
+authRouter.delete("/medical-documents/:id", authMiddleware, (req, res) => mobileMedicalDocumentController.deleteDocument(req, res));
 
 export { authRouter };

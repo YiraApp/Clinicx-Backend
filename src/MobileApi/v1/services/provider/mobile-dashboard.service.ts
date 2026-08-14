@@ -93,7 +93,8 @@ export class MobileDashboardService {
                 time: timeFormatted || apt.StartTime,
                 consultationType: apt.IsTeleConsultation ? "Teleconsultation" : "In-Clinic Consultation",
                 reason: apt.Reason || "Regular Checkup",
-                statusTag: apt.IsTeleConsultation ? "LIVE VIDEO" : "IN-CLINIC"
+                statusTag: apt.IsTeleConsultation ? "LIVE VIDEO" : "IN-CLINIC",
+                meetingUrl: apt.MeetingUrl || null
             };
         });
 

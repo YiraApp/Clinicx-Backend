@@ -42,10 +42,14 @@ export class BlobService {
         const uploadResponses: FileUploadResponse[] = [];
 
         try {
-            // Ensure container exists and has blob public access
-            await this.containerClient.createIfNotExists({
-                access: 'blob' as PublicAccessType
-            });
+            // Safely ensure container exists
+            try {
+                await this.containerClient.createIfNotExists();
+            } catch (cErr: any) {
+                console.warn("[Blob Service] Container existence notice:", cErr.message);
+            }
+
+            const safeUserName = (userName || 'patient').toString().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 
             for (const file of files) {
                 // Generate a unique filename using IST timestamp
@@ -65,7 +69,7 @@ export class BlobService {
                 const fileExtension = path.extname(file.originalname);
 
                 // Construct blob path: username/service/imagename
-                const blobPath = `${userName.toLowerCase()}/${serviceConstant}/${imageName}`;
+                const blobPath = `${safeUserName}/${serviceConstant}/${imageName}`;
                 const blockBlobClient = this.containerClient.getBlockBlobClient(blobPath);
 
                 // Determine MIME type

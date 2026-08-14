@@ -107,13 +107,15 @@ export const sendOTP = async (req: Request, res: Response) => {
         const successMessage = isResendFlag ? "OTP resent successfully!" : "OTP sent successfully!";
         return res.json(ApiResponse.success(result, successMessage));
     } catch (error: any) {
+        console.error("[DEBUG] sendOTP Catch Block Error:", error);
         let status = 400;
         let code = "OTP_SEND_FAILED";
         let message = error.message;
 
-        if (error.message === "User not registered") {
+        if (error.message === "User not registered" || error.message === "No patient account found for this mobile number.") {
             status = 404;
             code = "USER_NOT_REGISTERED";
+            message = "No Account Found Please Register";
         } else if (error.message.includes("Access denied")) {
             status = 400;
             code = "ACCESS_DENIED";
