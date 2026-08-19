@@ -106,8 +106,10 @@ export class PatientSummaryRepository {
                 state: addr?.State || "",
                 pincode: addr?.Pincode || "",
                 emergencyContactName: user.EmergencyContactName,
-                emergencyContactPhone: user.EmergencyContactPhone
+                emergencyContactPhone: user.EmergencyContactPhone,
+                tokenNumber: registration?.TokenNumber || user.TokenNumber || null
             },
+            tokenNumber: registration?.TokenNumber || user.TokenNumber || null,
             allergies,
             conditions,
             insurance: insurance

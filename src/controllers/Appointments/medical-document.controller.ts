@@ -43,6 +43,58 @@ export class MedicalDocumentController {
             return res.status(400).json(ApiResponse.error(error.message));
         }
     }
+
+    async generateUploadLink(req: Request, res: Response) {
+        try {
+            const appointmentId = parseInt(req.params.appointmentId as string);
+            if (isNaN(appointmentId)) {
+                return res.status(400).json(ApiResponse.error("Valid Appointment ID is required."));
+            }
+
+            const createdBy = req.body?.createdBy || "PATIENT";
+            const result = await medicalDocumentService.generateUploadLink(appointmentId, createdBy);
+            return res.json(ApiResponse.success(result, "Upload link generated successfully."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] generateUploadLink Error:", error);
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async getUploadLinkInfo(req: Request, res: Response) {
+        try {
+            const token = req.params.token as string;
+            if (!token) {
+                return res.status(400).json(ApiResponse.error("Token is required."));
+            }
+
+            const result = await medicalDocumentService.getUploadLinkInfo(token);
+            return res.json(ApiResponse.success(result, "Upload link info retrieved successfully."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] getUploadLinkInfo Error:", error);
+            return res.status(404).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async uploadByLink(req: Request, res: Response) {
+        try {
+            const token = req.params.token as string;
+            const files = req.files as Express.Multer.File[];
+
+            if (!token) {
+                return res.status(400).json(ApiResponse.error("Upload token is required."));
+            }
+
+            if (!files || files.length === 0) {
+                return res.status(400).json(ApiResponse.error("No documents provided for upload."));
+            }
+
+            const result = await medicalDocumentService.uploadDocumentsByLink(token, req.body, files);
+            return res.json(ApiResponse.success(result, "Documents uploaded successfully via link."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] uploadByLink Error:", error);
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const medicalDocumentController = new MedicalDocumentController();

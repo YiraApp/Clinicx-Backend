@@ -15,6 +15,12 @@ export class AppointmentShareLinkRepository {
         });
     }
 
+    async findByAppointment(appointmentId: number): Promise<AppointmentShareLink | null> {
+        return await this.repo.findOne({
+            where: { AppointmentId: appointmentId, IsActive: true, IsDeleted: false }
+        });
+    }
+
     async update(id: number, data: Partial<AppointmentShareLink>): Promise<void> {
         await this.repo.update(id, { ...data, UpdatedAt: new Date() });
     }

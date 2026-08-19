@@ -95,8 +95,13 @@ export const assignSidebarPermissions = async (req: Request, res: Response) => {
 export const createMenu = async (req: Request, res: Response) => {
     try {
         const { platform, ...menuData } = req.body;
+        const isMobile = platform === "mobile" || 
+                         req.query.platform === "mobile" || 
+                         menuData.TaskCode !== undefined || 
+                         menuData.TaskId !== undefined || 
+                         menuData.UseImage !== undefined;
         let menu;
-        if (platform === "mobile") {
+        if (isMobile) {
             menu = await sidebarService.createMobileMenu(menuData);
         } else {
             menu = await sidebarService.createMenu(menuData);
@@ -114,8 +119,13 @@ export const updateMenu = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { platform, ...menuData } = req.body;
+        const isMobile = platform === "mobile" || 
+                         req.query.platform === "mobile" || 
+                         menuData.TaskCode !== undefined || 
+                         menuData.TaskId !== undefined || 
+                         menuData.UseImage !== undefined;
         let menu;
-        if (platform === "mobile" || req.query.platform === "mobile") {
+        if (isMobile) {
             menu = await sidebarService.updateMobileMenu(parseInt(id as string), menuData);
         } else {
             menu = await sidebarService.updateMenu(parseInt(id as string), menuData);

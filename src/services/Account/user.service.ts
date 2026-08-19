@@ -83,6 +83,7 @@ export class UserService implements IUserService {
         if (data.BloodGroup) newUser.BloodGroup = data.BloodGroup;
         if (data.Height) newUser.Height = data.Height;
         if (data.Weight) newUser.Weight = data.Weight;
+        if (data.TokenNumber || (data as any).Token) newUser.TokenNumber = data.TokenNumber || (data as any).Token;
 
         newUser.Status = true;
         newUser.IsDeleted = false;
@@ -239,6 +240,9 @@ export class UserService implements IUserService {
         user.Status = data.Status !== undefined ? data.Status : true;
         user.Height = data.Height ?? null;
         user.Weight = data.Weight ?? null;
+        if (data.TokenNumber !== undefined || (data as any).Token !== undefined) {
+            user.TokenNumber = data.TokenNumber || (data as any).Token || null;
+        }
 
         // 4. Update addresses
         let permData = data.PermanentAddress;
@@ -272,6 +276,15 @@ export class UserService implements IUserService {
 
         const rolesToUpdate: UserRole[] = [];
 
+        // Check if this request is specifically for Patient registration (only assigning Patient role)
+        const isOnlyPatientRequest = requestedAssignments.length > 0 &&
+            requestedAssignments.every(ra =>
+                ra.roleId?.toLowerCase() === "4fc67429-28ae-4106-93ef-436228282ed0" ||
+                ra.roleId?.toLowerCase() === "patient"
+            );
+
+        const shouldPreserveExistingRoles = data.preserveExistingRoles || isOnlyPatientRequest;
+
         // Identify existing roles and mark for update (reactivate or deactivate)
         currentRoles.forEach(cr => {
             const matchIndex = requestedAssignments.findIndex(ra =>
@@ -295,11 +308,13 @@ export class UserService implements IUserService {
                 // Remove from requested list so we don't treat it as a new creation
                 requestedAssignments.splice(matchIndex, 1);
             } else {
-                // NOT in requested assignments - deactivate if currently active
-                if (cr.Status) {
-                    cr.Status = false;
-                    cr.UpdatedAt = new Date();
-                    rolesToUpdate.push(cr);
+                // NOT in requested assignments - only deactivate if NOT preserving existing roles
+                if (!shouldPreserveExistingRoles) {
+                    if (cr.Status) {
+                        cr.Status = false;
+                        cr.UpdatedAt = new Date();
+                        rolesToUpdate.push(cr);
+                    }
                 }
             }
         });

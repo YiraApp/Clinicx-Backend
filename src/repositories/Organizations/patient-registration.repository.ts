@@ -55,9 +55,14 @@ export class PatientRegistrationRepository {
 
         if (filters.search) {
             query.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search)",
                 { search: `%${filters.search}%` }
             );
+        }
+
+        if (filters.tokenNumber || filters.token) {
+            const tokenVal = (filters.tokenNumber || filters.token).trim();
+            query.andWhere("(u.TokenNumber LIKE :tokenFilter OR pr.TokenNumber LIKE :tokenFilter)", { tokenFilter: `%${tokenVal}%` });
         }
 
         if (filters.doctorId) {
@@ -164,9 +169,14 @@ export class PatientRegistrationRepository {
 
         if (filters.search) {
             statsQuery.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search)",
                 { search: `%${filters.search}%` }
             );
+        }
+
+        if (filters.tokenNumber || filters.token) {
+            const tokenVal = (filters.tokenNumber || filters.token).trim();
+            statsQuery.andWhere("(u.TokenNumber LIKE :tokenFilter OR pr.TokenNumber LIKE :tokenFilter)", { tokenFilter: `%${tokenVal}%` });
         }
 
         if (filters.doctorId) {
@@ -206,6 +216,7 @@ export class PatientRegistrationRepository {
                 emergencyContactPhone: pr.User?.EmergencyContactPhone,
                 allergies: pr.Allergies,
                 medicalHistory: pr.MedicalHistory,
+                tokenNumber: pr.TokenNumber || pr.User?.TokenNumber || null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,
                 insuranceStatus: ins?.Status ?? null,

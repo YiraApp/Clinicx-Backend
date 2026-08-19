@@ -21,6 +21,8 @@ export interface UpdateUserRequest {
     Gender?: string | undefined;
     DateOfBirth?: string | undefined;
     BloodGroup?: string | undefined;
+    TokenNumber?: string | undefined;
+    Token?: string | undefined;
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;
@@ -43,4 +45,5 @@ export interface UpdateUserRequest {
     EmergencyContactPhone?: string | undefined;
     workspaces: UserRoleAssignment[];
     revokeTokens?: boolean | undefined;
+    preserveExistingRoles?: boolean | undefined;
 }

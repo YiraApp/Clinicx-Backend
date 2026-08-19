@@ -1,6 +1,9 @@
 import { medicalDocumentRepository } from "../../repositories/Appointments/medical-document.repository.js";
+import { appointmentShareLinkRepository } from "../../repositories/Appointments/appointment-share-link.repository.js";
+import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { blobService } from "../Common/blob.service.js";
+import { v4 as uuidv4 } from "uuid";
 
 const DEFAULT_UUID = "00000000-0000-0000-0000-000000000000";
 
@@ -116,6 +119,119 @@ export class MedicalDocumentService {
         } catch (e: any) {
             console.error("[MedicalDocumentService] deleteDocument error:", e.message);
         }
+    }
+
+    /**
+     * Generate or retrieve an upload token & URL for an appointment
+     */
+    async generateUploadLink(appointmentId: number, createdBy?: string): Promise<any> {
+        const appointment = await appointmentRepository.findById(appointmentId);
+        if (!appointment) throw new Error("Appointment not found");
+
+        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:4200";
+        const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+
+        // Check if an active link already exists
+        let shareLink = await appointmentShareLinkRepository.findByAppointment(appointmentId);
+
+        if (!shareLink || (shareLink.ExpiryAt && new Date(shareLink.ExpiryAt) < new Date())) {
+            const shareToken = uuidv4();
+            const shareLinkUrl = `${cleanBaseUrl}/upload-documents/${shareToken}`;
+
+            shareLink = await appointmentShareLinkRepository.create({
+                AppointmentId: appointmentId,
+                PatientId: appointment.UserId,
+                OrganizationId: appointment.OrgId,
+                HospitalId: appointment.HospitalId,
+                ShareToken: shareToken,
+                ShareLink: shareLinkUrl,
+                ExpiryAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+                IsActive: true,
+                CreatedBy: createdBy || "SYSTEM"
+            });
+        }
+
+        const patientName = appointment.User ? `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim() : "Patient";
+        const doctorName = appointment.Doctor ? `Dr. ${appointment.Doctor.FirstName} ${appointment.Doctor.LastName || ""}`.trim() : "Doctor";
+        const hospitalName = appointment.Hospital?.Name || "Clinic";
+
+        return {
+            appointmentId: appointment.Id,
+            shareToken: shareLink.ShareToken,
+            shareLink: shareLink.ShareLink || `${cleanBaseUrl}/upload-documents/${shareLink.ShareToken}`,
+            expiryAt: shareLink.ExpiryAt,
+            patientName,
+            doctorName,
+            hospitalName,
+            appointmentDate: appointment.AppointmentDate,
+            startTime: appointment.StartTime
+        };
+    }
+
+    /**
+     * Get appointment summary and existing documents using an upload token (publicly accessible)
+     */
+    async getUploadLinkInfo(token: string): Promise<any> {
+        const shareLink = await appointmentShareLinkRepository.findByToken(token);
+        if (!shareLink) {
+            throw new Error("Invalid or expired upload link.");
+        }
+
+        const appointment = await appointmentRepository.findById(Number(shareLink.AppointmentId));
+        if (!appointment) {
+            throw new Error("Associated appointment not found.");
+        }
+
+        // Fetch documents already uploaded for this appointment
+        const existingDocs = await medicalDocumentRepository.findByAppointment(Number(appointment.Id));
+
+        const patientName = appointment.User ? `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim() : "Patient";
+        const doctorName = appointment.Doctor ? `Dr. ${appointment.Doctor.FirstName} ${appointment.Doctor.LastName || ""}`.trim() : "Doctor";
+        const hospitalName = appointment.Hospital?.Name || "Clinic";
+
+        return {
+            appointmentId: appointment.Id,
+            shareToken: shareLink.ShareToken,
+            patientId: appointment.UserId,
+            patientName,
+            doctorName,
+            hospitalName,
+            hospitalAddress: appointment.Hospital?.Address || "",
+            appointmentDate: appointment.AppointmentDate,
+            startTime: appointment.StartTime,
+            appointmentType: appointment.AppointmentType || "In-Person",
+            status: appointment.Status || "Scheduled",
+            existingDocuments: existingDocs
+        };
+    }
+
+    /**
+     * Upload documents using a secure public upload token
+     */
+    async uploadDocumentsByLink(token: string, data: any, files: Express.Multer.File[]): Promise<MedicalDocument[]> {
+        const shareLink = await appointmentShareLinkRepository.findByToken(token);
+        if (!shareLink) {
+            throw new Error("Invalid or expired upload link.");
+        }
+
+        const appointment = await appointmentRepository.findById(Number(shareLink.AppointmentId));
+        if (!appointment) {
+            throw new Error("Associated appointment not found.");
+        }
+
+        const uploadPayload = {
+            ...data,
+            appointmentId: appointment.Id,
+            patientId: appointment.UserId,
+            doctorId: appointment.DoctorId,
+            organizationId: appointment.OrgId,
+            hospitalId: appointment.HospitalId,
+            uploadedByUserId: appointment.UserId,
+            isPatientUploaded: true,
+            isDoctorUploaded: false
+        };
+
+        return await this.uploadDocuments(uploadPayload, files);
     }
 }
 

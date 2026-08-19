@@ -35,6 +35,9 @@ export class PatientRegistration {
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     MedicalHistory?: string;
 
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    TokenNumber?: string;
+
     @Column({ type: "bit", default: true })
     Status: boolean;
 
