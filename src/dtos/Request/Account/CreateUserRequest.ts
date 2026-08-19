@@ -34,6 +34,8 @@ export interface CreateUserRequest {
     IsEmailVerified?: boolean | undefined;
     Height?: number | undefined;
     Weight?: number | undefined;
+    TokenNumber?: string | undefined;
+    Token?: string | undefined;
     
     PermanentAddress?: AddressDTO | undefined;
     TemporaryAddress?: AddressDTO | undefined;
