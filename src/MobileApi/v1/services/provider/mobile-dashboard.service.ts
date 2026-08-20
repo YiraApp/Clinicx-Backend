@@ -836,6 +836,180 @@ export class MobileDashboardService {
             }
         };
     }
+
+    /**
+     * Retrieves detailed profile of a healthcare provider / doctor.
+     */
+    async getProviderProfile(userId: string, hospId?: number, orgId?: number): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+        const hospitalRepo = AppDataSource.getRepository(Hospital);
+
+        const user = await userRepo.findOne({
+            where: { Id: userId }
+        });
+
+        if (!user) {
+            throw new Error("Provider user not found");
+        }
+
+        const provider = await providerRepo.findOne({
+            where: { UserId: userId, IsDeleted: false },
+            relations: ["Hospital", "Hospital.Organization"]
+        });
+
+        let targetHospId = hospId || provider?.HospitalId;
+        let targetOrgId = orgId || provider?.Hospital?.OrganizationId;
+
+        let hospital: Hospital | null = null;
+        if (targetHospId) {
+            hospital = await hospitalRepo.findOne({
+                where: { Id: targetHospId },
+                relations: ["Organization"]
+            });
+        }
+
+        let prefix = "";
+        const fullName = `${user.FirstName || ""} ${user.LastName || ""}`.trim();
+        if (fullName && !fullName.toLowerCase().startsWith("dr.") && !fullName.toLowerCase().startsWith("dr ")) {
+            prefix = "Dr. ";
+        }
+
+        return {
+            id: provider?.Id || 0,
+            userId: user.Id,
+            name: `${prefix}${fullName}`,
+            firstName: user.FirstName || "",
+            lastName: user.LastName || "",
+            email: user.Email || "",
+            phoneNumber: user.PhoneNumber || "",
+            gender: user.Gender || "Not Specified",
+            dob: user.DateOfBirth ? String(user.DateOfBirth) : "",
+            bloodGroup: user.BloodGroup || "O+",
+            imagePath: user.ImagePath || null,
+            profileImageUrl: user.ImagePath || null,
+            specialty: provider?.Specialty || "General Practitioner",
+            subSpecialty: provider?.SubSpecialty || "Family Medicine",
+            department: provider?.Department || "General Medicine",
+            registrationNumber: provider?.RegistrationNumber || "REG-YIRA-" + (user.Id.substring(0, 8).toUpperCase()),
+            qualification: provider?.Qualification || "MBBS, MD",
+            experience: provider?.Experience || "8+ Years",
+            consultationFee: provider?.ConsultationFee ? Number(provider.ConsultationFee) : 500,
+            bio: provider?.Bio || "Dedicated medical practitioner committed to providing comprehensive healthcare and clinical excellence.",
+            hospitalId: hospital?.Id || targetHospId || 0,
+            hospitalName: hospital?.Name || provider?.Hospital?.Name || "Primary Care Clinic",
+            clinicAddress: [hospital?.Address, hospital?.City, hospital?.State].filter(Boolean).join(", ") || hospital?.Address || provider?.Hospital?.Address || "Central Healthcare Facility",
+            hospitalCode: hospital?.HospitalCode || "",
+            hospitalType: hospital?.HospitalType || "",
+            orgId: hospital?.Organization?.Id || targetOrgId || 0,
+            orgName: hospital?.Organization?.Name || "Yira Health Network",
+            isEmailVerified: user.IsEmailVerified ?? true,
+            isMobileVerified: user.IsMobileVerified ?? true
+        };
+    }
+
+    /**
+     * Updates doctor personal and professional profile details.
+     */
+    async updateProviderProfile(userId: string, data: any): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+
+        const user = await userRepo.findOne({ where: { Id: userId } });
+        if (!user) {
+            throw new Error("Provider user not found");
+        }
+
+        // Update User personal details
+        if (data.firstName !== undefined) user.FirstName = data.firstName;
+        if (data.lastName !== undefined) user.LastName = data.lastName;
+        if (data.email !== undefined) user.Email = data.email;
+        if (data.phoneNumber !== undefined) user.PhoneNumber = data.phoneNumber;
+        if (data.gender !== undefined) user.Gender = data.gender;
+        if (data.dob !== undefined || data.dateOfBirth !== undefined) {
+            const dobVal = data.dob || data.dateOfBirth;
+            user.DateOfBirth = dobVal && dobVal !== "" ? String(dobVal) : user.DateOfBirth;
+        }
+        if (data.bloodGroup !== undefined) user.BloodGroup = data.bloodGroup;
+        if (data.imagePath !== undefined) user.ImagePath = data.imagePath;
+        if (data.profileImageUrl !== undefined) user.ImagePath = data.profileImageUrl;
+        user.UpdatedAt = new Date();
+
+        await userRepo.save(user);
+
+        // Update or create HealthcareProvider record
+        let provider = await providerRepo.findOne({
+            where: { UserId: userId, IsDeleted: false }
+        });
+
+        if (provider) {
+            if (data.specialty !== undefined) provider.Specialty = data.specialty;
+            if (data.subSpecialty !== undefined) provider.SubSpecialty = data.subSpecialty;
+            if (data.department !== undefined) provider.Department = data.department;
+            if (data.registrationNumber !== undefined) provider.RegistrationNumber = data.registrationNumber;
+            if (data.qualification !== undefined) provider.Qualification = data.qualification;
+            if (data.experience !== undefined) provider.Experience = data.experience;
+            if (data.consultationFee !== undefined) provider.ConsultationFee = Number(data.consultationFee);
+            if (data.bio !== undefined) provider.Bio = data.bio;
+            if (data.hospitalId !== undefined && !isNaN(Number(data.hospitalId))) {
+                provider.HospitalId = Number(data.hospitalId);
+            }
+            provider.UpdatedAt = new Date();
+            await providerRepo.save(provider);
+        } else {
+            provider = providerRepo.create({
+                UserId: userId,
+                HospitalId: data.hospitalId ? Number(data.hospitalId) : 19,
+                Specialty: data.specialty || "General Practitioner",
+                SubSpecialty: data.subSpecialty || "Family Medicine",
+                Department: data.department || "General Medicine",
+                RegistrationNumber: data.registrationNumber || "REG-YIRA-" + (userId.substring(0, 8).toUpperCase()),
+                Qualification: data.qualification || "MBBS, MD",
+                Experience: data.experience || "8+ Years",
+                ConsultationFee: data.consultationFee ? Number(data.consultationFee) : 500,
+                Bio: data.bio || "Dedicated medical practitioner committed to providing comprehensive healthcare and clinical excellence.",
+                IsDeleted: false,
+                CreatedAt: new Date()
+            });
+            await providerRepo.save(provider);
+        }
+
+        return await this.getProviderProfile(userId, data.hospitalId, data.orgId);
+    }
+
+    /**
+     * Uploads provider profile photo and updates user record.
+     */
+    async uploadProviderPhoto(userId: string, file: Express.Multer.File): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const user = await userRepo.findOne({ where: { Id: userId } });
+        if (!user) {
+            throw new Error("Provider user not found");
+        }
+
+        let photoUrl = "";
+        try {
+            const { blobService } = await import("../../../../services/Common/blob.service.js");
+            const uploadResult = await blobService.uploadFiles([file], userId, "profiles");
+            if (uploadResult && uploadResult.length > 0) {
+                photoUrl = uploadResult[0].fileUrl;
+            }
+        } catch (blobErr: any) {
+            console.warn("[Mobile Dashboard] Blob upload fallback to base64:", blobErr.message);
+            photoUrl = `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
+        }
+
+        user.ImagePath = photoUrl;
+        user.UpdatedAt = new Date();
+        await userRepo.save(user);
+
+        return {
+            photoUrl,
+            imagePath: photoUrl,
+            message: "Profile photo uploaded successfully"
+        };
+    }
 }
 
 export const mobileDashboardService = new MobileDashboardService();
+

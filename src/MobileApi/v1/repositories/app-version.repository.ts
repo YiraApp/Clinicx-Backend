@@ -6,16 +6,39 @@ export class AppVersionRepository {
     private versionRepo = AppDataSource.getRepository(AppVersion);
 
     async findLatestByPlatform(platform: PlatformType): Promise<AppVersion | null> {
-        return await this.versionRepo.findOne({
-            where: { Platform: platform, IsLatest: true, IsDeleted: false }
+        const platStr = String(platform).toLowerCase();
+        let version = await this.versionRepo.findOne({
+            where: [
+                { Platform: platStr as PlatformType, IsLatest: true, IsDeleted: false },
+                { Platform: platform, IsLatest: true, IsDeleted: false }
+            ],
+            order: { Id: "DESC" }
         });
+
+        if (!version) {
+            version = await this.versionRepo.findOne({
+                where: [
+                    { Platform: platStr as PlatformType, IsDeleted: false },
+                    { Platform: platform, IsDeleted: false }
+                ],
+                order: { Id: "DESC" }
+            });
+        }
+        return version;
     }
 
     async deactivatePreviousLatest(platform: PlatformType): Promise<void> {
+        const platStr = String(platform).toLowerCase();
         await this.versionRepo.update(
-            { Platform: platform, IsLatest: true },
+            { Platform: platStr as PlatformType, IsLatest: true },
             { IsLatest: false, UpdatedAt: new Date() }
         );
+        if (platform !== platStr) {
+            await this.versionRepo.update(
+                { Platform: platform, IsLatest: true },
+                { IsLatest: false, UpdatedAt: new Date() }
+            );
+        }
     }
 
     async saveVersion(appVersion: AppVersion): Promise<AppVersion> {

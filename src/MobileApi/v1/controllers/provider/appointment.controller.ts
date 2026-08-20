@@ -148,41 +148,29 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
         const [y, m, d] = dateStr.split("-").map(Number);
         const targetDate = new Date(y, m - 1, d);
 
-        let slots = await healthcareProviderScheduleSlotRepository.getSlots(providerIdNum, hospIdNum, targetDate, targetDate);
+        const slots = await healthcareProviderScheduleSlotRepository.getSlots(providerIdNum, hospIdNum, targetDate, targetDate);
 
-        if (!slots || slots.length === 0) {
-            try {
-                await healthcareProviderService.generateSlotsForDateRange(
-                    providerIdNum,
-                    hospIdNum,
-                    dateStr,
-                    dateStr,
-                    30,
-                    0,
-                    false
-                );
-                slots = await healthcareProviderScheduleSlotRepository.getSlots(providerIdNum, hospIdNum, targetDate, targetDate);
-            } catch (genErr) {
-                console.log("Auto-generate slots fallback:", genErr);
-            }
-        }
-
-        let formattedSlots: Array<{ id: string; startTime: string; endTime: string; label: string; isAvailable: boolean; isBooked: boolean; patientName?: string; appointmentType?: string }> = [];
+        let formattedSlots: Array<{ id: string; startTime: string; endTime: string; label: string; isAvailable: boolean; isBooked: boolean; isBlocked: boolean; patientName?: string; appointmentType?: string; appointmentId?: string; reason?: string }> = [];
 
         if (slots && slots.length > 0) {
             formattedSlots = slots.map(s => {
                 let patientName = undefined;
                 let appointmentType = undefined;
+                let appointmentId = undefined;
+                let reason = undefined;
                 
                 if (s.IsBooked && s.Appointments && s.Appointments.length > 0) {
                     const activeAppt = s.Appointments.find(appt => 
                         appt.Status && !["cancelled", "canceled", "no show", "noshow", "rescheduled"].includes(appt.Status.toLowerCase())
                     );
                     if (activeAppt) {
+                        appointmentId = String(activeAppt.Id);
                         if (activeAppt.User) {
-                            patientName = activeAppt.User.FullName || activeAppt.User.Email;
+                            const u = activeAppt.User;
+                            patientName = [u.FirstName, u.LastName].filter(Boolean).join(" ") || u.Email || "Patient";
                         }
                         appointmentType = activeAppt.AppointmentType || 'Regular Check-up';
+                        reason = activeAppt.Reason || undefined;
                     }
                 }
 
@@ -193,8 +181,11 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
                     label: `${s.StartTime} - ${s.EndTime}`,
                     isAvailable: s.IsAvailable && !s.IsBooked,
                     isBooked: s.IsBooked,
+                    isBlocked: !s.IsAvailable && !s.IsBooked,
                     patientName: patientName,
-                    appointmentType: appointmentType
+                    appointmentType: appointmentType,
+                    appointmentId: appointmentId,
+                    reason: reason
                 };
             });
         }
@@ -240,6 +231,42 @@ export const deployMobileDoctorSlots = async (req: Request, res: Response) => {
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to deploy doctor slots"
+        });
+    }
+};
+
+/**
+ * Block or unblock a doctor slot.
+ */
+export const blockMobileDoctorSlot = async (req: Request, res: Response) => {
+    try {
+        const { slotId, block } = req.body;
+        if (!slotId) {
+            return res.status(400).json({
+                status: false,
+                message: "slotId is required"
+            });
+        }
+
+        const shouldBlock = block !== undefined ? Boolean(block) : true;
+        const result = await healthcareProviderScheduleSlotRepository.updateSlotStatus(
+            Number(slotId),
+            { isAvailable: !shouldBlock }
+        );
+
+        if (!result) {
+            return res.status(404).json({
+                status: false,
+                message: "Slot not found"
+            });
+        }
+
+        return res.json(ApiResponse.success(result, shouldBlock ? "Slot blocked successfully." : "Slot unblocked successfully."));
+    } catch (error: any) {
+        console.error("blockMobileDoctorSlot error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to update slot status"
         });
     }
 };

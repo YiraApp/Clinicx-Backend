@@ -2,13 +2,14 @@ import { Router } from "express";
 import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPassword, resetPassword, getRoleDetails, updateLatestContext, getUserData, verifyOTP, changePassword } from "../controllers/auth.controller.js";
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
-import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getSidebarMenu } from "../controllers/provider/dashboard.controller.js";
-import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots } from "../controllers/provider/appointment.controller.js";
+import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu } from "../controllers/provider/dashboard.controller.js";
+import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot } from "../controllers/provider/appointment.controller.js";
 import { mobileSnomedController } from "../controllers/snomed.controller.js";
 import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
 import { mobileMedicalRecordController } from "../controllers/provider/medical-record.controller.js";
 import { mobilePrescriptionController } from "../controllers/provider/prescription.controller.js";
 import { mobileMedicalDocumentController } from "../controllers/provider/medical-document.controller.js";
+import { patientAccessConsentController } from "../controllers/consent/patient-access-consent.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
@@ -32,11 +33,15 @@ authRouter.post("/book-appointment", authMiddleware, bookAppointment);
 authRouter.post("/update-appointment-status", authMiddleware, updateAppointmentStatus);
 authRouter.post("/doctor-slots", authMiddleware, getMobileDoctorSlots);
 authRouter.post("/doctor-slots/deploy", authMiddleware, deployMobileDoctorSlots);
+authRouter.post("/doctor-slots/block", authMiddleware, blockMobileDoctorSlot);
 authRouter.post("/clinical-data", authMiddleware, getClinicalData);
 authRouter.post("/patients", authMiddleware, getPatientsList);
 authRouter.get("/patients/filters", authMiddleware, getPatientsFilters);
 authRouter.post("/patient/overview", authMiddleware, getPatientOverview);
 authRouter.post("/patient/details", authMiddleware, getPatientProfile);
+authRouter.post("/provider/profile", authMiddleware, getProviderProfile);
+authRouter.post("/provider/profile/update", authMiddleware, updateProviderProfile);
+authRouter.post("/provider/profile/upload-photo", authMiddleware, upload.single("photo"), uploadProviderProfilePhoto);
 authRouter.post("/sidebar", authMiddleware, getSidebarMenu);
 authRouter.post("/latest-context", authMiddleware, updateLatestContext);
 authRouter.post("/device-token", authMiddleware, registerDeviceToken);
@@ -69,5 +74,11 @@ authRouter.delete("/prescriptions/:id", authMiddleware, (req, res) => mobilePres
 authRouter.get("/medical-documents/patient/:patientId", authMiddleware, (req, res) => mobileMedicalDocumentController.getPatientDocuments(req, res));
 authRouter.post("/medical-documents", authMiddleware, upload.array("files"), (req, res) => mobileMedicalDocumentController.uploadDocuments(req, res));
 authRouter.delete("/medical-documents/:id", authMiddleware, (req, res) => mobileMedicalDocumentController.deleteDocument(req, res));
+
+// Patient Medical Record Access Consents
+authRouter.post("/patient-access/request", authMiddleware, (req, res) => patientAccessConsentController.requestAccess(req, res));
+authRouter.get("/patient-access/check", authMiddleware, (req, res) => patientAccessConsentController.checkAccess(req, res));
+authRouter.get("/patient-access/patient-consents", authMiddleware, (req, res) => patientAccessConsentController.getPatientConsents(req, res));
+authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patientAccessConsentController.respondToConsent(req, res));
 
 export { authRouter };

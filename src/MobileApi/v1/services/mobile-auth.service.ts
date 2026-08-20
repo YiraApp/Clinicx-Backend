@@ -251,12 +251,33 @@ export class MobileAuthService {
             const rolesList = Array.from(uniqueRolesMap.values());
 
             let latestUserRole: string | null = null;
-            if (user.LatestRoleId) {
-                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === user.LatestRoleId?.toUpperCase());
+            let effectiveRoleId = user.LatestRoleId;
+            let effectiveOrgId = user.LatestOrgId;
+            let effectiveHospitalId = user.LatestHospitalId;
+
+            if (!effectiveRoleId && rolesList.length > 0) {
+                effectiveRoleId = rolesList[0].roleId;
+                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+                if (matched) {
+                    latestUserRole = matched.Role?.RoleName ?? null;
+                    if (!effectiveHospitalId && matched.HospitalId) effectiveHospitalId = matched.HospitalId;
+                    if (!effectiveOrgId && matched.OrganizationId) effectiveOrgId = matched.OrganizationId;
+                }
+                try {
+                    await AppDataSource.getRepository(User).update(user.Id, {
+                        LatestRoleId: effectiveRoleId,
+                        LatestHospitalId: effectiveHospitalId,
+                        LatestOrgId: effectiveOrgId
+                    });
+                } catch (_) {}
+            } else if (effectiveRoleId) {
+                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
                 if (matched) {
                     latestUserRole = matched.Role?.RoleName ?? null;
                 }
             }
+
+            const navigationId = getNavigationId(effectiveRoleId) || (rolesList.length > 0 ? getNavigationId(rolesList[0].roleId) : "2") || "2";
 
             return {
                 accessToken,
@@ -281,11 +302,11 @@ export class MobileAuthService {
                 weight: user.Weight != null ? String(user.Weight) : null,
                 heightUnit: "cms",
                 weightUnit: "kgs",
-                latestRoleId: user.LatestRoleId ?? null,
-                latestOrgId: user.LatestOrgId ?? null,
-                latestHospitalId: user.LatestHospitalId ?? null,
-                latestUserRole,
-                navigationId: getNavigationId(user.LatestRoleId)
+                latestRoleId: effectiveRoleId ?? null,
+                latestOrgId: effectiveOrgId ?? null,
+                latestHospitalId: effectiveHospitalId ?? null,
+                latestUserRole: latestUserRole ?? "Healthcare Provider",
+                navigationId: navigationId
             };
         } else {
             // Mobile OTP Login: calls verification in login method
@@ -385,12 +406,33 @@ export class MobileAuthService {
             const rolesList = Array.from(uniqueRolesMap.values());
 
             let latestUserRole: string | null = null;
-            if (user.LatestRoleId) {
-                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === user.LatestRoleId?.toUpperCase());
+            let effectiveRoleId = user.LatestRoleId;
+            let effectiveOrgId = user.LatestOrgId;
+            let effectiveHospitalId = user.LatestHospitalId;
+
+            if (!effectiveRoleId && rolesList.length > 0) {
+                effectiveRoleId = rolesList[0].roleId;
+                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+                if (matched) {
+                    latestUserRole = matched.Role?.RoleName ?? null;
+                    if (!effectiveHospitalId && matched.HospitalId) effectiveHospitalId = matched.HospitalId;
+                    if (!effectiveOrgId && matched.OrganizationId) effectiveOrgId = matched.OrganizationId;
+                }
+                try {
+                    await AppDataSource.getRepository(User).update(user.Id, {
+                        LatestRoleId: effectiveRoleId,
+                        LatestHospitalId: effectiveHospitalId,
+                        LatestOrgId: effectiveOrgId
+                    });
+                } catch (_) {}
+            } else if (effectiveRoleId) {
+                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
                 if (matched) {
                     latestUserRole = matched.Role?.RoleName ?? null;
                 }
             }
+
+            const navigationId = getNavigationId(effectiveRoleId) || (rolesList.length > 0 ? getNavigationId(rolesList[0].roleId) : "2") || "2";
 
             return {
                 accessToken,
@@ -415,11 +457,11 @@ export class MobileAuthService {
                 weight: user.Weight != null ? String(user.Weight) : null,
                 heightUnit: "cms",
                 weightUnit: "kgs",
-                latestRoleId: user.LatestRoleId ?? null,
-                latestOrgId: user.LatestOrgId ?? null,
-                latestHospitalId: user.LatestHospitalId ?? null,
-                latestUserRole,
-                navigationId: getNavigationId(user.LatestRoleId)
+                latestRoleId: effectiveRoleId ?? null,
+                latestOrgId: effectiveOrgId ?? null,
+                latestHospitalId: effectiveHospitalId ?? null,
+                latestUserRole: latestUserRole ?? "Healthcare Provider",
+                navigationId: navigationId
             };
         }
     }
@@ -670,12 +712,33 @@ export class MobileAuthService {
         }
 
         let latestUserRole: string | null = null;
-        if (user.LatestRoleId) {
-            const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === user.LatestRoleId?.toUpperCase());
+        let effectiveRoleId = user.LatestRoleId;
+        let effectiveOrgId = user.LatestOrgId;
+        let effectiveHospitalId = user.LatestHospitalId;
+
+        if (!effectiveRoleId && rolesList.length > 0) {
+            effectiveRoleId = rolesList[0].roleId;
+            const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+            if (matched) {
+                latestUserRole = matched.Role?.RoleName ?? null;
+                if (!effectiveHospitalId && matched.HospitalId) effectiveHospitalId = matched.HospitalId;
+                if (!effectiveOrgId && matched.OrganizationId) effectiveOrgId = matched.OrganizationId;
+            }
+            try {
+                await AppDataSource.getRepository(User).update(user.Id, {
+                    LatestRoleId: effectiveRoleId,
+                    LatestHospitalId: effectiveHospitalId,
+                    LatestOrgId: effectiveOrgId
+                });
+            } catch (_) {}
+        } else if (effectiveRoleId) {
+            const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
             if (matched) {
                 latestUserRole = matched.Role?.RoleName ?? null;
             }
         }
+
+        const navigationId = getNavigationId(effectiveRoleId) || (rolesList.length > 0 ? getNavigationId(rolesList[0].roleId) : "2") || "2";
 
         return {
             ...(accessToken && { accessToken }),
@@ -700,11 +763,11 @@ export class MobileAuthService {
             weight: user.Weight != null ? String(user.Weight) : null,
             heightUnit: "cms",
             weightUnit: "kgs",
-            latestRoleId: user.LatestRoleId ?? null,
-            latestOrgId: user.LatestOrgId ?? null,
-            latestHospitalId: user.LatestHospitalId ?? null,
-            latestUserRole,
-            navigationId: getNavigationId(user.LatestRoleId)
+            latestRoleId: effectiveRoleId ?? null,
+            latestOrgId: effectiveOrgId ?? null,
+            latestHospitalId: effectiveHospitalId ?? null,
+            latestUserRole: latestUserRole ?? "Healthcare Provider",
+            navigationId: navigationId
         };
     }
 

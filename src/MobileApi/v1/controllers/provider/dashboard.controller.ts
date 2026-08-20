@@ -224,24 +224,30 @@ export const getPatientProfile = async (req: Request, res: Response) => {
  */
 export const getSidebarMenu = async (req: Request, res: Response) => {
     try {
-        const { roleId, orgId, hospitalId, hospId } = req.body;
+        const { roleId, latestRoleId, orgId, latestOrgId, hospitalId, latestHospitalId, hospId } = req.body || {};
 
-        if (!roleId) {
+        const resolvedRoleId = roleId || latestRoleId || (req as any).user?.roleId || (req as any).user?.latestRoleId;
+
+        if (!resolvedRoleId) {
             return res.status(400).json({
                 status: false,
                 message: "Missing required field: roleId is required in request body"
             });
         }
 
-        const resolvedOrgId = orgId !== undefined ? Number(orgId) : null;
-        const resolvedHospitalId = (hospitalId !== undefined ? Number(hospitalId) : (hospId !== undefined ? Number(hospId) : null));
+        const resolvedOrgId = orgId !== undefined ? Number(orgId) : (latestOrgId !== undefined ? Number(latestOrgId) : null);
+        const resolvedHospitalId = (hospitalId !== undefined 
+            ? Number(hospitalId) 
+            : (latestHospitalId !== undefined 
+                ? Number(latestHospitalId) 
+                : (hospId !== undefined ? Number(hospId) : null)));
 
         const parsedOrgId = resolvedOrgId && !isNaN(resolvedOrgId) ? resolvedOrgId : null;
         const parsedHospitalId = resolvedHospitalId && !isNaN(resolvedHospitalId) ? resolvedHospitalId : null;
 
         const { sidebarService } = await import("../../../../services/Common/sidebar.service.js");
         const menu = await sidebarService.getMobileSidebarMenu(
-            roleId as string,
+            resolvedRoleId as string,
             parsedOrgId,
             parsedHospitalId
         );
@@ -267,3 +273,91 @@ export const getSidebarMenu = async (req: Request, res: Response) => {
         });
     }
 };
+
+/**
+ * Retrieves the comprehensive profile of the authenticated healthcare provider / doctor.
+ */
+export const getProviderProfile = async (req: Request, res: Response) => {
+    try {
+        const { doctorId, userId, hospitalId, orgId } = req.body;
+        const targetUserId = doctorId || userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+        if (!targetUserId) {
+            return res.status(400).json({
+                status: false,
+                message: "Doctor/User ID is required"
+            });
+        }
+
+        const result = await mobileDashboardService.getProviderProfile(
+            targetUserId,
+            hospitalId ? Number(hospitalId) : undefined,
+            orgId ? Number(orgId) : undefined
+        );
+        return res.json(ApiResponse.success(result, "Provider profile data retrieved successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to retrieve provider profile details"
+        });
+    }
+};
+
+/**
+ * Updates doctor personal and professional profile details.
+ */
+export const updateProviderProfile = async (req: Request, res: Response) => {
+    try {
+        const { doctorId, userId } = req.body;
+        const targetUserId = doctorId || userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+        if (!targetUserId) {
+            return res.status(400).json({
+                status: false,
+                message: "Doctor/User ID is required"
+            });
+        }
+
+        const result = await mobileDashboardService.updateProviderProfile(targetUserId, req.body);
+        return res.json(ApiResponse.success(result, "Doctor profile updated successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to update doctor profile"
+        });
+    }
+};
+
+/**
+ * Uploads doctor profile photo.
+ */
+export const uploadProviderProfilePhoto = async (req: Request, res: Response) => {
+    try {
+        const file = req.file;
+        if (!file) {
+            return res.status(400).json({
+                status: false,
+                message: "No photo file uploaded"
+            });
+        }
+
+        const { doctorId, userId } = req.body;
+        const targetUserId = doctorId || userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+        if (!targetUserId) {
+            return res.status(400).json({
+                status: false,
+                message: "Doctor/User ID is required"
+            });
+        }
+
+        const result = await mobileDashboardService.uploadProviderPhoto(targetUserId, file);
+        return res.json(ApiResponse.success(result, "Doctor profile photo uploaded successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to upload profile photo"
+        });
+    }
+};
+

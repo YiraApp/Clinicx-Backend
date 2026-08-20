@@ -200,10 +200,20 @@ export const getVersionAndTokenStatus = async (req: Request, res: Response) => {
         }
 
 
+        const defaultPlayStoreLink = "https://play.google.com/store/apps/details?id=ai.yira.clinicx";
+        const defaultAppStoreLink = "https://apps.apple.com/app/yira-clinx/id6741477759";
+        const storeLink = latest?.Url || (normalizedPlatform === PlatformType.ANDROID ? defaultPlayStoreLink : defaultAppStoreLink);
+
         const responseData = {
             versionStatus,
             updateType,
-            tokenStatus
+            tokenStatus,
+            playStoreLink: normalizedPlatform === PlatformType.ANDROID ? storeLink : defaultPlayStoreLink,
+            appStoreLink: normalizedPlatform === PlatformType.IOS ? storeLink : defaultAppStoreLink,
+            url: storeLink,
+            latestVersion: latest?.Version || "1.0.0",
+            currentVersion: resolvedCurrentVersion,
+            forceUpdate: updateType === "force"
         };
 
         return res.json(ApiResponse.success(responseData, "App version and token status fetched successfully"));

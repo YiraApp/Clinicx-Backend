@@ -35,6 +35,7 @@ import { Appointment } from "../models/Appointments/appointment.model.js";
 import { PatientQueue } from "../models/Appointments/patient-queue.model.js";
 import { PatientConsent } from "../models/Consent/patient-consent.model.js";
 import { ConsentRequest } from "../models/Consent/consent-request.model.js";
+import { PatientAccessConsent } from "../models/Consent/patient-access-consent.model.js";
 import { PatientVerification } from "../models/Appointments/patient-verification.model.js";
 import { PatientVerificationDocument } from "../models/Appointments/patient-verification-document.model.js";
 import { ClinicalNote } from "../models/Appointments/clinical-note.model.js";
@@ -98,7 +99,7 @@ export const AppDataSource = new DataSource({
         PatientRegistration, PatientInsurance, UserRegistrationLink,
         ConsentTemplate, ConsentTemplateField,
         Appointment, PatientQueue,
-        PatientConsent, ConsentRequest,
+        PatientConsent, ConsentRequest, PatientAccessConsent,
         PatientVerification, PatientVerificationDocument,
         ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
         PrescriptionDiagnosis, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
