@@ -19,7 +19,7 @@ export class MedicalDocumentRepository {
 
         return await this.repo.find({
             where: query,
-            relations: ["UploadedByUser"],
+            relations: ["UploadedByUser", "Hospital", "Organization", "Appointment", "Appointment.Hospital"],
             order: { CreatedAt: "DESC" }
         });
     }

@@ -62,6 +62,14 @@ export class UserService implements IUserService {
         // 1. Check if a primary user exists for this phone number
         const primaryUser = await userRepository.findPrimaryByPhone(data.PhoneNumber);
 
+        // 1b. Check if email is provided and already belongs to another primary user account
+        if (data.Email && data.Email.trim() !== "") {
+            const existingEmailUser = await userRepository.findPrimaryByEmail(data.Email.trim());
+            if (existingEmailUser && (!primaryUser || existingEmailUser.Id !== primaryUser.Id)) {
+                throw new Error("An account with this email address already exists for another user.");
+            }
+        }
+
         // 2. Count existing users for this phone number
         const userCount = await userRepository.countUsersByPhone(data.PhoneNumber);
 
@@ -197,19 +205,29 @@ export class UserService implements IUserService {
                 throw new Error("User with provided ID not found.");
             }
         } else {
-            const createResult = await this.createUser({
-                FirstName: data.FirstName,
-                LastName: data.LastName,
-                Email: data.Email,
-                Password: data.Password,
-                PhoneNumber: data.PhoneNumber,
-                Gender: data.Gender,
-                CountryCode: data.CountryCode,
-                DateOfBirth: data.DateOfBirth,
-                BloodGroup: data.BloodGroup,
-                Relation: data.Relation || "Admin"
-            }, true);
-            user = await userRepository.findById(createResult.Id);
+            // Check if primary account already exists for this phone number or email before creating a new account
+            if (data.PhoneNumber) {
+                user = await userRepository.findPrimaryByPhone(data.PhoneNumber);
+            }
+            if (!user && data.Email) {
+                user = await userRepository.findPrimaryByEmail(data.Email);
+            }
+
+            if (!user) {
+                const createResult = await this.createUser({
+                    FirstName: data.FirstName,
+                    LastName: data.LastName,
+                    Email: data.Email,
+                    Password: data.Password,
+                    PhoneNumber: data.PhoneNumber,
+                    Gender: data.Gender,
+                    CountryCode: data.CountryCode,
+                    DateOfBirth: data.DateOfBirth,
+                    BloodGroup: data.BloodGroup,
+                    Relation: data.Relation || "Admin"
+                }, true);
+                user = await userRepository.findById(createResult.Id);
+            }
         }
 
         if (!user) {
@@ -225,6 +243,14 @@ export class UserService implements IUserService {
                 throw new Error("Maximum of 6 users allowed per phone number account.");
             }
             user.PhoneNumber = data.PhoneNumber;
+        }
+
+        // 2b. Check if email is provided and already belongs to another primary user account
+        if (data.Email && data.Email.trim() !== "") {
+            const existingEmailUser = await userRepository.findPrimaryByEmail(data.Email.trim());
+            if (existingEmailUser && existingEmailUser.Id !== user.Id) {
+                throw new Error("An account with this email address already exists for another user.");
+            }
         }
 
         // 3. Update basic fields
