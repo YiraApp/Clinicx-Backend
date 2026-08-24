@@ -121,8 +121,8 @@ export class UserController {
             const search = (req.query.search as string) || undefined;
             const roleId = (req.query.roleId as string) || undefined;
             
-            const headerOrgId = req.headers["x-org-id"] as string;
-            const headerHospId = (req.headers["x-hospital-id"] || req.headers["x-hosp-id"]) as string;
+            const headerOrgId = (req.headers["x-org-id"] || req.query.orgId || req.query.organizationId || (req as any).user?.OrganizationId || (req as any).user?.organizationId) as string;
+            const headerHospId = (req.headers["x-hospital-id"] || req.headers["x-hosp-id"] || req.query.hospId || req.query.hospitalId || (req as any).user?.HospitalId || (req as any).user?.hospitalId) as string;
 
             if (!headerOrgId || !headerHospId) {
                 res.status(403).json(ApiResponse.error("Organization or Hospital identification missing."));

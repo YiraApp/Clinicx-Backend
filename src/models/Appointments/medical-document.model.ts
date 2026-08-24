@@ -2,6 +2,9 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Relation
 import { Appointment } from "./appointment.model.js";
 import { User } from "../Account/user.model.js";
 
+import { Hospital } from "../Organizations/hospital.model.js";
+import { Organization } from "../Organizations/organization.model.js";
+
 @Entity({ name: "MedicalDocuments" })
 export class MedicalDocument {
     @PrimaryGeneratedColumn({ type: "bigint" })
@@ -31,8 +34,16 @@ export class MedicalDocument {
     @Column({ type: "bigint" })
     OrganizationId: number;
 
+    @ManyToOne(() => Organization)
+    @JoinColumn({ name: "OrganizationId" })
+    Organization?: Relation<Organization>;
+
     @Column({ type: "bigint" })
     HospitalId: number;
+
+    @ManyToOne(() => Hospital)
+    @JoinColumn({ name: "HospitalId" })
+    Hospital?: Relation<Hospital>;
 
     @Column({ type: "varchar", length: 100 })
     DocumentCategory: string;
