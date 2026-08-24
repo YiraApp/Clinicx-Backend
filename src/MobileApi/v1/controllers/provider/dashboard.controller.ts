@@ -361,3 +361,49 @@ export const uploadProviderProfilePhoto = async (req: Request, res: Response) =>
     }
 };
 
+/**
+ * Toggles a patient's favorite status for a doctor.
+ */
+export const toggleFavoritePatient = async (req: Request, res: Response) => {
+    try {
+        const { doctorId, patientId, isFavorite } = req.body;
+        const currentDocId = doctorId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId || "default";
+
+        if (!patientId) {
+            return res.status(400).json({
+                status: false,
+                message: "Missing patientId"
+            });
+        }
+
+        const result = await mobileDashboardService.toggleFavoritePatient(currentDocId, patientId, isFavorite);
+        return res.json(ApiResponse.success(result, "Favorite status updated successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to toggle favorite status"
+        });
+    }
+};
+
+/**
+ * Retrieves all favorite patients for a doctor.
+ */
+export const getFavoritePatientsList = async (req: Request, res: Response) => {
+    try {
+        const { doctorId, orgId, hospitalId } = req.body;
+        const currentDocId = doctorId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId || "default";
+        const parsedOrgId = Number(orgId || 1);
+        const parsedHospitalId = Number(hospitalId || 1);
+
+        const result = await mobileDashboardService.getFavoritePatients(currentDocId, parsedOrgId, parsedHospitalId);
+        return res.json(ApiResponse.success(result, "Favorite patients retrieved successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to retrieve favorite patients"
+        });
+    }
+};
+
+

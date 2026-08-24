@@ -8,6 +8,9 @@ import { clinicalNoteRepository } from "../../../../repositories/Appointments/cl
 import { ClinicalNote } from "../../../../models/Appointments/clinical-note.model.js";
 import { PatientInsurance } from "../../../../models/Organizations/patient-insurance.model.js";
 import { PatientMedicalRecord } from "../../../../models/Appointments/patient-medical-record.model.js";
+import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
+import { MedicalDocument } from "../../../../models/Appointments/medical-document.model.js";
+import { MedicalRecord } from "../../../../models/Appointments/medical-record.model.js";
 
 export class MobileDashboardService {
     async getProviderDashboard(userId: string, hospId: number, orgId: number): Promise<any> {
@@ -47,7 +50,9 @@ export class MobileDashboardService {
         const profile = {
             name: `${prefix}${fullName}`,
             specialty: provider?.Specialty || "General Practitioner",
-            clinicAddress: provider?.Hospital?.Address || (provider?.Hospital?.Name ? `${provider.Hospital.Name}` : "Clinic Branch")
+            clinicAddress: provider?.Hospital?.Address || (provider?.Hospital?.Name ? `${provider.Hospital.Name}` : "Clinic Branch"),
+            profileImageUrl: user.ImagePath || null,
+            imagePath: user.ImagePath || null,
         };
 
         const todayStr = new Date().toISOString().split('T')[0];
@@ -150,31 +155,16 @@ export class MobileDashboardService {
             };
         });
 
-        // 4. Calculate stats/metrics aligned 100% with the web doctor dashboard calculations
-        // Today's appointments count & completed count
-        const todayStatsQuery = appointmentRepo.createQueryBuilder("appointment")
-            .select("COUNT(*)", "totalToday")
-            .addSelect("COUNT(CASE WHEN appointment.Status = 'Completed' THEN 1 END)", "completedToday")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("CAST(appointment.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE)");
+        // 4. Calculate stats/metrics aligned with the doctor's actual records
+        // Today's appointments count & completed count directly from today's dataset
+        const totalToday = todaysAppointments.length;
+        const completedToday = todaysAppointments.filter(a => (a.Status || "").toLowerCase() === "completed").length;
 
-        if (hospId) {
-            todayStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
-        }
-        if (orgId) {
-            todayStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
-        }
-
-        const todayStatsResult = await todayStatsQuery.getRawOne();
-        const totalToday = parseInt(todayStatsResult?.totalToday || "0", 10);
-        const completedToday = parseInt(todayStatsResult?.completedToday || "0", 10);
-
-        // Unique active patients total
+        // Unique active patients total of this doctor
         const totalPatientsQuery = appointmentRepo.createQueryBuilder("appointment")
             .select("COUNT(DISTINCT appointment.UserId)", "count")
-            .innerJoin("Users", "user", "appointment.UserId = user.Id AND user.Status = 1 AND user.IsDeleted = 0")
-            .innerJoin("UserRoles", "ur", "ur.UserId = appointment.UserId AND ur.OrganizationId = appointment.OrgId AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0' AND ur.Status = 1 AND ur.IsDeleted = 0")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId });
+            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .andWhere("appointment.UserId IS NOT NULL");
 
         if (hospId) {
             totalPatientsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
@@ -186,13 +176,12 @@ export class MobileDashboardService {
         const totalPatientsResult = await totalPatientsQuery.getRawOne();
         const totalPatients = parseInt(totalPatientsResult?.count || "0", 10);
 
-        // Unique patients new this week
+        // Unique patients new in the last 7 days
         const newPatientsWeekQuery = appointmentRepo.createQueryBuilder("a1")
             .select("COUNT(DISTINCT a1.UserId)", "count")
-            .innerJoin("Users", "u1", "a1.UserId = u1.Id AND u1.Status = 1 AND u1.IsDeleted = 0")
-            .innerJoin("UserRoles", "ur1", "ur1.UserId = a1.UserId AND ur1.OrganizationId = a1.OrgId AND ur1.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0' AND ur1.Status = 1 AND ur1.IsDeleted = 0")
             .where("a1.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("a1.AppointmentDate >= DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))");
+            .andWhere("a1.UserId IS NOT NULL")
+            .andWhere("a1.AppointmentDate >= CAST(DATEADD(day, -7, GETDATE()) AS DATE)");
 
         if (hospId) {
             newPatientsWeekQuery.andWhere("a1.HospitalId = :hospId", { hospId });
@@ -201,24 +190,14 @@ export class MobileDashboardService {
             newPatientsWeekQuery.andWhere("a1.OrgId = :orgId", { orgId });
         }
 
-        newPatientsWeekQuery.andWhere(`NOT EXISTS (
-            SELECT 1 FROM Appointments a2
-            WHERE a2.UserId = a1.UserId 
-            AND a2.DoctorId = a1.DoctorId 
-            ${orgId ? `AND a2.OrgId = ${orgId}` : ''}
-            AND a2.AppointmentDate < DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
-        )`);
-
         const newPatientsWeekResult = await newPatientsWeekQuery.getRawOne();
         const newPatientsThisWeek = parseInt(newPatientsWeekResult?.count || "0", 10);
 
-        // Completed appointments total & follow-ups count
+        // Completed appointments total
         const doneStatsQuery = appointmentRepo.createQueryBuilder("appointment")
             .select("COUNT(*)", "totalCompleted")
-            .addSelect("COUNT(CASE WHEN (appointment.ParentAppointmentId IS NOT NULL OR appointment.Reason LIKE :follow) THEN 1 END)", "followUpsCount")
             .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("appointment.Status = :status", { status: "Completed" })
-            .setParameter("follow", "%follow%");
+            .andWhere("LOWER(appointment.Status) = 'completed'");
 
         if (hospId) {
             doneStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
@@ -229,26 +208,25 @@ export class MobileDashboardService {
 
         const doneStatsResult = await doneStatsQuery.getRawOne();
         const totalCompleted = parseInt(doneStatsResult?.totalCompleted || "0", 10);
-        const followUpsCount = parseInt(doneStatsResult?.followUpsCount || "0", 10);
 
         const metrics = {
             today: {
-                title: "Today",
+                title: "Appointments",
                 value: totalToday,
-                subtext: `${completedToday} completed`
+                subtext: totalToday > 0 ? `${completedToday} completed` : "No appointments"
             },
             patients: {
-                title: "Patients",
+                title: "Total Patients",
                 value: totalPatients,
-                subtext: `${newPatientsThisWeek} new this week`
+                subtext: newPatientsThisWeek > 0 ? `${newPatientsThisWeek} new this week` : "All time"
             },
             done: {
-                title: "Done",
+                title: "Completed",
                 value: totalCompleted,
-                subtext: `${followUpsCount} follow-ups`
+                subtext: totalToday > 0 ? `${Math.round((completedToday / totalToday) * 100)}% Today` : "All Time"
             },
             stats: {
-                title: "Stats",
+                title: "Weekly Stats",
                 value: newPatientsThisWeek,
                 subtext: `${newPatientsThisWeek} new patients`
             }
@@ -440,6 +418,7 @@ export class MobileDashboardService {
             }
         });
 
+        const favSet = this.getDoctorFavoriteSet(doctorId);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
         const patientDataList = [];
 
@@ -507,8 +486,11 @@ export class MobileDashboardService {
                 }
             }
 
+            const patId = reg ? `YRA${String(reg.Id).padStart(4, "0")}` : `YRA0000`;
+            const isFav = favSet.has(user.Id) || favSet.has(patId);
+
             patientDataList.push({
-                id: reg ? `YRA${String(reg.Id).padStart(4, "0")}` : `YRA0000`,
+                id: patId,
                 userId: user.Id,
                 name: `${user.FirstName || ""} ${user.LastName || ""}`.trim(),
                 phoneNumber: user.PhoneNumber || "",
@@ -521,7 +503,8 @@ export class MobileDashboardService {
                 condition,
                 total_visits: totalVisits,
                 last_visit_date: lastVisitDate,
-                allergies: allergiesArr
+                allergies: allergiesArr,
+                isFavorite: isFav,
             });
         }
 
@@ -555,7 +538,9 @@ export class MobileDashboardService {
 
             if (status) {
                 const stat = status.trim().toLowerCase();
-                if (stat !== "01" && stat !== "all") {
+                if (stat === "favorites" || stat === "favorite") {
+                    filteredList = filteredList.filter(patient => patient.isFavorite === true);
+                } else if (stat !== "01" && stat !== "all") {
                     filteredList = filteredList.filter(patient => {
                         return (patient.status_label || "").toLowerCase() === stat || 
                                (patient.status_id || "") === stat;
@@ -621,6 +606,7 @@ export class MobileDashboardService {
 
         const appointments = await appointmentRepo.find({
             where: { UserId: patientId, OrgId: orgId, HospitalId: hospitalId },
+            relations: ["Doctor", "Hospital", "Organization"],
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
 
@@ -679,6 +665,113 @@ export class MobileDashboardService {
             ? formatDateMMMddyyyyWithYear(futureAppointments[0].AppointmentDate)
             : "None";
 
+        const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
+        const docRepo = AppDataSource.getRepository(MedicalDocument);
+        const recordRepo = AppDataSource.getRepository(MedicalRecord);
+        const noteRepo = AppDataSource.getRepository(ClinicalNote);
+
+        const allPrescriptions = await prescriptionRepo.find({
+            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            relations: ["Diagnoses", "Medications", "Doctor"],
+            order: { CreatedAt: "DESC" }
+        });
+
+        const allNotes = await noteRepo.find({
+            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            relations: ["Doctor"],
+            order: { CreatedAt: "DESC" }
+        });
+
+        const allDocs = await docRepo.find({
+            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            relations: ["Doctor"],
+            order: { CreatedAt: "DESC" }
+        });
+
+        const allRecords = await recordRepo.find({
+            where: { PatientId: patientId },
+            relations: ["Appointment"],
+            order: { CreatedAt: "DESC" }
+        });
+
+        const mappedAppointments = appointments.map(a => {
+            const apptId = a.Id;
+            const apptIdStr = String(apptId).toLowerCase().trim();
+
+            const apptPrescriptions = allPrescriptions.filter(p => p.AppointmentId != null && String(p.AppointmentId).toLowerCase().trim() === apptIdStr);
+            const apptNotes = allNotes.filter(n => n.AppointmentId != null && String(n.AppointmentId).toLowerCase().trim() === apptIdStr);
+            const apptDocs = allDocs.filter(d => d.AppointmentId != null && String(d.AppointmentId).toLowerCase().trim() === apptIdStr);
+            const apptRecords = allRecords.filter(r => r.AppointmentId != null && String(r.AppointmentId).toLowerCase().trim() === apptIdStr);
+
+            return {
+                id: String(apptId),
+                appointment_number: a.AppointmentNumber ? String(a.AppointmentNumber) : "",
+                token_number: a.AppointmentNumber ? String(a.AppointmentNumber).padStart(2, '0') : "",
+                appointment_date: formatDateMMMddyyyy(a.AppointmentDate),
+                raw_date: a.AppointmentDate,
+                start_time: a.StartTime || "",
+                end_time: a.EndTime || "",
+                duration: a.Duration ? `${a.Duration} mins` : "15 mins",
+                condition: a.ChiefComplaint || a.Reason || "General Consultation",
+                chief_complaint: a.ChiefComplaint || "",
+                reason: a.Reason || a.ChiefComplaint || "",
+                status: a.Status || "Confirmed",
+                appointment_type: a.AppointmentType || (a.IsTeleConsultation ? "Video Call" : "In-Clinic"),
+                is_tele_consultation: a.IsTeleConsultation || false,
+                meeting_url: a.MeetingUrl || "",
+                location: a.Location || (a.Hospital ? a.Hospital.Name : "Main Clinic"),
+                hospital_name: a.Hospital ? a.Hospital.Name : "",
+                hospital_address: a.Hospital ? (a.Hospital.Address || "") : "",
+                hospital_phone: a.Hospital ? (a.Hospital.MobileNumber || a.Hospital.HelplineNumber || "") : "",
+                doctor_id: a.DoctorId || "",
+                doctor_name: a.Doctor ? (a.Doctor.FirstName ? `Dr. ${a.Doctor.FirstName} ${a.Doctor.LastName || ''}`.trim() : "Doctor") : "Doctor",
+                doctor_email: a.Doctor ? (a.Doctor.Email || "") : "",
+                doctor_phone: a.Doctor ? (a.Doctor.PhoneNumber || "") : "",
+                notes: a.Notes || "",
+                created_at: a.CreatedAt ? formatDateMMMddyyyy(a.CreatedAt) : "",
+                created_by: a.CreatedBy || "",
+                prescriptions: apptPrescriptions.map(p => ({
+                    id: String(p.Id),
+                    date: formatDateMMMddyyyy(p.Date || p.CreatedAt),
+                    notes: p.Notes || "",
+                    doctor_name: p.Doctor ? (p.Doctor.FirstName ? `Dr. ${p.Doctor.FirstName} ${p.Doctor.LastName || ''}`.trim() : "Doctor") : "Doctor",
+                    medications: (p.Medications || []).map(m => ({
+                        id: String(m.Id),
+                        name: m.Medication || "Medication",
+                        dosage: m.Dosage || "",
+                        frequency: m.FrequencyType || "",
+                        duration: m.DurationValue ? `${m.DurationValue} ${m.DurationUnit || 'days'}` : "",
+                        instructions: m.Instructions || ""
+                    })),
+                    diagnoses: (p.Diagnoses || []).map(d => ({
+                        id: String(d.Id),
+                        name: d.Diagnosis || "",
+                        icd10: d.DiagnosisConceptId || ""
+                    }))
+                })),
+                clinical_notes: apptNotes.map(n => ({
+                    id: String(n.Id),
+                    notes: n.Notes || "",
+                    doctor_name: n.Doctor ? (n.Doctor.FirstName ? `Dr. ${n.Doctor.FirstName} ${n.Doctor.LastName || ''}`.trim() : "Doctor") : "Doctor",
+                    created_at: formatDateMMMddyyyy(n.CreatedAt)
+                })),
+                documents: apptDocs.map(d => ({
+                    id: String(d.Id),
+                    file_name: d.OriginalFileName || d.FileName || "Document",
+                    category: d.DocumentCategory || "General",
+                    type: d.DocumentType || "Report",
+                    file_url: d.BlobUrl || "",
+                    created_at: formatDateMMMddyyyy(d.CreatedAt)
+                })),
+                medical_records: apptRecords.map(r => ({
+                    id: String(r.Id),
+                    record_type: r.RecordType || "Medical Diagnosis",
+                    file_url: r.FileUrl || "",
+                    created_at: formatDateMMMddyyyy(r.CreatedAt)
+                }))
+            };
+        });
+
         return {
             contact_information: {
                 phone: user.PhoneNumber || "",
@@ -703,7 +796,8 @@ export class MobileDashboardService {
                 initial_registration,
                 last_check_in_visit,
                 next_scheduled_appointment
-            }
+            },
+            appointments: mappedAppointments
         };
     }
 
@@ -1009,7 +1103,52 @@ export class MobileDashboardService {
             message: "Profile photo uploaded successfully"
         };
     }
+
+    private doctorFavoritesMap = new Map<string, Set<string>>();
+
+    getDoctorFavoriteSet(doctorId: string): Set<string> {
+        const key = String(doctorId || 'default').trim().toLowerCase();
+        if (!this.doctorFavoritesMap.has(key)) {
+            this.doctorFavoritesMap.set(key, new Set<string>());
+        }
+        return this.doctorFavoritesMap.get(key)!;
+    }
+
+    async toggleFavoritePatient(doctorId: string, patientId: string, isFavExplicit?: boolean): Promise<{ isFavorite: boolean }> {
+        const favSet = this.getDoctorFavoriteSet(doctorId);
+        const pId = String(patientId).trim();
+        let isFav: boolean;
+        if (typeof isFavExplicit === 'boolean') {
+            if (isFavExplicit) {
+                favSet.add(pId);
+            } else {
+                favSet.delete(pId);
+            }
+            isFav = isFavExplicit;
+        } else {
+            if (favSet.has(pId)) {
+                favSet.delete(pId);
+                isFav = false;
+            } else {
+                favSet.add(pId);
+                isFav = true;
+            }
+        }
+        return { isFavorite: isFav };
+    }
+
+    async getFavoritePatients(doctorId: string, orgId: number, hospId: number): Promise<any> {
+        const favSet = this.getDoctorFavoriteSet(doctorId);
+        const allPatientsResult = await this.getPatientsList(doctorId, orgId, hospId);
+        const allPatients: any[] = allPatientsResult?.patients || [];
+        const favPatients = allPatients.filter(p => favSet.has(p.userId) || favSet.has(p.id) || p.isFavorite);
+        return {
+            patients: favPatients,
+            total: favPatients.length
+        };
+    }
 }
 
 export const mobileDashboardService = new MobileDashboardService();
+
 

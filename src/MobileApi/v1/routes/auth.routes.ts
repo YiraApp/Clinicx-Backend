@@ -2,14 +2,15 @@ import { Router } from "express";
 import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPassword, resetPassword, getRoleDetails, updateLatestContext, getUserData, verifyOTP, changePassword } from "../controllers/auth.controller.js";
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
-import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu } from "../controllers/provider/dashboard.controller.js";
-import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot } from "../controllers/provider/appointment.controller.js";
+import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList } from "../controllers/provider/dashboard.controller.js";
+import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments } from "../controllers/provider/appointment.controller.js";
 import { mobileSnomedController } from "../controllers/snomed.controller.js";
 import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
 import { mobileMedicalRecordController } from "../controllers/provider/medical-record.controller.js";
 import { mobilePrescriptionController } from "../controllers/provider/prescription.controller.js";
 import { mobileMedicalDocumentController } from "../controllers/provider/medical-document.controller.js";
 import { patientAccessConsentController } from "../controllers/consent/patient-access-consent.controller.js";
+import { notificationController } from "../controllers/notification.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
@@ -34,9 +35,14 @@ authRouter.post("/update-appointment-status", authMiddleware, updateAppointmentS
 authRouter.post("/doctor-slots", authMiddleware, getMobileDoctorSlots);
 authRouter.post("/doctor-slots/deploy", authMiddleware, deployMobileDoctorSlots);
 authRouter.post("/doctor-slots/block", authMiddleware, blockMobileDoctorSlot);
+authRouter.get("/treatment-plans", authMiddleware, getTreatmentPlans);
+authRouter.post("/treatment-plans", authMiddleware, getTreatmentPlans);
+authRouter.post("/patient-appointments", authMiddleware, getPatientAppointments);
 authRouter.post("/clinical-data", authMiddleware, getClinicalData);
 authRouter.post("/patients", authMiddleware, getPatientsList);
 authRouter.get("/patients/filters", authMiddleware, getPatientsFilters);
+authRouter.post("/favorite-patients/toggle", authMiddleware, toggleFavoritePatient);
+authRouter.post("/favorite-patients/list", authMiddleware, getFavoritePatientsList);
 authRouter.post("/patient/overview", authMiddleware, getPatientOverview);
 authRouter.post("/patient/details", authMiddleware, getPatientProfile);
 authRouter.post("/provider/profile", authMiddleware, getProviderProfile);
@@ -80,5 +86,10 @@ authRouter.post("/patient-access/request", authMiddleware, (req, res) => patient
 authRouter.get("/patient-access/check", authMiddleware, (req, res) => patientAccessConsentController.checkAccess(req, res));
 authRouter.get("/patient-access/patient-consents", authMiddleware, (req, res) => patientAccessConsentController.getPatientConsents(req, res));
 authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patientAccessConsentController.respondToConsent(req, res));
+
+// In-App Notifications & Alerts
+authRouter.get("/notifications", authMiddleware, notificationController.getNotifications);
+authRouter.post("/notifications/:id/read", authMiddleware, notificationController.markAsRead);
+authRouter.post("/notifications/mark-all-read", authMiddleware, notificationController.markAllAsRead);
 
 export { authRouter };

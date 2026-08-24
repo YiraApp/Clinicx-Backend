@@ -16,6 +16,12 @@ export class UserDeviceRepository {
         });
     }
 
+    async findActiveDevicesByUserId(userId: string): Promise<UserDevice[]> {
+        return await this.deviceRepo.find({
+            where: { UserId: userId, IsActive: true }
+        });
+    }
+
     async saveDevice(device: UserDevice): Promise<UserDevice> {
         return await this.deviceRepo.save(device);
     }

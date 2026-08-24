@@ -1,5 +1,8 @@
 import { Request, Response } from "express";
 import { patientPrescriptionService } from "../../../../services/Appointments/patient-prescription.service.js";
+import { pushNotificationService } from "../../../../services/Notifications/push-notification.service.js";
+import { AppDataSource } from "../../../../config/database.js";
+import { User } from "../../../../models/Account/user.model.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
 
 const normalizeMedication = (med: any) => ({
@@ -92,6 +95,33 @@ export class MobilePrescriptionController {
                     return res.status(400).json(ApiResponse.error("Patient ID is required"));
                 }
                 results.push(await patientPrescriptionService.addPrescription(header));
+            }
+
+            // Trigger Push Notification to Patient
+            try {
+                const firstResult = results[0];
+                const patientId = firstResult?.PatientId || body.patientId || body.PatientId;
+                const doctorId = firstResult?.DoctorId || body.doctorId || body.DoctorId;
+                const appointmentId = firstResult?.AppointmentId || body.appointmentId || body.AppointmentId;
+
+                if (patientId) {
+                    let doctorName = "Your doctor";
+                    if (doctorId) {
+                        const userRepo = AppDataSource.getRepository(User);
+                        const doc = await userRepo.findOne({ where: { Id: doctorId } });
+                        if (doc) doctorName = `${doc.FirstName || ""} ${doc.LastName || ""}`.trim();
+                    }
+
+                    await pushNotificationService.notifyPrescriptionAdded({
+                        patientId,
+                        doctorId,
+                        doctorName,
+                        appointmentId,
+                        prescriptionId: firstResult?.Id
+                    });
+                }
+            } catch (e) {
+                console.error("Failed to send prescription push notification:", e);
             }
 
             return res.status(201).json(ApiResponse.success(results, "Prescription saved successfully"));

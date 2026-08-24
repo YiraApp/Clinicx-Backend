@@ -23,10 +23,7 @@ export class ZoomService {
         const clientSecret = process.env.ZOOM_CLIENT_SECRET;
 
         if (!accountId || !clientId || !clientSecret) {
-            // If keys are missing, we fall back to a mock/simulated behavior for now 
-            // but log a warning.
-            console.warn("Zoom API credentials missing. Please set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, and ZOOM_CLIENT_SECRET.");
-            return "MOCK_TOKEN";
+            throw new Error("Zoom API credentials missing in .env (ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET).");
         }
 
         const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -39,7 +36,7 @@ export class ZoomService {
 
         const data = await response.json();
         if (!response.ok) {
-            throw new Error(`Failed to get Zoom access token: ${data.reason || data.message}`);
+            throw new Error(`Failed to get Zoom access token: ${data.reason || data.message || JSON.stringify(data)}`);
         }
 
         return data.access_token;
@@ -51,57 +48,15 @@ export class ZoomService {
      * @param startTime Optional start time (for scheduled meetings)
      * @param duration Optional duration in minutes
      */
-    /**
-     * Generates a Jitsi Meet URL
-     */
-    generateJitsiUrl(roomName?: string): string {
-        const domain = process.env.JITSI_DOMAIN || "meet.jit.si";
-        const room = roomName || `ClinicX-${Math.floor(10000000 + Math.random() * 90000000)}`;
-        return `https://${domain}/${room}`;
-    }
-
-    /**
-     * Creates a Zoom or Jitsi meeting.
-     * @param topic Meeting topic
-     * @param startTime Optional start time (for scheduled meetings)
-     * @param duration Optional duration in minutes
-     */
     async createMeeting(topic: string, startTime?: Date, duration: number = 30): Promise<ZoomMeetingResponse> {
         try {
-            if (process.env.VIDEO_PROVIDER === "jitsi") {
-                const jitsiUrl = this.generateJitsiUrl();
-                const mockId = Math.floor(Math.random() * 10000000000);
-                return {
-                    id: mockId,
-                    join_url: jitsiUrl,
-                    start_url: jitsiUrl,
-                    topic: topic,
-                    start_time: startTime?.toISOString(),
-                    duration: duration
-                };
-            }
-
             const accessToken = await this.getAccessToken();
-            
-            // If no credentials, return a Jitsi / simulated meeting link for instant join
-            if (accessToken === "MOCK_TOKEN") {
-                const mockId = Math.floor(Math.random() * 10000000000);
-                const jitsiUrl = this.generateJitsiUrl(`ClinicX-Consultation-${mockId}`);
-                return {
-                    id: mockId,
-                    join_url: jitsiUrl,
-                    start_url: jitsiUrl,
-                    topic: topic,
-                    start_time: startTime?.toISOString(),
-                    duration: duration
-                };
-            }
 
             const meetingData = {
-                topic: topic,
+                topic: topic || "Doctor Consultation",
                 type: startTime ? 2 : 1, // 1 for instant, 2 for scheduled
                 start_time: startTime ? startTime.toISOString() : undefined,
-                duration: duration,
+                duration: duration || 30,
                 settings: {
                     host_video: true,
                     participant_video: true,
@@ -122,25 +77,23 @@ export class ZoomService {
 
             const data = await response.json();
             if (!response.ok) {
-                throw new Error(`Zoom API Error: ${data.message || 'Unknown error'}`);
+                throw new Error(`Zoom API Error: ${data.message || JSON.stringify(data)}`);
             }
 
-            return data;
+            return {
+                id: data.id,
+                join_url: data.join_url,
+                start_url: data.start_url || data.join_url,
+                topic: data.topic,
+                start_time: data.start_time,
+                duration: data.duration
+            };
         } catch (error: any) {
             console.error("Zoom Service Error:", error.message);
-            // Fallback to Jitsi meeting URL if Zoom service fails
-            const fallbackId = Math.floor(Math.random() * 10000000000);
-            const fallbackJitsiUrl = this.generateJitsiUrl(`ClinicX-Fallback-${fallbackId}`);
-            return {
-                id: fallbackId,
-                join_url: fallbackJitsiUrl,
-                start_url: fallbackJitsiUrl,
-                topic: topic,
-                start_time: startTime?.toISOString(),
-                duration: duration
-            };
+            throw error;
         }
     }
 }
 
 export const zoomService = new ZoomService();
+

@@ -62,6 +62,7 @@ import { MeetingRedirection } from "../models/Appointments/meeting-redirection.m
 import { PasswordResetToken } from "../models/Account/password-reset-token.model.js";
 import { UserDevice } from "../models/Account/userdevice.model.js";
 import { AppVersion } from "../models/Account/app-version.model.js";
+import { AppNotification } from "../models/Common/app-notification.model.js";
 
 import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
 
@@ -109,7 +110,8 @@ export const AppDataSource = new DataSource({
         MeetingRedirection,
         PasswordResetToken,
         UserDevice,
-        AppVersion
+        AppVersion,
+        AppNotification
     ],
     extra: {
         encrypt: true,
@@ -221,7 +223,28 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations and core tables");
+        // Ensure AppNotifications table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AppNotifications')
+            BEGIN
+                CREATE TABLE AppNotifications (
+                    Id UNIQUEIDENTIFIER DEFAULT NEWID() PRIMARY KEY,
+                    UserId UNIQUEIDENTIFIER NOT NULL,
+                    SenderId UNIQUEIDENTIFIER NULL,
+                    Title NVARCHAR(255) NOT NULL,
+                    Body NVARCHAR(MAX) NOT NULL,
+                    Type VARCHAR(50) DEFAULT 'SYSTEM' NOT NULL,
+                    ReferenceId VARCHAR(100) NULL,
+                    Route VARCHAR(255) NULL,
+                    IsRead BIT DEFAULT 0 NOT NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    UpdatedAt DATETIME NULL
+                );
+                CREATE NONCLUSTERED INDEX IX_AppNotifications_UserId ON AppNotifications (UserId, CreatedAt DESC);
+            END
+        `);
+
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

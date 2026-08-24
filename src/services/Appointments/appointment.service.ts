@@ -35,6 +35,10 @@ export class AppointmentService {
         createdBy?: string;
         reportUrl?: string;
         parsedSummary?: string;
+        parentAppointmentId?: number | null;
+        treatmentPlanIds?: string[];
+        customTreatmentPlans?: { name: string; amount: number; description?: string }[];
+        discountAmount?: number;
     }) {
         // 1. Mandatory Mobile Number check
         const rawPhone = data.patientPhone || "";
@@ -231,7 +235,11 @@ export class AppointmentService {
             reason: data.reason,
             appointmentType: data.appointmentType,
             isTeleConsultation: data.isTeleConsultation,
-            createdBy: data.createdBy || "PulseWhatsApp"
+            createdBy: data.createdBy || "PulseWhatsApp",
+            parentAppointmentId: data.parentAppointmentId || null,
+            treatmentPlanIds: data.treatmentPlanIds || [],
+            customTreatmentPlans: data.customTreatmentPlans || [],
+            discountAmount: data.discountAmount || 0
         });
 
         // 5. If Report Blob URL is provided from Pulse, save into MedicalDocuments (Patient Records UI) & PostVisitDocuments tables

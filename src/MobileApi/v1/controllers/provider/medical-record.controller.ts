@@ -1,5 +1,8 @@
 import { Request, Response } from "express";
 import { patientMedicalRecordService } from "../../../../services/Appointments/patient-medical-record.service.js";
+import { pushNotificationService } from "../../../../services/Notifications/push-notification.service.js";
+import { AppDataSource } from "../../../../config/database.js";
+import { User } from "../../../../models/Account/user.model.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
 
 export class MobileMedicalRecordController {
@@ -64,6 +67,27 @@ export class MobileMedicalRecordController {
             }
 
             const record = await patientMedicalRecordService.addRecord(data);
+
+            // Trigger Push Notification to Patient
+            try {
+                let doctorName = "Your doctor";
+                if (data.DoctorId) {
+                    const userRepo = AppDataSource.getRepository(User);
+                    const doc = await userRepo.findOne({ where: { Id: data.DoctorId } });
+                    if (doc) doctorName = `${doc.FirstName || ""} ${doc.LastName || ""}`.trim();
+                }
+
+                await pushNotificationService.notifyMedicalRecordAdded({
+                    patientId: data.PatientId,
+                    doctorId: data.DoctorId,
+                    doctorName,
+                    recordName: data.Type || data.ChiefComplaint || "Consultation Summary",
+                    appointmentId: data.AppointmentId
+                });
+            } catch (e) {
+                console.error("Failed to send medical record push notification:", e);
+            }
+
             return res.status(201).json(ApiResponse.success(record, "Medical record created successfully"));
         } catch (error: any) {
             console.error("Mobile Medical Record Add Error:", error);
