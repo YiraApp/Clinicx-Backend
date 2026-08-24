@@ -143,7 +143,7 @@ export class UserRepository implements IUserRepository {
         }
 
 
-        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'COALESCE(ur.UpdatedAt, ur.CreatedAt)';
+        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
 
         if (filters?.currentUserId) {
             query.addSelect('CASE WHEN u.Id = :currentUserId THEN 0 ELSE 1 END', 'priority');

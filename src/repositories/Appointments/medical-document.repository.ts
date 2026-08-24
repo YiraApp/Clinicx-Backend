@@ -8,7 +8,7 @@ export class MedicalDocumentRepository {
         return await this.repo.save(document);
     }
 
-    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number): Promise<MedicalDocument[]> {
+    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number): Promise<MedicalDocument[]> {
         const query: any = { PatientId: patientId, IsDeleted: false };
         if (appointmentId) {
             query.AppointmentId = appointmentId;
@@ -17,11 +17,16 @@ export class MedicalDocumentRepository {
             if (hospitalId) query.HospitalId = hospitalId;
         }
 
-        return await this.repo.find({
+        const findOptions: any = {
             where: query,
-            relations: ["UploadedByUser"],
+            relations: ["UploadedByUser", "Hospital", "Organization", "Appointment", "Appointment.Hospital"],
             order: { CreatedAt: "DESC" }
-        });
+        };
+        if (limit && limit > 0) {
+            findOptions.take = limit;
+        }
+
+        return await this.repo.find(findOptions);
     }
 
     async findById(id: number): Promise<MedicalDocument | null> {
