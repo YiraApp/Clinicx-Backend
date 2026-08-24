@@ -180,11 +180,7 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
                     );
                     if (activeAppt) {
                         if (activeAppt.User) {
-<<<<<<< HEAD
                             patientName = `${activeAppt.User.FirstName || ''} ${activeAppt.User.LastName || ''}`.trim() || activeAppt.User.Email || undefined;
-=======
-                            patientName = `${activeAppt.User.FirstName || ""} ${activeAppt.User.LastName || ""}`.trim() || activeAppt.User.Email;
->>>>>>> mobile-apis-14-08-26
                         }
                         appointmentType = activeAppt.AppointmentType || 'Regular Check-up';
                     }
