@@ -8,6 +8,7 @@ import { clinicalNoteRepository } from "../../../../repositories/Appointments/cl
 import { ClinicalNote } from "../../../../models/Appointments/clinical-note.model.js";
 import { PatientInsurance } from "../../../../models/Organizations/patient-insurance.model.js";
 import { PatientMedicalRecord } from "../../../../models/Appointments/patient-medical-record.model.js";
+import { MedicalDocument } from "../../../../models/Appointments/medical-document.model.js";
 
 export class MobileDashboardService {
     async getProviderDashboard(userId: string, hospId: number, orgId: number): Promise<any> {
@@ -596,7 +597,7 @@ export class MobileDashboardService {
     }
 
 // removed getPatientNotesDetail method
-    async getPatientOverview(patientId: string, orgId: number, hospitalId: number): Promise<any> {
+    async getPatientOverview(patientId: string, orgId?: number, hospitalId?: number): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
         const appointmentRepo = AppDataSource.getRepository(Appointment);
@@ -611,16 +612,27 @@ export class MobileDashboardService {
             throw new Error("Patient not found");
         }
 
+        const regWhere: any = { UserId: patientId, IsDeleted: false };
+        if (orgId) regWhere.OrganizationId = orgId;
+        if (hospitalId) regWhere.HospitalId = hospitalId;
         const reg = await regRepo.findOne({
-            where: { UserId: patientId, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+            where: regWhere,
+            order: { CreatedAt: "DESC" }
         });
 
+        const insWhere: any = { UserId: patientId, IsDeleted: false };
+        if (orgId) insWhere.OrganizationId = orgId;
+        if (hospitalId) insWhere.HospitalId = hospitalId;
         const insurance = await insuranceRepo.findOne({
-            where: { UserId: patientId, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+            where: insWhere,
+            order: { CreatedAt: "DESC" }
         });
 
+        const apptWhere: any = { UserId: patientId };
+        if (orgId) apptWhere.OrgId = orgId;
+        if (hospitalId) apptWhere.HospitalId = hospitalId;
         const appointments = await appointmentRepo.find({
-            where: { UserId: patientId, OrgId: orgId, HospitalId: hospitalId },
+            where: apptWhere,
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
 
@@ -664,20 +676,152 @@ export class MobileDashboardService {
         // Visit history
         const initial_registration = formatDateMMMddyyyyWithYear(reg?.CreatedAt || user.CreatedAt);
         
-        // Last check-in visit (most recent past appointment)
-        const now = new Date();
-        const pastAppointments = appointments.filter(a => new Date(a.AppointmentDate) <= now);
+        const formatTime12h = (timeStr: string) => {
+            if (!timeStr) return "";
+            const parts = timeStr.split(":");
+            if (parts.length < 2) return timeStr;
+            let hour = parseInt(parts[0], 10);
+            const min = parts[1];
+            const ampm = hour >= 12 ? "PM" : "AM";
+            hour = hour % 12;
+            hour = hour ? hour : 12;
+            const hourStr = hour < 10 ? `0${hour}` : `${hour}`;
+            return `${hourStr}:${min} ${ampm}`;
+        };
+
+        // Fetch all appointments globally across all orgs & hospitals for this patient
+        const allPatientAppts = await appointmentRepo.createQueryBuilder("apt")
+            .leftJoinAndSelect("apt.Doctor", "doctor")
+            .leftJoinAndSelect("apt.Hospital", "hospital")
+            .leftJoinAndSelect("apt.Organization", "org")
+            .where("apt.UserId = :patientId", { patientId })
+            .andWhere("LOWER(apt.Status) NOT IN ('cancelled', 'deleted', 'canceled')")
+            .orderBy("CAST(apt.AppointmentDate AS DATE)", "ASC")
+            .addOrderBy("apt.StartTime", "ASC")
+            .getMany();
+
+        const todayStr = new Date().toISOString().split("T")[0]; // YYYY-MM-DD for today
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+
+        // Last check-in visit (past completed appointments or visits before today)
+        const pastAppointments = allPatientAppts.filter(a => {
+            const aptDateStr = new Date(a.AppointmentDate).toISOString().split("T")[0];
+            return aptDateStr < todayStr || a.Status === "Completed";
+        }).sort((a, b) => new Date(b.AppointmentDate).getTime() - new Date(a.AppointmentDate).getTime());
+
         const last_check_in_visit = pastAppointments.length > 0
             ? formatDateMMMddyyyyWithYear(pastAppointments[0].AppointmentDate)
             : initial_registration;
 
-        // Next scheduled appointment (earliest future appointment)
-        const futureAppointments = appointments
-            .filter(a => new Date(a.AppointmentDate) > now)
-            .sort((a, b) => new Date(a.AppointmentDate).getTime() - new Date(b.AppointmentDate).getTime());
-        const next_scheduled_appointment = futureAppointments.length > 0
-            ? formatDateMMMddyyyyWithYear(futureAppointments[0].AppointmentDate)
-            : "None";
+        // Upcoming appointments (for TODAY or future dates that are scheduled/confirmed)
+        const upcomingApptListRaw = allPatientAppts.filter(a => {
+            const aptDateStr = new Date(a.AppointmentDate).toISOString().split("T")[0];
+            return aptDateStr >= todayStr && a.Status !== "Completed";
+        });
+
+        const upcoming_appointments = await Promise.all(upcomingApptListRaw.map(async (apt) => {
+            const docName = apt.Doctor ? `Dr. ${apt.Doctor.FirstName || ""} ${apt.Doctor.LastName || ""}`.trim() : "Healthcare Provider";
+            let doctorSpecialty = "General Practitioner";
+            if (apt.DoctorId) {
+                const hp = await providerRepo.findOne({ where: { UserId: apt.DoctorId, IsDeleted: false } });
+                if (hp?.Specialty) doctorSpecialty = hp.Specialty;
+            }
+
+            return {
+                id: apt.Id,
+                appointment_id: String(apt.Id),
+                doctor_name: docName,
+                doctor_id: apt.DoctorId,
+                doctor_specialty: doctorSpecialty,
+                hospital_id: apt.HospitalId,
+                hospital_name: apt.Hospital?.Name || "",
+                org_id: apt.OrgId,
+                org_name: apt.Organization?.Name || "",
+                appointment_date: apt.AppointmentDate,
+                formatted_date: formatDateMMMddyyyy(apt.AppointmentDate),
+                start_time: apt.StartTime,
+                formatted_time: formatTime12h(apt.StartTime),
+                consultation_type: apt.IsTeleConsultation ? "Video Consultation" : (apt.AppointmentType || "In-Person"),
+                is_teleconsultation: apt.IsTeleConsultation || false,
+                reason: apt.Reason || apt.ChiefComplaint || "Regular Checkup",
+                status: apt.Status || "Scheduled",
+                meeting_url: apt.MeetingUrl || null
+            };
+        }));
+
+        const next_appointment = upcoming_appointments.length > 0 ? upcoming_appointments[0] : null;
+        const next_scheduled_appointment = upcoming_appointments.length > 0 ? upcoming_appointments[0].formatted_date : "None";
+
+        // Fetch latest vitals for patient overview
+        const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
+        const recordWhere: any = { PatientId: patientId };
+        if (orgId) recordWhere.OrganizationId = orgId;
+        if (hospitalId) recordWhere.HospitalId = hospitalId;
+        const latestRecord = await medicalRecordRepo.findOne({
+            where: recordWhere,
+            order: { CreatedAt: "DESC" }
+        });
+
+        const latest_vitals = {
+            blood_pressure: {
+                value: latestRecord?.BloodPressure || "None",
+                unit: "mmHg"
+            },
+            pulse: {
+                value: latestRecord?.HeartRate || "None",
+                unit: "bpm"
+            },
+            temperature: {
+                value: latestRecord?.Temperature || "None",
+                unit: "°F"
+            },
+            spo2: {
+                value: "None",
+                unit: "%"
+            },
+            weight: {
+                value: latestRecord?.Weight || "None",
+                unit: "kg"
+            },
+            height: {
+                value: latestRecord?.Height || "None",
+                unit: "cm"
+            }
+        };
+
+        // Fetch recent medical documents globally across ALL orgs & hospitals for this patient
+        const docRepo = AppDataSource.getRepository(MedicalDocument);
+        const docWhere: any = { PatientId: patientId, IsDeleted: false };
+        if (orgId) docWhere.OrganizationId = orgId;
+        if (hospitalId) docWhere.HospitalId = hospitalId;
+
+        const medicalDocsRaw = await docRepo.find({
+            where: docWhere,
+            relations: ["Hospital", "Organization", "Appointment"],
+            order: { CreatedAt: "DESC" },
+            take: 2
+        });
+
+        const recent_medical_documents = medicalDocsRaw.map(doc => {
+            return {
+                id: doc.Id,
+                document_id: String(doc.Id),
+                file_name: doc.FileName || doc.OriginalFileName || "Medical Document",
+                document_type: doc.DocumentType || "PDF",
+                document_category: doc.DocumentCategory || "General",
+                blob_url: doc.BlobUrl || "",
+                file_size: doc.FileSize || 0,
+                is_patient_uploaded: doc.IsPatientUploaded || false,
+                is_doctor_uploaded: doc.IsDoctorUploaded || false,
+                appointment_id: doc.AppointmentId || null,
+                hospital_id: doc.HospitalId,
+                hospital_name: doc.Hospital?.Name || "",
+                org_id: doc.OrganizationId,
+                org_name: doc.Organization?.Name || "",
+                created_at: doc.CreatedAt,
+                formatted_date: formatDateMMMddyyyy(doc.CreatedAt)
+            };
+        });
 
         return {
             contact_information: {
@@ -695,10 +839,14 @@ export class MobileDashboardService {
                 blood_group: user.BloodGroup || "None",
                 total_visits: totalVisits
             },
+            latest_vitals,
             insurance: {
                 policy_name: insurance?.InsuranceProvider || "None",
                 policy_number: insurance?.InsuranceNumber || "None"
             },
+            next_appointment,
+            upcoming_appointments,
+            recent_medical_documents,
             visit_history: {
                 initial_registration,
                 last_check_in_visit,
@@ -707,7 +855,7 @@ export class MobileDashboardService {
         };
     }
 
-    async getPatientProfile(patientId: string, orgId: number, hospitalId: number): Promise<any> {
+    async getPatientProfile(patientId: string, orgId?: number, hospitalId?: number): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
         const appointmentRepo = AppDataSource.getRepository(Appointment);
@@ -723,21 +871,35 @@ export class MobileDashboardService {
             throw new Error("Patient not found");
         }
 
+        const regWhere: any = { UserId: patientId, IsDeleted: false };
+        if (orgId) regWhere.OrganizationId = orgId;
+        if (hospitalId) regWhere.HospitalId = hospitalId;
         const reg = await regRepo.findOne({
-            where: { UserId: patientId, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+            where: regWhere,
+            order: { CreatedAt: "DESC" }
         });
 
+        const insWhere: any = { UserId: patientId, IsDeleted: false };
+        if (orgId) insWhere.OrganizationId = orgId;
+        if (hospitalId) insWhere.HospitalId = hospitalId;
         const insurance = await insuranceRepo.findOne({
-            where: { UserId: patientId, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+            where: insWhere,
+            order: { CreatedAt: "DESC" }
         });
 
+        const apptWhere: any = { UserId: patientId };
+        if (orgId) apptWhere.OrgId = orgId;
+        if (hospitalId) apptWhere.HospitalId = hospitalId;
         const appointments = await appointmentRepo.find({
-            where: { UserId: patientId, OrgId: orgId, HospitalId: hospitalId },
+            where: apptWhere,
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
 
+        const recordWhere: any = { PatientId: patientId };
+        if (orgId) recordWhere.OrganizationId = orgId;
+        if (hospitalId) recordWhere.HospitalId = hospitalId;
         const latestRecord = await medicalRecordRepo.findOne({
-            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            where: recordWhere,
             order: { CreatedAt: "DESC" }
         });
 
@@ -810,6 +972,108 @@ export class MobileDashboardService {
             }
         };
 
+        // Global upcoming appointments search across ALL orgs & hospitals for this patient
+        const todayStr = new Date().toISOString().split("T")[0];
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+        const formatTime12h = (timeStr: string) => {
+            if (!timeStr) return "";
+            const parts = timeStr.split(":");
+            if (parts.length < 2) return timeStr;
+            let hour = parseInt(parts[0], 10);
+            const min = parts[1];
+            const ampm = hour >= 12 ? "PM" : "AM";
+            hour = hour % 12;
+            hour = hour ? hour : 12;
+            const hourStr = hour < 10 ? `0${hour}` : `${hour}`;
+            return `${hourStr}:${min} ${ampm}`;
+        };
+
+        const formatDateMMMddyyyy = (dateInput: Date | string) => {
+            if (!dateInput) return "";
+            const d = new Date(dateInput);
+            if (isNaN(d.getTime())) return "";
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+        };
+
+        const upcomingApptRawList = await appointmentRepo.createQueryBuilder("apt")
+            .leftJoinAndSelect("apt.Doctor", "doctor")
+            .leftJoinAndSelect("apt.Hospital", "hospital")
+            .leftJoinAndSelect("apt.Organization", "org")
+            .where("apt.UserId = :patientId", { patientId })
+            .andWhere("CAST(apt.AppointmentDate AS DATE) >= :todayStr", { todayStr })
+            .andWhere("LOWER(apt.Status) NOT IN ('cancelled', 'deleted', 'canceled')")
+            .andWhere("apt.Status != 'Completed'")
+            .orderBy("CAST(apt.AppointmentDate AS DATE)", "ASC")
+            .addOrderBy("apt.StartTime", "ASC")
+            .getMany();
+
+        const upcoming_appointments = await Promise.all(upcomingApptRawList.map(async (apt) => {
+            const docName = apt.Doctor ? `Dr. ${apt.Doctor.FirstName || ""} ${apt.Doctor.LastName || ""}`.trim() : "Healthcare Provider";
+            let doctorSpecialty = "General Practitioner";
+            if (apt.DoctorId) {
+                const hp = await providerRepo.findOne({ where: { UserId: apt.DoctorId, IsDeleted: false } });
+                if (hp?.Specialty) doctorSpecialty = hp.Specialty;
+            }
+
+            return {
+                id: apt.Id,
+                appointment_id: String(apt.Id),
+                doctor_name: docName,
+                doctor_id: apt.DoctorId,
+                doctor_specialty: doctorSpecialty,
+                hospital_id: apt.HospitalId,
+                hospital_name: apt.Hospital?.Name || "",
+                org_id: apt.OrgId,
+                org_name: apt.Organization?.Name || "",
+                appointment_date: apt.AppointmentDate,
+                formatted_date: formatDateMMMddyyyy(apt.AppointmentDate),
+                start_time: apt.StartTime,
+                formatted_time: formatTime12h(apt.StartTime),
+                consultation_type: apt.IsTeleConsultation ? "Video Consultation" : (apt.AppointmentType || "In-Person"),
+                is_teleconsultation: apt.IsTeleConsultation || false,
+                reason: apt.Reason || apt.ChiefComplaint || "Regular Checkup",
+                status: apt.Status || "Scheduled",
+                meeting_url: apt.MeetingUrl || null
+            };
+        }));
+
+        const next_appointment = upcoming_appointments.length > 0 ? upcoming_appointments[0] : null;
+
+        // Fetch recent medical documents globally across ALL orgs & hospitals for this patient
+        const docRepo = AppDataSource.getRepository(MedicalDocument);
+        const docWhere: any = { PatientId: patientId, IsDeleted: false };
+        if (orgId) docWhere.OrganizationId = orgId;
+        if (hospitalId) docWhere.HospitalId = hospitalId;
+
+        const medicalDocsRaw = await docRepo.find({
+            where: docWhere,
+            relations: ["Hospital", "Organization", "Appointment"],
+            order: { CreatedAt: "DESC" },
+            take: 2
+        });
+
+        const recent_medical_documents = medicalDocsRaw.map(doc => {
+            return {
+                id: doc.Id,
+                document_id: String(doc.Id),
+                file_name: doc.FileName || doc.OriginalFileName || "Medical Document",
+                document_type: doc.DocumentType || "PDF",
+                document_category: doc.DocumentCategory || "General",
+                blob_url: doc.BlobUrl || "",
+                file_size: doc.FileSize || 0,
+                is_patient_uploaded: doc.IsPatientUploaded || false,
+                is_doctor_uploaded: doc.IsDoctorUploaded || false,
+                appointment_id: doc.AppointmentId || null,
+                hospital_id: doc.HospitalId,
+                hospital_name: doc.Hospital?.Name || "",
+                org_id: doc.OrganizationId,
+                org_name: doc.Organization?.Name || "",
+                created_at: doc.CreatedAt,
+                formatted_date: formatDateMMMddyyyy(doc.CreatedAt)
+            };
+        });
+
         return {
             patient_info: {
                 patient_id: user.Id,
@@ -820,6 +1084,9 @@ export class MobileDashboardService {
                 gender,
                 last_visit: lastVisitDate
             },
+            next_appointment,
+            upcoming_appointments,
+            recent_medical_documents,
             contact_information: {
                 phone: user.PhoneNumber || "",
                 email: user.Email || "",

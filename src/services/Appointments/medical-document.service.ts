@@ -100,13 +100,13 @@ export class MedicalDocumentService {
         return savedDocuments;
     }
 
-    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number): Promise<MedicalDocument[]> {
+    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number): Promise<MedicalDocument[]> {
         const validPatientId = ensureUUID(patientId);
         if (validPatientId === DEFAULT_UUID) {
             return [];
         }
         try {
-            return await medicalDocumentRepository.findByPatient(validPatientId, organizationId, hospitalId, appointmentId);
+            return await medicalDocumentRepository.findByPatient(validPatientId, organizationId, hospitalId, appointmentId, limit);
         } catch (e: any) {
             console.error("[MedicalDocumentService] getPatientDocuments error:", e.message);
             return [];

@@ -9,12 +9,13 @@ export class MobileMedicalDocumentController {
             const organizationId = req.query.organizationId ? Number(req.query.organizationId) : undefined;
             const hospitalId = req.query.hospitalId ? Number(req.query.hospitalId) : undefined;
             const appointmentId = req.query.appointmentId ? Number(req.query.appointmentId) : undefined;
+            const limit = req.query.limit ? Number(req.query.limit) : undefined;
 
             if (!patientId) {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
-            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId);
+            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit);
             return res.json(ApiResponse.success(result, "Patient documents fetched successfully."));
         } catch (error: any) {
             console.error("Mobile Medical Document Get Error:", error);
