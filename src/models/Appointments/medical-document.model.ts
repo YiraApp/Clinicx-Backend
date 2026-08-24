@@ -4,9 +4,6 @@ import { User } from "../Account/user.model.js";
 import { Hospital } from "../Organizations/hospital.model.js";
 import { Organization } from "../Organizations/organization.model.js";
 
-import { Hospital } from "../Organizations/hospital.model.js";
-import { Organization } from "../Organizations/organization.model.js";
-
 @Entity({ name: "MedicalDocuments" })
 export class MedicalDocument {
     @PrimaryGeneratedColumn({ type: "bigint" })
