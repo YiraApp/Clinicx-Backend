@@ -193,22 +193,6 @@ export class MobileDashboardService {
         const newPatientsWeekResult = await newPatientsWeekQuery.getRawOne();
         const newPatientsThisWeek = parseInt(newPatientsWeekResult?.count || "0", 10);
 
-        // Completed appointments total
-        const doneStatsQuery = appointmentRepo.createQueryBuilder("appointment")
-            .select("COUNT(*)", "totalCompleted")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("LOWER(appointment.Status) = 'completed'");
-
-        if (hospId) {
-            doneStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
-        }
-        if (orgId) {
-            doneStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
-        }
-
-        const doneStatsResult = await doneStatsQuery.getRawOne();
-        const totalCompleted = parseInt(doneStatsResult?.totalCompleted || "0", 10);
-
         const metrics = {
             today: {
                 title: "Appointments",
@@ -222,8 +206,8 @@ export class MobileDashboardService {
             },
             done: {
                 title: "Completed",
-                value: totalCompleted,
-                subtext: totalToday > 0 ? `${Math.round((completedToday / totalToday) * 100)}% Today` : "All Time"
+                value: completedToday,
+                subtext: totalToday > 0 ? `${completedToday} completed today` : "Today"
             },
             stats: {
                 title: "Weekly Stats",

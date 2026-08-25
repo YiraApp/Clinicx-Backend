@@ -60,6 +60,8 @@ export const bookAppointment = async (req: Request, res: Response) => {
             orgId,
             patientName,
             patientPhone,
+            patientEmail,
+            email,
             gender,
             dob,
             appointmentDate,
@@ -70,7 +72,9 @@ export const bookAppointment = async (req: Request, res: Response) => {
             parentAppointmentId,
             treatmentPlanIds,
             customTreatmentPlans,
-            discountAmount
+            discountAmount,
+            includeConsultationFee,
+            consultationFee
         } = req.body;
 
         if (!doctorId || hospitalId === undefined || orgId === undefined || !patientPhone) {
@@ -96,6 +100,7 @@ export const bookAppointment = async (req: Request, res: Response) => {
             orgId: parsedOrgId,
             patientName,
             patientPhone,
+            email: (patientEmail || email || "").trim() || undefined,
             gender,
             dob,
             appointmentDate: appointmentDate || new Date().toISOString().split("T")[0],
@@ -106,7 +111,9 @@ export const bookAppointment = async (req: Request, res: Response) => {
             parentAppointmentId: parentAppointmentId ? Number(parentAppointmentId) : null,
             treatmentPlanIds: Array.isArray(treatmentPlanIds) ? treatmentPlanIds : [],
             customTreatmentPlans: Array.isArray(customTreatmentPlans) ? customTreatmentPlans : [],
-            discountAmount: discountAmount ? Number(discountAmount) : 0
+            discountAmount: discountAmount ? Number(discountAmount) : 0,
+            includeConsultationFee: includeConsultationFee !== undefined ? Boolean(includeConsultationFee) : true,
+            consultationFee: consultationFee !== undefined ? Number(consultationFee) : undefined
         });
 
         return res.json(ApiResponse.success(result, "Appointment booked successfully."));
@@ -198,7 +205,11 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
             });
         }
 
-        return res.json(ApiResponse.success({ date: dateStr, slots: formattedSlots }, "Doctor slots fetched successfully."));
+        const consultationFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null && Number(provider.ConsultationFee) > 0)
+            ? Number(provider.ConsultationFee)
+            : 500;
+
+        return res.json(ApiResponse.success({ date: dateStr, slots: formattedSlots, consultationFee }, "Doctor slots fetched successfully."));
     } catch (error: any) {
         console.error("getMobileDoctorSlots error:", error);
         return res.status(400).json({
@@ -356,6 +367,33 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to fetch patient appointments"
+        });
+    }
+};
+
+/**
+ * Retrieves all matching patient accounts (primary & dependent family members) for a given phone or search.
+ */
+export const getPatientAccountsByPhone = async (req: Request, res: Response) => {
+    try {
+        const phone = req.body.phone || req.body.patientPhone || req.query.phone || req.query.patientPhone || "";
+        const search = req.body.search || req.query.search || req.body.nameSearch || "";
+        const orgId = req.body.orgId || req.query.orgId;
+        const hospitalId = req.body.hospitalId || req.query.hospitalId;
+
+        const result = await mobileAppointmentService.findPatientAccountsByPhone(
+            String(phone),
+            orgId ? Number(orgId) : undefined,
+            hospitalId ? Number(hospitalId) : undefined,
+            String(search)
+        );
+
+        return res.json(ApiResponse.success(result, "Patient accounts retrieved successfully."));
+    } catch (error: any) {
+        console.error("getPatientAccountsByPhone Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to retrieve matching patient accounts"
         });
     }
 };

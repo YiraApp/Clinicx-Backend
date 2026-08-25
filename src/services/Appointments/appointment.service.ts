@@ -93,7 +93,8 @@ export class AppointmentService {
             const nameParts = (data.patientName || "Pulse Patient").trim().split(" ");
             targetUser.FirstName = nameParts[0];
             targetUser.LastName = nameParts.slice(1).join(" ") || "";
-            targetUser.Email = data.patientEmail || `${last10Digits}@yira.ai`;
+            const providedEmail = (data.patientEmail || (data as any).email || "").trim();
+            targetUser.Email = providedEmail.length > 0 ? providedEmail : "";
             targetUser.PhoneNumber = cleanPhone;
             targetUser.Status = true;
             targetUser.IsDeleted = false;
@@ -149,7 +150,8 @@ export class AppointmentService {
                     const nameParts = reqName.split(" ");
                     targetUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Family";
                     targetUser.LastName = nameParts.slice(1).join(" ") || "Member";
-                    targetUser.Email = data.patientEmail || `${last10Digits}_dep@yira.ai`;
+                    const depProvidedEmail = (data.patientEmail || (data as any).email || "").trim();
+                    targetUser.Email = depProvidedEmail.length > 0 ? depProvidedEmail : "";
                     targetUser.PhoneNumber = cleanPhone;
                     targetUser.Status = true;
                     targetUser.IsDeleted = false;
@@ -163,8 +165,11 @@ export class AppointmentService {
             const nameParts = data.patientName.trim().split(" ");
             targetUser.FirstName = nameParts[0];
             targetUser.LastName = nameParts.slice(1).join(" ") || "";
-            if (data.patientEmail && (!targetUser.Email || targetUser.Email.includes("@yira.ai"))) {
-                targetUser.Email = data.patientEmail;
+            const providedEmail = (data.patientEmail || (data as any).email || "").trim();
+            if (providedEmail.length > 0) {
+                targetUser.Email = providedEmail;
+            } else if (targetUser.Email && targetUser.Email.includes("@yira.ai")) {
+                targetUser.Email = "";
             }
             await userRepo.save(targetUser);
         }

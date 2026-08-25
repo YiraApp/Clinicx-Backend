@@ -255,7 +255,7 @@ export const getSidebarMenu = async (req: Request, res: Response) => {
         const mappedData = menu.map((item) => ({
             title: item.MenuName,
             taskCode: item.TaskCode || "",
-            taskId: item.TaskId || "",
+            taskId: item.TaskId || 0,
             ImagePath: item.ImagePath || "",
             icon: item.Icon || "",
             useImage: item.UseImage ? 1 : 0

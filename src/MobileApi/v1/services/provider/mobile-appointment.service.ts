@@ -146,8 +146,14 @@ export class MobileAppointmentService {
         doctorId: string;
         hospitalId: number;
         orgId: number;
+        patientUserId?: string;
+        parentUserId?: string;
+        relation?: string;
+        isPrimary?: boolean;
         patientName?: string;
         patientPhone: string;
+        patientEmail?: string;
+        email?: string;
         gender?: string;
         dob?: string;
         appointmentDate: string;
@@ -159,6 +165,8 @@ export class MobileAppointmentService {
         treatmentPlanIds?: string[];
         customTreatmentPlans?: { name: string; amount: number; description?: string }[];
         discountAmount?: number;
+        includeConsultationFee?: boolean;
+        consultationFee?: number;
     }): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const userRoleRepo = AppDataSource.getRepository(UserRole);
@@ -173,7 +181,25 @@ export class MobileAppointmentService {
 
         const last10Digits = cleanPhone.slice(-10);
 
-        // 1. Verify Slot Availability
+        // 1. Verify Slot Availability & Ensure Time Slot Has Not Passed
+        const now = new Date();
+        const [appYear, appMonth, appDay] = (data.appointmentDate || "").split("-").map(Number);
+        if (appYear && appMonth && appDay) {
+            const isToday = appYear === now.getFullYear() && (appMonth - 1) === now.getMonth() && appDay === now.getDate();
+            if (isToday) {
+                const timeParts = (data.startTime || "").split(":");
+                if (timeParts.length >= 2) {
+                    const slotHour = parseInt(timeParts[0], 10);
+                    const slotMin = parseInt(timeParts[1], 10);
+                    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+                    const slotMinutes = slotHour * 60 + slotMin;
+                    if (slotMinutes < currentMinutes) {
+                        throw new Error("Cannot book an appointment for a time slot that has already passed.");
+                    }
+                }
+            }
+        }
+
         const provider = await healthcareProviderRepository.findByUserIdAndHospital(data.doctorId, data.hospitalId);
         const providerIdNum = provider ? provider.Id : (Number(data.doctorId) || 1);
         const normalizedStartTime = (data.startTime || "10:00:00").trim();
@@ -196,35 +222,82 @@ export class MobileAppointmentService {
             }
         }
 
-        let patientUser = await userRepo.createQueryBuilder("u")
-            .where("u.IsDeleted = 0")
-            .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
-                phone: cleanPhone,
-                last10: `%${last10Digits}`
-            })
-            .getOne();
+        const providedEmail = (data.patientEmail || data.email || "").trim();
 
-        if (!patientUser) {
+        let patientUser: User | null = null;
+
+        // 1. If explicit patientUserId was selected (e.g. from matching accounts list)
+        if (data.patientUserId) {
+            patientUser = await userRepo.findOne({
+                where: { Id: data.patientUserId, IsDeleted: false }
+            });
+        }
+
+        // 2. If creating a new dependent under an existing parentUserId
+        if (!patientUser && data.parentUserId) {
             patientUser = new User();
             patientUser.Id = uuidv4();
-            patientUser.IsPrimary = true;
-            patientUser.Relation = "Self";
+            patientUser.ParentUserId = data.parentUserId;
+            patientUser.IsPrimary = false;
+            patientUser.Relation = data.relation || "Dependent";
 
-            const nameParts = (data.patientName || "Mobile Patient").trim().split(" ");
+            const nameParts = (data.patientName || "Family Member").trim().split(" ");
             patientUser.FirstName = nameParts[0];
             patientUser.LastName = nameParts.slice(1).join(" ") || "";
             patientUser.PhoneNumber = cleanPhone;
             if (data.gender) patientUser.Gender = data.gender;
-            if (data.dob) (patientUser as any).Dob = new Date(data.dob);
-            patientUser.Email = `${last10Digits}@yira.ai`;
+            if (data.dob) (patientUser as any).DateOfBirth = data.dob;
+            patientUser.Email = providedEmail.length > 0 ? providedEmail : "";
             patientUser.Status = true;
             patientUser.IsDeleted = false;
             await userRepo.save(patientUser);
-        } else if (data.patientName && (!patientUser.FirstName || patientUser.FirstName === "Mobile" || patientUser.FirstName === "Patient")) {
-            const nameParts = data.patientName.trim().split(" ");
-            patientUser.FirstName = nameParts[0];
-            patientUser.LastName = nameParts.slice(1).join(" ") || "";
-            await userRepo.save(patientUser);
+        } else if (!patientUser) {
+            // 3. Lookup user by phone number or create primary user
+            patientUser = await userRepo.createQueryBuilder("u")
+                .where("u.IsDeleted = 0")
+                .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
+                    phone: cleanPhone,
+                    last10: `%${last10Digits}`
+                })
+                .getOne();
+
+            if (!patientUser) {
+                patientUser = new User();
+                patientUser.Id = uuidv4();
+                patientUser.IsPrimary = true;
+                patientUser.Relation = "Self";
+
+                const nameParts = (data.patientName || "Mobile Patient").trim().split(" ");
+                patientUser.FirstName = nameParts[0];
+                patientUser.LastName = nameParts.slice(1).join(" ") || "";
+                patientUser.PhoneNumber = cleanPhone;
+                if (data.gender) patientUser.Gender = data.gender;
+                if (data.dob) (patientUser as any).DateOfBirth = data.dob;
+                patientUser.Email = providedEmail.length > 0 ? providedEmail : "";
+                patientUser.Status = true;
+                patientUser.IsDeleted = false;
+                await userRepo.save(patientUser);
+            } else {
+                let userNeedsUpdate = false;
+                if (data.patientName && (!patientUser.FirstName || patientUser.FirstName === "Mobile" || patientUser.FirstName === "Patient")) {
+                    const nameParts = data.patientName.trim().split(" ");
+                    patientUser.FirstName = nameParts[0];
+                    patientUser.LastName = nameParts.slice(1).join(" ") || "";
+                    userNeedsUpdate = true;
+                }
+                if (providedEmail.length > 0) {
+                    if (patientUser.Email !== providedEmail) {
+                        patientUser.Email = providedEmail;
+                        userNeedsUpdate = true;
+                    }
+                } else if (patientUser.Email && patientUser.Email.endsWith("@yira.ai")) {
+                    patientUser.Email = "";
+                    userNeedsUpdate = true;
+                }
+                if (userNeedsUpdate) {
+                    await userRepo.save(patientUser);
+                }
+            }
         }
 
         // Ensure UserRole mapping exists for Patient
@@ -351,6 +424,68 @@ export class MobileAppointmentService {
             }
         }
 
+        // 2. Create/consolidate Appointment Bill (matching web API logic)
+        try {
+            const { appointmentBillRepository } = await import("../../../../repositories/Payments/appointment-bill.repository.js");
+            const defaultDoctorFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null && Number(provider.ConsultationFee) > 0)
+                ? Number(provider.ConsultationFee)
+                : 500;
+
+            const isFeeIncluded = data.includeConsultationFee !== false && data.appointmentType !== "Without Consultation";
+            const consultationFee = isFeeIncluded
+                ? (data.consultationFee !== undefined && data.consultationFee !== null ? Number(data.consultationFee) : defaultDoctorFee)
+                : 0;
+
+            const discountAmount = Number(data.discountAmount || 0);
+
+            // If it's a follow-up, locate the root parent appointment and append to existing bill
+            let rootParentId: number | null = null;
+            if (savedAppointment.ParentAppointmentId) {
+                const apptRepo = AppDataSource.getRepository(Appointment);
+                let currentId = savedAppointment.ParentAppointmentId;
+                const visitedAppts = new Set<number>();
+                while (currentId) {
+                    if (visitedAppts.has(currentId)) break;
+                    visitedAppts.add(currentId);
+                    const parentAppt = await apptRepo.findOne({ where: { Id: currentId } });
+                    if (parentAppt) {
+                        rootParentId = parentAppt.Id;
+                        currentId = parentAppt.ParentAppointmentId || 0;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            let billAppended = false;
+            if (rootParentId) {
+                const parentBill = await appointmentBillRepository.findByAppointmentId(rootParentId);
+                if (parentBill) {
+                    await appointmentBillRepository.appendChildItemsToBill(parentBill.AppointmentBillId, savedAppointment.Id, {
+                        consultationFee,
+                        treatmentPlanIds: data.treatmentPlanIds || [],
+                        customTreatmentPlans: data.customTreatmentPlans || [],
+                        discountAmount
+                    });
+                    billAppended = true;
+                }
+            }
+
+            if (!billAppended) {
+                await appointmentBillRepository.createBillForAppointment(savedAppointment.Id, {
+                    patientId: patientUser.Id,
+                    providerId: data.doctorId,
+                    hospitalId: data.hospitalId,
+                    consultationFee,
+                    treatmentPlanIds: data.treatmentPlanIds || [],
+                    customTreatmentPlans: data.customTreatmentPlans || [],
+                    discountAmount
+                });
+            }
+        } catch (billErr) {
+            console.error("Error creating appointment bill in mobile booking:", billErr);
+        }
+
         // Mark Slot as Booked in Database
         if (slot) {
             slot.IsBooked = true;
@@ -390,8 +525,47 @@ export class MobileAppointmentService {
             const cleanDigits = patientUser.PhoneNumber.replace(/\D/g, "");
             const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
 
+            const formatTime12h = (timeStr: string) => {
+                if (!timeStr) return "10:00 AM";
+                const clean = timeStr.trim();
+                if (clean.toUpperCase().includes("AM") || clean.toUpperCase().includes("PM")) {
+                    return clean;
+                }
+                const parts = clean.split(":");
+                if (parts.length === 0) return clean;
+                let hour = parseInt(parts[0], 10);
+                const minute = parts.length > 1 ? parts[1].padStart(2, "0") : "00";
+                const ampm = hour >= 12 ? "PM" : "AM";
+                hour = hour % 12;
+                if (hour === 0) hour = 12;
+                return `${hour}:${minute} ${ampm}`;
+            };
+
+            const formattedDoctorName = doctorName.startsWith("Dr.") || doctorName.startsWith("Dr ") ? doctorName : `Dr. ${doctorName}`;
+            const timeDisplay = formatTime12h(savedAppointment.StartTime || "10:00:00");
             const templateName = data.isTeleConsultation ? "video_call_template" : "appointment_conformation";
-            const timeDisplay = (savedAppointment.StartTime || "10:00").slice(0, 5);
+
+            let redirectionUrlId = "";
+            if (data.isTeleConsultation) {
+                try {
+                    const { meetingRedirectionService } = await import("../../../../services/Appointments/meeting-redirection.service.js");
+                    const redirection = await meetingRedirectionService.getOrCreateRedirection({
+                        AppointmentId: savedAppointment.Id,
+                        PatientId: patientUser.Id,
+                        DoctorId: data.doctorId,
+                        HospitalId: data.hospitalId,
+                        OrganizationId: data.orgId,
+                        MeetingUrl: savedAppointment.MeetingUrl || "",
+                        AppointmentDate: savedAppointment.AppointmentDate,
+                        StartTime: savedAppointment.StartTime
+                    });
+                    if (redirection && redirection.UrlId) {
+                        redirectionUrlId = redirection.UrlId;
+                    }
+                } catch (redirErr) {
+                    console.error("[MobileAppointmentService] Error creating meeting redirection for WhatsApp:", redirErr);
+                }
+            }
 
             const components: any[] = [
                 {
@@ -402,7 +576,7 @@ export class MobileAppointmentService {
                     type: "body",
                     parameters: [
                         { type: "text", text: patientName },
-                        { type: "text", text: doctorName },
+                        { type: "text", text: formattedDoctorName },
                         { type: "text", text: hospitalName },
                         { type: "text", text: dateStr },
                         { type: "text", text: timeDisplay }
@@ -410,12 +584,24 @@ export class MobileAppointmentService {
                 }
             ];
 
+            if (data.isTeleConsultation && redirectionUrlId) {
+                components.push({
+                    type: "button",
+                    sub_type: "url",
+                    index: "0",
+                    parameters: [
+                        { type: "text", text: redirectionUrlId }
+                    ]
+                });
+            }
+
             try {
                 await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
                 console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone}`);
             } catch (templateErr) {
                 console.warn(`[MobileAppointmentService] WhatsApp template message failed, sending fallback text:`, templateErr);
-                const fallbackMessage = `Hello ${patientName},\n\nYour appointment with Dr. ${doctorName} at ${hospitalName} is confirmed for ${dateStr} at ${timeDisplay}.\n\nThank you for choosing ClinicX!`;
+                const joinCallInfo = savedAppointment.MeetingUrl ? `\nJoin Call: ${savedAppointment.MeetingUrl}` : "";
+                const fallbackMessage = `Hello ${patientName},\n\nYour ${data.isTeleConsultation ? 'online consultation ' : ''}appointment with ${formattedDoctorName} at ${hospitalName} is confirmed for ${dateStr} at ${timeDisplay}.${joinCallInfo}\n\nThank you for choosing ${hospitalName}!`;
                 await whatsappService.sendTextMessage(normalizedPhone, fallbackMessage);
                 console.log(`[MobileAppointmentService] WhatsApp text message sent to ${normalizedPhone}`);
             }
@@ -467,6 +653,117 @@ export class MobileAppointmentService {
         }
 
         return { appointmentId, status: appointment.Status };
+    }
+
+    /**
+     * Retrieves all matching patient accounts (both independent / primary and dependent family accounts)
+     * associated with a mobile phone number or name search.
+     */
+    async findPatientAccountsByPhone(
+        phone: string,
+        orgId?: number,
+        hospitalId?: number,
+        search?: string
+    ): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const apptRepo = AppDataSource.getRepository(Appointment);
+
+        const cleanPhone = (phone || "").replace(/[^\d]/g, "");
+        const last10Digits = cleanPhone.slice(-10);
+
+        let usersQuery = userRepo.createQueryBuilder("u")
+            .where("u.IsDeleted = 0");
+
+        if (cleanPhone.length >= 10) {
+            usersQuery.andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
+                phone: cleanPhone,
+                last10: `%${last10Digits}`
+            });
+        } else if (search && search.trim().length > 0) {
+            const searchPattern = `%${search.trim().toLowerCase()}%`;
+            usersQuery.andWhere(
+                "(LOWER(u.FirstName) LIKE :searchPattern OR LOWER(u.LastName) LIKE :searchPattern OR LOWER(COALESCE(u.FirstName, '') + ' ' + COALESCE(u.LastName, '')) LIKE :searchPattern OR u.PhoneNumber LIKE :searchPattern)",
+                { searchPattern }
+            );
+        } else {
+            return {
+                matchingAccounts: [],
+                totalCount: 0,
+                primaryAccount: null,
+                dependentAccounts: []
+            };
+        }
+
+        const directUsers = await usersQuery.getMany();
+
+        // Also fetch any dependent users linked by ParentUserId
+        const directUserIds = directUsers.map(u => u.Id);
+        let dependentUsers: User[] = [];
+        if (directUserIds.length > 0) {
+            dependentUsers = await userRepo.createQueryBuilder("u")
+                .where("u.IsDeleted = 0")
+                .andWhere("u.ParentUserId IN (:...directUserIds)", { directUserIds })
+                .getMany();
+        }
+
+        // Combine and deduplicate
+        const allUsersMap = new Map<string, User>();
+        for (const u of [...directUsers, ...dependentUsers]) {
+            allUsersMap.set(u.Id, u);
+        }
+        const allUsers = Array.from(allUsersMap.values());
+
+        const matchingAccounts = await Promise.all(allUsers.map(async (u) => {
+            const isPrimary = u.IsPrimary === true || !u.ParentUserId;
+            const relation = u.Relation || (isPrimary ? "Self" : "Dependent");
+            const accountType: "Independent" | "Dependent" = isPrimary ? "Independent" : "Dependent";
+            const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim() || (isPrimary ? "Primary Account" : "Family Member");
+
+            const lastAppt = await apptRepo.createQueryBuilder("apt")
+                .where("apt.UserId = :userId", { userId: u.Id })
+                .andWhere("apt.Status != 'Cancelled'")
+                .orderBy("apt.AppointmentDate", "DESC")
+                .getOne();
+
+            const count = await apptRepo.count({
+                where: { UserId: u.Id }
+            });
+
+            return {
+                id: u.Id,
+                userId: u.Id,
+                name: fullName,
+                firstName: u.FirstName || '',
+                lastName: u.LastName || '',
+                phone: u.PhoneNumber || cleanPhone,
+                gender: u.Gender || 'Male',
+                dob: u.DateOfBirth ? new Date(u.DateOfBirth).toISOString().split('T')[0] : '',
+                email: u.Email && !u.Email.endsWith('@yira.ai') ? u.Email : '',
+                relation: relation,
+                isPrimary: isPrimary,
+                parentUserId: u.ParentUserId || null,
+                accountType: accountType,
+                pastAppointmentsCount: count,
+                lastVisitDate: lastAppt ? new Date(lastAppt.AppointmentDate).toISOString().split('T')[0] : null
+            };
+        }));
+
+        // Sort: Independent / Primary accounts first, then dependents
+        matchingAccounts.sort((a, b) => {
+            if (a.isPrimary && !b.isPrimary) return -1;
+            if (!a.isPrimary && b.isPrimary) return 1;
+            return a.name.localeCompare(b.name);
+        });
+
+        const primaryAccount = matchingAccounts.find(a => a.isPrimary) || null;
+        const dependents = matchingAccounts.filter(a => !a.isPrimary);
+
+        return {
+            matchingAccounts,
+            totalCount: matchingAccounts.length,
+            primaryAccount,
+            dependentAccounts: dependents
+        };
     }
 }
 
