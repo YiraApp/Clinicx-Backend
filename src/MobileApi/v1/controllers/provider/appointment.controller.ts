@@ -397,3 +397,46 @@ export const getPatientAccountsByPhone = async (req: Request, res: Response) => 
         });
     }
 };
+
+/**
+ * Creates or links a dependent family member under a primary phone account.
+ * Enforces maximum of 6 dependents per primary account.
+ */
+export const addDependentPatient = async (req: Request, res: Response) => {
+    try {
+        const { primaryPhone, phone, parentUserId, name, relation, gender, dob, email, orgId, hospitalId } = req.body;
+        const targetPhone = primaryPhone || phone;
+        if (!targetPhone) {
+            return res.status(400).json({
+                status: false,
+                message: "Primary phone number is required to add a family member"
+            });
+        }
+        if (!name || name.trim().length < 2) {
+            return res.status(400).json({
+                status: false,
+                message: "Valid family member name is required (min 2 characters)"
+            });
+        }
+
+        const result = await mobileAppointmentService.createOrLinkDependent({
+            primaryPhone: String(targetPhone),
+            parentUserId: parentUserId ? String(parentUserId) : undefined,
+            name: String(name),
+            relation: String(relation || "Dependent"),
+            gender: gender ? String(gender) : undefined,
+            dob: dob ? String(dob) : undefined,
+            email: email ? String(email) : undefined,
+            orgId: orgId ? Number(orgId) : undefined,
+            hospitalId: hospitalId ? Number(hospitalId) : undefined
+        });
+
+        return res.json(ApiResponse.success(result, "Family member added successfully."));
+    } catch (error: any) {
+        console.error("addDependentPatient Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to add family member"
+        });
+    }
+};

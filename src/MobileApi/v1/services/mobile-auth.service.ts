@@ -287,7 +287,10 @@ export class MobileAuthService {
                 } catch (_) {}
             }
 
-            const navigationId = getNavigationId(effectiveRoleId) || "2";
+            const isProvider = latestUserRole?.toLowerCase().trim() === "provider" || 
+                               effectiveRoleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
+            const navigationId = isProvider ? "2" : "1";
+            const userRoleName = isProvider ? "Provider" : "Patient";
 
             return {
                 accessToken,
@@ -315,7 +318,7 @@ export class MobileAuthService {
                 latestRoleId: effectiveRoleId ?? null,
                 latestOrgId: effectiveOrgId ?? null,
                 latestHospitalId: effectiveHospitalId ?? null,
-                latestUserRole: latestUserRole ?? "Healthcare Provider",
+                latestUserRole: latestUserRole ?? userRoleName,
                 navigationId: navigationId
             };
         } else {
@@ -452,7 +455,10 @@ export class MobileAuthService {
                 } catch (_) {}
             }
 
-            const navigationId = getNavigationId(effectiveRoleId) || "2";
+            const isProvider = latestUserRole?.toLowerCase().trim() === "provider" || 
+                               effectiveRoleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
+            const navigationId = isProvider ? "2" : "1";
+            const userRoleName = isProvider ? "Provider" : "Patient";
 
             return {
                 accessToken,
@@ -480,7 +486,7 @@ export class MobileAuthService {
                 latestRoleId: effectiveRoleId ?? null,
                 latestOrgId: effectiveOrgId ?? null,
                 latestHospitalId: effectiveHospitalId ?? null,
-                latestUserRole: latestUserRole ?? "Healthcare Provider",
+                latestUserRole: latestUserRole ?? userRoleName,
                 navigationId: navigationId
             };
         }
@@ -768,7 +774,10 @@ export class MobileAuthService {
             } catch (_) {}
         }
 
-        const navigationId = getNavigationId(effectiveRoleId) || "2";
+        const isProvider = latestUserRole?.toLowerCase().trim() === "provider" || 
+                           effectiveRoleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
+        const navigationId = isProvider ? "2" : "1";
+        const userRoleName = isProvider ? "Provider" : "Patient";
 
         return {
             ...(accessToken && { accessToken }),
@@ -796,7 +805,7 @@ export class MobileAuthService {
             latestRoleId: effectiveRoleId ?? null,
             latestOrgId: effectiveOrgId ?? null,
             latestHospitalId: effectiveHospitalId ?? null,
-            latestUserRole: latestUserRole ?? "Healthcare Provider",
+            latestUserRole: latestUserRole ?? userRoleName,
             navigationId: navigationId
         };
     }
@@ -1170,18 +1179,10 @@ export function getNavigationId(roleId: string | null | undefined): string | nul
     if (!roleId) return null;
     const roleIdUpper = roleId.toUpperCase();
     switch (roleIdUpper) {
-        case "4FC67429-28AE-4106-93EF-436228282ED0": // Patient
+        case "4FC67429-28AE-4106-93EF-436228282ED0": // User / Patient
             return "1";
         case "FE80173F-9DB3-4703-84A8-5C23E7CC493C": // Provider
             return "2";
-        case "3956F98D-D835-4204-8D5B-72870E57FF76": // Front Desk
-            return "3";
-        case "FFE1811D-6200-407C-9BDD-3B89FA1BAF2B": // Hospital Admin
-            return "4";
-        case "6F92E889-9844-4C8F-A9E7-5A456F12A9C7": // Org Admin
-            return "5";
-        case "F6C3292F-BB06-4F43-9962-988E23087FD5": // Yira System Admin
-            return "6";
         default:
             return null;
     }

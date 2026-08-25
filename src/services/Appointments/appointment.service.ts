@@ -613,7 +613,8 @@ export class AppointmentService {
                 });
 
                 // Format details for WhatsApp
-                const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim();
+                const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
+
                 const doctorName = appt.Doctor 
                     ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
                     : "N/A";
@@ -624,8 +625,8 @@ export class AppointmentService {
                 });
                 const timeStr = appt.StartTime ? appt.StartTime.slice(0, 5) : "";
 
-                const countryCode = appt.User.CountryCode || "91";
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appt.User.PhoneNumber.replace(/\D/g, "")}`;
+                const countryCode = appt.User?.CountryCode || "91";
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${(appt.User?.PhoneNumber || "").replace(/\D/g, "")}`;
 
                 // Select template based on consultation type
                 const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";

@@ -3,7 +3,7 @@ import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPas
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
 import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList } from "../controllers/provider/dashboard.controller.js";
-import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone } from "../controllers/provider/appointment.controller.js";
+import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone, addDependentPatient } from "../controllers/provider/appointment.controller.js";
 import { mobileSnomedController } from "../controllers/snomed.controller.js";
 import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
 import { mobileMedicalRecordController } from "../controllers/provider/medical-record.controller.js";
@@ -40,6 +40,7 @@ authRouter.post("/treatment-plans", authMiddleware, getTreatmentPlans);
 authRouter.post("/patient-appointments", authMiddleware, getPatientAppointments);
 authRouter.post("/patients/accounts-by-phone", authMiddleware, getPatientAccountsByPhone);
 authRouter.get("/patients/accounts-by-phone", authMiddleware, getPatientAccountsByPhone);
+authRouter.post("/patients/add-dependent", authMiddleware, addDependentPatient);
 authRouter.post("/clinical-data", authMiddleware, getClinicalData);
 authRouter.post("/patients", authMiddleware, getPatientsList);
 authRouter.get("/patients/filters", authMiddleware, getPatientsFilters);

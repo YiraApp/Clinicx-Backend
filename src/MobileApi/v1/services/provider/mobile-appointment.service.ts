@@ -223,27 +223,127 @@ export class MobileAppointmentService {
         }
 
         const providedEmail = (data.patientEmail || data.email || "").trim();
+        const reqName = (data.patientName || "").trim();
+        const reqRelation = (data.relation || "").trim();
+        const isExplicitRelation = reqRelation.length > 0 && reqRelation.toLowerCase() !== "self";
+
+        // Fetch all existing users under this phone number (both primary and family relations)
+        const phoneUsers = await userRepo.createQueryBuilder("u")
+            .where("u.IsDeleted = 0")
+            .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
+                phone: cleanPhone,
+                last10: `%${last10Digits}`
+            })
+            .getMany();
+
+        const phoneUserIds = phoneUsers.map(u => u.Id);
+        let linkedDependents: User[] = [];
+        if (phoneUserIds.length > 0) {
+            linkedDependents = await userRepo.createQueryBuilder("u")
+                .where("u.IsDeleted = 0")
+                .andWhere("u.ParentUserId IN (:...phoneUserIds)", { phoneUserIds })
+                .getMany();
+        }
+
+        const allUsersMap = new Map<string, User>();
+        for (const u of [...phoneUsers, ...linkedDependents]) {
+            allUsersMap.set(u.Id, u);
+        }
+        const allAssociatedUsers = Array.from(allUsersMap.values());
+
+        // Find primary user if one already exists
+        let primaryUser = allAssociatedUsers.find(u => u.IsPrimary === true) || 
+                          allAssociatedUsers.find(u => !u.ParentUserId) || 
+                          null;
 
         let patientUser: User | null = null;
 
-        // 1. If explicit patientUserId was selected (e.g. from matching accounts list)
+        // 1. Match by explicit patientUserId if passed
         if (data.patientUserId) {
-            patientUser = await userRepo.findOne({
+            patientUser = allUsersMap.get(data.patientUserId) || await userRepo.findOne({
                 where: { Id: data.patientUserId, IsDeleted: false }
             });
+            if (patientUser && isExplicitRelation && patientUser.Relation !== reqRelation) {
+                patientUser.Relation = reqRelation;
+                await userRepo.save(patientUser);
+            }
         }
 
-        // 2. If creating a new dependent under an existing parentUserId
-        if (!patientUser && data.parentUserId) {
+        // 2. Match by Name among associated accounts (case-insensitive full name or first name)
+        if (!patientUser && reqName.length > 0) {
+            const reqParts = reqName.toLowerCase().split(/\s+/);
+            const reqFirst = reqParts[0] || "";
+            const reqFull = reqName.toLowerCase();
+
+            // First check for exact full name or first name match
+            const nameMatch = allAssociatedUsers.find(u => {
+                const uFull = `${u.FirstName || ''} ${u.LastName || ''}`.trim().toLowerCase();
+                const uFirst = (u.FirstName || '').trim().toLowerCase();
+                return uFull === reqFull || (reqFirst.length >= 2 && uFirst === reqFirst);
+            });
+
+            if (nameMatch) {
+                patientUser = nameMatch;
+                if (isExplicitRelation && patientUser.Relation !== reqRelation) {
+                    patientUser.Relation = reqRelation;
+                    await userRepo.save(patientUser);
+                }
+            }
+        }
+
+        // 3. Match by Relation if explicit relation was provided
+        if (!patientUser && isExplicitRelation) {
+            const relationMatch = allAssociatedUsers.find(u => 
+                (u.Relation || '').trim().toLowerCase() === reqRelation.toLowerCase()
+            );
+            if (relationMatch) {
+                patientUser = relationMatch;
+            }
+        }
+
+        // 4. If booking is for a dependent / relation (or patient name differs from primary user name)
+        const primaryFullName = primaryUser ? `${primaryUser.FirstName || ''} ${primaryUser.LastName || ''}`.trim().toLowerCase() : "";
+        const isNameDifferentFromPrimary = reqName.length > 0 && primaryFullName.length > 0 && 
+                                           !primaryFullName.includes(reqName.toLowerCase()) && 
+                                           !reqName.toLowerCase().includes(primaryFullName);
+
+        const isBookingForDependent = isExplicitRelation || 
+                                     data.isPrimary === false || 
+                                     !!data.parentUserId || 
+                                     (primaryUser != null && isNameDifferentFromPrimary);
+
+        if (!patientUser && isBookingForDependent) {
+            // Establish primary user if not existing
+            if (!primaryUser) {
+                primaryUser = new User();
+                primaryUser.Id = uuidv4();
+                primaryUser.IsPrimary = true;
+                primaryUser.Relation = "Self";
+                primaryUser.FirstName = "Primary";
+                primaryUser.LastName = "Account";
+                primaryUser.PhoneNumber = cleanPhone;
+                primaryUser.Status = true;
+                primaryUser.IsDeleted = false;
+                await userRepo.save(primaryUser);
+            }
+
+            // Enforce max 6 dependents per primary account
+            const existingDependents = allAssociatedUsers.filter(u => u.Id !== primaryUser!.Id && (!u.IsPrimary || !!u.ParentUserId));
+            if (existingDependents.length >= 6) {
+                throw new Error("Maximum limit of 6 family relations reached for this primary account.");
+            }
+
+            const nameParts = (reqName || "Family Member").split(/\s+/);
+            const firstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Family";
+            const lastName = nameParts.slice(1).join(" ") || "";
+
             patientUser = new User();
             patientUser.Id = uuidv4();
-            patientUser.ParentUserId = data.parentUserId;
+            patientUser.ParentUserId = primaryUser.Id;
             patientUser.IsPrimary = false;
-            patientUser.Relation = data.relation || "Dependent";
-
-            const nameParts = (data.patientName || "Family Member").trim().split(" ");
-            patientUser.FirstName = nameParts[0];
-            patientUser.LastName = nameParts.slice(1).join(" ") || "";
+            patientUser.Relation = reqRelation.length > 0 ? reqRelation : "Dependent";
+            patientUser.FirstName = firstName;
+            patientUser.LastName = lastName;
             patientUser.PhoneNumber = cleanPhone;
             if (data.gender) patientUser.Gender = data.gender;
             if (data.dob) (patientUser as any).DateOfBirth = data.dob;
@@ -251,24 +351,20 @@ export class MobileAppointmentService {
             patientUser.Status = true;
             patientUser.IsDeleted = false;
             await userRepo.save(patientUser);
-        } else if (!patientUser) {
-            // 3. Lookup user by phone number or create primary user
-            patientUser = await userRepo.createQueryBuilder("u")
-                .where("u.IsDeleted = 0")
-                .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
-                    phone: cleanPhone,
-                    last10: `%${last10Digits}`
-                })
-                .getOne();
+        }
 
-            if (!patientUser) {
+        // 5. If still not resolved, lookup or create primary / self user
+        if (!patientUser) {
+            if (primaryUser) {
+                patientUser = primaryUser;
+            } else {
                 patientUser = new User();
                 patientUser.Id = uuidv4();
                 patientUser.IsPrimary = true;
                 patientUser.Relation = "Self";
 
-                const nameParts = (data.patientName || "Mobile Patient").trim().split(" ");
-                patientUser.FirstName = nameParts[0];
+                const nameParts = (reqName || "Patient").split(/\s+/);
+                patientUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Patient";
                 patientUser.LastName = nameParts.slice(1).join(" ") || "";
                 patientUser.PhoneNumber = cleanPhone;
                 if (data.gender) patientUser.Gender = data.gender;
@@ -277,26 +373,6 @@ export class MobileAppointmentService {
                 patientUser.Status = true;
                 patientUser.IsDeleted = false;
                 await userRepo.save(patientUser);
-            } else {
-                let userNeedsUpdate = false;
-                if (data.patientName && (!patientUser.FirstName || patientUser.FirstName === "Mobile" || patientUser.FirstName === "Patient")) {
-                    const nameParts = data.patientName.trim().split(" ");
-                    patientUser.FirstName = nameParts[0];
-                    patientUser.LastName = nameParts.slice(1).join(" ") || "";
-                    userNeedsUpdate = true;
-                }
-                if (providedEmail.length > 0) {
-                    if (patientUser.Email !== providedEmail) {
-                        patientUser.Email = providedEmail;
-                        userNeedsUpdate = true;
-                    }
-                } else if (patientUser.Email && patientUser.Email.endsWith("@yira.ai")) {
-                    patientUser.Email = "";
-                    userNeedsUpdate = true;
-                }
-                if (userNeedsUpdate) {
-                    await userRepo.save(patientUser);
-                }
             }
         }
 
@@ -495,7 +571,8 @@ export class MobileAppointmentService {
         // Fetch Doctor details for notifications
         const doctorUser = await userRepo.findOne({ where: { Id: data.doctorId } });
         const doctorName = doctorUser ? `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() : "Doctor";
-        const patientName = `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim();
+        const patientName = `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim() || data.patientName || "Patient";
+
         const dateStr = new Date(savedAppointment.AppointmentDate).toLocaleDateString("en-IN", {
             day: "2-digit", month: "short", year: "numeric"
         });
@@ -597,7 +674,7 @@ export class MobileAppointmentService {
 
             try {
                 await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
-                console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone}`);
+                console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone} for ${patientName}`);
             } catch (templateErr) {
                 console.warn(`[MobileAppointmentService] WhatsApp template message failed, sending fallback text:`, templateErr);
                 const joinCallInfo = savedAppointment.MeetingUrl ? `\nJoin Call: ${savedAppointment.MeetingUrl}` : "";
@@ -763,6 +840,178 @@ export class MobileAppointmentService {
             totalCount: matchingAccounts.length,
             primaryAccount,
             dependentAccounts: dependents
+        };
+    }
+
+    /**
+     * Creates or links a dependent family member under a primary phone account.
+     * Enforces the maximum limit of 6 family relations per primary account.
+     */
+    async createOrLinkDependent(data: {
+        primaryPhone: string;
+        parentUserId?: string;
+        name: string;
+        relation: string;
+        gender?: string;
+        dob?: string;
+        email?: string;
+        orgId?: number;
+        hospitalId?: number;
+    }): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+        const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+        const roleRepo = AppDataSource.getRepository(Role);
+
+        const cleanPhone = (data.primaryPhone || "").replace(/[^\d]/g, "");
+        if (!cleanPhone || cleanPhone.length < 10) {
+            throw new Error("Valid primary phone number is required to link a family member");
+        }
+        const last10Digits = cleanPhone.slice(-10);
+
+        const reqRelation = (data.relation || "Dependent").trim();
+        if (reqRelation.toLowerCase() === "self") {
+            throw new Error("Relation for a family member cannot be 'Self'");
+        }
+
+        // Find or establish the primary account
+        let primaryUser: User | null = null;
+        if (data.parentUserId) {
+            primaryUser = await userRepo.findOne({
+                where: { Id: data.parentUserId, IsDeleted: false }
+            });
+        }
+        if (!primaryUser) {
+            primaryUser = await userRepo.createQueryBuilder("u")
+                .where("u.IsDeleted = 0")
+                .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
+                    phone: cleanPhone,
+                    last10: `%${last10Digits}`
+                })
+                .andWhere("u.IsPrimary = 1")
+                .getOne();
+        }
+        if (!primaryUser) {
+            primaryUser = await userRepo.createQueryBuilder("u")
+                .where("u.IsDeleted = 0")
+                .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
+                    phone: cleanPhone,
+                    last10: `%${last10Digits}`
+                })
+                .getOne();
+        }
+
+        if (!primaryUser) {
+            // Create primary account first
+            primaryUser = new User();
+            primaryUser.Id = uuidv4();
+            primaryUser.IsPrimary = true;
+            primaryUser.Relation = "Self";
+            primaryUser.FirstName = "Primary";
+            primaryUser.LastName = "Account";
+            primaryUser.PhoneNumber = cleanPhone;
+            primaryUser.Status = true;
+            primaryUser.IsDeleted = false;
+            await userRepo.save(primaryUser);
+        }
+
+        // Check existing dependents count (Max 6 limit!)
+        const existingDependents = await userRepo.createQueryBuilder("u")
+            .where("u.IsDeleted = 0")
+            .andWhere("(u.ParentUserId = :primaryId OR (u.PhoneNumber = :phone AND u.IsPrimary = 0))", {
+                primaryId: primaryUser.Id,
+                phone: cleanPhone
+            })
+            .getMany();
+
+        if (existingDependents.length >= 6) {
+            throw new Error("Maximum limit of 6 family relations reached for this primary account.");
+        }
+
+        const nameParts = (data.name || "Family Member").trim().split(" ");
+        const firstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Family";
+        const lastName = nameParts.slice(1).join(" ") || "";
+
+        // Check if matching dependent already exists
+        const existingMatch = existingDependents.find(d => {
+            const dFullName = `${d.FirstName || ''} ${d.LastName || ''}`.trim().toLowerCase();
+            const reqFullName = `${firstName} ${lastName}`.trim().toLowerCase();
+            return dFullName === reqFullName || (d.FirstName?.toLowerCase() === firstName.toLowerCase() && d.Relation?.toLowerCase() === reqRelation.toLowerCase());
+        });
+
+        let dependentUser: User;
+        if (existingMatch) {
+            dependentUser = existingMatch;
+            if (data.relation) dependentUser.Relation = reqRelation;
+            if (data.gender) dependentUser.Gender = data.gender;
+            if (data.dob) (dependentUser as any).DateOfBirth = data.dob;
+            await userRepo.save(dependentUser);
+        } else {
+            dependentUser = new User();
+            dependentUser.Id = uuidv4();
+            dependentUser.ParentUserId = primaryUser.Id;
+            dependentUser.IsPrimary = false;
+            dependentUser.Relation = reqRelation;
+            dependentUser.FirstName = firstName;
+            dependentUser.LastName = lastName;
+            dependentUser.PhoneNumber = cleanPhone;
+            if (data.gender) dependentUser.Gender = data.gender;
+            if (data.dob) (dependentUser as any).DateOfBirth = data.dob;
+            const providedEmail = (data.email || "").trim();
+            dependentUser.Email = providedEmail.length > 0 ? providedEmail : "";
+            dependentUser.Status = true;
+            dependentUser.IsDeleted = false;
+            await userRepo.save(dependentUser);
+        }
+
+        // Assign UserRole (Patient) & PatientRegistration if orgId/hospitalId provided
+        const orgId = data.orgId;
+        const hospitalId = data.hospitalId;
+        if (orgId && hospitalId) {
+            const existingRole = await userRoleRepo.findOne({
+                where: { UserId: dependentUser.Id, OrganizationId: orgId, HospitalId: hospitalId, IsDeleted: false }
+            });
+            if (!existingRole) {
+                const patientRole = await roleRepo.findOne({ where: { RoleName: "Patient" } });
+                const userRole = new UserRole();
+                userRole.UserId = dependentUser.Id;
+                userRole.RoleId = patientRole ? patientRole.Id : "4FC67429-28AE-4106-93EF-436228282ED0";
+                userRole.OrganizationId = orgId;
+                userRole.HospitalId = hospitalId;
+                userRole.Status = true;
+                userRole.IsDeleted = false;
+                await userRoleRepo.save(userRole);
+            }
+
+            const existingReg = await patientRegRepo.findOne({
+                where: { UserId: dependentUser.Id, OrganizationId: orgId, HospitalId: hospitalId }
+            });
+            if (!existingReg) {
+                const patientReg = new PatientRegistration();
+                patientReg.UserId = dependentUser.Id;
+                patientReg.OrganizationId = orgId;
+                patientReg.HospitalId = hospitalId;
+                patientReg.Status = true;
+                patientReg.IsDeleted = false;
+                await patientRegRepo.save(patientReg);
+            }
+        }
+
+        return {
+            id: dependentUser.Id,
+            userId: dependentUser.Id,
+            name: `${dependentUser.FirstName || ''} ${dependentUser.LastName || ''}`.trim(),
+            firstName: dependentUser.FirstName || '',
+            lastName: dependentUser.LastName || '',
+            phone: dependentUser.PhoneNumber,
+            gender: dependentUser.Gender || 'Male',
+            dob: dependentUser.DateOfBirth ? new Date(dependentUser.DateOfBirth).toISOString().split('T')[0] : '',
+            relation: dependentUser.Relation || 'Dependent',
+            isPrimary: false,
+            parentUserId: primaryUser.Id,
+            accountType: "Dependent",
+            totalDependentsCount: existingDependents.length + (existingMatch ? 0 : 1),
+            maxLimit: 6
         };
     }
 }
