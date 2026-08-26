@@ -150,6 +150,49 @@ export class PatientAccessConsentController {
             });
         }
     }
+
+    /**
+     * Connects patient and doctor directly via QR scan.
+     */
+    async connectDoctorPatient(req: Request, res: Response): Promise<Response> {
+        try {
+            const { doctorId, patientUserId, hospitalId, orgId, patientPhone, patientName, patientEmail, gender } = req.body;
+            const targetPatientUserId = patientUserId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+            if (!doctorId) {
+                return res.status(400).json({
+                    status: false,
+                    message: "doctorId is required"
+                });
+            }
+
+            const result = await patientAccessConsentService.connectPatientByQr(
+                targetPatientUserId,
+                doctorId,
+                hospitalId ? Number(hospitalId) : undefined,
+                orgId ? Number(orgId) : undefined,
+                {
+                    phone: patientPhone,
+                    name: patientName,
+                    email: patientEmail,
+                    gender
+                }
+            );
+
+            return res.status(200).json({
+                status: true,
+                success: true,
+                message: "Patient connected with doctor successfully",
+                data: result
+            });
+        } catch (error: any) {
+            console.error("Error connecting patient with doctor:", error);
+            return res.status(400).json({
+                status: false,
+                message: error.message || "Failed to connect patient with doctor"
+            });
+        }
+    }
 }
 
 export const patientAccessConsentController = new PatientAccessConsentController();

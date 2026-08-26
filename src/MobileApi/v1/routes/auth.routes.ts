@@ -84,7 +84,9 @@ authRouter.get("/medical-documents/patient/:patientId", authMiddleware, (req, re
 authRouter.post("/medical-documents", authMiddleware, upload.array("files"), (req, res) => mobileMedicalDocumentController.uploadDocuments(req, res));
 authRouter.delete("/medical-documents/:id", authMiddleware, (req, res) => mobileMedicalDocumentController.deleteDocument(req, res));
 
-// Patient Medical Record Access Consents
+// Patient Medical Record Access Consents & Doctor QR Linking
+authRouter.post("/doctor/connect-patient", authMiddleware, (req, res) => patientAccessConsentController.connectDoctorPatient(req, res));
+authRouter.post("/patient-access/connect-by-qr", authMiddleware, (req, res) => patientAccessConsentController.connectDoctorPatient(req, res));
 authRouter.post("/patient-access/request", authMiddleware, (req, res) => patientAccessConsentController.requestAccess(req, res));
 authRouter.get("/patient-access/check", authMiddleware, (req, res) => patientAccessConsentController.checkAccess(req, res));
 authRouter.get("/patient-access/patient-consents", authMiddleware, (req, res) => patientAccessConsentController.getPatientConsents(req, res));

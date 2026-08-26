@@ -13,6 +13,11 @@ export interface ZoomMeetingResponse {
 export class ZoomService {
     private zoomApiUrl = "https://api.zoom.us/v2";
 
+    public generateJitsiUrl(roomName: string): string {
+        const cleanRoom = encodeURIComponent(roomName.replace(/[^a-zA-Z0-9-_]/g, ""));
+        return `https://meet.jit.si/${cleanRoom}`;
+    }
+
     /**
      * Generates a Zoom Access Token using Server-to-Server OAuth.
      * Requires ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, and ZOOM_CLIENT_SECRET in .env

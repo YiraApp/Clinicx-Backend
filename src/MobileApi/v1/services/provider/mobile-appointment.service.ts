@@ -223,7 +223,14 @@ export class MobileAppointmentService {
                     const currentMinutes = now.getHours() * 60 + now.getMinutes();
                     const slotMinutes = slotHour * 60 + slotMin;
                     if (slotMinutes < currentMinutes) {
-                        throw new Error("Cannot book an appointment for a time slot that has already passed.");
+                        const reasonLower = (data.reason || "").toLowerCase();
+                        if (reasonLower.includes("qr") || reasonLower.includes("scan") || reasonLower.includes("connect")) {
+                            const curH = String(now.getHours()).padStart(2, "0");
+                            const curM = String(now.getMinutes()).padStart(2, "0");
+                            data.startTime = `${curH}:${curM}:00`;
+                        } else {
+                            throw new Error("Cannot book an appointment for a time slot that has already passed.");
+                        }
                     }
                 }
             }
