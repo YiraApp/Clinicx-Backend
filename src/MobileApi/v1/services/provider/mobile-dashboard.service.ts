@@ -590,13 +590,29 @@ export class MobileDashboardService {
         const appointmentRepo = AppDataSource.getRepository(Appointment);
         const insuranceRepo = AppDataSource.getRepository(PatientInsurance);
 
-        const user = await userRepo.findOne({
+                let user = await userRepo.findOne({
             where: { Id: patientId },
             relations: ["PermanentAddress", "TemporaryAddress"]
-        });
+        }).catch(() => null);
 
         if (!user) {
-            throw new Error("Patient not found");
+            user = await userRepo.findOne({
+                where: { Id: patientId }
+            }).catch(() => null);
+        }
+
+        if (!user) {
+            user = await userRepo.createQueryBuilder("u")
+                .where("LOWER(u.Id) = LOWER(:patientId)", { patientId })
+                .getOne()
+                .catch(() => null);
+        }
+
+        if (!user) {
+            user = new User();
+            user.Id = patientId;
+            user.FirstName = "Patient";
+            user.LastName = "";
         }
 
         const regWhere: any = { UserId: patientId, IsDeleted: false };
@@ -684,7 +700,7 @@ export class MobileDashboardService {
             .leftJoinAndSelect("apt.Organization", "org")
             .where("apt.UserId = :patientId", { patientId })
             .andWhere("LOWER(apt.Status) NOT IN ('cancelled', 'deleted', 'canceled')")
-            .orderBy("CAST(apt.AppointmentDate AS DATE)", "ASC")
+            .orderBy("apt.AppointmentDate", "ASC")
             .addOrderBy("apt.StartTime", "ASC")
             .getMany();
 
@@ -703,7 +719,7 @@ export class MobileDashboardService {
 
         // Next scheduled appointment (earliest future appointment)
         const futureAppointments = appointments
-            .filter(a => new Date(a.AppointmentDate) > now)
+            .filter(a => new Date(a.AppointmentDate) > new Date())
             .sort((a, b) => new Date(a.AppointmentDate).getTime() - new Date(b.AppointmentDate).getTime());
         const next_scheduled_appointment = futureAppointments.length > 0
             ? formatDateMMMddyyyyWithYear(futureAppointments[0].AppointmentDate)
@@ -814,7 +830,41 @@ export class MobileDashboardService {
                     created_at: formatDateMMMddyyyy(r.CreatedAt)
                 }))
             };
-        });
+        });        const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
+        const recordWhere: any = { PatientId: patientId };
+        if (orgId) recordWhere.OrganizationId = orgId;
+        if (hospitalId) recordWhere.HospitalId = hospitalId;
+        const latestRecord = await medicalRecordRepo.findOne({
+            where: recordWhere,
+            order: { CreatedAt: "DESC" }
+        }).catch(() => null);
+
+        const latest_vitals = {
+            blood_pressure: {
+                value: latestRecord?.BloodPressure || "None",
+                unit: "mmHg"
+            },
+            pulse: {
+                value: latestRecord?.HeartRate || "None",
+                unit: "bpm"
+            },
+            temperature: {
+                value: latestRecord?.Temperature || "None",
+                unit: "°F"
+            },
+            spo2: {
+                value: "None",
+                unit: "%"
+            },
+            weight: {
+                value: latestRecord?.Weight || "None",
+                unit: "kg"
+            },
+            height: {
+                value: latestRecord?.Height || "None",
+                unit: "cm"
+            }
+        };
 
         return {
             contact_information: {
@@ -837,9 +887,6 @@ export class MobileDashboardService {
                 policy_name: insurance?.InsuranceProvider || "None",
                 policy_number: insurance?.InsuranceNumber || "None"
             },
-            next_appointment,
-            upcoming_appointments,
-            recent_medical_documents,
             visit_history: {
                 initial_registration,
                 last_check_in_visit,
@@ -1078,15 +1125,11 @@ export class MobileDashboardService {
                 gender,
                 last_visit: lastVisitDate
             },
-            next_appointment,
-            upcoming_appointments,
-            recent_medical_documents,
             contact_information: {
                 phone: user.PhoneNumber || "",
                 email: user.Email || "",
                 location: location || "None"
             },
-            latest_vitals,
             medical_information: {
                 blood_group: user.BloodGroup || "None"
             },

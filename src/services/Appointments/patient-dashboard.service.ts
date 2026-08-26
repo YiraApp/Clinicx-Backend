@@ -52,7 +52,7 @@ export class PatientDashboardService {
                 doctor: appt.Doctor ? `Dr. ${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim() : "Unknown Doctor",
                 specialty,
                 patientName: patName,
-                relation: appt.User?.Relation || "Self",
+                relation: (appt.User?.Relation && appt.User?.Relation.toLowerCase() !== "self") ? appt.User.Relation : (appt.User?.IsPrimary ? "Self" : "Dependent"),
                 date: appt.AppointmentDate,
                 time: appt.StartTime,
                 type: appt.IsTeleConsultation ? "Video" : (appt.AppointmentType || "In-Person"),

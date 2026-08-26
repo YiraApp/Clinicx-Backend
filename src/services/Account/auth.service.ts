@@ -134,7 +134,7 @@ export class AuthService implements IAuthService {
                     email: primaryMember.Email,
                     gender: primaryMember.Gender,
                     dateOfBirth: primaryMember.DateOfBirth,
-                    relation: primaryMember.Relation || "Self",
+                    relation: (primaryMember.Relation && primaryMember.Relation.toLowerCase() !== "self") ? primaryMember.Relation : "Self",
                     isPrimary: primaryMember.IsPrimary,
                     relations: childMembers.map((member: User) => ({
                         id: member.Id,
@@ -145,7 +145,7 @@ export class AuthService implements IAuthService {
                         email: member.Email,
                         gender: member.Gender,
                         dateOfBirth: member.DateOfBirth,
-                        relation: member.Relation || "Self",
+                        relation: (member.Relation && member.Relation.toLowerCase() !== "self") ? member.Relation : (member.IsPrimary ? "Self" : "Dependent"),
                         isPrimary: member.IsPrimary
                     }))
                 }];

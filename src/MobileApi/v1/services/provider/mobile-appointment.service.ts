@@ -152,7 +152,7 @@ export class MobileAppointmentService {
                 appointmentDate: apt.AppointmentDate,
                 meetingUrl: apt.MeetingUrl || null,
                 patientUserId: apt.UserId || null,
-                relation: apt.User?.Relation || "Self",
+                relation: (apt.User?.Relation && apt.User?.Relation.toLowerCase() !== "self") ? apt.User.Relation : (apt.User?.IsPrimary ? "Self" : "Dependent"),
                 isPrimary: apt.User?.IsPrimary ?? (apt.User?.Relation?.toLowerCase() === "self" || !apt.User?.ParentUserId),
                 parentUserId: apt.User?.ParentUserId || null,
                 orgId: apt.OrgId || null,
@@ -856,7 +856,7 @@ export class MobileAppointmentService {
 
         const matchingAccounts = await Promise.all(allUsers.map(async (u) => {
             const isPrimary = u.IsPrimary === true || !u.ParentUserId;
-            const relation = u.Relation || (isPrimary ? "Self" : "Dependent");
+            const relation = (u.Relation && u.Relation.toLowerCase() !== "self") ? u.Relation : (isPrimary ? "Self" : "Dependent");
             const accountType: "Independent" | "Dependent" = isPrimary ? "Independent" : "Dependent";
             const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim() || (isPrimary ? "Primary Account" : "Family Member");
 

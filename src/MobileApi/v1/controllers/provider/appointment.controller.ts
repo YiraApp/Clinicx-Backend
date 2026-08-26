@@ -379,7 +379,7 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             organizationName: a.Organization?.Name || "Organization",
             doctorName: a.Doctor ? `Dr. ${a.Doctor.FirstName || ''} ${a.Doctor.LastName || ''}`.trim() : "Doctor",
             patientName: a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : "Patient",
-            relation: a.User?.Relation || "Self",
+            relation: (a.User?.Relation && a.User?.Relation.toLowerCase() !== "self") ? a.User.Relation : (a.User?.IsPrimary ? "Self" : "Dependent"),
             isPrimary: a.User?.IsPrimary ?? true
         }));
 
