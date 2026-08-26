@@ -23,36 +23,55 @@ export class MobileAppointmentService {
 
         const todayStr = options?.date || new Date().toISOString().split("T")[0];
 
-        // 1. Calculate stats/counts for today
+        const userRepo = AppDataSource.getRepository(User);
+        let allFamilyUserIds = [doctorId];
+        try {
+            const dependents = await userRepo.find({ where: { ParentUserId: doctorId, IsDeleted: false } });
+            if (dependents.length > 0) {
+                allFamilyUserIds.push(...dependents.map(d => d.Id));
+            }
+        } catch (_) {}
+
+        // 1. Calculate stats/counts for today (or selected date range)
         const statsQuery = appointmentRepo.createQueryBuilder("apt")
             .select("COUNT(*)", "todayCount")
-            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('confirmed', 'completed', 'scheduled') THEN 1 END)", "confirmedCount")
+            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('confirmed', 'scheduled') THEN 1 END)", "confirmedCount")
             .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'requested') THEN 1 END)", "pendingCount")
-            .where("apt.DoctorId = :doctorId", { doctorId });
+            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' THEN 1 END)", "completedCount")
+            .where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
 
         if (hospitalId) {
-            statsQuery.andWhere("apt.HospitalId = :hospitalId", { hospitalId });
+            statsQuery.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
         }
         if (orgId) {
-            statsQuery.andWhere("apt.OrgId = :orgId", { orgId });
+            statsQuery.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
         }
-        statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) = :todayStr", { todayStr });
+        if (options?.dateFrom && options?.dateTo) {
+            statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
+            statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) <= :dateTo", { dateTo: options.dateTo });
+        } else if (options?.date) {
+            statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) = :dateStr", { dateStr: options.date });
+        } else {
+            statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) = :todayStr", { todayStr });
+        }
 
         const statsResult = await statsQuery.getRawOne();
         const todayCount = parseInt(statsResult?.todayCount || "0", 10);
         const confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
         const pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
+        const completedCount = parseInt(statsResult?.completedCount || "0", 10);
 
         // 2. Fetch appointments list
         const query = appointmentRepo.createQueryBuilder("apt")
             .leftJoinAndSelect("apt.User", "user")
-            .where("apt.DoctorId = :doctorId", { doctorId });
+            .leftJoinAndSelect("apt.Doctor", "doctor")
+            .where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
 
         if (hospitalId) {
-            query.andWhere("apt.HospitalId = :hospitalId", { hospitalId });
+            query.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
         }
         if (orgId) {
-            query.andWhere("apt.OrgId = :orgId", { orgId });
+            query.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
         }
 
         if (options?.dateFrom && options?.dateTo) {
@@ -65,7 +84,11 @@ export class MobileAppointmentService {
         }
 
         if (options?.status && options.status !== "All Status") {
-            query.andWhere("LOWER(apt.Status) = :status", { status: options.status.toLowerCase() });
+            const rawStatus = options.status.toLowerCase().replace(/\s+/g, "");
+            query.andWhere("(LOWER(REPLACE(apt.Status, ' ', '')) = :rawStatus OR LOWER(apt.Status) = :status OR (LOWER(apt.Status) IN ('scheduled', 'confirmed') AND :rawStatus IN ('scheduled', 'confirmed')))", { 
+                rawStatus, 
+                status: options.status.toLowerCase() 
+            });
         }
 
         if (options?.search && options.search.trim() !== "") {
@@ -92,6 +115,7 @@ export class MobileAppointmentService {
 
         const formattedList = appointments.map((apt, index) => {
             const patientName = `${apt.User?.FirstName || ""} ${apt.User?.LastName || ""}`.trim() || "Patient";
+            const doctorName = apt.Doctor ? `Dr. ${apt.Doctor.FirstName || ""} ${apt.Doctor.LastName || ""}`.trim() : "Doctor";
             const phone = apt.User?.PhoneNumber || "";
             const formattedTime = formatTime12h(apt.StartTime);
             const durationMins = apt.Duration || 30;
@@ -119,6 +143,7 @@ export class MobileAppointmentService {
                 time: formattedTime || apt.StartTime,
                 duration: `${durationMins} MIN`,
                 patientName,
+                doctorName,
                 phoneNumber: phone,
                 type: apt.IsTeleConsultation ? "videoCall" : "inClinic",
                 category: apt.AppointmentType || apt.Reason || "Consultation",
@@ -127,6 +152,9 @@ export class MobileAppointmentService {
                 appointmentDate: apt.AppointmentDate,
                 meetingUrl: apt.MeetingUrl || null,
                 patientUserId: apt.UserId || null,
+                relation: apt.User?.Relation || "Self",
+                isPrimary: apt.User?.IsPrimary ?? (apt.User?.Relation?.toLowerCase() === "self" || !apt.User?.ParentUserId),
+                parentUserId: apt.User?.ParentUserId || null,
                 orgId: apt.OrgId || null,
                 hospitalId: apt.HospitalId || null,
                 reason: apt.Reason || ""
@@ -137,6 +165,7 @@ export class MobileAppointmentService {
             todayCount,
             confirmedCount,
             pendingCount,
+            completedCount,
             aiOptimizationScore: 94,
             appointments: formattedList
         };
@@ -696,16 +725,51 @@ export class MobileAppointmentService {
         };
     }
 
-    async updateAppointmentStatus(appointmentId: string, status: string): Promise<any> {
+    async updateAppointmentStatus(options: { appointmentId?: string; patientId?: string; doctorId?: string; status: string } | string, statusArg?: string): Promise<any> {
         const appointmentRepo = AppDataSource.getRepository(Appointment);
-        const appointment = await appointmentRepo.findOne({ 
-            where: { Id: Number(appointmentId) },
-            relations: ["User", "Doctor"]
-        });
+        let appointmentId: string | undefined;
+        let patientId: string | undefined;
+        let doctorId: string | undefined;
+        let status: string;
+
+        if (typeof options === "string") {
+            appointmentId = options;
+            status = statusArg || "Confirmed";
+        } else {
+            appointmentId = options.appointmentId;
+            patientId = options.patientId;
+            doctorId = options.doctorId;
+            status = options.status;
+        }
+
+        let appointment: Appointment | null = null;
+        if (appointmentId && !isNaN(Number(appointmentId)) && Number(appointmentId) > 0) {
+            appointment = await appointmentRepo.findOne({ 
+                where: { Id: Number(appointmentId) },
+                relations: ["User", "Doctor"]
+            });
+        }
+
+        if (!appointment && patientId) {
+            const query = appointmentRepo.createQueryBuilder("apt")
+                .leftJoinAndSelect("apt.User", "user")
+                .leftJoinAndSelect("apt.Doctor", "doctor")
+                .where("apt.UserId = :patientId", { patientId });
+            if (doctorId) {
+                query.andWhere("apt.DoctorId = :doctorId", { doctorId });
+            }
+            appointment = await query
+                .orderBy("apt.AppointmentDate", "DESC")
+                .addOrderBy("apt.StartTime", "DESC")
+                .getOne();
+        }
+
         if (!appointment) {
             throw new Error("Appointment not found");
         }
-        appointment.Status = status;
+
+        const normalizedStatus = status.trim();
+        appointment.Status = normalizedStatus;
         await appointmentRepo.save(appointment);
 
         // Trigger Push Notification for status update

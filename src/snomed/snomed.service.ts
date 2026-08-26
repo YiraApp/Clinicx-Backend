@@ -46,22 +46,33 @@ export class SnomedService {
 
             console.log(`SNOMED Search: ${url.toString()}`);
 
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
             const response = await fetch(url.toString(), {
                 headers: {
                     'Accept': 'application/json',
                     'Accept-Language': 'en-X-900000000000509007,en-X-900000000000508004,en'
-                }
+                },
+                signal: controller.signal
             });
 
+            clearTimeout(timeout);
+
             if (!response.ok) {
-                throw new Error(`SNOMED Server responded with status: ${response.status}`);
+                console.warn(`SNOMED Server responded with status: ${response.status} — returning empty results`);
+                return { items: [], total: 0 };
             }
 
             const data = await response.json();
             return data;
-        } catch (error) {
-            console.error("Error fetching SNOMED concepts:", error);
-            throw error;
+        } catch (error: any) {
+            if (error?.name === 'AbortError') {
+                console.warn("SNOMED CT request timed out — returning empty results");
+            } else {
+                console.warn("Error fetching SNOMED concepts:", error?.message || error);
+            }
+            return { items: [], total: 0 };
         }
     }
 

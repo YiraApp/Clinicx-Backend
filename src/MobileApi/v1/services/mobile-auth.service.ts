@@ -12,6 +12,48 @@ import { UserOTP } from "../../../models/Account/userotp.model.js";
 
 export class MobileAuthService {
     /**
+     * Retrieves all family profiles (primary account and dependents) linked to a user.
+     */
+    private async getProfilesForUser(user: User): Promise<any[]> {
+        const userRepo = AppDataSource.getRepository(User);
+        let allFamilyUsers: User[] = [user];
+        try {
+            const dependents = await userRepo.find({
+                where: [
+                    { ParentUserId: user.Id, IsDeleted: false },
+                    { PhoneNumber: user.PhoneNumber, IsPrimary: false, IsDeleted: false }
+                ]
+            });
+            if (dependents.length > 0) {
+                const seen = new Set([user.Id]);
+                for (const dep of dependents) {
+                    if (!seen.has(dep.Id)) {
+                        seen.add(dep.Id);
+                        allFamilyUsers.push(dep);
+                    }
+                }
+            }
+        } catch (_) {}
+
+        return allFamilyUsers.map(u => {
+            const isPrimary = u.IsPrimary === true || !u.ParentUserId;
+            const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim() || (isPrimary ? "Primary Account" : "Family Member");
+            return {
+                id: u.Id,
+                firstName: u.FirstName ?? null,
+                lastName: u.LastName ?? null,
+                name: fullName,
+                phoneNumber: u.PhoneNumber,
+                relation: u.Relation || (isPrimary ? "Self" : "Dependent"),
+                isPrimary: isPrimary,
+                gender: u.Gender ?? null,
+                dob: formatDOB(u.DateOfBirth),
+                accountType: isPrimary ? "Independent" : "Dependent"
+            };
+        });
+    }
+
+    /**
      * Sends (or resends) an OTP to the mobile user if they are registered and active with allowed roles.
      */
     async sendOTP(
@@ -146,6 +188,7 @@ export class MobileAuthService {
         latestHospitalId: number | null;
         latestUserRole: string | null;
         navigationId: string | null;
+        profiles?: any[];
     }> {
         const type = loginType === "mobileNumber" ? "mobile" : (loginType || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile"));
 
@@ -319,7 +362,8 @@ export class MobileAuthService {
                 latestOrgId: effectiveOrgId ?? null,
                 latestHospitalId: effectiveHospitalId ?? null,
                 latestUserRole: latestUserRole ?? userRoleName,
-                navigationId: navigationId
+                navigationId: navigationId,
+                profiles: await this.getProfilesForUser(user)
             };
         } else {
             // Mobile OTP Login: calls verification in login method
@@ -487,7 +531,8 @@ export class MobileAuthService {
                 latestOrgId: effectiveOrgId ?? null,
                 latestHospitalId: effectiveHospitalId ?? null,
                 latestUserRole: latestUserRole ?? userRoleName,
-                navigationId: navigationId
+                navigationId: navigationId,
+                profiles: await this.getProfilesForUser(user)
             };
         }
     }
@@ -664,6 +709,7 @@ export class MobileAuthService {
         latestHospitalId: number | null;
         latestUserRole: string | null;
         navigationId: string | null;
+        profiles?: any[];
     }> {
         const user = await mobileAuthRepository.findUserById(userId);
         if (!user) {
@@ -806,7 +852,8 @@ export class MobileAuthService {
             latestOrgId: effectiveOrgId ?? null,
             latestHospitalId: effectiveHospitalId ?? null,
             latestUserRole: latestUserRole ?? userRoleName,
-            navigationId: navigationId
+            navigationId: navigationId,
+            profiles: await this.getProfilesForUser(user)
         };
     }
 

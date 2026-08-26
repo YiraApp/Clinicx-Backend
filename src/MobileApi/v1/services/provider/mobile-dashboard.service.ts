@@ -57,17 +57,27 @@ export class MobileDashboardService {
 
         const todayStr = new Date().toISOString().split('T')[0];
 
+        // Find all family user IDs under this account
+        let allFamilyUserIds = [userId];
+        try {
+            const dependents = await userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } });
+            if (dependents.length > 0) {
+                allFamilyUserIds.push(...dependents.map(d => d.Id));
+            }
+        } catch (_) {}
+
         // 2. Fetch today's schedule
         const todaysQuery = appointmentRepo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .leftJoinAndSelect("appointment.Doctor", "doctor")
+            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("CAST(appointment.AppointmentDate AS DATE) = :todayStr", { todayStr });
 
-        if (hospId) {
-            todaysQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        if (hospId && hospId > 0) {
+            todaysQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
         }
-        if (orgId) {
-            todaysQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId && orgId > 0) {
+            todaysQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
         }
 
         const todaysAppointments = await todaysQuery
@@ -89,12 +99,16 @@ export class MobileDashboardService {
 
         const todaysSchedule = todaysAppointments.map(apt => {
             const timeFormatted = formatTime12h(apt.StartTime);
+            let patName = apt.User ? `${apt.User.FirstName || ""} ${apt.User.LastName || ""}`.trim() : "";
+            if (!patName) {
+                patName = apt.Doctor ? `Dr. ${apt.Doctor.FirstName || ""} ${apt.Doctor.LastName || ""}`.trim() : "Patient";
+            }
             return {
                 patientUserId: apt.UserId,
                 orgId: apt.OrgId,
                 hospitalId: apt.HospitalId,
                 appointmentId: apt.Id,
-                patientName: `${apt.User?.FirstName || ""} ${apt.User?.LastName || ""}`.trim(),
+                patientName: patName || "Patient",
                 time: timeFormatted || apt.StartTime,
                 consultationType: apt.IsTeleConsultation ? "Teleconsultation" : "In-Clinic Consultation",
                 reason: apt.Reason || "Regular Checkup",
@@ -106,14 +120,15 @@ export class MobileDashboardService {
         // 3. Fetch recent patients (past appointments of this provider)
         const recentQuery = appointmentRepo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .leftJoinAndSelect("appointment.Doctor", "doctor")
+            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("CAST(appointment.AppointmentDate AS DATE) <= :todayStr", { todayStr });
 
-        if (hospId) {
-            recentQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        if (hospId && hospId > 0) {
+            recentQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
         }
-        if (orgId) {
-            recentQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId && orgId > 0) {
+            recentQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
         }
 
         const recentAppointments = await recentQuery
@@ -142,12 +157,16 @@ export class MobileDashboardService {
         };
 
         const recentPatients = uniqueAppointments.map(apt => {
+            let patName = apt.User ? `${apt.User.FirstName || ""} ${apt.User.LastName || ""}`.trim() : "";
+            if (!patName) {
+                patName = apt.Doctor ? `Dr. ${apt.Doctor.FirstName || ""} ${apt.Doctor.LastName || ""}`.trim() : "Patient";
+            }
             return {
                 patientUserId: apt.UserId,
                 orgId: apt.OrgId,
                 hospitalId: apt.HospitalId,
                 appointmentId: apt.Id,
-                name: `${apt.User?.FirstName || ""} ${apt.User?.LastName || ""}`.trim(),
+                name: patName || "Patient",
                 date: formatDateSlash(apt.AppointmentDate),
                 consultationType: apt.IsTeleConsultation ? "Teleconsultation" : "In-Clinic Consultation",
                 condition: apt.ChiefComplaint || apt.Reason || "Checkup",
@@ -158,19 +177,19 @@ export class MobileDashboardService {
         // 4. Calculate stats/metrics aligned with the doctor's actual records
         // Today's appointments count & completed count directly from today's dataset
         const totalToday = todaysAppointments.length;
-        const completedToday = todaysAppointments.filter(a => (a.Status || "").toLowerCase() === "completed").length;
+        const completedToday = todaysAppointments.filter(a => (a.Status || "").toLowerCase().includes("complet")).length;
 
         // Unique active patients total of this doctor
         const totalPatientsQuery = appointmentRepo.createQueryBuilder("appointment")
             .select("COUNT(DISTINCT appointment.UserId)", "count")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("appointment.UserId IS NOT NULL");
 
-        if (hospId) {
-            totalPatientsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        if (hospId && hospId > 0) {
+            totalPatientsQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
         }
-        if (orgId) {
-            totalPatientsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId && orgId > 0) {
+            totalPatientsQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
         }
 
         const totalPatientsResult = await totalPatientsQuery.getRawOne();
@@ -179,15 +198,15 @@ export class MobileDashboardService {
         // Unique patients new in the last 7 days
         const newPatientsWeekQuery = appointmentRepo.createQueryBuilder("a1")
             .select("COUNT(DISTINCT a1.UserId)", "count")
-            .where("a1.DoctorId = :doctorId", { doctorId: userId })
+            .where("(a1.DoctorId = :doctorId OR a1.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("a1.UserId IS NOT NULL")
             .andWhere("a1.AppointmentDate >= CAST(DATEADD(day, -7, GETDATE()) AS DATE)");
 
-        if (hospId) {
-            newPatientsWeekQuery.andWhere("a1.HospitalId = :hospId", { hospId });
+        if (hospId && hospId > 0) {
+            newPatientsWeekQuery.andWhere("(a1.HospitalId = :hospId OR a1.HospitalId IS NULL)", { hospId });
         }
-        if (orgId) {
-            newPatientsWeekQuery.andWhere("a1.OrgId = :orgId", { orgId });
+        if (orgId && orgId > 0) {
+            newPatientsWeekQuery.andWhere("(a1.OrgId = :orgId OR a1.OrgId IS NULL)", { orgId });
         }
 
         const newPatientsWeekResult = await newPatientsWeekQuery.getRawOne();
@@ -220,14 +239,14 @@ export class MobileDashboardService {
         const dailyStatsQuery = appointmentRepo.createQueryBuilder("appointment")
             .select("FORMAT(appointment.AppointmentDate, 'ddd')", "day")
             .addSelect("COUNT(*)", "appointments")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("appointment.AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
 
-        if (hospId) {
-            dailyStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        if (hospId && hospId > 0) {
+            dailyStatsQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
         }
-        if (orgId) {
-            dailyStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId && orgId > 0) {
+            dailyStatsQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
         }
 
         const weeklyStatsRaw = await dailyStatsQuery
@@ -589,7 +608,7 @@ export class MobileDashboardService {
         });
 
         const appointments = await appointmentRepo.find({
-            where: { UserId: patientId, OrgId: orgId, HospitalId: hospitalId },
+            where: { UserId: patientId },
             relations: ["Doctor", "Hospital", "Organization"],
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
@@ -655,19 +674,19 @@ export class MobileDashboardService {
         const noteRepo = AppDataSource.getRepository(ClinicalNote);
 
         const allPrescriptions = await prescriptionRepo.find({
-            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            where: { PatientId: patientId },
             relations: ["Diagnoses", "Medications", "Doctor"],
             order: { CreatedAt: "DESC" }
         });
 
         const allNotes = await noteRepo.find({
-            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            where: { PatientId: patientId },
             relations: ["Doctor"],
             order: { CreatedAt: "DESC" }
         });
 
         const allDocs = await docRepo.find({
-            where: { PatientId: patientId, OrganizationId: orgId, HospitalId: hospitalId },
+            where: { PatientId: patientId },
             relations: ["Doctor"],
             order: { CreatedAt: "DESC" }
         });

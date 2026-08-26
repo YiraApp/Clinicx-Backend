@@ -7,8 +7,12 @@ export class MobileSnomedController {
         try {
             const { term, type, limit, offset } = req.query;
 
-            if (!term) {
-                return res.status(400).json({ status: false, message: "Search term is required" });
+            if (!term || (term as string).trim().length < 2) {
+                return res.json({
+                    status: true,
+                    message: "SNOMED CT concepts retrieved successfully",
+                    data: { items: [], total: 0 }
+                });
             }
 
             let ecl = "";
@@ -35,12 +39,19 @@ export class MobileSnomedController {
                     ecl = (type as string) || "";
             }
 
-            const results = await snomedService.searchConcepts(
-                term as string,
-                ecl,
-                limit ? parseInt(limit as string) : 15,
-                offset ? parseInt(offset as string) : 0
-            );
+            let results: any = { items: [], total: 0 };
+            try {
+                results = await snomedService.searchConcepts(
+                    term as string,
+                    ecl,
+                    limit ? parseInt(limit as string) : 15,
+                    offset ? parseInt(offset as string) : 0
+                );
+            } catch (snomedError: any) {
+                // Log but don't throw — return empty results gracefully
+                console.warn("SNOMED CT server error (returning empty results):", snomedError?.message || snomedError);
+                results = { items: [], total: 0 };
+            }
 
             res.json({
                 status: true,
@@ -48,13 +59,16 @@ export class MobileSnomedController {
                 data: results
             });
         } catch (error: any) {
-            console.error("Mobile SNOMED search error:", error);
-            res.status(500).json({
-                status: false,
-                message: error.message || "Failed to search SNOMED concepts"
+            // Even top-level errors should not return 500 — return empty results
+            console.error("Mobile SNOMED search error:", error?.message || error);
+            res.json({
+                status: true,
+                message: "No results found",
+                data: { items: [], total: 0 }
             });
         }
     }
 }
 
 export const mobileSnomedController = new MobileSnomedController();
+

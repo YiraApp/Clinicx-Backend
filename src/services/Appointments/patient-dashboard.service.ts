@@ -15,14 +15,25 @@ export class PatientDashboardService {
         });
         if (!user) return null;
 
+        // Find all family user IDs under this account (primary user + dependents)
+        const userRepo = AppDataSource.getRepository(User);
+        const dependents = await userRepo.find({
+            where: { ParentUserId: userId, IsDeleted: false }
+        });
+        const allFamilyUserIds = [userId, ...dependents.map(d => d.Id)];
+
         // 2. Fetch upcoming appointments
         const todayStr = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-        const upcomingApptsRaw = await AppDataSource.getRepository(Appointment).find({
-            where: { UserId: userId, Status: "scheduled", AppointmentDate: MoreThanOrEqual(todayStr as any) },
-            relations: ["Doctor"],
-            order: { AppointmentDate: "ASC", StartTime: "ASC" },
-            take: 5
-        });
+        const upcomingApptsRaw = await AppDataSource.getRepository(Appointment).createQueryBuilder("apt")
+            .leftJoinAndSelect("apt.Doctor", "doctor")
+            .leftJoinAndSelect("apt.User", "patient")
+            .where("apt.UserId IN (:...allFamilyUserIds)", { allFamilyUserIds })
+            .andWhere("LOWER(apt.Status) = 'scheduled'")
+            .andWhere("CAST(apt.AppointmentDate AS DATE) >= :todayStr", { todayStr })
+            .orderBy("apt.AppointmentDate", "ASC")
+            .addOrderBy("apt.StartTime", "ASC")
+            .take(5)
+            .getMany();
 
         const upcomingAppointments = [];
         for (const appt of upcomingApptsRaw) {
@@ -35,10 +46,13 @@ export class PatientDashboardService {
                     specialty = provider.Specialty;
                 }
             }
+            const patName = appt.User ? `${appt.User.FirstName || ""} ${appt.User.LastName || ""}`.trim() : "Self";
             upcomingAppointments.push({
                 id: appt.Id,
                 doctor: appt.Doctor ? `Dr. ${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim() : "Unknown Doctor",
                 specialty,
+                patientName: patName,
+                relation: appt.User?.Relation || "Self",
                 date: appt.AppointmentDate,
                 time: appt.StartTime,
                 type: appt.IsTeleConsultation ? "Video" : (appt.AppointmentType || "In-Person"),
@@ -47,12 +61,14 @@ export class PatientDashboardService {
         }
 
         // 3. Fetch recent appointments
-        const recentApptsRaw = await AppDataSource.getRepository(Appointment).find({
-            where: { UserId: userId },
-            relations: ["Doctor"],
-            order: { AppointmentDate: "DESC", StartTime: "DESC" },
-            take: 5
-        });
+        const recentApptsRaw = await AppDataSource.getRepository(Appointment).createQueryBuilder("apt")
+            .leftJoinAndSelect("apt.Doctor", "doctor")
+            .leftJoinAndSelect("apt.User", "patient")
+            .where("apt.UserId IN (:...allFamilyUserIds)", { allFamilyUserIds })
+            .orderBy("apt.AppointmentDate", "DESC")
+            .addOrderBy("apt.StartTime", "DESC")
+            .take(5)
+            .getMany();
 
         const recentAppointments = [];
         for (const appt of recentApptsRaw) {
@@ -69,10 +85,13 @@ export class PatientDashboardService {
                     specialty = provider.Specialty;
                 }
             }
+            const patName = appt.User ? `${appt.User.FirstName || ""} ${appt.User.LastName || ""}`.trim() : "Self";
             recentAppointments.push({
                 id: appt.Id,
                 doctor: appt.Doctor ? `Dr. ${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim() : "Unknown Doctor",
                 specialty,
+                patientName: patName,
+                relation: appt.User?.Relation || "Self",
                 date: appt.AppointmentDate,
                 time: appt.StartTime,
                 type: appt.IsTeleConsultation ? "Video" : (appt.AppointmentType || "In-Person"),

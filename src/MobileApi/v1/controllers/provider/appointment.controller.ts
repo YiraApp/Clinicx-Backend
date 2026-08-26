@@ -130,15 +130,21 @@ export const bookAppointment = async (req: Request, res: Response) => {
  */
 export const updateAppointmentStatus = async (req: Request, res: Response) => {
     try {
-        const { appointmentId, status } = req.body;
-        if (!appointmentId || !status) {
+        const { appointmentId, patientId, doctorId, status } = req.body;
+        if ((!appointmentId && !patientId) || !status) {
             return res.status(400).json({
                 status: false,
-                message: "appointmentId and status are required"
+                message: "appointmentId or patientId, and status are required"
             });
         }
 
-        const result = await mobileAppointmentService.updateAppointmentStatus(appointmentId, status);
+        const effectiveDoctorId = doctorId || (req as any).user?.Id || (req as any).user?.id;
+        const result = await mobileAppointmentService.updateAppointmentStatus({
+            appointmentId: appointmentId ? String(appointmentId) : undefined,
+            patientId: patientId ? String(patientId) : undefined,
+            doctorId: effectiveDoctorId ? String(effectiveDoctorId) : undefined,
+            status: String(status)
+        });
         return res.json(ApiResponse.success(result, "Appointment status updated successfully."));
     } catch (error: any) {
         return res.status(400).json({
@@ -326,27 +332,41 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
     try {
         const { patientPhone, userId, orgId } = req.body;
         const { Appointment } = await import("../../../../models/Appointments/appointment.model.js");
+        const { User } = await import("../../../../models/Account/user.model.js");
         const { AppDataSource } = await import("../../../../config/database.js");
 
         const apptRepo = AppDataSource.getRepository(Appointment);
         const qb = apptRepo.createQueryBuilder("a")
             .leftJoinAndSelect("a.User", "u")
             .leftJoinAndSelect("a.Doctor", "d")
+            .leftJoinAndSelect("a.Hospital", "h")
+            .leftJoinAndSelect("a.Organization", "o")
             .where("a.Status != :cancelledStatus", { cancelledStatus: "Cancelled" })
             .orderBy("a.AppointmentDate", "DESC")
             .addOrderBy("a.StartTime", "DESC")
-            .take(25);
+            .take(50);
 
         if (userId) {
-            qb.andWhere("a.UserId = :userId", { userId });
+            const userRepo = AppDataSource.getRepository(User);
+            const user = await userRepo.findOne({ where: { Id: userId, IsDeleted: false } });
+            const dependents = await userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } });
+            const userIds = [userId, ...dependents.map(d => d.Id)];
+            
+            if (user && user.PhoneNumber) {
+                const clean = user.PhoneNumber.replace(/\D/g, "");
+                const last10 = clean.slice(-10);
+                qb.andWhere("(a.UserId IN (:...userIds) OR u.PhoneNumber = :clean OR u.PhoneNumber LIKE :last10)", {
+                    userIds,
+                    clean,
+                    last10: `%${last10}`
+                });
+            } else {
+                qb.andWhere("a.UserId IN (:...userIds)", { userIds });
+            }
         } else if (patientPhone) {
             const cleanPhone = String(patientPhone).replace(/\D/g, "");
             const last10 = cleanPhone.slice(-10);
             qb.andWhere("(u.PhoneNumber = :cleanPhone OR u.PhoneNumber LIKE :last10)", { cleanPhone, last10: `%${last10}` });
-        }
-
-        if (orgId) {
-            qb.andWhere("a.OrgId = :orgId", { orgId: Number(orgId) });
         }
 
         const appts = await qb.getMany();
@@ -357,8 +377,14 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             appointmentType: a.AppointmentType,
             status: a.Status,
             reason: a.Reason,
+            hospitalId: a.HospitalId ?? a.Hospital?.Id ?? null,
+            hospitalName: a.Hospital?.Name || "Healthcare Facility",
+            organizationId: a.OrgId ?? a.Organization?.Id ?? null,
+            organizationName: a.Organization?.Name || "Organization",
             doctorName: a.Doctor ? `Dr. ${a.Doctor.FirstName || ''} ${a.Doctor.LastName || ''}`.trim() : "Doctor",
-            patientName: a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : "Patient"
+            patientName: a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : "Patient",
+            relation: a.User?.Relation || "Self",
+            isPrimary: a.User?.IsPrimary ?? true
         }));
 
         return res.json(ApiResponse.success(formatted, "Patient appointments fetched successfully."));
