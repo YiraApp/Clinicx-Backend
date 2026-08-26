@@ -91,14 +91,20 @@ export class AuthService implements IAuthService {
             }
         }
 
-        // Fetch family relations by shared phone number
-        const familyMembers = await this.userRepository.find({
-            where: { PhoneNumber: user.PhoneNumber, IsDeleted: false },
-            order: {
-                IsPrimary: "DESC",
-                CreatedAt: "ASC"
-            }
-        });
+        // Fetch family relations by shared phone number or parentId link
+        const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
+        const parentId = user.ParentUserId || user.Id;
+
+        const familyMembers = await this.userRepository.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere(
+                '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
+                (cleanPhone && cleanPhone.length === 10 ? ' OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone' : '') + ')',
+                { userId: user.Id, parentId, cleanPhone }
+            )
+            .orderBy('u.IsPrimary', 'DESC')
+            .addOrderBy('u.CreatedAt', 'ASC')
+            .getMany();
 
         let relations: any[] = [];
         if (familyMembers.length > 0) {
@@ -116,7 +122,7 @@ export class AuthService implements IAuthService {
             const patientFamilyMembers = familyMembers.filter(m => patientUserIds.has(m.Id) || m.Id === user.Id);
 
             if (patientFamilyMembers.length > 0) {
-                const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || patientFamilyMembers.find(m => m.Id === user.Id) || patientFamilyMembers[0]!;
+                const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || patientFamilyMembers.find(m => m.Id === parentId) || patientFamilyMembers.find(m => m.Id === user.Id) || patientFamilyMembers[0]!;
                 const childMembers = patientFamilyMembers.filter(m => m.Id !== primaryMember.Id);
 
                 relations = [{

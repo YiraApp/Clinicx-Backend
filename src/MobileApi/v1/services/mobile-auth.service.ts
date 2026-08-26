@@ -31,12 +31,8 @@ export class MobileAuthService {
             throw new Error("Email cannot be used for OTP login");
         }
 
-        let lookupIdentity = identity;
-        if (countryCode && identity.startsWith(countryCode)) {
-            lookupIdentity = identity.substring(countryCode.length);
-        } else if (identity.startsWith("91")) {
-            lookupIdentity = identity.substring(2);
-        }
+        const digitsOnly = identity.replace(/\D/g, "");
+        let lookupIdentity = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
 
         // Find user (ONLY primary, non-deleted user)
         const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);

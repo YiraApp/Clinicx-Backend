@@ -824,14 +824,20 @@ export class UserService implements IUserService {
             throw new Error("User not found");
         }
 
-        // Family members share the same phone number
-        const familyMembers = await userRepo.find({
-            where: { PhoneNumber: user.PhoneNumber, IsDeleted: false },
-            order: {
-                IsPrimary: "DESC",
-                CreatedAt: "ASC"
-            }
-        });
+        const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
+        const parentId = user.ParentUserId || user.Id;
+
+        const qb = userRepo.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere(
+                '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
+                (cleanPhone && cleanPhone.length === 10 ? ' OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone' : '') + ')',
+                { userId: user.Id, parentId, cleanPhone }
+            )
+            .orderBy('u.IsPrimary', 'DESC')
+            .addOrderBy('u.CreatedAt', 'ASC');
+
+        const familyMembers = await qb.getMany();
 
         if (familyMembers.length === 0) return [];
 
@@ -850,8 +856,11 @@ export class UserService implements IUserService {
 
         if (patientFamilyMembers.length === 0) return [];
 
-        // Primary user is the one marked IsPrimary, or fall back to current user
-        const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || patientFamilyMembers.find(m => m.Id === userId) || patientFamilyMembers[0]!;
+        // Primary user is the one marked IsPrimary, or fall back to parentId, or current user
+        const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || 
+                              patientFamilyMembers.find(m => m.Id === parentId) || 
+                              patientFamilyMembers.find(m => m.Id === userId) || 
+                              patientFamilyMembers[0]!;
         const childMembers = patientFamilyMembers.filter(m => m.Id !== primaryMember.Id);
 
         const primaryResponse = {
