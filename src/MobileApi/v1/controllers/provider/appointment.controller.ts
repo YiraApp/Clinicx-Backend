@@ -229,7 +229,7 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
  */
 export const deployMobileDoctorSlots = async (req: Request, res: Response) => {
     try {
-        const { doctorId, hospitalId, date, slots } = req.body;
+        const { doctorId, hospitalId, date, slots, breakTimes, breaks } = req.body;
         if (!doctorId || !hospitalId || !date || !Array.isArray(slots)) {
             return res.status(400).json({
                 status: false,
@@ -241,12 +241,15 @@ export const deployMobileDoctorSlots = async (req: Request, res: Response) => {
         const provider = await healthcareProviderRepository.findByUserIdAndHospital(doctorId, hospIdNum);
         const providerIdNum = provider ? provider.Id : (Number(doctorId) || 1);
 
+        const effectiveBreaks = Array.isArray(breakTimes) ? breakTimes : (Array.isArray(breaks) ? breaks : []);
+
         const result = await healthcareProviderService.generateManualSlots(
             providerIdNum,
             hospIdNum,
             date,
             slots,
-            true // overwrite
+            true, // overwrite
+            effectiveBreaks
         );
 
         return res.json(ApiResponse.success(result, "Doctor slots deployed successfully."));

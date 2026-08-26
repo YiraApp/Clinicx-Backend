@@ -540,13 +540,13 @@ export class HealthcareProviderService {
         });
     }
 
-    async generateManualSlots(providerId: number, hospitalId: number, date: string, slots: any[], overwrite: boolean = false): Promise<any> {
+    async generateManualSlots(providerId: number, hospitalId: number, date: string, slots: any[], overwrite: boolean = false, breakTimes: any[] = []): Promise<any> {
         const provider = await healthcareProviderRepository.getDoctorById(providerId);
         if (!provider) throw new Error("Doctor not found.");
 
         // Normalize date to avoid timezone shifts (take only YYYY-MM-DD)
         const dateStr = date.split('T')[0];
-        console.log(`[Service] Generating manual slots for Date: ${dateStr}, Slots: ${slots.length}`);
+        console.log(`[Service] Generating manual slots for Date: ${dateStr}, Slots: ${slots.length}, Breaks: ${breakTimes.length}`);
 
         // 1. Prevent editing past dates
         const targetDate = new Date(dateStr);
@@ -610,9 +610,14 @@ export class HealthcareProviderService {
             // Prepare a set of booked slot time ranges to avoid duplicates (allow re‑creating unbooked slots)
             const existingTimes = new Set<string>(bookedSlots.map(s => `${s.StartTime}-${s.EndTime}`));
 
-            // 2. Create new manual slots, skipping any that would duplicate an existing time range
+            // 2. Create new manual slots, skipping any that would duplicate an existing time range or overlap with breaks
             const newSlots: HealthcareProviderScheduleSlot[] = [];
             const newTimes = new Set<string>(); // track times added in this request
+
+            const timeToMins = (t: string) => {
+                const [h, m] = t.split(':').map(Number);
+                return h * 60 + m;
+            };
 
             for (const s of slots) {
                 if (!s.startTime || !s.endTime) {
@@ -620,8 +625,30 @@ export class HealthcareProviderService {
                     continue;
                 }
                 
-                // Duplicate check against existing slots (including booked)
                 const timeKey = `${s.startTime}-${s.endTime}`;
+                const newStart = timeToMins(s.startTime);
+                const newEnd = timeToMins(s.endTime);
+
+                // 1. Break Overlap Check - Exclude any slot that falls within break timings
+                let overlapsBreak = false;
+                for (const b of breakTimes) {
+                    const bFrom = b.fromTime || b.startTime || b.StartTime || b.FromTime;
+                    const bTo = b.toTime || b.endTime || b.EndTime || b.ToTime;
+                    if (bFrom && bTo) {
+                        const bStart = timeToMins(bFrom);
+                        const bEnd = timeToMins(bTo);
+                        if (bStart < bEnd && ((newStart < bEnd && newEnd > bStart) || (newStart >= bStart && newEnd <= bEnd))) {
+                            console.log(`[Service] Skipping slot ${timeKey} because it falls within break ${bFrom}-${bTo}`);
+                            overlapsBreak = true;
+                            break;
+                        }
+                    }
+                }
+                if (overlapsBreak) {
+                    continue;
+                }
+
+                // Duplicate check against existing slots (including booked)
                 if (existingTimes.has(timeKey)) {
                     console.warn(`[Service] Skipping duplicate slot ${timeKey} (exists in DB)`);
                     continue;
@@ -632,12 +659,6 @@ export class HealthcareProviderService {
                     continue;
                 }
                 // Overlap check with existing booked slots
-                const timeToMins = (t: string) => {
-                    const [h, m] = t.split(':').map(Number);
-                    return h * 60 + m;
-                };
-                const newStart = timeToMins(s.startTime);
-                const newEnd = timeToMins(s.endTime);
                 let overlaps = false;
                 for (const b of bookedSlots) {
                     const bStart = timeToMins(b.StartTime);
