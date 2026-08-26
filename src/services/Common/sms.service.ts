@@ -96,6 +96,10 @@ export class SMSService {
             const result = await response.text();
             console.log(`[SMS Service] Response from SMS Striker: ${result}`);
 
+            if (typeof result === "string" && (result.includes("Invalid Number") || result.includes("Error") || result.includes("Failed") || result.includes("Invalid User"))) {
+                throw new Error(`SMS Striker Error: ${result.trim()}`);
+            }
+
             return result;
         } catch (error: any) {
             console.error(`[SMS Service] Error sending SMS to ${to}:`, error.message);

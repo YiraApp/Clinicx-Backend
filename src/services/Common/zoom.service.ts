@@ -52,6 +52,20 @@ export class ZoomService {
         try {
             const accessToken = await this.getAccessToken();
 
+            // If no credentials, return a Jitsi / simulated meeting link for instant join
+            if (accessToken === "MOCK_TOKEN") {
+                const mockId = Math.floor(Math.random() * 10000000000);
+                const jitsiUrl = this.generateJitsiUrl(`ClinicX-Consultation-${mockId}`);
+                return {
+                    id: mockId,
+                    join_url: jitsiUrl,
+                    start_url: jitsiUrl,
+                    topic: topic,
+                    start_time: startTime?.toISOString(),
+                    duration: duration
+                };
+            }
+
             const meetingData = {
                 topic: topic || "Doctor Consultation",
                 type: startTime ? 2 : 1, // 1 for instant, 2 for scheduled

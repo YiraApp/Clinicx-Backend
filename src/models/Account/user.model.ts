@@ -102,6 +102,9 @@ export class User {
     @Column({ type: "varchar", length: 10, nullable: true })
     CountryCode?: string | null;
 
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    TokenNumber?: string | null;
+
 
 
     @Column({ type: "nvarchar", length: 200, nullable: true })

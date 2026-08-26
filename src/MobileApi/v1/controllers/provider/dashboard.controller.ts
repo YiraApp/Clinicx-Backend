@@ -156,22 +156,15 @@ export const getPatientOverview = async (req: Request, res: Response) => {
     try {
         const { patientId, orgId, hospitalId } = req.body;
 
-        if (!patientId || orgId === undefined || hospitalId === undefined) {
+        if (!patientId) {
             return res.status(400).json({
                 status: false,
-                message: "Missing required fields: patientId, orgId, and hospitalId are all required in request body"
+                message: "Missing required field: patientId is required in request body"
             });
         }
 
-        const parsedOrgId = Number(orgId);
-        const parsedHospitalId = Number(hospitalId);
-
-        if (isNaN(parsedOrgId) || isNaN(parsedHospitalId)) {
-            return res.status(400).json({
-                status: false,
-                message: "Invalid parameters: orgId and hospitalId must be valid numbers"
-            });
-        }
+        const parsedOrgId = orgId !== undefined && orgId !== null && !isNaN(Number(orgId)) ? Number(orgId) : undefined;
+        const parsedHospitalId = hospitalId !== undefined && hospitalId !== null && !isNaN(Number(hospitalId)) ? Number(hospitalId) : undefined;
 
         const result = await mobileDashboardService.getPatientOverview(patientId, parsedOrgId, parsedHospitalId);
 
@@ -191,22 +184,15 @@ export const getPatientProfile = async (req: Request, res: Response) => {
     try {
         const { patientId, orgId, hospitalId } = req.body;
 
-        if (!patientId || orgId === undefined || hospitalId === undefined) {
+        if (!patientId) {
             return res.status(400).json({
                 status: false,
-                message: "Missing required fields: patientId, orgId, and hospitalId are all required in request body"
+                message: "Missing required field: patientId is required in request body"
             });
         }
 
-        const parsedOrgId = Number(orgId);
-        const parsedHospitalId = Number(hospitalId);
-
-        if (isNaN(parsedOrgId) || isNaN(parsedHospitalId)) {
-            return res.status(400).json({
-                status: false,
-                message: "Invalid parameters: orgId and hospitalId must be valid numbers"
-            });
-        }
+        const parsedOrgId = orgId !== undefined && orgId !== null && !isNaN(Number(orgId)) ? Number(orgId) : undefined;
+        const parsedHospitalId = hospitalId !== undefined && hospitalId !== null && !isNaN(Number(hospitalId)) ? Number(hospitalId) : undefined;
 
         const result = await mobileDashboardService.getPatientProfile(patientId, parsedOrgId, parsedHospitalId);
 

@@ -116,7 +116,18 @@ export class SidebarRepository implements ISidebarRepository {
     }
 
     async updateMenu(menuId: number, menuData: Partial<SidebarMenu>): Promise<SidebarMenu> {
-        await this.menuRepo.update(menuId, menuData);
+        const allowedFields: (keyof SidebarMenu)[] = [
+            "MenuName", "Route", "Icon", "ImagePath", "ParentMenuId", "OrderNo", "Status"
+        ];
+        const sanitizedData: any = {};
+        for (const key of allowedFields) {
+            if ((menuData as any)[key] !== undefined) {
+                sanitizedData[key] = (menuData as any)[key];
+            }
+        }
+        if (Object.keys(sanitizedData).length > 0) {
+            await this.menuRepo.update(menuId, sanitizedData);
+        }
         return await this.menuRepo.findOneBy({ MenuId: menuId }) as SidebarMenu;
     }
 
@@ -256,7 +267,18 @@ export class SidebarRepository implements ISidebarRepository {
     }
 
     async updateMobileMenu(menuId: number, menuData: Partial<MobileSidebarMenu>): Promise<MobileSidebarMenu> {
-        await this.mobileMenuRepo.update(menuId, menuData);
+        const allowedFields: (keyof MobileSidebarMenu)[] = [
+            "MenuName", "TaskCode", "TaskId", "Icon", "ImagePath", "UseImage", "OrderNo", "Status"
+        ];
+        const sanitizedData: any = {};
+        for (const key of allowedFields) {
+            if ((menuData as any)[key] !== undefined) {
+                sanitizedData[key] = (menuData as any)[key];
+            }
+        }
+        if (Object.keys(sanitizedData).length > 0) {
+            await this.mobileMenuRepo.update(menuId, sanitizedData);
+        }
         return await this.mobileMenuRepo.findOneBy({ MenuId: menuId }) as MobileSidebarMenu;
     }
 

@@ -5,6 +5,7 @@ import { loggingMiddleware } from './middlewares/logging.middleware.js';
 import router from './routes/index.js';
 import { mobileRouterV1 } from './MobileApi/v1/routes/index.js';
 
+// ClinicX Backend Application
 const app: Application = express();
 
 app.use(cors());

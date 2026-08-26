@@ -82,8 +82,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/app-version"
     ];
 
-
-    const isPublic = publicRoutes.some(route => req.path.startsWith(route));
+    const cleanReqPath = (req.path || "").toLowerCase();
+    const isPublic = publicRoutes.some(route => cleanReqPath.startsWith(route.toLowerCase()));
 
     // Capture initial request metadata
     const requestLog = new APILog();

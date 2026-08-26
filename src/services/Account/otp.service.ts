@@ -10,6 +10,24 @@ import { OTPType, OTPPurpose } from "../../enums/OTPType.enum.js";
  */
 export class OTPService {
     /**
+     * Safely normalizes mobile contact input to ensure consistent 10-digit finalContact and 12-digit fullMobileForSMS.
+     */
+    private normalizeMobileContact(contact: string, countryCode?: string): { finalContact: string; finalCountryCode: string; fullMobileForSMS: string } {
+        const cleanCountryCode = (countryCode || "91").replace(/\D/g, "") || "91";
+        const digitsOnly = contact.replace(/\D/g, "");
+
+        let finalContact = digitsOnly;
+        if (digitsOnly.length > 10 && digitsOnly.startsWith(cleanCountryCode)) {
+            finalContact = digitsOnly.slice(cleanCountryCode.length);
+        } else if (digitsOnly.length > 10) {
+            finalContact = digitsOnly.slice(-10);
+        }
+
+        const fullMobileForSMS = cleanCountryCode + finalContact;
+        return { finalContact, finalCountryCode: cleanCountryCode, fullMobileForSMS };
+    }
+
+    /**
      * Sends OTP to a contact (Email or Mobile).
      * @param contact Email or phone number
      * @param purpose OTP purpose
@@ -35,16 +53,10 @@ export class OTPService {
         let fullMobileForSMS = contact;
 
         if (!isEmail) {
-            // If contact starts with 91 but no countryCode was passed, extract it
-            if (contact.startsWith("91") && !finalCountryCode) {
-                finalCountryCode = "91";
-                finalContact = contact.substring(2);
-            } 
-            // If countryCode was passed separately, ensure finalContact is clean and fullMobile is combined
-            else if (finalCountryCode) {
-                finalContact = contact; // Assuming it's the 10-digit number
-                fullMobileForSMS = finalCountryCode + contact;
-            }
+            const normalized = this.normalizeMobileContact(contact, countryCode);
+            finalContact = normalized.finalContact;
+            finalCountryCode = normalized.finalCountryCode;
+            fullMobileForSMS = normalized.fullMobileForSMS;
         }
 
         /*
@@ -61,13 +73,7 @@ export class OTPService {
         if (isEmail) {
             user = await userRepository.findPrimaryByEmail(finalContact);
         } else {
-            // Also clean phone prefix for lookup if needed
-            let phoneLookup = finalContact;
-            const cleanPhone = finalContact.startsWith("+") ? finalContact.slice(1) : finalContact;
-            if (cleanPhone.startsWith("91") && cleanPhone.length === 12) {
-                phoneLookup = cleanPhone.substring(2);
-            }
-            user = await userRepository.findPrimaryByPhone(phoneLookup);
+            user = await userRepository.findPrimaryByPhone(finalContact);
         }
 
         // Validate patient role before generating/sending OTP if purpose is LOGIN
@@ -157,9 +163,14 @@ export class OTPService {
             } else {
                 try {
                     // Send OTP via SMS (using full mobile number including 91)
-                    await smsService.sendOTP(fullMobileForSMS, otp);
-                } catch (smsError) {
+                    const smsRes = await smsService.sendOTP(fullMobileForSMS, otp);
+                    if (typeof smsRes === "string" && (smsRes.includes("Invalid") || smsRes.includes("Error") || smsRes.includes("Failed"))) {
+                        console.error(`[OTP] SMS Gateway returned error for ${fullMobileForSMS}:`, smsRes);
+                        throw new Error(smsRes);
+                    }
+                } catch (smsError: any) {
                     console.error(`[OTP] Failed to send SMS to ${fullMobileForSMS}:`, smsError);
+                    throw new Error(`Failed to send OTP via SMS: ${smsError.message || smsError}`);
                 }
             }
         }
@@ -187,11 +198,7 @@ export class OTPService {
 
         let lookupContact = contact;
         if (!isEmail) {
-            if (contact.startsWith("91") && !countryCode) {
-                lookupContact = contact.substring(2);
-            } else if (countryCode) {
-                lookupContact = contact;
-            }
+            lookupContact = this.normalizeMobileContact(contact, countryCode).finalContact;
         }
 
         // Find existing unexpired OTP and mark it as expired
@@ -225,11 +232,7 @@ export class OTPService {
         // Normalize contact for lookup (strip country code prefix if present)
         let lookupContact = contact;
         if (!isEmail) {
-            if (countryCode && contact.startsWith(countryCode)) {
-                lookupContact = contact.substring(countryCode.length);
-            } else if (contact.startsWith("91")) {
-                lookupContact = contact.substring(2);
-            }
+            lookupContact = this.normalizeMobileContact(contact, countryCode).finalContact;
         }
 
         // Verify OTP using the repository logic

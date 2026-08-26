@@ -152,6 +152,28 @@ export class AppointmentController {
             return res.status(400).json(ApiResponse.error(error.message));
         }
     }
+
+    async sendReminder(req: Request, res: Response) {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            const { timeRemaining, templateName } = req.body;
+            const { appointmentReminderService } = await import("../../services/Appointments/appointment-reminder.service.js");
+            
+            const result = await appointmentReminderService.sendAppointmentReminder(
+                id, 
+                timeRemaining || "10 minutes", 
+                templateName || "remainder_template"
+            );
+
+            if (!result.success) {
+                return res.status(400).json(ApiResponse.error(result.error || "Failed to send reminder"));
+            }
+
+            return res.json(ApiResponse.success(result, "WhatsApp appointment reminder sent successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 export const appointmentController = new AppointmentController();

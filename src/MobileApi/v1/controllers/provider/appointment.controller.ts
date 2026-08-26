@@ -179,16 +179,15 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
                 let appointmentType = undefined;
                 let appointmentId = undefined;
                 let reason = undefined;
-                
+
                 if (s.IsBooked && s.Appointments && s.Appointments.length > 0) {
-                    const activeAppt = s.Appointments.find(appt => 
+                    const activeAppt = s.Appointments.find(appt =>
                         appt.Status && !["cancelled", "canceled", "no show", "noshow", "rescheduled"].includes(appt.Status.toLowerCase())
                     );
                     if (activeAppt) {
                         appointmentId = String(activeAppt.Id);
                         if (activeAppt.User) {
-                            const u = activeAppt.User;
-                            patientName = [u.FirstName, u.LastName].filter(Boolean).join(" ") || u.Email || "Patient";
+                            patientName = `${activeAppt.User.FirstName || ''} ${activeAppt.User.LastName || ''}`.trim() || activeAppt.User.Email || undefined;
                         }
                         appointmentType = activeAppt.AppointmentType || 'Regular Check-up';
                         reason = activeAppt.Reason || undefined;
@@ -202,11 +201,8 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
                     label: `${s.StartTime} - ${s.EndTime}`,
                     isAvailable: s.IsAvailable && !s.IsBooked,
                     isBooked: s.IsBooked,
-                    isBlocked: !s.IsAvailable && !s.IsBooked,
-                    patientName: patientName,
-                    appointmentType: appointmentType,
-                    appointmentId: appointmentId,
-                    reason: reason
+                    patientName: patientName || undefined,
+                    appointmentType: appointmentType || undefined
                 };
             });
         }
@@ -351,7 +347,7 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             const user = await userRepo.findOne({ where: { Id: userId, IsDeleted: false } });
             const dependents = await userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } });
             const userIds = [userId, ...dependents.map(d => d.Id)];
-            
+
             if (user && user.PhoneNumber) {
                 const clean = user.PhoneNumber.replace(/\D/g, "");
                 const last10 = clean.slice(-10);

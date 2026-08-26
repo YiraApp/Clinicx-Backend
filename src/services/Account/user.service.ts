@@ -62,6 +62,14 @@ export class UserService implements IUserService {
         // 1. Check if a primary user exists for this phone number
         const primaryUser = await userRepository.findPrimaryByPhone(data.PhoneNumber);
 
+        // 1b. Check if email is provided and already belongs to another primary user account
+        if (data.Email && data.Email.trim() !== "") {
+            const existingEmailUser = await userRepository.findPrimaryByEmail(data.Email.trim());
+            if (existingEmailUser && (!primaryUser || existingEmailUser.Id !== primaryUser.Id)) {
+                throw new Error("An account with this email address already exists for another user.");
+            }
+        }
+
         // 2. Count existing users for this phone number
         const userCount = await userRepository.countUsersByPhone(data.PhoneNumber);
 
@@ -83,6 +91,7 @@ export class UserService implements IUserService {
         if (data.BloodGroup) newUser.BloodGroup = data.BloodGroup;
         if (data.Height) newUser.Height = data.Height;
         if (data.Weight) newUser.Weight = data.Weight;
+        if (data.TokenNumber || (data as any).Token) newUser.TokenNumber = data.TokenNumber || (data as any).Token;
 
         newUser.Status = true;
         newUser.IsDeleted = false;
@@ -196,19 +205,29 @@ export class UserService implements IUserService {
                 throw new Error("User with provided ID not found.");
             }
         } else {
-            const createResult = await this.createUser({
-                FirstName: data.FirstName,
-                LastName: data.LastName,
-                Email: data.Email,
-                Password: data.Password,
-                PhoneNumber: data.PhoneNumber,
-                Gender: data.Gender,
-                CountryCode: data.CountryCode,
-                DateOfBirth: data.DateOfBirth,
-                BloodGroup: data.BloodGroup,
-                Relation: data.Relation || "Admin"
-            }, true);
-            user = await userRepository.findById(createResult.Id);
+            // Check if primary account already exists for this phone number or email before creating a new account
+            if (data.PhoneNumber) {
+                user = await userRepository.findPrimaryByPhone(data.PhoneNumber);
+            }
+            if (!user && data.Email) {
+                user = await userRepository.findPrimaryByEmail(data.Email);
+            }
+
+            if (!user) {
+                const createResult = await this.createUser({
+                    FirstName: data.FirstName,
+                    LastName: data.LastName,
+                    Email: data.Email,
+                    Password: data.Password,
+                    PhoneNumber: data.PhoneNumber,
+                    Gender: data.Gender,
+                    CountryCode: data.CountryCode,
+                    DateOfBirth: data.DateOfBirth,
+                    BloodGroup: data.BloodGroup,
+                    Relation: data.Relation || "Admin"
+                }, true);
+                user = await userRepository.findById(createResult.Id);
+            }
         }
 
         if (!user) {
@@ -226,6 +245,14 @@ export class UserService implements IUserService {
             user.PhoneNumber = data.PhoneNumber;
         }
 
+        // 2b. Check if email is provided and already belongs to another primary user account
+        if (data.Email && data.Email.trim() !== "") {
+            const existingEmailUser = await userRepository.findPrimaryByEmail(data.Email.trim());
+            if (existingEmailUser && existingEmailUser.Id !== user.Id) {
+                throw new Error("An account with this email address already exists for another user.");
+            }
+        }
+
         // 3. Update basic fields
         user.FirstName = data.FirstName ?? null;
         user.LastName = data.LastName ?? null;
@@ -239,6 +266,9 @@ export class UserService implements IUserService {
         user.Status = data.Status !== undefined ? data.Status : true;
         user.Height = data.Height ?? null;
         user.Weight = data.Weight ?? null;
+        if (data.TokenNumber !== undefined || (data as any).Token !== undefined) {
+            user.TokenNumber = data.TokenNumber || (data as any).Token || null;
+        }
 
         // 4. Update addresses
         let permData = data.PermanentAddress;
@@ -272,6 +302,15 @@ export class UserService implements IUserService {
 
         const rolesToUpdate: UserRole[] = [];
 
+        // Check if this request is specifically for Patient registration (only assigning Patient role)
+        const isOnlyPatientRequest = requestedAssignments.length > 0 &&
+            requestedAssignments.every(ra =>
+                ra.roleId?.toLowerCase() === "4fc67429-28ae-4106-93ef-436228282ed0" ||
+                ra.roleId?.toLowerCase() === "patient"
+            );
+
+        const shouldPreserveExistingRoles = data.preserveExistingRoles || isOnlyPatientRequest;
+
         // Identify existing roles and mark for update (reactivate or deactivate)
         currentRoles.forEach(cr => {
             const matchIndex = requestedAssignments.findIndex(ra =>
@@ -295,11 +334,13 @@ export class UserService implements IUserService {
                 // Remove from requested list so we don't treat it as a new creation
                 requestedAssignments.splice(matchIndex, 1);
             } else {
-                // NOT in requested assignments - deactivate if currently active
-                if (cr.Status) {
-                    cr.Status = false;
-                    cr.UpdatedAt = new Date();
-                    rolesToUpdate.push(cr);
+                // NOT in requested assignments - only deactivate if NOT preserving existing roles
+                if (!shouldPreserveExistingRoles) {
+                    if (cr.Status) {
+                        cr.Status = false;
+                        cr.UpdatedAt = new Date();
+                        rolesToUpdate.push(cr);
+                    }
                 }
             }
         });
@@ -783,14 +824,20 @@ export class UserService implements IUserService {
             throw new Error("User not found");
         }
 
-        // Family members share the same phone number
-        const familyMembers = await userRepo.find({
-            where: { PhoneNumber: user.PhoneNumber, IsDeleted: false },
-            order: {
-                IsPrimary: "DESC",
-                CreatedAt: "ASC"
-            }
-        });
+        const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
+        const parentId = user.ParentUserId || user.Id;
+
+        const qb = userRepo.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere(
+                '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
+                (cleanPhone && cleanPhone.length === 10 ? ' OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone' : '') + ')',
+                { userId: user.Id, parentId, cleanPhone }
+            )
+            .orderBy('u.IsPrimary', 'DESC')
+            .addOrderBy('u.CreatedAt', 'ASC');
+
+        const familyMembers = await qb.getMany();
 
         if (familyMembers.length === 0) return [];
 
@@ -809,8 +856,11 @@ export class UserService implements IUserService {
 
         if (patientFamilyMembers.length === 0) return [];
 
-        // Primary user is the one marked IsPrimary, or fall back to current user
-        const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || patientFamilyMembers.find(m => m.Id === userId) || patientFamilyMembers[0]!;
+        // Primary user is the one marked IsPrimary, or fall back to parentId, or current user
+        const primaryMember = patientFamilyMembers.find(m => m.IsPrimary) || 
+                              patientFamilyMembers.find(m => m.Id === parentId) || 
+                              patientFamilyMembers.find(m => m.Id === userId) || 
+                              patientFamilyMembers[0]!;
         const childMembers = patientFamilyMembers.filter(m => m.Id !== primaryMember.Id);
 
         const primaryResponse = {

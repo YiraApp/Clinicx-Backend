@@ -924,7 +924,7 @@ export class AppointmentService {
     }
 
     async rescheduleAppointment(appointmentId: number, data: { newSlotId: number; newDoctorId: string; newDate: string; startTime: string; endTime: string }) {
-        return await AppDataSource.transaction(async (manager) => {
+        const updated = await AppDataSource.transaction(async (manager) => {
             const appointment = await manager.findOne(Appointment, { where: { Id: appointmentId } });
             if (!appointment) throw new Error("Appointment not found.");
 
@@ -964,6 +964,84 @@ export class AppointmentService {
 
             return await manager.findOne(Appointment, { where: { Id: appointmentId } });
         });
+
+        // Async task: Send WhatsApp appointment_rescheduled notification
+        try {
+            const enriched = await appointmentRepository.findById(appointmentId);
+            if (enriched && enriched.User?.PhoneNumber) {
+                const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
+
+                const redirection = await meetingRedirectionService.getOrCreateRedirection({
+                    AppointmentId: enriched.Id,
+                    PatientId: enriched.UserId,
+                    DoctorId: enriched.DoctorId,
+                    HospitalId: enriched.HospitalId,
+                    OrganizationId: enriched.OrgId,
+                    MeetingUrl: enriched.MeetingUrl || "",
+                    AppointmentDate: enriched.AppointmentDate,
+                    StartTime: enriched.StartTime
+                });
+
+                const patientName = `${enriched.User?.FirstName || ""} ${enriched.User?.LastName || ""}`.trim() || "Patient";
+                const doctorName = enriched.Doctor 
+                    ? `Dr. ${enriched.Doctor.FirstName || ""} ${enriched.Doctor.LastName || ""}`.trim()
+                    : "your doctor";
+
+                const dateObj = new Date(enriched.AppointmentDate);
+                const dateStr = !isNaN(dateObj.getTime())
+                    ? dateObj.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                    : String(enriched.AppointmentDate);
+
+                let timeStr = enriched.StartTime ? enriched.StartTime.slice(0, 5) : "";
+                if (enriched.StartTime && enriched.StartTime.includes(":")) {
+                    const [h, m] = enriched.StartTime.split(":");
+                    const hourNum = parseInt(h, 10);
+                    const period = hourNum >= 12 ? "PM" : "AM";
+                    const displayHour = hourNum % 12 || 12;
+                    timeStr = `${displayHour}:${m} ${period}`;
+                }
+
+                let locationStr = enriched.Hospital?.Name || "our clinic";
+                if (enriched.IsTeleConsultation) {
+                    locationStr = "Online Video Consultation";
+                }
+
+                const countryCode = enriched.User.CountryCode || "91";
+                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${enriched.User.PhoneNumber.replace(/\D/g, "")}`;
+
+                const components: any[] = [
+                    {
+                        type: "body",
+                        parameters: [
+                            { type: "text", text: patientName },   // {{1}}
+                            { type: "text", text: doctorName },    // {{2}}
+                            { type: "text", text: dateStr },        // {{3}}
+                            { type: "text", text: timeStr },        // {{4}}
+                            { type: "text", text: locationStr }     // {{5}}
+                        ]
+                    }
+                ];
+
+                if (redirection && redirection.UrlId) {
+                    components.push({
+                        type: "button",
+                        sub_type: "url",
+                        index: "0",
+                        parameters: [
+                            { type: "text", text: redirection.UrlId }
+                        ]
+                    });
+                }
+
+                await whatsappService.sendTemplateMessage(normalizedPhone, "appointment_rescheduled", "en", components);
+                console.log(`[AppointmentService] WhatsApp appointment_rescheduled notification sent to ${normalizedPhone} for Appt #${enriched.Id}`);
+            }
+        } catch (err: any) {
+            console.error("[AppointmentService] Error sending appointment_rescheduled notification:", err.message || err);
+        }
+
+        return updated;
     }
 
     async createInstantMeeting(topic: string = "Instant Consultation") {

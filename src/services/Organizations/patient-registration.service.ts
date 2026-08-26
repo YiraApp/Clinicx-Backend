@@ -13,10 +13,11 @@ export class PatientRegistrationService {
 
         if (!userId) throw new Error("UserId is required for patient registration.");
 
-        // If registration was initiated via a token, validate and deactivate it
-        if (token) {
+        // If registration was initiated via a registration link token (GUID), validate and deactivate it
+        const isGuid = typeof token === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token.trim());
+        if (token && isGuid) {
             const { userRegistrationLinkRepository } = await import("../../repositories/Organizations/user-registration-link.repository.js");
-            const regLink = await userRegistrationLinkRepository.findByToken(token);
+            const regLink = await userRegistrationLinkRepository.findByToken(token.trim());
             if (!regLink) {
                 throw new Error("Registration link not found or has already been used.");
             }
@@ -37,6 +38,9 @@ export class PatientRegistrationService {
 
         if (patientFields.allergies !== undefined) registration.Allergies = patientFields.allergies;
         if (patientFields.medicalHistory !== undefined) registration.MedicalHistory = patientFields.medicalHistory;
+        if (patientFields.tokenNumber || (!isGuid && token ? token : undefined)) {
+            registration.TokenNumber = patientFields.tokenNumber || (!isGuid && token ? token : undefined);
+        }
 
         registration.Status = true;
         registration.IsDeleted = false;

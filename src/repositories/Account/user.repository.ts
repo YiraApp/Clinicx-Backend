@@ -143,7 +143,7 @@ export class UserRepository implements IUserRepository {
         }
 
 
-        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'COALESCE(ur.UpdatedAt, ur.CreatedAt)';
+        const orderByColumn = sortBy === 'updatedAt' ? 'u.UpdatedAt' : sortBy === 'firstName' ? 'u.FirstName' : 'u.CreatedAt';
 
         if (filters?.currentUserId) {
             query.addSelect('CASE WHEN u.Id = :currentUserId THEN 0 ELSE 1 END', 'priority');
@@ -269,21 +269,28 @@ export class UserRepository implements IUserRepository {
     }
 
     async findPrimaryByPhone(phone: string): Promise<User | null> {
-        return await this.repo.findOne({
-            where: { PhoneNumber: phone, IsPrimary: true, IsDeleted: false }
-        });
+        if (!phone) return null;
+        const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+        return await this.repo.createQueryBuilder('u')
+            .where('u.IsPrimary = 1 AND u.IsDeleted = 0')
+            .andWhere('(u.PhoneNumber = :phone OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone)', { phone, cleanPhone })
+            .getOne();
     }
 
     async findPrimaryByEmail(email: string): Promise<User | null> {
+        if (!email) return null;
         return await this.repo.findOne({
             where: { Email: email, IsPrimary: true, IsDeleted: false }
         });
     }
 
     async countUsersByPhone(phone: string): Promise<number> {
-        return await this.repo.count({
-            where: { PhoneNumber: phone, IsDeleted: false }
-        });
+        if (!phone) return 0;
+        const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+        return await this.repo.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere('(u.PhoneNumber = :phone OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone)', { phone, cleanPhone })
+            .getCount();
     }
 
     async findById(id: string): Promise<User | null> {
@@ -303,9 +310,12 @@ export class UserRepository implements IUserRepository {
     }
 
     async findByPhone(phone: string): Promise<User | null> {
-        return await this.repo.findOne({
-            where: { PhoneNumber: phone, IsDeleted: false }
-        });
+        if (!phone) return null;
+        const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+        return await this.repo.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere('(u.PhoneNumber = :phone OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone)', { phone, cleanPhone })
+            .getOne();
     }
 
     async checkUserRole(identifier: string, roleId: string, organizationId?: number, hospitalId?: number): Promise<boolean> {
