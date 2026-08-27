@@ -208,7 +208,31 @@ export class AppointmentReminderService {
                 if (diffMinutes >= 8 && diffMinutes <= 14 && !this.sentReminders.has(reminderKey10m)) {
                     this.sentReminders.add(reminderKey10m);
                     console.log(`[AppointmentReminder] Auto-triggering 10m reminder for Appt #${appt.Id} (Starts in ~${diffMinutes}m)`);
+                    
+                    // 1. Send WhatsApp reminder
                     await this.sendAppointmentReminder(appt.Id, "10 minutes");
+
+                    // 2. Dispatch Live Push Notification to Doctor & Patient
+                    try {
+                        const { pushNotificationService } = await import("../Notifications/push-notification.service.js");
+                        const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
+                        const doctorName = appt.Doctor 
+                            ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
+                            : "Doctor";
+                        await pushNotificationService.notifyAppointment10MinReminder({
+                            appointmentId: appt.Id,
+                            doctorId: appt.DoctorId,
+                            patientId: appt.UserId,
+                            doctorName,
+                            patientName,
+                            date: todayStr,
+                            time: appt.StartTime,
+                            consultationType: appt.IsTeleConsultation ? "Video Consultation" : "In-Clinic"
+                        });
+                    } catch (pushErr: any) {
+                        console.error("[AppointmentReminder] Mobile push reminder error:", pushErr?.message || pushErr);
+                    }
+
                     sentCount++;
                 }
             }

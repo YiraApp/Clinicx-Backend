@@ -105,6 +105,36 @@ export class NotificationController {
             return res.status(500).json(ApiResponse.error(error.message || "Failed to mark notifications as read"));
         }
     };
+
+    /**
+     * Dispatches a test push notification and saves to database.
+     */
+    sendTestNotification = async (req: Request, res: Response) => {
+        try {
+            const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || req.body?.userId;
+            const { title, body, type, route } = req.body || {};
+
+            if (!userId) {
+                return res.status(400).json(ApiResponse.error("User ID not found"));
+            }
+
+            const { PushNotificationService } = await import("../../../services/Notifications/push-notification.service.js");
+            const pushService = new PushNotificationService();
+
+            const result = await pushService.sendNotification({
+                userId,
+                title: title || "🩺 Yira Clinx: Test Push Notification",
+                body: body || "Rahul Verma booked an appointment for Today at 10:30 AM.",
+                type: type || "TEST_PUSH",
+                route: route || "/doctorDashboard",
+            });
+
+            return res.json(ApiResponse.success(result, "Test notification dispatched and saved"));
+        } catch (error: any) {
+            console.error("Error sending test notification:", error);
+            return res.status(500).json(ApiResponse.error(error.message || "Failed to dispatch test notification"));
+        }
+    };
 }
 
 export const notificationController = new NotificationController();

@@ -148,6 +148,117 @@ export const sendOTP = async (req: Request, res: Response) => {
 };
 
 /**
+ * Sends OTP for Mobile Signup verification.
+ */
+export const sendSignupOtp = async (req: Request, res: Response) => {
+    const { identity, phoneNumber, countryCode } = req.body;
+    const targetPhone = phoneNumber || identity;
+    try {
+        if (!targetPhone) {
+            return res.status(400).json({
+                status: false,
+                message: "Mobile phone number is required",
+                code: "PHONE_REQUIRED"
+            });
+        }
+
+        const result = await mobileAuthService.sendSignupOTP(targetPhone, countryCode);
+        return res.json(ApiResponse.success(result, "Verification code sent successfully."));
+    } catch (error: any) {
+        console.error("[DEBUG] sendSignupOtp Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to send signup verification code.",
+            code: "SIGNUP_OTP_FAILED"
+        });
+    }
+};
+
+/**
+ * Handles mobile patient registration, OTP verification, and default Yira organization onboarding.
+ */
+export const register = async (req: Request, res: Response) => {
+    try {
+        const {
+            phoneNumber,
+            identity,
+            countryCode,
+            firstName,
+            lastName,
+            email,
+            password,
+            otp,
+            sessionId,
+            gender,
+            dateOfBirth,
+            bloodGroup,
+            profileImageUrl
+        } = req.body;
+
+        const targetPhone = phoneNumber || identity;
+        const deviceInfo = req.headers["x-device-info"] as string;
+        const ipAddress = req.headers["x-ip-address"] as string;
+
+        if (!targetPhone) {
+            return res.status(400).json({
+                status: false,
+                message: "Mobile number is required",
+                code: "PHONE_REQUIRED"
+            });
+        }
+
+        if (!firstName) {
+            return res.status(400).json({
+                status: false,
+                message: "First name is required",
+                code: "FIRST_NAME_REQUIRED"
+            });
+        }
+
+        if (!password) {
+            return res.status(400).json({
+                status: false,
+                message: "Password is required",
+                code: "PASSWORD_REQUIRED"
+            });
+        }
+
+        if (!otp || !sessionId) {
+            return res.status(400).json({
+                status: false,
+                message: "OTP code and session ID are required",
+                code: "OTP_REQUIRED"
+            });
+        }
+
+        const result = await mobileAuthService.registerMobilePatient({
+            phoneNumber: targetPhone,
+            countryCode,
+            firstName,
+            lastName,
+            email,
+            password,
+            otp,
+            sessionId,
+            gender,
+            dateOfBirth,
+            bloodGroup,
+            profileImageUrl,
+            deviceInfo,
+            ipAddress
+        });
+
+        return res.json(ApiResponse.success(result, "Patient registration successful! Welcome to Yira."));
+    } catch (error: any) {
+        console.error("[DEBUG] register Patient Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to complete patient registration."
+        });
+    }
+};
+
+/**
  * Handles resending OTP for mobile logins (legacy endpoint wrapper).
  */
 export const resendOTP = async (req: Request, res: Response) => {

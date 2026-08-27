@@ -1,8 +1,12 @@
 import { AppDataSource } from "../../../../config/database.js";
 import { PatientAccessConsent } from "../../../../models/Consent/patient-access-consent.model.js";
 import { User } from "../../../../models/Account/user.model.js";
+import { UserRole } from "../../../../models/Account/userrole.model.js";
+import { Role } from "../../../../models/Account/role.model.js";
+import { PatientRegistration } from "../../../../models/Organizations/patient-registration.model.js";
 import { HealthcareProvider } from "../../../../models/Organizations/healthcare-provider.model.js";
 import { Hospital } from "../../../../models/Organizations/hospital.model.js";
+import { v4 as uuidv4 } from "uuid";
 
 export class PatientAccessConsentService {
     private consentRepo = AppDataSource.getRepository(PatientAccessConsent);
@@ -285,6 +289,147 @@ export class PatientAccessConsentService {
         return {
             ...saved,
             durationLabel: this.getDurationLabel(saved.Duration)
+        };
+    }
+
+    /**
+     * Connects patient and doctor via QR Code scan.
+     * Grants automatic approved record access and registers the patient under doctor's patient list.
+     */
+    async connectPatientByQr(
+        patientUserId: string,
+        doctorId: string,
+        hospitalId?: number,
+        orgId?: number,
+        patientDetails?: {
+            phone?: string;
+            name?: string;
+            email?: string;
+            gender?: string;
+        }
+    ): Promise<any> {
+        if (!patientUserId && !patientDetails?.phone) {
+            throw new Error("Patient ID or phone number is required");
+        }
+        if (!doctorId) {
+            throw new Error("Doctor ID is required");
+        }
+
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+        const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+
+        let targetPatient: User | null = null;
+        if (patientUserId) {
+            targetPatient = await this.userRepo.findOne({ where: { Id: patientUserId, IsDeleted: false } }).catch(() => null);
+        }
+        if (!targetPatient && patientDetails?.phone) {
+            const clean = patientDetails.phone.replace(/[^\d]/g, "").slice(-10);
+            targetPatient = await this.userRepo.createQueryBuilder("u")
+                .where("u.IsDeleted = 0")
+                .andWhere("(u.PhoneNumber = :p OR u.PhoneNumber LIKE :l)", { p: patientDetails.phone, l: `%${clean}` })
+                .getOne()
+                .catch(() => null);
+        }
+
+        if (!targetPatient && patientDetails?.phone) {
+            targetPatient = new User();
+            targetPatient.Id = uuidv4();
+            targetPatient.IsPrimary = true;
+            targetPatient.Relation = "Self";
+            const nameParts = (patientDetails.name || "Patient").trim().split(/\s+/);
+            targetPatient.FirstName = nameParts[0] || "Patient";
+            targetPatient.LastName = nameParts.slice(1).join(" ") || "";
+            targetPatient.PhoneNumber = patientDetails.phone;
+            targetPatient.Email = patientDetails.email || "";
+            if (patientDetails.gender) targetPatient.Gender = patientDetails.gender;
+            targetPatient.Status = true;
+            targetPatient.IsDeleted = false;
+            await this.userRepo.save(targetPatient);
+        }
+
+        if (!targetPatient) {
+            throw new Error("Could not find or create patient user");
+        }
+
+        const hId = hospitalId || 19;
+        const oId = orgId || 1;
+
+        // Ensure Patient Role mapping exists
+        const existingRole = await userRoleRepo.findOne({
+            where: { UserId: targetPatient.Id, OrganizationId: oId, HospitalId: hId, IsDeleted: false }
+        }).catch(() => null);
+        if (!existingRole) {
+            const roleRepo = AppDataSource.getRepository(Role);
+            const patientRole = await roleRepo.findOne({ where: { RoleName: "Patient" } }).catch(() => null);
+            const userRole = new UserRole();
+            userRole.UserId = targetPatient.Id;
+            userRole.RoleId = patientRole ? patientRole.Id : "4FC67429-28AE-4106-93EF-436228282ED0";
+            userRole.OrganizationId = oId;
+            userRole.HospitalId = hId;
+            userRole.Status = true;
+            userRole.IsDeleted = false;
+            await userRoleRepo.save(userRole).catch(() => {});
+        }
+
+        // Ensure PatientRegistration mapping exists
+        let existingReg = await patientRegRepo.findOne({
+            where: { UserId: targetPatient.Id, OrganizationId: oId, HospitalId: hId, IsDeleted: false }
+        }).catch(() => null);
+        if (!existingReg) {
+            const patientReg = new PatientRegistration();
+            patientReg.UserId = targetPatient.Id;
+            patientReg.OrganizationId = oId;
+            patientReg.HospitalId = hId;
+            patientReg.Status = true;
+            patientReg.IsDeleted = false;
+            await patientRegRepo.save(patientReg).catch(() => {});
+        }
+
+        // Create or update approved consent for 30 days
+        let consent = await this.consentRepo.findOne({
+            where: { PatientId: targetPatient.Id, DoctorId: doctorId },
+            order: { Id: "DESC" }
+        }).catch(() => null);
+
+        const now = new Date();
+        const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+        if (consent) {
+            consent.Status = "APPROVED";
+            consent.ApprovedAt = now;
+            consent.ExpiresAt = expires;
+            consent.Duration = "1_MONTH";
+            consent.DurationMinutes = 43200;
+            consent.Notes = "Connected via Doctor QR Scan";
+            consent.HospitalId = hId;
+            consent.OrganizationId = oId;
+            consent.UpdatedAt = now;
+            await this.consentRepo.save(consent);
+        } else {
+            consent = new PatientAccessConsent();
+            consent.PatientId = targetPatient.Id;
+            consent.DoctorId = doctorId;
+            consent.HospitalId = hId;
+            consent.OrganizationId = oId;
+            consent.Duration = "1_MONTH";
+            consent.DurationMinutes = 43200;
+            consent.Status = "APPROVED";
+            consent.RequestedAt = now;
+            consent.ApprovedAt = now;
+            consent.ExpiresAt = expires;
+            consent.Notes = "Connected via Doctor QR Scan";
+            await this.consentRepo.save(consent);
+        }
+
+        return {
+            status: true,
+            message: "Patient successfully connected with doctor via QR code",
+            patient: {
+                id: targetPatient.Id,
+                name: `${targetPatient.FirstName || ''} ${targetPatient.LastName || ''}`.trim(),
+                phone: targetPatient.PhoneNumber,
+            },
+            consent
         };
     }
 }
