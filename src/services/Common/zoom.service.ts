@@ -143,11 +143,6 @@ export class ZoomService {
 
         return urlStr;
     }
-
-    generateJitsiUrl(roomName: string): string {
-        const cleanRoom = encodeURIComponent(roomName.replace(/\s+/g, "-"));
-        return `https://meet.jit.si/${cleanRoom}`;
-    }
 }
 
 export const zoomService = new ZoomService();

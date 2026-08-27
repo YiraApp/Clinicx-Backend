@@ -204,13 +204,8 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
                     isBlocked: !s.IsAvailable && !s.IsBooked,
                     patientName: patientName || undefined,
                     appointmentType: appointmentType || undefined,
-<<<<<<< HEAD
-                    appointmentId: appointmentId,
-                    reason: reason
-=======
                     appointmentId: appointmentId || undefined,
                     reason: reason || undefined
->>>>>>> 2a3d974c8b7c63e4da7bb97131c9f4e360561864
                 };
             });
         }
