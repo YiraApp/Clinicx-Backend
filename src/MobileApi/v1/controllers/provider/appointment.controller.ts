@@ -201,8 +201,11 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
                     label: `${s.StartTime} - ${s.EndTime}`,
                     isAvailable: s.IsAvailable && !s.IsBooked,
                     isBooked: s.IsBooked,
+                    isBlocked: !s.IsAvailable && !s.IsBooked,
                     patientName: patientName || undefined,
-                    appointmentType: appointmentType || undefined
+                    appointmentType: appointmentType || undefined,
+                    appointmentId: appointmentId,
+                    reason: reason
                 };
             });
         }
@@ -370,7 +373,14 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             id: a.Id,
             appointmentDate: a.AppointmentDate,
             startTime: a.StartTime,
+            endTime: a.EndTime,
+            duration: a.Duration ? `${a.Duration} mins` : "15 mins",
             appointmentType: a.AppointmentType,
+            isTeleConsultation: a.IsTeleConsultation === true ||
+                                (a.AppointmentType && a.AppointmentType.toLowerCase().includes("video")) ||
+                                (a.AppointmentType && a.AppointmentType.toLowerCase().includes("tele")) ||
+                                (!!a.MeetingUrl),
+            meetingUrl: a.MeetingUrl || "",
             status: a.Status,
             reason: a.Reason,
             hospitalId: a.HospitalId ?? a.Hospital?.Id ?? null,

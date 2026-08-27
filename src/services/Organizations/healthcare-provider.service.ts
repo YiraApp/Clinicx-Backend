@@ -3,6 +3,7 @@ import { healthcareProviderRepository } from "../../repositories/Organizations/h
 import { AppDataSource } from "../../config/database.js";
 import { HealthcareProvider } from "../../models/Organizations/healthcare-provider.model.js";
 import { HealthcareProviderAvailability } from "../../models/Organizations/healthcare-provider-availability.model.js";
+import { UserRole } from "../../models/Account/userrole.model.js";
 import { roleRepository } from "../../repositories/Account/role.repository.js";
 import { userRoleRepository } from "../../repositories/Account/userrole.repository.js";
 import { healthcareProviderScheduleSlotRepository } from "../../repositories/Organizations/healthcare-provider-schedule-slot.repository.js";
@@ -145,16 +146,23 @@ export class HealthcareProviderService {
 
         for (const provider of result.data.data) {
             const userId = provider.UserId;
+            const isUserActive = provider.User?.Status ?? true;
+            const isProviderActive = provider.Status ?? true;
+            const effectiveStatus = Boolean(isUserActive && isProviderActive);
 
             if (!userMap.has(userId)) {
                 userMap.set(userId, {
                     Id: provider.Id, // Primary provider ID (first encountered)
                     UserId: userId,
-                    User: provider.User,
+                    User: provider.User ? {
+                        ...provider.User,
+                        Status: effectiveStatus
+                    } : provider.User,
                     // First hospital's specialty shown as primary
                     Specialty: provider.Specialty,
                     Department: provider.Department,
-                    Status: provider.Status,
+                    Status: effectiveStatus,
+                    status: effectiveStatus,
                     ConsultationFee: provider.ConsultationFee,
                     hospitals: []
                 });
@@ -169,7 +177,7 @@ export class HealthcareProviderService {
                 subSpecialty: provider.SubSpecialty,
                 department: provider.Department,
                 consultationFee: provider.ConsultationFee,
-                status: provider.Status
+                status: isProviderActive
             });
         }
 
@@ -247,6 +255,10 @@ export class HealthcareProviderService {
 
         // 4. Return user info once + hospitals array
         const user = doctor.User;
+        const isUserActive = user?.Status ?? true;
+        const isProviderActive = doctor.Status ?? true;
+        const effectiveStatus = Boolean(isUserActive && isProviderActive);
+
         return {
             userId: doctor.UserId,
             firstName: user?.FirstName,
@@ -256,7 +268,12 @@ export class HealthcareProviderService {
             countryCode: user?.CountryCode,
             gender: user?.Gender,
             dateOfBirth: user?.DateOfBirth,
-            status: user?.Status,
+            status: effectiveStatus,
+            Status: effectiveStatus,
+            User: user ? {
+                ...user,
+                Status: effectiveStatus
+            } : user,
             address: user?.PermanentAddress ? {
                 addressLine1: user.PermanentAddress.AddressLine1,
                 addressLine2: user.PermanentAddress.AddressLine2,
@@ -724,6 +741,101 @@ export class HealthcareProviderService {
         const slot = await healthcareProviderScheduleSlotRepository.updateSlotStatus(slotId, data);
         if (!slot) throw new Error("Slot not found.");
         return slot;
+    }
+
+    async deleteProvider(id: number): Promise<any> {
+        const provider = await healthcareProviderRepository.getDoctorById(id);
+        if (!provider) throw new Error("Doctor / Healthcare provider not found.");
+
+        return await AppDataSource.transaction(async (manager) => {
+            // 1. Soft delete HealthcareProvider record
+            await manager.getRepository(HealthcareProvider).update(id, {
+                IsDeleted: true,
+                Status: false,
+                UpdatedAt: new Date()
+            });
+
+            // 2. Soft delete availability for this provider
+            await manager.getRepository(HealthcareProviderAvailability).update(
+                { ProviderId: id, IsDeleted: false },
+                { IsDeleted: true, UpdatedAt: new Date() }
+            );
+
+            // 3. Mark unbooked future schedule slots as deleted/unavailable
+            const today = new Date().toISOString().split("T")[0];
+            await manager
+                .createQueryBuilder()
+                .update(HealthcareProviderScheduleSlot)
+                .set({ IsDeleted: true, IsAvailable: false, UpdatedAt: new Date() })
+                .where("ProviderId = :id AND SlotDate >= :today AND IsBooked = 0 AND IsDeleted = 0", {
+                    id,
+                    today
+                })
+                .execute();
+
+            // 4. Soft delete UserRole for this hospital if exists
+            const userRoles = await userRoleRepository.findByUserId(provider.UserId);
+            const matchingRole = userRoles.find(r => r.HospitalId === provider.HospitalId);
+            if (matchingRole) {
+                await manager.getRepository(UserRole).update(matchingRole.UserRoleId, {
+                    Status: false,
+                    IsDeleted: true,
+                    UpdatedAt: new Date()
+                });
+            }
+
+            return { message: "Healthcare provider removed from hospital successfully." };
+        });
+    }
+
+    async updateProviderStatus(id: number, status: boolean): Promise<any> {
+        const provider = await healthcareProviderRepository.getDoctorById(id);
+        if (!provider) throw new Error("Doctor / Healthcare provider not found.");
+
+        return await AppDataSource.transaction(async (manager) => {
+            await manager.getRepository(HealthcareProvider).update(id, {
+                Status: status,
+                UpdatedAt: new Date()
+            });
+
+            // If deactivated, mark unbooked future schedule slots as unavailable
+            if (!status) {
+                const today = new Date().toISOString().split("T")[0];
+                await manager
+                    .createQueryBuilder()
+                    .update(HealthcareProviderScheduleSlot)
+                    .set({ IsAvailable: false, UpdatedAt: new Date() })
+                    .where("ProviderId = :id AND SlotDate >= :today AND IsBooked = 0 AND IsDeleted = 0", {
+                        id,
+                        today
+                    })
+                    .execute();
+            } else {
+                // If activated, make unbooked future schedule slots available again
+                const today = new Date().toISOString().split("T")[0];
+                await manager
+                    .createQueryBuilder()
+                    .update(HealthcareProviderScheduleSlot)
+                    .set({ IsAvailable: true, UpdatedAt: new Date() })
+                    .where("ProviderId = :id AND SlotDate >= :today AND IsBooked = 0 AND IsDeleted = 0", {
+                        id,
+                        today
+                    })
+                    .execute();
+            }
+
+            // Update matching UserRole for this hospital if exists
+            const userRoles = await userRoleRepository.findByUserId(provider.UserId);
+            const matchingRole = userRoles.find(r => r.HospitalId === provider.HospitalId);
+            if (matchingRole) {
+                await manager.getRepository(UserRole).update(matchingRole.UserRoleId, {
+                    Status: status,
+                    UpdatedAt: new Date()
+                });
+            }
+
+            return { message: `Healthcare provider marked as ${status ? "active" : "inactive"} successfully.` };
+        });
     }
 }
 

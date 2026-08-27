@@ -51,7 +51,11 @@ export class HealthcareProviderRepository {
 
         if (filters.status !== undefined) {
             const statusVal = filters.status === true || filters.status === "active";
-            query.andWhere("u.Status = :status", { status: statusVal ? 1 : 0 });
+            if (statusVal) {
+                query.andWhere("u.Status = 1 AND hp.Status = 1");
+            } else {
+                query.andWhere("(u.Status = 0 OR hp.Status = 0)");
+            }
         }
 
 
@@ -78,12 +82,16 @@ export class HealthcareProviderRepository {
         }
         if (filters.status !== undefined) {
             const statusVal = filters.status === true || filters.status === "active";
-            statsQuery.andWhere("u.Status = :status", { status: statusVal ? 1 : 0 });
+            if (statusVal) {
+                statsQuery.andWhere("u.Status = 1 AND hp.Status = 1");
+            } else {
+                statsQuery.andWhere("(u.Status = 0 OR hp.Status = 0)");
+            }
         }
 
         const stats = await statsQuery
             .select("COUNT(DISTINCT hp.UserId)", "total")
-            .addSelect("COUNT(DISTINCT CASE WHEN u.Status = 1 THEN hp.UserId END)", "active")
+            .addSelect("COUNT(DISTINCT CASE WHEN (u.Status = 1 AND hp.Status = 1) THEN hp.UserId END)", "active")
             .getRawOne();
 
 

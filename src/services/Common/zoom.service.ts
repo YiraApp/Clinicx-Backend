@@ -94,10 +94,11 @@ export class ZoomService {
                 throw new Error(`Zoom API Error: ${data.message || JSON.stringify(data)}`);
             }
 
+            const browserJoinUrl = this.convertToBrowserJoinUrl(data.join_url, data.id, data.password);
             return {
                 id: data.id,
-                join_url: data.join_url,
-                start_url: data.start_url || data.join_url,
+                join_url: browserJoinUrl,
+                start_url: data.start_url || browserJoinUrl,
                 topic: data.topic,
                 start_time: data.start_time,
                 duration: data.duration
@@ -106,6 +107,41 @@ export class ZoomService {
             console.error("Zoom Service Error:", error.message);
             throw error;
         }
+    }
+
+    convertToBrowserJoinUrl(urlStr: string, meetingId?: number | string, password?: string): string {
+        if (!urlStr) return urlStr;
+        if (!urlStr.includes("zoom.us")) return urlStr;
+        if (urlStr.includes("/wc/")) return urlStr;
+
+        try {
+            const parsed = new URL(urlStr);
+            const match = parsed.pathname.match(/\/j\/(\d+)/);
+            const id = meetingId || (match ? match[1] : null);
+            const pwd = parsed.searchParams.get("pwd") || password;
+
+            if (id) {
+                const browserUrl = new URL(`https://app.zoom.us/wc/${id}/join`);
+                if (pwd) {
+                    browserUrl.searchParams.set("pwd", pwd);
+                }
+                parsed.searchParams.forEach((val, key) => {
+                    if (key !== "pwd") {
+                        browserUrl.searchParams.set(key, val);
+                    }
+                });
+                return browserUrl.toString();
+            }
+        } catch (e) {
+            return urlStr.replace(/\/j\/(\d+)/, "/wc/$1/join");
+        }
+
+        return urlStr;
+    }
+
+    generateJitsiUrl(roomName: string): string {
+        const cleanRoom = encodeURIComponent(roomName.replace(/\s+/g, "-"));
+        return `https://meet.jit.si/${cleanRoom}`;
     }
 }
 

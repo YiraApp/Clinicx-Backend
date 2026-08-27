@@ -195,6 +195,35 @@ export class HealthcareProviderController {
             return res.status(400).json(ApiResponse.error(error.message));
         }
     }
+
+    async delete(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
+
+            const result = await healthcareProviderService.deleteProvider(id);
+            return res.json(ApiResponse.success(result, "Doctor removed from hospital successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async updateStatus(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid doctor ID"));
+
+            const { status } = req.body;
+            if (typeof status !== "boolean") {
+                return res.status(400).json(ApiResponse.error("Status boolean field is required."));
+            }
+
+            const result = await healthcareProviderService.updateProviderStatus(id, status);
+            return res.json(ApiResponse.success(result, "Doctor status updated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
 }
 
 

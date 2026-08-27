@@ -9,6 +9,8 @@ healthcareProviderRouter.patch("/slots/:slotId/status", healthcareProviderContro
 
 healthcareProviderRouter.get("/:id", healthcareProviderController.getDoctorById.bind(healthcareProviderController));
 healthcareProviderRouter.put("/:id", healthcareProviderController.update.bind(healthcareProviderController));
+healthcareProviderRouter.patch("/:id/status", healthcareProviderController.updateStatus.bind(healthcareProviderController));
+healthcareProviderRouter.delete("/:id", healthcareProviderController.delete.bind(healthcareProviderController));
 healthcareProviderRouter.get("/:id/slots", healthcareProviderController.getSlots.bind(healthcareProviderController));
 healthcareProviderRouter.post("/:id/generate-slots", healthcareProviderController.generateSlots.bind(healthcareProviderController));
 healthcareProviderRouter.post("/:id/manual-slots", healthcareProviderController.generateManualSlots.bind(healthcareProviderController));
