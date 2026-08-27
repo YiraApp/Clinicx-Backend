@@ -45,7 +45,15 @@ export class PushNotificationService {
 
             if (validTokens.length > 0) {
                 console.log(`[PushNotificationService] Dispatched push to user ${userId} on ${validTokens.length} device(s): "${title}"`);
-                // Note: We can expand this with Google FCM V1 HTTP OAuth when service-account credentials are provided
+                const { sendFcmPushToTokens } = await import("./firebase-admin.service.js");
+                await sendFcmPushToTokens(validTokens, {
+                    title,
+                    body,
+                    type,
+                    route: route || undefined,
+                    referenceId: referenceId || undefined,
+                    additionalData
+                });
             } else {
                 console.log(`[PushNotificationService] Notification saved for user ${userId} (No active FCM devices registered)`);
             }
@@ -200,6 +208,50 @@ export class PushNotificationService {
             route: "/appointmentDashboardScreen",
             additionalData: { appointmentId, meetingUrl }
         });
+    }
+
+    /**
+     * Trigger 6: 10-Minute Pre-Appointment Reminder (Dispatched to both Doctor and Patient)
+     */
+    async notifyAppointment10MinReminder(params: {
+        appointmentId: string | number;
+        doctorId: string;
+        patientId: string;
+        doctorName: string;
+        patientName: string;
+        date: string;
+        time: string;
+        consultationType?: string;
+    }) {
+        const { appointmentId, doctorId, patientId, doctorName, patientName, date, time, consultationType } = params;
+
+        // 1. Alert Doctor
+        if (doctorId) {
+            await this.sendNotification({
+                userId: doctorId,
+                senderId: patientId || null,
+                title: "⏰ Upcoming Consultation in 10 Mins",
+                body: `Your appointment with ${patientName || 'Patient'} starts in 10 minutes (${time}).`,
+                type: "APPOINTMENT_REMINDER_10MIN",
+                referenceId: String(appointmentId),
+                route: "/doctorDashboard",
+                additionalData: { appointmentId, date, time, patientName, consultationType }
+            });
+        }
+
+        // 2. Alert Patient
+        if (patientId) {
+            await this.sendNotification({
+                userId: patientId,
+                senderId: doctorId || null,
+                title: "⏰ Appointment in 10 Minutes",
+                body: `Your consultation with Dr. ${doctorName || 'Doctor'} starts at ${time}. Please be ready.`,
+                type: "APPOINTMENT_REMINDER_10MIN",
+                referenceId: String(appointmentId),
+                route: "/appointmentDashboardScreen",
+                additionalData: { appointmentId, date, time, doctorName, consultationType }
+            });
+        }
     }
 }
 

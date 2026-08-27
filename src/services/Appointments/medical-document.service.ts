@@ -97,6 +97,32 @@ export class MedicalDocumentService {
             }
         }
 
+        // 3. Trigger Push Notification to Patient
+        if (validPatientId && validPatientId !== DEFAULT_UUID && savedDocuments.length > 0) {
+            try {
+                const { pushNotificationService } = await import("../Notifications/push-notification.service.js");
+                const { AppDataSource } = await import("../../config/database.js");
+                const { User } = await import("../../models/Account/user.model.js");
+
+                let doctorName = "Your doctor";
+                if (doctorId && ensureUUID(doctorId) !== DEFAULT_UUID) {
+                    const userRepo = AppDataSource.getRepository(User);
+                    const doc = await userRepo.findOne({ where: { Id: doctorId } });
+                    if (doc) doctorName = `${doc.FirstName || ""} ${doc.LastName || ""}`.trim();
+                }
+
+                await pushNotificationService.notifyMedicalRecordAdded({
+                    patientId: validPatientId,
+                    doctorId: doctorId || null,
+                    doctorName,
+                    recordName: savedDocuments[0]?.OriginalFileName || cat || "Medical Document",
+                    appointmentId: appointmentId ? parseInt(String(appointmentId)) : undefined
+                });
+            } catch (notifErr: any) {
+                console.error("[MedicalDocumentService] Push notification trigger warning:", notifErr?.message || notifErr);
+            }
+        }
+
         return savedDocuments;
     }
 

@@ -9,6 +9,11 @@ import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from ".
 import { User } from "../../../models/Account/user.model.js";
 import { AppDataSource } from "../../../config/database.js";
 import { UserOTP } from "../../../models/Account/userotp.model.js";
+import { v4 as uuidv4 } from "uuid";
+import { userRepository } from "../../../repositories/Account/user.repository.js";
+import { UserRole } from "../../../models/Account/userrole.model.js";
+import { PatientRegistration } from "../../../models/Organizations/patient-registration.model.js";
+import { defaultOrganizationRepository } from "../../../repositories/Organizations/default-organization.repository.js";
 
 export class MobileAuthService {
     /**
@@ -141,6 +146,245 @@ export class MobileAuthService {
                 message: otpResult.message
             };
         }
+    }
+
+    /**
+     * Sends OTP for Signup verification. Checks if an active account already exists.
+     */
+    async sendSignupOTP(
+        phoneNumber: string,
+        countryCode?: string
+    ): Promise<{
+        otpSent: boolean;
+        sessionId: string;
+        contact: string;
+        contactType: OTPType;
+        message: string;
+    }> {
+        const digitsOnly = (phoneNumber || "").replace(/\D/g, "");
+        const cleanPhone = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
+        if (!cleanPhone || cleanPhone.length !== 10) {
+            throw new Error("Please enter a valid 10-digit mobile number.");
+        }
+
+        // Check if active user already exists with this phone number
+        const existingUser = await mobileAuthRepository.findPrimaryUser(cleanPhone);
+        if (existingUser && existingUser.Status) {
+            throw new Error("An account is already registered with this mobile number. Please Sign In.");
+        }
+
+        const otpResult = await otpService.sendOTP(
+            cleanPhone,
+            OTPPurpose.VERIFICATION,
+            countryCode || "91",
+            undefined,
+            undefined,
+            undefined,
+            true
+        );
+
+        return {
+            otpSent: true,
+            sessionId: otpResult.sessionId,
+            contact: cleanPhone,
+            contactType: otpResult.contactType,
+            message: otpResult.message
+        };
+    }
+
+    /**
+     * Registers a new Patient account via mobile number, optional email, and defaults to dynamic DB Yira organization & hospital.
+     */
+    async registerMobilePatient(data: {
+        phoneNumber: string;
+        countryCode?: string;
+        firstName: string;
+        lastName?: string;
+        email?: string;
+        password: string;
+        otp: string;
+        sessionId: string;
+        gender?: string;
+        dateOfBirth?: string;
+        bloodGroup?: string;
+        profileImageUrl?: string;
+        deviceInfo?: string;
+        ipAddress?: string;
+    }): Promise<any> {
+        const digitsOnly = (data.phoneNumber || "").replace(/\D/g, "");
+        const cleanPhone = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
+        if (!cleanPhone || cleanPhone.length !== 10) {
+            throw new Error("Please enter a valid 10-digit mobile number.");
+        }
+        if (!data.firstName || !data.firstName.trim()) {
+            throw new Error("First name is required.");
+        }
+        if (!data.password || data.password.length < 6) {
+            throw new Error("Password must be at least 6 characters.");
+        }
+        if (!data.otp || !data.sessionId) {
+            throw new Error("OTP verification code and session ID are required.");
+        }
+
+        // 1. Verify OTP
+        const verification = await otpService.verifyOTP(
+            cleanPhone,
+            data.sessionId,
+            data.otp,
+            OTPPurpose.VERIFICATION,
+            data.countryCode || "91"
+        );
+
+        if (!verification.success) {
+            throw new Error("Invalid or expired OTP. Please check the code and try again.");
+        }
+
+        // 2. Validate optional email
+        let cleanEmail: string | undefined = undefined;
+        if (data.email && data.email.trim() !== "") {
+            cleanEmail = data.email.trim().toLowerCase();
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(cleanEmail)) {
+                throw new Error("Please enter a valid email address.");
+            }
+            const existingEmailUser = await userRepository.findPrimaryByEmail(cleanEmail);
+            if (existingEmailUser && existingEmailUser.PhoneNumber !== cleanPhone) {
+                throw new Error("An account with this email address already exists.");
+            }
+        }
+
+        // 3. Dynamic active default Organization and Hospital from DB
+        const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+        const defaultOrgId = activeDefault?.OrganizationId ?? 1;
+        const defaultHospitalId = activeDefault?.HospitalId ?? 19;
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+
+        // 4. Create or update User
+        let user = await mobileAuthRepository.findPrimaryUser(cleanPhone);
+        const salt = await bcrypt.genSalt(10);
+        const passwordHash = await bcrypt.hash(data.password, salt);
+
+        if (user) {
+            user.FirstName = data.firstName.trim();
+            user.LastName = data.lastName?.trim() || user.LastName || "";
+            if (cleanEmail) user.Email = cleanEmail;
+            user.PasswordHash = passwordHash;
+            user.Status = true;
+            user.IsDeleted = false;
+            user.IsMobileVerified = true;
+            if (data.gender) user.Gender = data.gender;
+            if (data.dateOfBirth) user.DateOfBirth = data.dateOfBirth;
+            if (data.bloodGroup) user.BloodGroup = data.bloodGroup;
+            await userRepository.save(user);
+        } else {
+            user = new User();
+            user.Id = uuidv4();
+            user.PhoneNumber = cleanPhone;
+            user.CountryCode = (data.countryCode || "91").replace(/\D/g, "");
+            user.FirstName = data.firstName.trim();
+            user.LastName = data.lastName?.trim() || "";
+            user.Email = cleanEmail;
+            user.PasswordHash = passwordHash;
+            user.Status = true;
+            user.IsDeleted = false;
+            user.IsPrimary = true;
+            user.Relation = "Self";
+            user.IsMobileVerified = true;
+            user.Gender = data.gender;
+            user.DateOfBirth = data.dateOfBirth;
+            user.BloodGroup = data.bloodGroup;
+            if (data.profileImageUrl) user.ImagePath = data.profileImageUrl;
+            user.LatestRoleId = PATIENT_ROLE_ID;
+            user.LatestOrgId = defaultOrgId;
+            user.LatestHospitalId = defaultHospitalId;
+            user.LastLoginTime = new Date();
+            user = await userRepository.save(user);
+        }
+
+        // 5. Ensure UserRole exists for Patient in default Org/Hospital
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+        let existingRole = await userRoleRepo.findOne({
+            where: {
+                UserId: user.Id,
+                RoleId: PATIENT_ROLE_ID,
+                OrganizationId: defaultOrgId
+            }
+        });
+
+        if (!existingRole) {
+            existingRole = new UserRole();
+            existingRole.UserId = user.Id;
+            existingRole.RoleId = PATIENT_ROLE_ID;
+            existingRole.OrganizationId = defaultOrgId;
+            existingRole.HospitalId = defaultHospitalId;
+            existingRole.Status = true;
+            existingRole.IsDeleted = false;
+            existingRole.CreatedBy = "MobileAppSignup";
+            await userRoleRepo.save(existingRole);
+        }
+
+        // 6. Ensure PatientRegistration exists
+        const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+        let existingReg = await patientRegRepo.findOne({
+            where: {
+                UserId: user.Id,
+                OrganizationId: defaultOrgId
+            }
+        });
+
+        if (!existingReg) {
+            existingReg = new PatientRegistration();
+            existingReg.UserId = user.Id;
+            existingReg.OrganizationId = defaultOrgId;
+            existingReg.HospitalId = defaultHospitalId;
+            existingReg.TokenNumber = `UHID-${cleanPhone.slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+            existingReg.Status = true;
+            existingReg.IsDeleted = false;
+            existingReg.CreatedBy = "MobileAppSignup";
+            await patientRegRepo.save(existingReg);
+        }
+
+        // 7. Generate 30-day Tokens
+        const payload = { userId: user.Id, email: user.Email };
+        const accessToken = generateAccessToken(payload, "30d");
+        const refreshToken = generateRefreshToken(payload, "30d");
+        const expiryMs = 30 * 24 * 60 * 60 * 1000;
+
+        await tokenRepository.createToken({
+            UserId: user.Id,
+            AccessToken: accessToken,
+            RefreshToken: refreshToken,
+            AccessTokenExpiry: new Date(Date.now() + expiryMs),
+            RefreshTokenExpiry: new Date(Date.now() + expiryMs),
+            IsRevoked: false,
+            ...(data.deviceInfo && { DeviceInfo: data.deviceInfo }),
+            ...(data.ipAddress && { IPAddress: data.ipAddress })
+        });
+
+        // 9. Return standard login payload
+        return {
+            token: accessToken,
+            refreshToken: refreshToken,
+            userId: user.Id,
+            firstName: user.FirstName,
+            lastName: user.LastName || "",
+            email: user.Email || "",
+            phoneNumber: user.PhoneNumber,
+            countryCode: user.CountryCode || "91",
+            latestRoleId: PATIENT_ROLE_ID,
+            latestUserRole: "User/ Patient",
+            latestOrgId: defaultOrgId,
+            latestHospitalId: defaultHospitalId,
+            roleCount: 1,
+            organizationCount: 1,
+            hospitalCount: 1,
+            navigationId: "1", // Patient Navigation
+            rolesList: [{
+                roleId: PATIENT_ROLE_ID,
+                roleName: "User/ Patient",
+                status: true
+            }]
+        };
     }
 
     /**

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPassword, resetPassword, getRoleDetails, updateLatestContext, getUserData, verifyOTP, changePassword } from "../controllers/auth.controller.js";
+import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPassword, resetPassword, getRoleDetails, updateLatestContext, getUserData, verifyOTP, changePassword, sendSignupOtp, register } from "../controllers/auth.controller.js";
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
 import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList } from "../controllers/provider/dashboard.controller.js";
@@ -17,6 +17,8 @@ import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 const authRouter = Router();
 
 authRouter.post("/login", login);
+authRouter.post("/register", register);
+authRouter.post("/signup-otp", sendSignupOtp);
 authRouter.post("/sendotp", sendOTP);
 authRouter.post("/verify-login", verifyLogin);
 authRouter.post("/resend-otp", resendOTP);
@@ -94,6 +96,7 @@ authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patient
 
 // In-App Notifications & Alerts
 authRouter.get("/notifications", authMiddleware, notificationController.getNotifications);
+authRouter.post("/notifications/test", authMiddleware, notificationController.sendTestNotification);
 authRouter.post("/notifications/:id/read", authMiddleware, notificationController.markAsRead);
 authRouter.post("/notifications/mark-all-read", authMiddleware, notificationController.markAllAsRead);
 

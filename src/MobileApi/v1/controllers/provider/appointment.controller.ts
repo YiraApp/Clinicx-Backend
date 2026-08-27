@@ -210,11 +210,36 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
             });
         }
 
+        const breaks: Array<{ id: string; fromTime: string; toTime: string; label: string }> = [];
+        if (slots && slots.length > 1) {
+            const timeToMins = (t: string) => {
+                const [h, m] = t.split(':').map(Number);
+                return h * 60 + m;
+            };
+
+            const sortedSlots = [...slots].sort((a, b) => timeToMins(a.StartTime) - timeToMins(b.StartTime));
+            let breakIdx = 1;
+            for (let i = 0; i < sortedSlots.length - 1; i++) {
+                const currentEndMins = timeToMins(sortedSlots[i].EndTime);
+                const nextStartMins = timeToMins(sortedSlots[i + 1].StartTime);
+                const gap = nextStartMins - currentEndMins;
+                if (gap >= 15) {
+                    breaks.push({
+                        id: `break_${breakIdx}`,
+                        fromTime: sortedSlots[i].EndTime,
+                        toTime: sortedSlots[i + 1].StartTime,
+                        label: `Break ${breakIdx}`
+                    });
+                    breakIdx++;
+                }
+            }
+        }
+
         const consultationFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null && Number(provider.ConsultationFee) > 0)
             ? Number(provider.ConsultationFee)
             : 500;
 
-        return res.json(ApiResponse.success({ date: dateStr, slots: formattedSlots, consultationFee }, "Doctor slots fetched successfully."));
+        return res.json(ApiResponse.success({ date: dateStr, slots: formattedSlots, breaks, consultationFee }, "Doctor slots fetched successfully."));
     } catch (error: any) {
         console.error("getMobileDoctorSlots error:", error);
         return res.status(400).json({

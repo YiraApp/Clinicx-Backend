@@ -49,6 +49,31 @@ export class MobileClinicalNoteController {
             };
 
             const result = await clinicalNoteService.addNote(noteData);
+
+            // Trigger Push Notification to Patient
+            try {
+                const { pushNotificationService } = await import("../../../../services/Notifications/push-notification.service.js");
+                const { AppDataSource } = await import("../../../../config/database.js");
+                const { User } = await import("../../../../models/Account/user.model.js");
+
+                let doctorName = noteData.createdBy || "Your doctor";
+                if (noteData.doctorId) {
+                    const userRepo = AppDataSource.getRepository(User);
+                    const doc = await userRepo.findOne({ where: { Id: noteData.doctorId } });
+                    if (doc) doctorName = `${doc.FirstName || ""} ${doc.LastName || ""}`.trim();
+                }
+
+                await pushNotificationService.notifyMedicalRecordAdded({
+                    patientId: noteData.patientId,
+                    doctorId: noteData.doctorId || null,
+                    doctorName,
+                    recordName: "Clinical Consultation Note",
+                    appointmentId: noteData.appointmentId
+                });
+            } catch (notifErr: any) {
+                console.error("[ClinicalNoteController] Push notification warning:", notifErr?.message || notifErr);
+            }
+
             return res.status(201).json(ApiResponse.success(result, "Clinical note saved successfully"));
         } catch (error: any) {
             console.error("Mobile Clinical Note Add Error:", error);
