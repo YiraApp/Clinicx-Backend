@@ -167,10 +167,32 @@ export class MobileAuthService {
             throw new Error("Please enter a valid 10-digit mobile number.");
         }
 
-        // Check if active user already exists with this phone number
-        const existingUser = await mobileAuthRepository.findPrimaryUser(cleanPhone);
-        if (existingUser && existingUser.Status) {
-            throw new Error("An account is already registered with this mobile number. Please Sign In.");
+        // Check if user already exists and ALREADY has the Patient role
+        const userRepo = AppDataSource.getRepository(User);
+        const existingUsers = await userRepo.find({
+            where: [
+                { PhoneNumber: cleanPhone, IsDeleted: false },
+                { PhoneNumber: `+91${cleanPhone}`, IsDeleted: false },
+                { PhoneNumber: `91${cleanPhone}`, IsDeleted: false },
+            ]
+        });
+
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+
+        for (const existingUser of existingUsers) {
+            if (existingUser.Status) {
+                const roles = await userRoleRepo.find({
+                    where: { UserId: existingUser.Id, IsDeleted: false, Status: true }
+                });
+                const hasPatientRole = roles.some(r => r.RoleId && (
+                    r.RoleId.toUpperCase() === PATIENT_ROLE_ID.toUpperCase()
+                ));
+
+                if (hasPatientRole) {
+                    throw new Error("An account is already registered as a patient with this mobile number. Please Sign In.");
+                }
+            }
         }
 
         const otpResult = await otpService.sendOTP(
@@ -272,6 +294,10 @@ export class MobileAuthService {
             user.Status = true;
             user.IsDeleted = false;
             user.IsMobileVerified = true;
+            user.LatestRoleId = PATIENT_ROLE_ID;
+            user.LatestOrgId = defaultOrgId;
+            user.LatestHospitalId = defaultHospitalId;
+            user.LastLoginTime = new Date();
             if (data.gender) user.Gender = data.gender;
             if (data.dateOfBirth) user.DateOfBirth = data.dateOfBirth;
             if (data.bloodGroup) user.BloodGroup = data.bloodGroup;
@@ -321,6 +347,11 @@ export class MobileAuthService {
             existingRole.IsDeleted = false;
             existingRole.CreatedBy = "MobileAppSignup";
             await userRoleRepo.save(existingRole);
+        } else {
+            existingRole.Status = true;
+            existingRole.IsDeleted = false;
+            existingRole.HospitalId = defaultHospitalId;
+            await userRoleRepo.save(existingRole);
         }
 
         // 6. Ensure PatientRegistration exists
@@ -342,6 +373,11 @@ export class MobileAuthService {
             existingReg.IsDeleted = false;
             existingReg.CreatedBy = "MobileAppSignup";
             await patientRegRepo.save(existingReg);
+        } else {
+            existingReg.Status = true;
+            existingReg.IsDeleted = false;
+            existingReg.HospitalId = defaultHospitalId;
+            await patientRegRepo.save(existingReg);
         }
 
         // 7. Generate 30-day Tokens
@@ -361,16 +397,27 @@ export class MobileAuthService {
             ...(data.ipAddress && { IPAddress: data.ipAddress })
         });
 
-        // 9. Return standard login payload
+        // 9. Return standard login payload matching Flutter DataModel
         return {
-            token: accessToken,
+            accessToken: accessToken,
             refreshToken: refreshToken,
+            accessTokenExpiry: new Date(Date.now() + expiryMs),
+            refreshTokenExpiry: new Date(Date.now() + expiryMs),
+            id: user.Id,
             userId: user.Id,
             firstName: user.FirstName,
             lastName: user.LastName || "",
             email: user.Email || "",
             phoneNumber: user.PhoneNumber,
             countryCode: user.CountryCode || "91",
+            gender: user.Gender || null,
+            dob: user.DateOfBirth || null,
+            height: user.Height != null ? String(user.Height) : null,
+            weight: user.Weight != null ? String(user.Weight) : null,
+            heightUnit: "cms",
+            weightUnit: "kgs",
+            isMobileVerified: user.IsMobileVerified,
+            isEmailVerified: user.IsEmailVerified,
             latestRoleId: PATIENT_ROLE_ID,
             latestUserRole: "User/ Patient",
             latestOrgId: defaultOrgId,
@@ -379,12 +426,83 @@ export class MobileAuthService {
             organizationCount: 1,
             hospitalCount: 1,
             navigationId: "1", // Patient Navigation
+            roles: [{
+                roleId: PATIENT_ROLE_ID,
+                roleName: "User/ Patient",
+                status: true
+            }],
             rolesList: [{
                 roleId: PATIENT_ROLE_ID,
                 roleName: "User/ Patient",
                 status: true
-            }]
+            }],
+            token: accessToken
         };
+    }
+
+    /**
+     * Ensures every patient user is assigned the active default Organization and Hospital in UserRoles and PatientRegistration.
+     */
+    async ensurePatientDefaultRoleAndRegistration(user: User): Promise<UserRole[]> {
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+        const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+        const defaultOrgId = activeDefault?.OrganizationId ?? 1;
+        const defaultHospitalId = activeDefault?.HospitalId ?? 19;
+
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+        let userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+
+        const patientRole = userRoles.find(ur => ur.RoleId?.toUpperCase() === PATIENT_ROLE_ID.toUpperCase());
+
+        // ONLY if the user has an existing patient role, ensure its organization/hospital and PatientRegistration are set up
+        if (patientRole) {
+            if (!patientRole.OrganizationId || !patientRole.HospitalId) {
+                patientRole.OrganizationId = patientRole.OrganizationId || defaultOrgId;
+                patientRole.HospitalId = patientRole.HospitalId || defaultHospitalId;
+                patientRole.Status = true;
+                patientRole.IsDeleted = false;
+                await userRoleRepo.save(patientRole);
+            }
+
+            // Ensure PatientRegistration exists for default organization & hospital
+            const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+            let existingReg = await patientRegRepo.findOne({
+                where: { UserId: user.Id, OrganizationId: defaultOrgId }
+            });
+            if (!existingReg) {
+                existingReg = new PatientRegistration();
+                existingReg.UserId = user.Id;
+                existingReg.OrganizationId = defaultOrgId;
+                existingReg.HospitalId = defaultHospitalId;
+                const digits = (user.PhoneNumber || "000000").replace(/\D/g, "");
+                existingReg.TokenNumber = `UHID-${digits.slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+                existingReg.Status = true;
+                existingReg.IsDeleted = false;
+                existingReg.CreatedBy = "AutoPatientRegistration";
+                await patientRegRepo.save(existingReg);
+            } else if (!existingReg.HospitalId) {
+                existingReg.HospitalId = defaultHospitalId;
+                await patientRegRepo.save(existingReg);
+            }
+
+            if (!user.LatestRoleId) {
+                user.LatestRoleId = PATIENT_ROLE_ID;
+                user.LatestOrgId = user.LatestOrgId || defaultOrgId;
+                user.LatestHospitalId = user.LatestHospitalId || defaultHospitalId;
+                await mobileAuthRepository.saveUser(user);
+            }
+        } else if (userRoles.length > 0) {
+            // User does not have patient role, ensure their latest role points to their first assigned role
+            if (!user.LatestRoleId || user.LatestRoleId.toUpperCase() === PATIENT_ROLE_ID.toUpperCase()) {
+                const firstRole = userRoles[0];
+                user.LatestRoleId = firstRole.RoleId;
+                user.LatestOrgId = firstRole.OrganizationId ?? defaultOrgId;
+                user.LatestHospitalId = firstRole.HospitalId ?? defaultHospitalId;
+                await mobileAuthRepository.saveUser(user);
+            }
+        }
+
+        return userRoles;
     }
 
     /**
@@ -461,8 +579,8 @@ export class MobileAuthService {
                 throw new Error("Invalid password");
             }
 
-            // Fetch user roles
-            const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+            // Fetch user roles and ensure patient has default org & hospital
+            const userRoles = await this.ensurePatientDefaultRoleAndRegistration(user);
             /*
             const allowedRoleIds = [
                 "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
@@ -636,8 +754,8 @@ export class MobileAuthService {
                 throw new Error("Authentication failed. Please try again.");
             }
 
-            // Fetch user roles
-            const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+            // Fetch user roles and ensure patient has default org & hospital
+            const userRoles = await this.ensurePatientDefaultRoleAndRegistration(user);
             const allowedRoleIds = [
                 "4FC67429-28AE-4106-93EF-436228282ED0", // Patient
                 "FE80173F-9DB3-4703-84A8-5C23E7CC493C"  // Provider
@@ -894,6 +1012,37 @@ export class MobileAuthService {
             }
         }
 
+        if (orgMap.size === 0 && roleId?.toUpperCase() === "4FC67429-28AE-4106-93EF-436228282ED0") {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            const defaultOrgId = activeDefault?.OrganizationId ?? 1;
+            const defaultHospitalId = activeDefault?.HospitalId ?? 19;
+            const orgName = activeDefault?.Organization?.Name || "yira";
+            const hospName = activeDefault?.Hospital?.Name || "Yira Hospitals";
+
+            orgMap.set(defaultOrgId, {
+                organizationId: defaultOrgId,
+                organizationName: orgName,
+                organizationCode: activeDefault?.Organization?.OrgCode ?? null,
+                hospitals: [{
+                    hospitalId: defaultHospitalId,
+                    hospitalCode: activeDefault?.Hospital?.HospitalCode ?? null,
+                    hospitalName: hospName,
+                    email: activeDefault?.Hospital?.Email ?? null,
+                    mobileNumber: activeDefault?.Hospital?.MobileNumber ?? null,
+                    countryCode: activeDefault?.Hospital?.CountryCode ?? null,
+                    address: activeDefault?.Hospital?.Address ?? null,
+                    helplineNumber: activeDefault?.Hospital?.HelplineNumber ?? null,
+                    website: activeDefault?.Hospital?.Website ?? null,
+                    city: activeDefault?.Hospital?.City ?? null,
+                    state: activeDefault?.Hospital?.State ?? null,
+                    country: activeDefault?.Hospital?.Country ?? null,
+                    pincode: activeDefault?.Hospital?.Pincode ?? null,
+                    status: activeDefault?.Hospital?.Status ?? true,
+                    is24Hours: activeDefault?.Hospital?.Is24Hours ?? true
+                }]
+            });
+        }
+
         return Array.from(orgMap.values());
     }
 
@@ -911,9 +1060,64 @@ export class MobileAuthService {
             throw new Error("User not found");
         }
 
-        if (latestRoleId !== undefined) user.LatestRoleId = latestRoleId || null;
-        if (latestOrgId !== undefined) user.LatestOrgId = latestOrgId || null;
-        if (latestHospitalId !== undefined) user.LatestHospitalId = latestHospitalId || null;
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+        const PROVIDER_ROLE_ID = "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
+
+        if (latestRoleId) {
+            const isPatient = latestRoleId.toUpperCase() === PATIENT_ROLE_ID;
+            const isDependent = user.IsPrimary === false || !!user.ParentUserId;
+
+            if (isDependent && isPatient) {
+                user.LatestRoleId = latestRoleId;
+            } else {
+                const lookupUserId = (isDependent && user.ParentUserId) ? user.ParentUserId : user.Id;
+                const userRoleRepo = AppDataSource.getRepository(UserRole);
+                const userRoles = await userRoleRepo.find({
+                    where: { UserId: lookupUserId, IsDeleted: false },
+                    relations: ["Role"]
+                });
+
+                const requestedRole = userRoles.find(
+                    ur => ur.RoleId && ur.RoleId.toUpperCase() === latestRoleId.toUpperCase() &&
+                    (ur.Status === true || (ur.Status as any) === 1 || (ur.Status as any) === "1" || ur.Status === undefined)
+                );
+
+                if (requestedRole) {
+                    user.LatestRoleId = requestedRole.RoleId;
+                    if (requestedRole.OrganizationId && !latestOrgId) user.LatestOrgId = requestedRole.OrganizationId;
+                    if (requestedRole.HospitalId && !latestHospitalId) user.LatestHospitalId = requestedRole.HospitalId;
+                } else if (isPatient) {
+                    // User does not have patient role -> redirect to Provider role if they have it
+                    const providerRole = userRoles.find(
+                        ur => ur.RoleId && (
+                            ur.RoleId.toUpperCase() === PROVIDER_ROLE_ID ||
+                            ur.Role?.RoleName?.toLowerCase() === "provider" ||
+                            ur.Role?.RoleName?.toLowerCase() === "doctor" ||
+                            ur.Role?.RoleName?.toLowerCase() === "physician"
+                        )
+                    );
+                    if (providerRole) {
+                        user.LatestRoleId = providerRole.RoleId;
+                        if (providerRole.OrganizationId && !latestOrgId) user.LatestOrgId = providerRole.OrganizationId;
+                        if (providerRole.HospitalId && !latestHospitalId) user.LatestHospitalId = providerRole.HospitalId;
+                    } else if (!isDependent && userRoles.length > 0) {
+                        const fallbackRole = userRoles[0];
+                        user.LatestRoleId = fallbackRole.RoleId;
+                        if (fallbackRole.OrganizationId && !latestOrgId) user.LatestOrgId = fallbackRole.OrganizationId;
+                        if (fallbackRole.HospitalId && !latestHospitalId) user.LatestHospitalId = fallbackRole.HospitalId;
+                    } else {
+                        throw new Error("Access denied: User does not have access to the selected role.");
+                    }
+                } else if (!isDependent) {
+                    throw new Error("Access denied: User does not have access to the selected role.");
+                }
+            }
+        } else if (latestRoleId === null) {
+            user.LatestRoleId = null;
+        }
+
+        if (latestOrgId !== undefined) user.LatestOrgId = latestOrgId || user.LatestOrgId || null;
+        if (latestHospitalId !== undefined) user.LatestHospitalId = latestHospitalId || user.LatestHospitalId || null;
 
         return await mobileAuthRepository.saveUser(user);
     }
@@ -956,8 +1160,8 @@ export class MobileAuthService {
             throw new Error("User not found");
         }
 
-        // Fetch user roles
-        const userRoles = await mobileAuthRepository.findUserRoles(user.Id);
+        // Fetch user roles and ensure patient has default org & hospital
+        const userRoles = await this.ensurePatientDefaultRoleAndRegistration(user);
         /*
         const allowedRoleIds = [
             "4FC67429-28AE-4106-93EF-436228282ED0", // Patient

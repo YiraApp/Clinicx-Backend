@@ -235,9 +235,9 @@ export const getMobileDoctorSlots = async (req: Request, res: Response) => {
             }
         }
 
-        const consultationFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null && Number(provider.ConsultationFee) > 0)
+        const consultationFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null)
             ? Number(provider.ConsultationFee)
-            : 500;
+            : 0;
 
         return res.json(ApiResponse.success({ date: dateStr, slots: formattedSlots, breaks, consultationFee }, "Doctor slots fetched successfully."));
     } catch (error: any) {
@@ -374,22 +374,7 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             .take(50);
 
         if (userId) {
-            const userRepo = AppDataSource.getRepository(User);
-            const user = await userRepo.findOne({ where: { Id: userId, IsDeleted: false } });
-            const dependents = await userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } });
-            const userIds = [userId, ...dependents.map(d => d.Id)];
-
-            if (user && user.PhoneNumber) {
-                const clean = user.PhoneNumber.replace(/\D/g, "");
-                const last10 = clean.slice(-10);
-                qb.andWhere("(a.UserId IN (:...userIds) OR u.PhoneNumber = :clean OR u.PhoneNumber LIKE :last10)", {
-                    userIds,
-                    clean,
-                    last10: `%${last10}`
-                });
-            } else {
-                qb.andWhere("a.UserId IN (:...userIds)", { userIds });
-            }
+            qb.andWhere("a.UserId = :userId", { userId });
         } else if (patientPhone) {
             const cleanPhone = String(patientPhone).replace(/\D/g, "");
             const last10 = cleanPhone.slice(-10);
@@ -497,6 +482,104 @@ export const addDependentPatient = async (req: Request, res: Response) => {
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to add family member"
+        });
+    }
+};
+
+/**
+ * Retrieves all doctors for a specific hospital so patients can view and book appointments with any doctor in that hospital.
+ */
+export const getHospitalDoctors = async (req: Request, res: Response) => {
+    try {
+        const query = req.query || {};
+        const body = req.body || {};
+        const rawHospId = query.hospitalId || body.hospitalId || query.hospital_id || body.hospital_id;
+        const hospitalId = Number(rawHospId);
+        const rawOrgId = query.organizationId || body.organizationId || query.orgId || body.orgId;
+        const organizationId = rawOrgId ? Number(rawOrgId) : undefined;
+        const search = String(query.search || body.search || "").trim();
+
+        if (!hospitalId || isNaN(hospitalId)) {
+            return res.status(400).json({
+                status: false,
+                message: "Valid hospitalId is required"
+            });
+        }
+
+        const result = await healthcareProviderService.getDoctors(1, 100, {
+            hospitalId,
+            organizationId,
+            search: search || undefined,
+            status: true
+        });
+
+        const rawList = Array.isArray(result) ? result : (result.data?.data || result.data || []);
+        const doctorsList = rawList
+            .filter((d: any) => {
+                const firstName = (d.User?.FirstName || d.firstName || "").toString().toLowerCase().trim();
+                const lastName = (d.User?.LastName || d.lastName || "").toString().toLowerCase().trim();
+                const fullName = `${firstName} ${lastName}`.trim();
+                const rawName = (d.name || "").toString().toLowerCase().trim();
+                const email = (d.User?.Email || d.email || "").toString().toLowerCase().trim();
+                const specialty = (d.Specialty || d.specialty || "").toString().toLowerCase().trim();
+
+                // Exclude any test, sample, demo, fake, or dummy doctors
+                if (
+                    firstName.includes("test") ||
+                    lastName.includes("test") ||
+                    fullName.includes("test") ||
+                    rawName.includes("test") ||
+                    email.includes("test") ||
+                    specialty.includes("test") ||
+                    firstName.includes("dummy") ||
+                    lastName.includes("dummy") ||
+                    rawName.includes("dummy") ||
+                    fullName.includes("demo") ||
+                    rawName.includes("demo") ||
+                    fullName.includes("sample") ||
+                    rawName.includes("sample") ||
+                    fullName.includes("fake")
+                ) {
+                    return false;
+                }
+                return true;
+            })
+            .map((d: any) => {
+                const firstName = d.User?.FirstName || d.firstName || "";
+                const lastName = d.User?.LastName || d.lastName || "";
+                const fullName = firstName || lastName ? `Dr. ${firstName} ${lastName}`.trim() : (d.name || "Doctor");
+                const doctorGuid = d.UserId || d.userId || d.Id || d.id;
+                return {
+                    doctorId: doctorGuid,
+                    id: doctorGuid,
+                    providerId: d.Id || d.id,
+                    userId: d.UserId || d.userId,
+                    name: fullName,
+                    firstName: firstName,
+                    lastName: lastName,
+                    specialty: d.Specialty || d.specialty || "General Physician",
+                    subSpecialty: d.SubSpecialty || d.subSpecialty || null,
+                    department: d.Department || d.department || "General",
+                    qualification: d.Qualification || d.qualification || "MBBS",
+                    experience: d.Experience || d.experience || "5+ Years Exp.",
+                    registrationNumber: d.RegistrationNumber || d.registrationNumber || null,
+                    bio: d.Bio || d.bio || null,
+                    hospitalId: hospitalId,
+                    hospitalName: d.Hospital?.Name || null,
+                    consultationFee: d.ConsultationFee !== undefined && d.ConsultationFee !== null ? Number(d.ConsultationFee) : 0,
+                    imagePath: d.User?.ImagePath || d.imagePath || null,
+                    email: d.User?.Email || d.email || null,
+                    phoneNumber: d.User?.PhoneNumber || d.phoneNumber || null,
+                    isLinked: true
+                };
+            });
+
+        return res.json(ApiResponse.success(doctorsList, "Hospital doctors fetched successfully"));
+    } catch (error: any) {
+        console.error("getHospitalDoctors error:", error);
+        return res.status(500).json({
+            status: false,
+            message: error.message || "Failed to fetch doctors for hospital"
         });
     }
 };

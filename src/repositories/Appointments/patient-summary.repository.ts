@@ -43,20 +43,41 @@ export class PatientSummaryRepository {
         });
 
         let latestVitals = null;
-        if (latestAppointment) {
-            const latestRecord = await AppDataSource.getRepository(PatientMedicalRecord).findOne({
-                where: { PatientId: patientId },
-                order: { CreatedAt: "DESC" }
-            });
-            if (latestRecord) {
-                latestVitals = {
-                    bloodPressure: latestRecord.BloodPressure,
-                    heartRate: latestRecord.HeartRate,
-                    temperature: latestRecord.Temperature,
-                    weight: latestRecord.Weight,
-                    height: latestRecord.Height
-                };
-            }
+        const latestRecord = await AppDataSource.getRepository(PatientMedicalRecord).findOne({
+            where: [
+                { PatientId: patientId },
+                ...(registration?.Id ? [{ PatientId: registration.Id.toString() }] : [])
+            ],
+            order: { CreatedAt: "DESC" }
+        });
+        if (latestRecord) {
+            latestVitals = {
+                bloodPressure: {
+                    value: latestRecord.BloodPressure || null,
+                    unit: "mmHg"
+                },
+                pulse: {
+                    value: latestRecord.HeartRate || null,
+                    unit: "bpm"
+                },
+                heartRate: {
+                    value: latestRecord.HeartRate || null,
+                    unit: "bpm"
+                },
+                temperature: {
+                    value: latestRecord.Temperature || null,
+                    unit: "°F"
+                },
+                weight: {
+                    value: latestRecord.Weight || null,
+                    unit: "kg"
+                },
+                height: {
+                    value: latestRecord.Height || null,
+                    unit: "cm"
+                },
+                updatedAt: latestRecord.CreatedAt || latestRecord.UpdatedAt || null
+            };
         }
 
         const recentNotes = await AppDataSource.getRepository(ClinicalNote).find({

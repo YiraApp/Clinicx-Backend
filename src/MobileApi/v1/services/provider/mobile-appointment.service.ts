@@ -5,6 +5,7 @@ import { UserRole } from "../../../../models/Account/userrole.model.js";
 import { Role } from "../../../../models/Account/role.model.js";
 import { PatientRegistration } from "../../../../models/Organizations/patient-registration.model.js";
 import { Hospital } from "../../../../models/Organizations/hospital.model.js";
+import { HealthcareProvider } from "../../../../models/Organizations/healthcare-provider.model.js";
 import { HealthcareProviderScheduleSlot } from "../../../../models/Organizations/healthcare-provider-schedule-slot.model.js";
 import { healthcareProviderRepository } from "../../../../repositories/Organizations/healthcare-provider.repository.js";
 import { pushNotificationService } from "../../../../services/Notifications/push-notification.service.js";
@@ -236,7 +237,33 @@ export class MobileAppointmentService {
             }
         }
 
-        const provider = await healthcareProviderRepository.findByUserIdAndHospital(data.doctorId, data.hospitalId);
+        let doctorUserId = String(data.doctorId || "").trim();
+        const isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(doctorUserId);
+
+        let provider: any = null;
+        const hpRepo = AppDataSource.getRepository(HealthcareProvider);
+        if (isGuid) {
+            provider = await healthcareProviderRepository.findByUserIdAndHospital(doctorUserId, data.hospitalId);
+        } else {
+            const providerIdNum = Number(doctorUserId);
+            if (!isNaN(providerIdNum)) {
+                provider = await hpRepo.findOne({ where: { Id: providerIdNum, IsDeleted: false } });
+                if (provider && provider.UserId) {
+                    doctorUserId = provider.UserId;
+                }
+            }
+        }
+
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(doctorUserId)) {
+            const firstHp = await hpRepo.findOne({
+                where: { HospitalId: data.hospitalId, IsDeleted: false, Status: true }
+            });
+            if (firstHp && firstHp.UserId) {
+                doctorUserId = firstHp.UserId;
+                provider = firstHp;
+            }
+        }
+
         const providerIdNum = provider ? provider.Id : (Number(data.doctorId) || 1);
         const normalizedStartTime = (data.startTime || "10:00:00").trim();
         const startPrefix = normalizedStartTime.slice(0, 5);
@@ -449,7 +476,7 @@ export class MobileAppointmentService {
         // Create & Save Appointment
         const appointment = new Appointment();
         appointment.UserId = patientUser.Id;
-        appointment.DoctorId = data.doctorId;
+        appointment.DoctorId = doctorUserId;
         appointment.OrgId = data.orgId;
         appointment.HospitalId = data.hospitalId;
         appointment.AppointmentDate = new Date(data.appointmentDate);
@@ -539,9 +566,9 @@ export class MobileAppointmentService {
         // 2. Create/consolidate Appointment Bill (matching web API logic)
         try {
             const { appointmentBillRepository } = await import("../../../../repositories/Payments/appointment-bill.repository.js");
-            const defaultDoctorFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null && Number(provider.ConsultationFee) > 0)
+            const defaultDoctorFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null)
                 ? Number(provider.ConsultationFee)
-                : 500;
+                : 0;
 
             const isFeeIncluded = data.includeConsultationFee !== false && data.appointmentType !== "Without Consultation";
             const consultationFee = isFeeIncluded
@@ -605,20 +632,22 @@ export class MobileAppointmentService {
         }
 
         // Fetch Doctor details for notifications
-        const doctorUser = await userRepo.findOne({ where: { Id: data.doctorId } });
-        const doctorName = doctorUser ? `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() : "Doctor";
+        const resolvedDoctorUserId = doctorUserId || data.doctorId;
+        const doctorUser = await userRepo.findOne({ where: { Id: resolvedDoctorUserId } });
+        const doctorName = doctorUser ? `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() : (provider?.FirstName ? `${provider.FirstName} ${provider.LastName || ""}`.trim() : "Doctor");
         const patientName = `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim() || data.patientName || "Patient";
 
         const dateStr = new Date(savedAppointment.AppointmentDate).toLocaleDateString("en-IN", {
             day: "2-digit", month: "short", year: "numeric"
         });
 
-        // 1. Trigger Push Notification to Doctor & Patient
+        // 1. Trigger Push Notification to Doctor & Patient (and Parent account if dependent)
         try {
             await pushNotificationService.notifyAppointmentBooked({
                 appointmentId: savedAppointment.Id,
-                doctorId: data.doctorId,
+                doctorId: resolvedDoctorUserId,
                 patientId: patientUser.Id,
+                parentUserId: patientUser.ParentUserId || null,
                 doctorName,
                 patientName,
                 date: dateStr,

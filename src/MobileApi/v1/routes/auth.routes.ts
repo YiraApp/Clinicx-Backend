@@ -3,7 +3,7 @@ import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPas
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
 import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList } from "../controllers/provider/dashboard.controller.js";
-import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone, addDependentPatient } from "../controllers/provider/appointment.controller.js";
+import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone, addDependentPatient, getHospitalDoctors } from "../controllers/provider/appointment.controller.js";
 import { mobileSnomedController } from "../controllers/snomed.controller.js";
 import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
 import { mobileMedicalRecordController } from "../controllers/provider/medical-record.controller.js";
@@ -11,6 +11,8 @@ import { mobilePrescriptionController } from "../controllers/provider/prescripti
 import { mobileMedicalDocumentController } from "../controllers/provider/medical-document.controller.js";
 import { patientAccessConsentController } from "../controllers/consent/patient-access-consent.controller.js";
 import { notificationController } from "../controllers/notification.controller.js";
+import { hospitalController } from "../../../controllers/Organizations/hospital.controller.js";
+import { mobileDoctorSuggestionController } from "../controllers/provider/doctor-suggestion.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
@@ -30,6 +32,8 @@ authRouter.post("/change_password", changePassword);
 authRouter.post("/reset_password", resetPassword);
 authRouter.get("/roles/details", getRoleDetails);
 authRouter.get("/user-data", authMiddleware, getUserData);
+authRouter.get("/hospitals", authMiddleware, (req, res) => hospitalController.getAll(req, res));
+authRouter.get("/hospitals/all", authMiddleware, (req, res) => hospitalController.getAll(req, res));
 authRouter.post("/dashboard", authMiddleware, getProviderDashboard);
 authRouter.post("/appointment-dashboard", authMiddleware, getAppointmentDashboard);
 authRouter.post("/book-appointment", authMiddleware, bookAppointment);
@@ -37,6 +41,8 @@ authRouter.post("/update-appointment-status", authMiddleware, updateAppointmentS
 authRouter.post("/doctor-slots", authMiddleware, getMobileDoctorSlots);
 authRouter.post("/doctor-slots/deploy", authMiddleware, deployMobileDoctorSlots);
 authRouter.post("/doctor-slots/block", authMiddleware, blockMobileDoctorSlot);
+authRouter.get("/hospital-doctors", authMiddleware, getHospitalDoctors);
+authRouter.post("/hospital-doctors", authMiddleware, getHospitalDoctors);
 authRouter.get("/treatment-plans", authMiddleware, getTreatmentPlans);
 authRouter.post("/treatment-plans", authMiddleware, getTreatmentPlans);
 authRouter.post("/patient-appointments", authMiddleware, getPatientAppointments);
@@ -99,5 +105,10 @@ authRouter.get("/notifications", authMiddleware, notificationController.getNotif
 authRouter.post("/notifications/test", authMiddleware, notificationController.sendTestNotification);
 authRouter.post("/notifications/:id/read", authMiddleware, notificationController.markAsRead);
 authRouter.post("/notifications/mark-all-read", authMiddleware, notificationController.markAllAsRead);
+
+// Doctor Suggestions
+authRouter.get("/doctor-suggestions/patient/:patientId", authMiddleware, (req, res) => mobileDoctorSuggestionController.getPatientSuggestions(req, res));
+authRouter.post("/doctor-suggestions", authMiddleware, upload.single("file"), (req, res) => mobileDoctorSuggestionController.addSuggestion(req, res));
+authRouter.delete("/doctor-suggestions/:id", authMiddleware, (req, res) => mobileDoctorSuggestionController.deleteSuggestion(req, res));
 
 export { authRouter };

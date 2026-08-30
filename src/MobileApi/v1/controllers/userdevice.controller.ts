@@ -11,27 +11,17 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
     try {
         const { userId, platform, currentVersion, fcmToken, deviceId } = req.body || {};
 
-        let normalizedPlatform: PlatformType | undefined;
+        let normalizedPlatform: PlatformType = PlatformType.ANDROID;
         if (platform) {
             const lowerPlatform = String(platform).toLowerCase();
-            if (lowerPlatform === PlatformType.ANDROID) {
-                normalizedPlatform = PlatformType.ANDROID;
-            } else if (lowerPlatform === PlatformType.IOS) {
+            if (lowerPlatform === PlatformType.IOS || lowerPlatform.includes("ios") || lowerPlatform.includes("darwin") || lowerPlatform.includes("apple") || lowerPlatform.includes("iphone") || lowerPlatform.includes("ipad")) {
                 normalizedPlatform = PlatformType.IOS;
             } else {
-                return res.status(400).json({
-                    status: false,
-                    message: "Invalid platform. Platform must be 'android' or 'ios'"
-                });
+                normalizedPlatform = PlatformType.ANDROID;
             }
         }
 
-        if (!deviceId) {
-            return res.status(200).json({
-                status: false,
-                message: "Device ID (deviceId) is required"
-            });
-        }
+        const resolvedDeviceId = deviceId || userId || (req as any).user?.userId || `device_${Date.now()}`;
 
         if (!fcmToken) {
             return res.status(200).json({
@@ -55,7 +45,7 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
             normalizedPlatform,
             currentVersion,
             fcmToken,
-            deviceId
+            resolvedDeviceId
         );
 
         const responseData = {

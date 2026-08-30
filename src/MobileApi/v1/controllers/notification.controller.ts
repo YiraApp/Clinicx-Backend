@@ -1,35 +1,79 @@
 import type { Request, Response } from "express";
+import { In } from "typeorm";
 import { AppDataSource } from "../../../config/database.js";
 import { AppNotification } from "../../../models/Common/app-notification.model.js";
+import { User } from "../../../models/Account/user.model.js";
 import { ApiResponse } from "../../../utils/response.utils.js";
 
 export class NotificationController {
     private notificationRepo = AppDataSource.getRepository(AppNotification);
 
     /**
-     * Retrieves recent notifications for the authenticated user.
+     * Resolves all linked family account user IDs (Primary account + all linked dependents, up to 6 accounts)
+     */
+    private async getLinkedFamilyUserIds(userId: string): Promise<string[]> {
+        const ids = new Set<string>();
+        if (!userId) return [];
+        ids.add(userId);
+
+        try {
+            const userRepo = AppDataSource.getRepository(User);
+            const user = await userRepo.findOne({ where: { Id: userId } }).catch(() => null);
+            if (!user) return Array.from(ids);
+
+            const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
+            const parentId = user.ParentUserId || user.Id;
+
+            if (user.ParentUserId) {
+                ids.add(user.ParentUserId);
+            }
+
+            const familyMembers = await userRepo.createQueryBuilder('u')
+                .where('u.IsDeleted = 0')
+                .andWhere(
+                    '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
+                    (cleanPhone && cleanPhone.length === 10 ? ' OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone' : '') + ')',
+                    { userId: user.Id, parentId, cleanPhone }
+                )
+                .getMany()
+                .catch(() => []);
+
+            for (const m of familyMembers) {
+                ids.add(m.Id);
+            }
+        } catch (error) {
+            console.error("[NotificationController] Error resolving family user IDs:", error);
+        }
+
+        return Array.from(ids);
+    }
+
+    /**
+     * Retrieves recent notifications for the authenticated user and all linked dependents/family accounts.
      */
     getNotifications = async (req: Request, res: Response) => {
         try {
-            const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || req.body?.userId;
+            const userId = (req.query?.userId as string) || (req.body?.userId as string) || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
 
             if (!userId) {
                 return res.status(200).json(ApiResponse.error("User ID not found in session"));
             }
+
+            const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
 
             const page = parseInt(req.query.page as string || "1", 10);
             const limit = parseInt(req.query.limit as string || "30", 10);
             const skip = (page - 1) * limit;
 
             const [notifications, total] = await this.notificationRepo.findAndCount({
-                where: { UserId: userId },
+                where: { UserId: In(linkedUserIds) },
                 order: { CreatedAt: "DESC" },
                 skip,
                 take: limit,
             });
 
             const unreadCount = await this.notificationRepo.count({
-                where: { UserId: userId, IsRead: false }
+                where: { UserId: In(linkedUserIds), IsRead: false }
             });
 
             return res.json(ApiResponse.success({
@@ -69,7 +113,10 @@ export class NotificationController {
             }
 
             const query: any = { Id: id };
-            if (userId) query.UserId = userId;
+            if (userId) {
+                const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+                query.UserId = In(linkedUserIds);
+            }
 
             await this.notificationRepo.update(query, {
                 IsRead: true,
@@ -84,7 +131,7 @@ export class NotificationController {
     };
 
     /**
-     * Marks all unread notifications for the user as read.
+     * Marks all unread notifications for the user and all linked family members as read.
      */
     markAllAsRead = async (req: Request, res: Response) => {
         try {
@@ -94,8 +141,10 @@ export class NotificationController {
                 return res.status(400).json(ApiResponse.error("User ID not found"));
             }
 
+            const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+
             await this.notificationRepo.update(
-                { UserId: userId, IsRead: false },
+                { UserId: In(linkedUserIds), IsRead: false },
                 { IsRead: true, UpdatedAt: new Date() }
             );
 

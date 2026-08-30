@@ -63,6 +63,7 @@ import { PasswordResetToken } from "../models/Account/password-reset-token.model
 import { UserDevice } from "../models/Account/userdevice.model.js";
 import { AppVersion } from "../models/Account/app-version.model.js";
 import { AppNotification } from "../models/Common/app-notification.model.js";
+import { DoctorSuggestion } from "../models/Appointments/doctor-suggestion.model.js";
 
 import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
 
@@ -111,7 +112,8 @@ export const AppDataSource = new DataSource({
         PasswordResetToken,
         UserDevice,
         AppVersion,
-        AppNotification
+        AppNotification,
+        DoctorSuggestion
     ],
     extra: {
         encrypt: true,
@@ -244,7 +246,28 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications and core tables");
+        // Ensure DoctorSuggestions table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DoctorSuggestions')
+            BEGIN
+                CREATE TABLE DoctorSuggestions (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    DoctorId UNIQUEIDENTIFIER NOT NULL,
+                    PatientId UNIQUEIDENTIFIER NOT NULL,
+                    Title NVARCHAR(255) NOT NULL,
+                    Description NVARCHAR(MAX) NOT NULL,
+                    FilePath NVARCHAR(500) NULL,
+                    FileName NVARCHAR(255) NULL,
+                    OrganizationId INT NULL,
+                    HospitalId INT NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    UpdatedAt DATETIME NULL
+                );
+                CREATE NONCLUSTERED INDEX IX_DoctorSuggestions_PatientId ON DoctorSuggestions (PatientId, CreatedAt DESC);
+            END
+        `);
+
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

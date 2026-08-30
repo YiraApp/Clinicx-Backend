@@ -374,12 +374,12 @@ export class MobileDashboardService {
                 });
                 const fullName = `${authorUser.FirstName || ""} ${authorUser.LastName || ""}`.trim();
                 if (provider) {
-                    authorName = `Dr. ${fullName}`;
+                    authorName = fullName.toLowerCase().startsWith("dr.") || fullName.toLowerCase().startsWith("dr ") ? fullName : `Dr. ${fullName}`;
                 } else {
-                    authorName = `Mr. ${fullName}`;
+                    authorName = fullName || note.CreatedBy || "User";
                 }
-            } else if (authorName && !authorName.toLowerCase().startsWith("dr.") && !authorName.toLowerCase().startsWith("mr.")) {
-                authorName = `Mr. ${authorName}`;
+            } else if (authorName) {
+                authorName = authorName.replace(/^Dr\.\s*/i, "").replace(/^Mr\.\s*/i, "").trim();
             }
 
             return {
@@ -805,8 +805,9 @@ export class MobileDashboardService {
             return `${hourStr}:${min} ${ampm}`;
         };
 
-        // Fetch all appointments globally across all orgs & hospitals for this patient
+        // Fetch all appointments globally across all orgs & hospitals for strictly this patient account
         const allPatientAppts = await appointmentRepo.createQueryBuilder("apt")
+            .leftJoinAndSelect("apt.User", "user")
             .leftJoinAndSelect("apt.Doctor", "doctor")
             .leftJoinAndSelect("apt.Hospital", "hospital")
             .leftJoinAndSelect("apt.Organization", "org")
@@ -866,7 +867,7 @@ export class MobileDashboardService {
             order: { CreatedAt: "DESC" }
         });
 
-        const mappedAppointments = appointments.map(a => {
+        const mappedAppointments = allPatientAppts.map(a => {
             const apptId = a.Id;
             const apptIdStr = String(apptId).toLowerCase().trim();
 
@@ -874,6 +875,8 @@ export class MobileDashboardService {
             const apptNotes = allNotes.filter(n => n.AppointmentId != null && String(n.AppointmentId).toLowerCase().trim() === apptIdStr);
             const apptDocs = allDocs.filter(d => d.AppointmentId != null && String(d.AppointmentId).toLowerCase().trim() === apptIdStr);
             const apptRecords = allRecords.filter(r => r.AppointmentId != null && String(r.AppointmentId).toLowerCase().trim() === apptIdStr);
+
+            const aptPatientName = a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : (user ? `${user.FirstName || ''} ${user.LastName || ''}`.trim() : "Patient");
 
             return {
                 id: String(apptId),
@@ -899,6 +902,11 @@ export class MobileDashboardService {
                 doctor_name: a.Doctor ? (a.Doctor.FirstName ? `Dr. ${a.Doctor.FirstName} ${a.Doctor.LastName || ''}`.trim() : "Doctor") : "Doctor",
                 doctor_email: a.Doctor ? (a.Doctor.Email || "") : "",
                 doctor_phone: a.Doctor ? (a.Doctor.PhoneNumber || "") : "",
+                patient_name: aptPatientName,
+                patient_phone: a.User?.PhoneNumber || user.PhoneNumber || "",
+                patient_user_id: a.UserId || patientId,
+                relation: (a.User?.Relation && a.User?.Relation.toLowerCase() !== "self") ? a.User.Relation : (a.User?.IsPrimary ? "Self" : "Dependent"),
+                is_primary: a.User?.IsPrimary ?? true,
                 notes: a.Notes || "",
                 created_at: a.CreatedAt ? formatDateMMMddyyyy(a.CreatedAt) : "",
                 created_by: a.CreatedBy || "",
@@ -943,37 +951,41 @@ export class MobileDashboardService {
                 }))
             };
         });        const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
-        const recordWhere: any = { PatientId: patientId };
-        if (orgId) recordWhere.OrganizationId = orgId;
-        if (hospitalId) recordWhere.HospitalId = hospitalId;
-        const latestRecord = await medicalRecordRepo.findOne({
-            where: recordWhere,
-            order: { CreatedAt: "DESC" }
+        let latestRecord = await medicalRecordRepo.findOne({
+            where: { PatientId: patientId },
+            order: { Date: "DESC", CreatedAt: "DESC" }
         }).catch(() => null);
+
+        const bpVal = latestRecord?.BloodPressure || user.BloodPressure || "None";
+        const pulseVal = latestRecord?.HeartRate || user.HeartRate || "None";
+        const tempVal = latestRecord?.Temperature || user.Temperature || "None";
+        const spO2Val = user.SpO2 || "99";
+        const weightVal = latestRecord?.Weight || (user.Weight != null ? String(user.Weight) : "None");
+        const heightVal = latestRecord?.Height || (user.Height != null ? String(user.Height) : "None");
 
         const latest_vitals = {
             blood_pressure: {
-                value: latestRecord?.BloodPressure || "None",
+                value: bpVal,
                 unit: "mmHg"
             },
             pulse: {
-                value: latestRecord?.HeartRate || "None",
+                value: pulseVal,
                 unit: "bpm"
             },
             temperature: {
-                value: latestRecord?.Temperature || "None",
+                value: tempVal,
                 unit: "°F"
             },
             spo2: {
-                value: "None",
+                value: spO2Val,
                 unit: "%"
             },
             weight: {
-                value: latestRecord?.Weight || "None",
+                value: weightVal,
                 unit: "kg"
             },
             height: {
-                value: latestRecord?.Height || "None",
+                value: heightVal,
                 unit: "cm"
             }
         };
@@ -1336,7 +1348,7 @@ export class MobileDashboardService {
             throw new Error("Provider user not found");
         }
 
-        // Update User personal details
+        // Update User personal and health details
         if (data.firstName !== undefined) user.FirstName = data.firstName;
         if (data.lastName !== undefined) user.LastName = data.lastName;
         if (data.email !== undefined) user.Email = data.email;
@@ -1347,13 +1359,15 @@ export class MobileDashboardService {
             user.DateOfBirth = dobVal && dobVal !== "" ? String(dobVal) : user.DateOfBirth;
         }
         if (data.bloodGroup !== undefined) user.BloodGroup = data.bloodGroup;
+        if (data.height !== undefined) user.Height = data.height !== null && data.height !== "" ? Number(data.height) : user.Height;
+        if (data.weight !== undefined) user.Weight = data.weight !== null && data.weight !== "" ? Number(data.weight) : user.Weight;
         if (data.imagePath !== undefined) user.ImagePath = data.imagePath;
         if (data.profileImageUrl !== undefined) user.ImagePath = data.profileImageUrl;
         user.UpdatedAt = new Date();
 
         await userRepo.save(user);
 
-        // Update or create HealthcareProvider record
+        // Update or create HealthcareProvider record only if specialty is provided or already a provider
         let provider = await providerRepo.findOne({
             where: { UserId: userId, IsDeleted: false }
         });
@@ -1372,7 +1386,7 @@ export class MobileDashboardService {
             }
             provider.UpdatedAt = new Date();
             await providerRepo.save(provider);
-        } else {
+        } else if (data.specialty !== undefined || data.registrationNumber !== undefined) {
             provider = providerRepo.create({
                 UserId: userId,
                 HospitalId: data.hospitalId ? Number(data.hospitalId) : 19,

@@ -6,6 +6,7 @@ import { patientInsuranceRepository } from "../../repositories/Organizations/pat
 import { addressRepository } from "../../repositories/Account/address.repository.js";
 import { Address } from "../../models/Account/address.model.js";
 import { userRepository } from "../../repositories/Account/user.repository.js";
+import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
 
 export class PatientRegistrationService {
     async registerPatient(data: any): Promise<any> {
@@ -28,12 +29,18 @@ export class PatientRegistrationService {
         }
 
         // 1. Handle Medical Registration (Allergies, Medical History)
-        let registration = await patientRegistrationRepository.findByUserId(userId, organizationId);
+        const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+        const effectiveOrgId = organizationId || activeDefault?.OrganizationId || 1;
+        const effectiveHospitalId = hospitalId || activeDefault?.HospitalId || 19;
+
+        let registration = await patientRegistrationRepository.findByUserId(userId, effectiveOrgId);
         if (!registration) {
             registration = new PatientRegistration();
             registration.UserId = userId;
-            registration.OrganizationId = organizationId;
-            registration.HospitalId = hospitalId;
+            registration.OrganizationId = effectiveOrgId;
+            registration.HospitalId = effectiveHospitalId;
+        } else if (!registration.HospitalId) {
+            registration.HospitalId = effectiveHospitalId;
         }
 
         if (patientFields.allergies !== undefined) registration.Allergies = patientFields.allergies;

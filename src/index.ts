@@ -19,8 +19,8 @@ const startServer = async () => {
         const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
         appointmentReminderService.startScheduler(60);
 
-        app.listen(port, () => {
-            console.log(`Server is running on port ${port}`);
+        app.listen(Number(port), "0.0.0.0", () => {
+            console.log(`Server is running on port ${port} (0.0.0.0)`);
         });
 
     } catch (error) {
