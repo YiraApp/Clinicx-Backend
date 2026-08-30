@@ -14,10 +14,15 @@ export class DoctorSuggestionRepository {
     }
 
     async findByPatientIds(patientIds: string[], orgId?: number, hospitalId?: number): Promise<DoctorSuggestion[]> {
-        if (!patientIds || patientIds.length === 0) return [];
+        const isGuid = (val?: string): boolean =>
+            !!val && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val.trim());
+
+        const validIds = (patientIds || []).map(id => id.trim()).filter(isGuid);
+        if (validIds.length === 0) return [];
+
         const qb = this.repo.createQueryBuilder("s")
             .leftJoinAndSelect("s.Doctor", "Doctor")
-            .where("s.PatientId IN (:...patientIds)", { patientIds })
+            .where("s.PatientId IN (:...patientIds)", { patientIds: validIds })
             .orderBy("s.CreatedAt", "DESC");
 
         if (orgId) {

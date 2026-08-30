@@ -8,39 +8,54 @@ export class DoctorSuggestionService {
     private async resolveCandidatePatientIds(patientId: string): Promise<string[]> {
         const set = new Set<string>();
         if (!patientId) return [];
-        set.add(patientId);
+
+        const isGuid = (val?: string): boolean =>
+            !!val && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val.trim());
+
+        if (isGuid(patientId)) {
+            set.add(patientId.trim());
+        }
 
         try {
             const userRepo = AppDataSource.getRepository(User);
             const regRepo = AppDataSource.getRepository(PatientRegistration);
 
             const numId = parseInt(patientId, 10);
-            if (!isNaN(numId)) {
+            if (!isNaN(numId) && String(numId) === patientId.trim()) {
                 const reg = await regRepo.findOne({ where: { Id: numId } }).catch(() => null);
-                if (reg?.UserId) set.add(reg.UserId);
+                if (reg?.UserId && isGuid(reg.UserId)) set.add(reg.UserId.trim());
             }
 
-            const user = await userRepo.createQueryBuilder("u")
-                .where("u.Id = :id OR u.PhoneNumber = :phone OR u.Email = :email", {
-                    id: patientId,
-                    phone: patientId,
-                    email: patientId
-                })
-                .getOne()
-                .catch(() => null);
+            const queryBuilder = userRepo.createQueryBuilder("u");
+            if (isGuid(patientId)) {
+                queryBuilder.where("u.Id = :id OR u.PhoneNumber = :phone OR u.Email = :email", {
+                    id: patientId.trim(),
+                    phone: patientId.trim(),
+                    email: patientId.trim()
+                });
+            } else {
+                queryBuilder.where("u.PhoneNumber = :phone OR u.Email = :email", {
+                    phone: patientId.trim(),
+                    email: patientId.trim()
+                });
+            }
 
-            if (user?.Id) set.add(user.Id);
+            const user = await queryBuilder.getOne().catch(() => null);
 
-            const regs = await regRepo.find({ where: { UserId: patientId } }).catch(() => []);
-            for (const r of regs) {
-                set.add(String(r.Id));
-                if (r.UserId) set.add(r.UserId);
+            if (user?.Id && isGuid(user.Id)) set.add(user.Id.trim());
+
+            const baseGuid = user?.Id || (isGuid(patientId) ? patientId.trim() : null);
+            if (baseGuid) {
+                const regs = await regRepo.find({ where: { UserId: baseGuid } }).catch(() => []);
+                for (const r of regs) {
+                    if (r.UserId && isGuid(r.UserId)) set.add(r.UserId.trim());
+                }
             }
         } catch (e) {
             console.error("[DoctorSuggestionService] Error resolving patient IDs:", e);
         }
 
-        return Array.from(set);
+        return Array.from(set).filter(id => isGuid(id));
     }
 
     async addSuggestion(data: {

@@ -38,12 +38,20 @@ export class MobileDoctorSuggestionController {
 
             const effectiveDoctorId = doctorId || (req as any).user?.userId;
 
-            // Handle optional file upload
+            // Handle optional file upload to Azure Blob Storage
             let filePath: string | undefined;
             let fileName: string | undefined;
             if (req.file) {
-                filePath = req.file.path || (req.file as any).location || (req.file as any).url;
                 fileName = req.file.originalname;
+                try {
+                    const { blobService } = await import("../../../../services/Common/blob.service.js");
+                    const uploadResults = await blobService.uploadFiles([req.file], String(patientId || "patient"), "doctor-suggestions");
+                    if (uploadResults && uploadResults.length > 0 && uploadResults[0].fileUrl) {
+                        filePath = uploadResults[0].fileUrl;
+                    }
+                } catch (blobErr: any) {
+                    console.error("[DoctorSuggestionController] Azure upload failed:", blobErr.message);
+                }
             }
 
             const result = await doctorSuggestionService.addSuggestion({
