@@ -416,7 +416,7 @@ export class PushNotificationService {
             body: `${formattedDoctor} has added a new suggestion for you: "${suggestionTitle}"`,
             type: "DOCTOR_SUGGESTION",
             referenceId: suggestionId ? String(suggestionId) : null,
-            route: "/patientDashboard",
+            route: "/patientDoctorSuggestions",
             additionalData: { patientId, suggestionId, suggestionTitle }
         });
     }
