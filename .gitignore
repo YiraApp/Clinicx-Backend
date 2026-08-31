@@ -26,3 +26,9 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Secrets & Firebase Credentials
+serviceAccountKey.json
+firebase-service-account.json
+*.pem
+certs/
