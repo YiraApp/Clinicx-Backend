@@ -108,7 +108,7 @@ authRouter.post("/notifications/mark-all-read", authMiddleware, notificationCont
 
 // Doctor Suggestions
 authRouter.get("/doctor-suggestions/patient/:patientId", authMiddleware, (req, res) => mobileDoctorSuggestionController.getPatientSuggestions(req, res));
-authRouter.post("/doctor-suggestions", authMiddleware, upload.single("file"), (req, res) => mobileDoctorSuggestionController.addSuggestion(req, res));
+authRouter.post("/doctor-suggestions", authMiddleware, upload.any(), (req, res) => mobileDoctorSuggestionController.addSuggestion(req, res));
 authRouter.delete("/doctor-suggestions/:id", authMiddleware, (req, res) => mobileDoctorSuggestionController.deleteSuggestion(req, res));
 
 export { authRouter };

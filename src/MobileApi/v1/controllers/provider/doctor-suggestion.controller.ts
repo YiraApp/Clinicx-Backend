@@ -41,11 +41,12 @@ export class MobileDoctorSuggestionController {
             // Handle optional file upload to Azure Blob Storage
             let filePath: string | undefined;
             let fileName: string | undefined;
-            if (req.file) {
-                fileName = req.file.originalname;
+            const uploadedFile = req.file || (Array.isArray(req.files) && req.files.length > 0 ? req.files[0] : undefined);
+            if (uploadedFile) {
+                fileName = uploadedFile.originalname;
                 try {
                     const { blobService } = await import("../../../../services/Common/blob.service.js");
-                    const uploadResults = await blobService.uploadFiles([req.file], String(patientId || "patient"), "doctor-suggestions");
+                    const uploadResults = await blobService.uploadFiles([uploadedFile], String(patientId || "patient"), "doctor-suggestions");
                     if (uploadResults && uploadResults.length > 0 && uploadResults[0].fileUrl) {
                         filePath = uploadResults[0].fileUrl;
                     }
