@@ -131,7 +131,7 @@ export class HealthcareProviderService {
     }
 
     async getDoctors(page: number, pageSize: number, filters: any): Promise<any> {
-        if (!filters?.organizationId || !filters?.hospitalId) {
+        if (!filters?.organizationId && !filters?.hospitalId) {
             const activeDefault = await defaultOrganizationRepository.getActiveDefault();
             if (activeDefault) {
                 if (!filters.organizationId) filters.organizationId = activeDefault.OrganizationId;
