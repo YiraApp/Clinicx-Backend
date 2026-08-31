@@ -151,7 +151,7 @@ export const sendOTP = async (req: Request, res: Response) => {
  * Sends OTP for Mobile Signup verification.
  */
 export const sendSignupOtp = async (req: Request, res: Response) => {
-    const { identity, phoneNumber, countryCode } = req.body;
+    const { identity, phoneNumber, countryCode, email } = req.body;
     const targetPhone = phoneNumber || identity;
     try {
         if (!targetPhone) {
@@ -162,7 +162,7 @@ export const sendSignupOtp = async (req: Request, res: Response) => {
             });
         }
 
-        const result = await mobileAuthService.sendSignupOTP(targetPhone, countryCode);
+        const result = await mobileAuthService.sendSignupOTP(targetPhone, countryCode, email);
         return res.json(ApiResponse.success(result, "Verification code sent successfully."));
     } catch (error: any) {
         console.error("[DEBUG] sendSignupOtp Error:", error);

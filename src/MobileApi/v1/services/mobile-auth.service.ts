@@ -153,7 +153,8 @@ export class MobileAuthService {
      */
     async sendSignupOTP(
         phoneNumber: string,
-        countryCode?: string
+        countryCode?: string,
+        email?: string
     ): Promise<{
         otpSent: boolean;
         sessionId: string;
@@ -167,8 +168,24 @@ export class MobileAuthService {
             throw new Error("Please enter a valid 10-digit mobile number.");
         }
 
-        // Check if user already exists and ALREADY has the Patient role
         const userRepo = AppDataSource.getRepository(User);
+
+        // 1. Check if email is provided and already registered
+        if (email && email.trim().length > 0) {
+            const cleanEmail = email.trim().toLowerCase();
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(cleanEmail)) {
+                throw new Error("Please enter a valid email address.");
+            }
+            const existingEmailUser = await userRepo.findOne({
+                where: { Email: cleanEmail, IsDeleted: false }
+            });
+            if (existingEmailUser && existingEmailUser.Status) {
+                throw new Error("An account with this email address is already registered. Please Sign In or use another email.");
+            }
+        }
+
+        // 2. Check if user already exists and ALREADY has the Patient role
         const existingUsers = await userRepo.find({
             where: [
                 { PhoneNumber: cleanPhone, IsDeleted: false },
@@ -261,7 +278,9 @@ export class MobileAuthService {
             throw new Error("Invalid or expired OTP. Please check the code and try again.");
         }
 
-        // 2. Validate optional email
+        const userRepo = AppDataSource.getRepository(User);
+
+        // 2. Validate optional email uniqueness
         let cleanEmail: string | undefined = undefined;
         if (data.email && data.email.trim() !== "") {
             cleanEmail = data.email.trim().toLowerCase();
@@ -269,9 +288,15 @@ export class MobileAuthService {
             if (!emailRegex.test(cleanEmail)) {
                 throw new Error("Please enter a valid email address.");
             }
-            const existingEmailUser = await userRepository.findPrimaryByEmail(cleanEmail);
-            if (existingEmailUser && existingEmailUser.PhoneNumber !== cleanPhone) {
-                throw new Error("An account with this email address already exists.");
+            const existingEmailUser = await userRepo.findOne({
+                where: { Email: cleanEmail, IsDeleted: false }
+            });
+            if (existingEmailUser && existingEmailUser.Status) {
+                // If the user already has this phone number and email, it's allowed for profile update; otherwise error
+                const existingPhoneClean = (existingEmailUser.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+                if (existingPhoneClean !== cleanPhone) {
+                    throw new Error("An account with this email address is already registered. Please Sign In.");
+                }
             }
         }
 
