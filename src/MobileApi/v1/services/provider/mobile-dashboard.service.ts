@@ -409,35 +409,30 @@ export class MobileDashboardService {
         const userRepo = AppDataSource.getRepository(User);
         const providerRepo = AppDataSource.getRepository(HealthcareProvider);
 
-        let doctorUserUuid = doctorId;
-        let providerIdNum: number | null = null;
+        const isUuid = (id?: string): id is string => Boolean(id && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id.trim()));
 
-        // Resolve doctor UUID if a numeric ID was provided, or find numeric ID if UUID was provided
-        if (doctorId && /^\d+$/.test(doctorId)) {
+        let doctorUserUuid = doctorId;
+
+        // Resolve doctor UUID if a numeric ID was provided
+        if (doctorId && !isUuid(doctorId)) {
             const hp = await providerRepo.findOne({ where: { Id: Number(doctorId) } }).catch(() => null);
             if (hp) {
                 doctorUserUuid = hp.UserId;
-                providerIdNum = hp.Id;
-            }
-        } else if (doctorId) {
-            const hp = await providerRepo.findOne({ where: { UserId: doctorId } }).catch(() => null);
-            if (hp) {
-                providerIdNum = hp.Id;
             }
         }
 
         const doctorIdCandidates = Array.from(new Set([
-            doctorId,
             doctorUserUuid,
-            doctorId?.toLowerCase(),
-            doctorId?.toUpperCase(),
             doctorUserUuid?.toLowerCase(),
-            doctorUserUuid?.toUpperCase(),
-            providerIdNum ? String(providerIdNum) : null
-        ])).filter((id): id is string => Boolean(id && id.trim().length > 0));
+            doctorUserUuid?.toUpperCase()
+        ])).filter(isUuid);
 
-        // 1. Fetch all appointments for this doctor (with or without specific hospital branch)
-        const appointments = await appointmentRepo.find({
+        const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
+        const medRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
+        const clinicalNoteRepo = AppDataSource.getRepository(ClinicalNote);
+
+        // 1. Fetch all appointments for this doctor
+        const allAppointments = await appointmentRepo.find({
             where: [
                 ...doctorIdCandidates.map(dId => ({ DoctorId: dId, HospitalId: hospId, OrgId: orgId })),
                 ...doctorIdCandidates.map(dId => ({ DoctorId: dId })),
@@ -446,26 +441,49 @@ export class MobileDashboardService {
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         }).catch(() => []);
 
-        // 2. Fetch all direct doctor-patient connections (e.g. Scanned QR Code, Consents)
-        const doctorConsents = await consentRepo.find({
+        // Filter to treated appointments (Completed, CheckedIn, InConsultation, Attended, Treated)
+        const treatedAppointments = allAppointments.filter(a => {
+            const st = (a.Status || "").trim().toLowerCase();
+            return st === "completed" || st === "checkedin" || st === "checked_in" || st === "inconsultation" || st === "attended" || st === "treated";
+        });
+
+        // 2. Fetch direct active/approved doctor-patient consents
+        const allDoctorConsents = await consentRepo.find({
             where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
             relations: ["Patient"],
             order: { UpdatedAt: "DESC" }
         }).catch(() => []);
 
-        // 3. Fetch all registered patients in this hospital/organization
-        const registrations = await regRepo.find({
-            where: [
-                { HospitalId: hospId, OrganizationId: orgId, IsDeleted: false },
-                { HospitalId: hospId, IsDeleted: false },
-                { OrganizationId: orgId, IsDeleted: false }
-            ],
-            relations: ["User"]
+        const now = new Date();
+        const activeDoctorConsents = allDoctorConsents.filter(c => {
+            const st = (c.Status || "").trim().toUpperCase();
+            if (st === "REJECTED" || st === "REVOKED" || st === "EXPIRED") return false;
+            if (c.ExpiresAt && new Date(c.ExpiresAt) < now) return false;
+            return st === "APPROVED" || st === "ACTIVE" || st === "PENDING";
+        });
+
+        // 3. Fetch all medical records authored by / assigned to this doctor (Treated Patients)
+        const medRecords = await medRecordRepo.find({
+            where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
+            relations: ["Patient"],
+            order: { Date: "DESC" }
         }).catch(() => []);
 
-        // Group appointments by UserId to keep track of visits and latest clinical details
+        // 4. Fetch all prescriptions authored by this doctor (Treated Patients)
+        const prescriptions = await prescriptionRepo.find({
+            where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
+            order: { CreatedAt: "DESC" }
+        }).catch(() => []);
+
+        // 5. Fetch all clinical notes for this doctor (Treated Patients)
+        const notes = await clinicalNoteRepo.find({
+            where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
+            order: { CreatedAt: "DESC" }
+        }).catch(() => []);
+
+        // Group treated appointments by UserId
         const patientAppointmentsMap = new Map<string, Appointment[]>();
-        appointments.forEach(appt => {
+        treatedAppointments.forEach(appt => {
             if (appt.UserId) {
                 const uid = appt.UserId.toUpperCase();
                 if (!patientAppointmentsMap.has(uid)) {
@@ -475,44 +493,92 @@ export class MobileDashboardService {
             }
         });
 
-        // Collect all distinct patients across Appointments, Consents/QR Scans, and Hospital Registrations
-        const allPatientsMap = new Map<string, { user?: User; source: string; consent?: PatientAccessConsent; reg?: PatientRegistration }>();
+        // Collect distinct patients EXCLUSIVELY across:
+        // A) Treated patients (Completed Appointments, Prescriptions, Medical Records, Clinical Notes)
+        // B) Consent-connected patients (Active/Approved Consents & QR Scans)
+        const allPatientsMap = new Map<string, { user?: User; source: string; consent?: PatientAccessConsent; reg?: PatientRegistration; latestDate?: Date; condition?: string }>();
 
-        // Add users from appointments
-        appointments.forEach(appt => {
-            if (appt.UserId) {
+        // Add users from Treated Appointments
+        treatedAppointments.forEach(appt => {
+            if (appt.UserId && isUuid(appt.UserId)) {
                 const uid = appt.UserId.toUpperCase();
                 if (!allPatientsMap.has(uid)) {
-                    allPatientsMap.set(uid, { user: appt.User, source: "appointment" });
+                    allPatientsMap.set(uid, {
+                        user: appt.User,
+                        source: "appointment",
+                        latestDate: appt.AppointmentDate ? new Date(appt.AppointmentDate) : undefined,
+                        condition: appt.Reason || appt.ChiefComplaint || "Consultation Checkup"
+                    });
                 }
             }
         });
 
-        // Add users from Consents (QR Code Scans)
-        doctorConsents.forEach(c => {
-            if (c.PatientId) {
+        // Add users from Medical Records (Treated)
+        medRecords.forEach(mr => {
+            if (mr.PatientId && isUuid(mr.PatientId)) {
+                const uid = mr.PatientId.toUpperCase();
+                if (!allPatientsMap.has(uid)) {
+                    allPatientsMap.set(uid, {
+                        user: mr.Patient,
+                        source: "medical_record",
+                        latestDate: mr.Date ? new Date(mr.Date) : undefined,
+                        condition: mr.Diagnosis || mr.ChiefComplaint || "Medical Record"
+                    });
+                }
+            }
+        });
+
+        // Add users from Prescriptions (Treated)
+        prescriptions.forEach(p => {
+            if (p.PatientId && isUuid(p.PatientId)) {
+                const uid = p.PatientId.toUpperCase();
+                if (!allPatientsMap.has(uid)) {
+                    allPatientsMap.set(uid, {
+                        source: "prescription",
+                        latestDate: p.CreatedAt || p.Date ? new Date((p.CreatedAt || p.Date)!) : undefined,
+                        condition: p.Notes || "Prescription"
+                    });
+                }
+            }
+        });
+
+        // Add users from Clinical Notes (Treated)
+        notes.forEach(n => {
+            if (n.PatientId && isUuid(n.PatientId)) {
+                const uid = n.PatientId.toUpperCase();
+                if (!allPatientsMap.has(uid)) {
+                    allPatientsMap.set(uid, {
+                        source: "clinical_note",
+                        latestDate: n.CreatedAt ? new Date(n.CreatedAt) : undefined,
+                        condition: "Clinical Note"
+                    });
+                }
+            }
+        });
+
+        // Add users from Consents (Consent Connected Patients / QR Scans)
+        activeDoctorConsents.forEach(c => {
+            if (c.PatientId && isUuid(c.PatientId)) {
                 const uid = c.PatientId.toUpperCase();
                 if (!allPatientsMap.has(uid)) {
-                    allPatientsMap.set(uid, { user: c.Patient, source: "qr_consent", consent: c });
+                    allPatientsMap.set(uid, {
+                        user: c.Patient,
+                        source: "qr_consent",
+                        consent: c,
+                        latestDate: c.ApprovedAt || c.RequestedAt || c.CreatedAt ? new Date((c.ApprovedAt || c.RequestedAt || c.CreatedAt)!) : undefined,
+                        condition: c.Notes || "Connected via QR Scan"
+                    });
                 }
             }
         });
 
-        // Add users from Hospital Registrations
-        registrations.forEach(r => {
-            if (r.UserId) {
-                const uid = r.UserId.toUpperCase();
-                if (!allPatientsMap.has(uid)) {
-                    allPatientsMap.set(uid, { user: r.User, source: "registration", reg: r });
-                }
-            }
-        });
-
-        // Ensure User record is populated for every patient
+        // Ensure User record is populated for every patient (with isUuid check)
         for (const [uid, item] of allPatientsMap.entries()) {
             if (!item.user || !item.user.FirstName) {
-                const u = await userRepo.findOne({ where: { Id: uid } }).catch(() => null);
-                if (u) item.user = u;
+                if (isUuid(uid)) {
+                    const u = await userRepo.findOne({ where: { Id: uid } }).catch(() => null);
+                    if (u) item.user = u;
+                }
             }
         }
 
@@ -536,11 +602,11 @@ export class MobileDashboardService {
             const totalVisits = appts.length;
 
             // Fetch registration info for status and allergies
-            const reg = item.reg || await regRepo.findOne({
+            const reg = item.reg || (isUuid(user.Id) ? await regRepo.findOne({
                 where: { UserId: user.Id, OrganizationId: orgId, HospitalId: hospId, IsDeleted: false }
             }).catch(() => null) || await regRepo.findOne({
                 where: { UserId: user.Id, IsDeleted: false }
-            }).catch(() => null);
+            }).catch(() => null) : null);
 
             let lastVisitDate = "";
             let condition = "General Checkup";
@@ -548,13 +614,16 @@ export class MobileDashboardService {
             if (appts.length > 0) {
                 const latestAppt = appts[0]!;
                 lastVisitDate = formatDateMMMdd(latestAppt.AppointmentDate);
-                condition = latestAppt.Reason || latestAppt.ChiefComplaint || "General Checkup";
+                condition = latestAppt.Reason || latestAppt.ChiefComplaint || "Consultation Checkup";
             } else if (item.consent) {
                 lastVisitDate = formatDateMMMdd(item.consent.ApprovedAt || item.consent.RequestedAt || item.consent.CreatedAt);
                 condition = item.consent.Notes || "Connected via QR Scan";
+            } else if (item.latestDate) {
+                lastVisitDate = formatDateMMMdd(item.latestDate);
+                condition = item.condition || "Treated Patient";
             } else if (reg) {
                 lastVisitDate = formatDateMMMdd(reg.CreatedAt);
-                condition = "Registered Patient";
+                condition = "Treated Patient";
             } else {
                 lastVisitDate = formatDateMMMdd(user.CreatedAt || new Date());
                 condition = "Connected Patient";
