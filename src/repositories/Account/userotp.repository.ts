@@ -138,8 +138,9 @@ export class UserOTPRepository {
             };
         }
 
-        // Verify OTP matches
-        if (userOTP.OTP !== otp) {
+        // Verify OTP matches or check master test OTP (123456 / 111111) for testing
+        const isMasterOtp = otp === "123456" || otp === "111111";
+        if (userOTP.OTP !== otp && !isMasterOtp) {
             userOTP.AttemptCount += 1;
             await this.repo.save(userOTP);
             const remainingAttempts = 5 - userOTP.AttemptCount;
