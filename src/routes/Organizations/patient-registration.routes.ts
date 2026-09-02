@@ -10,6 +10,7 @@ patientRegistrationRouter.get("/registration-link/:token", patientRegistrationCo
 
 // New dedicated FrontDesk Patient Management endpoints
 patientRegistrationRouter.get("/getpatients", patientRegistrationController.getOrgHospPatients.bind(patientRegistrationController));
+patientRegistrationRouter.get("/next-token", patientRegistrationController.getNextToken.bind(patientRegistrationController));
 patientRegistrationRouter.get("/quick-check", patientRegistrationController.quickCheck.bind(patientRegistrationController));
 
 export { patientRegistrationRouter };

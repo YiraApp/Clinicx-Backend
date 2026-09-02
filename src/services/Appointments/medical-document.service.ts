@@ -16,6 +16,419 @@ function ensureUUID(str?: any): string {
 }
 
 export class MedicalDocumentService {
+
+    async sendDentalConsultationWhatsApp(patientId: string, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        // Template 'dental_consultation':
+        // Dear {{1}},
+        // Your dental consultation has been scheduled.
+        // Please visit Ocimum Dentistry and share your Member Reference at the clinic.
+        // Thank you,
+        // Yira Clinx
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName }
+                ]
+            }
+        ];
+
+        console.log(`[MedicalDocumentService] Sending WhatsApp 'dental_consultation' to ${normalizedPhone}`);
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "dental_consultation", "en", components);
+
+        // Record in AppNotification
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "Dental Consultation Scheduled";
+        notif.Body = `Dental consultation notification sent to ${normalizedPhone} ('dental_consultation' template)`;
+        notif.Type = "WHATSAPP_DENTAL_CONSULTATION";
+        notif.ReferenceId = patientId;
+        notif.Route = "/patient/overview";
+        notif.IsRead = false;
+        await notifRepo.save(notif);
+
+        return {
+            success: true,
+            whatsappResult: result,
+            notification: notif
+        };
+    }
+
+
+    async sendEyeConsultationWhatsApp(patientId: string, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        // Template 'eye_consultation':
+        // Dear {{1}},
+        // Your eye consultation has been scheduled.
+        // Please visit the nearest Vasan Eye Care and share your Member Reference at the clinic.
+        // Thank you,
+        // Yira Clinx
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName }
+                ]
+            }
+        ];
+
+        console.log(`[MedicalDocumentService] Sending WhatsApp 'eye_consultation' to ${normalizedPhone}`);
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "eye_consultation", "en", components);
+
+        // Record in AppNotification
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "Eye Consultation Scheduled";
+        notif.Body = `Eye consultation notification sent to ${normalizedPhone} ('eye_consultation' template)`;
+        notif.Type = "WHATSAPP_EYE_CONSULTATION";
+        notif.ReferenceId = patientId;
+        notif.Route = "/patient/overview";
+        notif.IsRead = false;
+        await notifRepo.save(notif);
+
+        return {
+            success: true,
+            whatsappResult: result,
+            notification: notif
+        };
+    }
+
+
+    async scheduleHomeSampleCollection(patientId: string, date: string, time: string, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        // Template 'hsp':
+        // Dear {{1}},
+        // Your Home Sample Collection has been successfully scheduled.
+        // Date: {{2}}
+        // Time: {{3}}
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName },
+                    { type: "text", text: String(date) },
+                    { type: "text", text: String(time) }
+                ]
+            }
+        ];
+
+        console.log(`[MedicalDocumentService] Sending WhatsApp 'hsp' to ${normalizedPhone} for Home Sample Collection`);
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "hsp", "en", components);
+
+        // Record in AppNotification
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "Home Sample Collection Scheduled";
+        notif.Body = `Home Sample Collection scheduled for Date: ${date}, Time: ${time} ('hsp' template)`;
+        notif.Type = "WHATSAPP_HOME_SAMPLE";
+        notif.ReferenceId = patientId;
+        notif.Route = "/patient/overview";
+        notif.IsRead = false;
+        await notifRepo.save(notif);
+
+        return {
+            success: true,
+            whatsappResult: result,
+            notification: notif
+        };
+    }
+
+
+    async shareSingleDocument(documentId: number, patientId: string, senderId?: string): Promise<any> {
+        const { medicalDocumentRepository } = await import("../../repositories/Appointments/medical-document.repository.js");
+        const { appointmentShareLinkRepository } = await import("../../repositories/Appointments/appointment-share-link.repository.js");
+        const { postVisitDocumentRepository } = await import("../../repositories/Appointments/post-visit-document.repository.js");
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+        const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+        const { v4: uuidv4 } = await import("uuid");
+
+        const doc = await medicalDocumentRepository.findById(documentId);
+        if (!doc) throw new Error("Document not found.");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = (patient.FirstName || "") + " " + (patient.LastName || "").trim() || "Valued Patient";
+
+        // Resolve hospital name
+        let hospitalName = "Yira Hospitals";
+        if (doc.HospitalId) {
+            const hosp = await hospitalRepository.findById(doc.HospitalId);
+            if (hosp && hosp.Name) hospitalName = hosp.Name;
+        } else {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault && activeDefault.HospitalName) hospitalName = activeDefault.HospitalName;
+        }
+
+        // 1. Generate share token & link (https://clinix.yira.ai/view-summary/<token>)
+        const shareToken = uuidv4();
+        const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "https://clinix.yira.ai";
+        const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+        const shareLinkUrl = cleanBaseUrl + "/view-summary/" + shareToken;
+
+        const appointmentId = doc.AppointmentId || 0;
+
+        await appointmentShareLinkRepository.create({
+            AppointmentId: appointmentId,
+            PatientId: patientId,
+            OrganizationId: doc.OrganizationId || 1,
+            HospitalId: doc.HospitalId || 19,
+            ShareToken: shareToken,
+            ShareLink: shareLinkUrl,
+            ExpiryAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            IsActive: true,
+            CreatedBy: senderId || "SYSTEM"
+        });
+
+        // 2. Register PostVisitDocument so summary portal displays this document
+        await postVisitDocumentRepository.create({
+            AppointmentId: appointmentId,
+            PatientId: patientId,
+            DoctorId: null,
+            OrganizationId: doc.OrganizationId || 1,
+            HospitalId: doc.HospitalId || 19,
+            DocumentType: doc.DocumentCategory || "Medical Document",
+            FileName: doc.Description || doc.FileName || "Medical Document",
+            BlobUrl: doc.BlobUrl,
+            FileSize: doc.FileSize || undefined,
+            MimeType: doc.MimeType || undefined,
+            GeneratedAt: new Date(),
+            SentOnWhatsApp: true,
+            WhatsAppSentAt: new Date(),
+            WhatsAppSentTo: normalizedPhone,
+            WhatsAppSentCount: 1,
+            Status: "ACTIVE"
+        });
+
+        // 3. Format WhatsApp template: medical_patient_documents
+        // Header: Hospital Name
+        // Body {{1}}: Patient Name, Body {{2}}: Hospital Name
+        // Button (index 0): shareToken
+        const components = [
+            {
+                type: "header",
+                parameters: [
+                    { type: "text", text: hospitalName }
+                ]
+            },
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName },
+                    { type: "text", text: hospitalName }
+                ]
+            },
+            {
+                type: "button",
+                sub_type: "url",
+                index: 0,
+                parameters: [
+                    { type: "text", text: shareToken }
+                ]
+            }
+        ];
+
+        console.log("[MedicalDocumentService] Sending WhatsApp 'medical_patient_documents' to " + normalizedPhone + " for document " + (doc.FileName || "doc"));
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "medical_patient_documents", "en", components);
+
+        // Increment WhatsAppSentCount directly in database on MedicalDocuments
+        try {
+            await medicalDocumentRepository.save({
+                ...doc,
+                WhatsAppSentCount: (Number(doc.WhatsAppSentCount) || 0) + 1,
+                UpdatedAt: new Date()
+            });
+        } catch (dbErr: any) {
+            console.warn("[MedicalDocumentService] DB increment warning:", dbErr.message);
+        }
+
+        // 4. Record AppNotification for history logs (WHATSAPP_SINGLE_DOCUMENT)
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "Document Shared: " + (doc.Description || doc.FileName || "Medical Document");
+        notif.Body = "Shared document '" + (doc.Description || doc.FileName) + "' via WhatsApp ('medical_patient_documents' template)";
+        notif.Type = "WHATSAPP_SINGLE_DOCUMENT";
+        notif.ReferenceId = String(documentId);
+        notif.Route = "/view-summary/" + shareToken;
+        notif.IsRead = false;
+        await notifRepo.save(notif);
+
+        const docCount = await notifRepo.count({
+            where: { UserId: patientId, ReferenceId: String(documentId), Type: "WHATSAPP_SINGLE_DOCUMENT" }
+        });
+
+        return {
+            success: true,
+            docCount,
+            shareToken,
+            shareLinkUrl,
+            whatsappResult: result
+        };
+    }
+
+
+    async notifyPatientMedicalRecord(patientId: string, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) {
+            throw new Error("Patient not found.");
+        }
+        const phone = patient.PhoneNumber;
+        if (!phone) {
+            throw new Error("Patient does not have a phone number registered.");
+        }
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = `91${normalizedPhone}`;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName }
+                ]
+            }
+        ];
+
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "medical_record", "en", components);
+
+        // Save history record in AppNotifications (WHATSAPP_GENERAL_ALERT)
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "General Alert: Medical Records Ready";
+        notif.Body = `Sent general WhatsApp template ('medical_record') to ${normalizedPhone}`;
+        notif.Type = "WHATSAPP_GENERAL_ALERT";
+        notif.ReferenceId = patientId;
+        notif.Route = "/patient/documents";
+        notif.IsRead = false;
+        await notifRepo.save(notif);
+
+        const generalCount = await notifRepo.count({
+            where: { UserId: patientId, Type: "WHATSAPP_GENERAL_ALERT" }
+        });
+
+        return {
+            success: true,
+            docCount,
+            notification: notif,
+            whatsappResult: result
+        };
+    }
+
+    async getNotificationHistory(patientId: string): Promise<any> {
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+        const { In } = await import("typeorm");
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+
+        const history = await notifRepo.find({
+            where: { 
+                UserId: patientId, 
+                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION"]) 
+            },
+            order: { CreatedAt: "DESC" },
+            take: 100
+        });
+
+        const generalCount = history.filter(h => h.Type === "WHATSAPP_GENERAL_ALERT" || (h.Type === "WHATSAPP_MEDICAL_RECORD" && h.Title.includes("Ready"))).length;
+        const documentShareCount = history.filter(h => h.Type === "WHATSAPP_SINGLE_DOCUMENT" || (h.Type === "WHATSAPP_MEDICAL_RECORD" && !h.Title.includes("Ready"))).length;
+        const homeSampleCount = history.filter(h => h.Type === "WHATSAPP_HOME_SAMPLE").length;
+        const eyeConsultationCount = history.filter(h => h.Type === "WHATSAPP_EYE_CONSULTATION").length;
+        const dentalConsultationCount = history.filter(h => h.Type === "WHATSAPP_DENTAL_CONSULTATION").length;
+
+        return {
+            generalCount,
+            documentShareCount,
+            homeSampleCount,
+            eyeConsultationCount,
+            dentalConsultationCount,
+            count: history.length,
+            history
+        };
+    }
+
     async uploadDocuments(data: any, files: Express.Multer.File[]): Promise<MedicalDocument[]> {
         const {
             appointmentId,

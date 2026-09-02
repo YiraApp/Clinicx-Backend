@@ -3,6 +3,17 @@ import { patientRegistrationService } from "../../services/Organizations/patient
 import { ApiResponse } from "../../utils/response.utils.js";
 
 export class PatientRegistrationController {
+
+    async getNextToken(req: Request, res: Response) {
+        try {
+            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string, 10) : undefined;
+            const result = await patientRegistrationService.getNextTokenNumber(hospitalId);
+            return res.json(ApiResponse.success(result, "Next token generated successfully."));
+        } catch (error: any) {
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
     async register(req: Request, res: Response) {
         try {
             const result = await patientRegistrationService.registerPatient(req.body);

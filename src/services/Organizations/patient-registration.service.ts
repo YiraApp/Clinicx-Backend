@@ -9,6 +9,103 @@ import { userRepository } from "../../repositories/Account/user.repository.js";
 import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
 
 export class PatientRegistrationService {
+
+    async sendPatientRegistrationWhatsApp(user: any, tokenNumber?: string): Promise<void> {
+        try {
+            const { whatsappService } = await import("../Common/whatsapp.service.js");
+            const patientName = `${user.FirstName || ""} ${user.LastName || ""}`.trim() || "Patient";
+            const patientMobile = user.PhoneNumber || "";
+            const memberRef = tokenNumber || user.TokenNumber || "N/A";
+
+            if (!patientMobile) {
+                console.warn("[WhatsApp clinic_reg] Skipping: No phone number for user:", user?.Id);
+                return;
+            }
+
+            let normalizedPhone = patientMobile.replace(/\D/g, "");
+            if (normalizedPhone.length === 10) {
+                normalizedPhone = `91${normalizedPhone}`;
+            }
+
+            const components = [
+                {
+                    type: "body",
+                    parameters: [
+                        { type: "text", text: patientName },
+                        { type: "text", text: patientMobile },
+                        { type: "text", text: memberRef }
+                    ]
+                }
+            ];
+
+            console.log(`[WhatsApp clinic_reg] Sending template 'clinic_reg' to ${normalizedPhone} with params:`, {
+                1: patientName,
+                2: patientMobile,
+                3: memberRef
+            });
+
+            await whatsappService.sendTemplateMessage(normalizedPhone, "clinic_reg", "en", components);
+            console.log(`[WhatsApp clinic_reg] Successfully sent template 'clinic_reg' to ${normalizedPhone}`);
+        } catch (err: any) {
+            console.error(`[WhatsApp clinic_reg] Error sending registration WhatsApp message:`, err?.message || err);
+        }
+    }
+
+
+    async getNextTokenNumber(hospitalId?: number): Promise<{ tokenNumber: string; hospitalId: number; hospitalCode: string }> {
+        const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+        const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+
+        let targetHospId = hospitalId;
+        if (!targetHospId) {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            targetHospId = activeDefault?.HospitalId || 19;
+        }
+
+        const hospital = await hospitalRepository.findById(targetHospId);
+        
+        let prefix = "HOSP";
+        if (hospital) {
+            if (hospital.HospitalCode && hospital.HospitalCode.trim()) {
+                prefix = hospital.HospitalCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+            } else if (hospital.Name && hospital.Name.trim()) {
+                prefix = hospital.Name.trim().split(" ")[0].toUpperCase().replace(/[^A-Z0-9]/g, "");
+            }
+        }
+        if (!prefix || prefix.length < 2) {
+            prefix = `HOSP${targetHospId}`;
+        }
+
+        const year = new Date().getFullYear();
+        const tokenPattern = `${prefix}-${year}-%`;
+
+        const existingTokens = await patientRegistrationRepository.repo.createQueryBuilder("pr")
+            .select("pr.TokenNumber", "token")
+            .where("pr.HospitalId = :targetHospId AND pr.TokenNumber LIKE :tokenPattern", { targetHospId, tokenPattern })
+            .getRawMany();
+
+        let maxSeq = 0;
+        for (const row of existingTokens) {
+            if (row.token) {
+                const parts = row.token.split("-");
+                const seqStr = parts[parts.length - 1];
+                const num = parseInt(seqStr, 10);
+                if (!isNaN(num) && num > maxSeq) {
+                    maxSeq = num;
+                }
+            }
+        }
+
+        const nextSeq = maxSeq + 1;
+        const tokenNumber = `${prefix}-${year}-${String(nextSeq).padStart(4, "0")}`;
+
+        return {
+            tokenNumber,
+            hospitalId: targetHospId,
+            hospitalCode: prefix
+        };
+    }
+
     async registerPatient(data: any): Promise<any> {
         const { userId, organizationId, hospitalId, token, ...patientFields } = data;
 
@@ -47,6 +144,9 @@ export class PatientRegistrationService {
         if (patientFields.medicalHistory !== undefined) registration.MedicalHistory = patientFields.medicalHistory;
         if (patientFields.tokenNumber || (!isGuid && token ? token : undefined)) {
             registration.TokenNumber = patientFields.tokenNumber || (!isGuid && token ? token : undefined);
+        } else if (!registration.TokenNumber) {
+            const nextTokenData = await this.getNextTokenNumber(effectiveHospitalId);
+            registration.TokenNumber = nextTokenData.tokenNumber;
         }
 
         registration.Status = true;
@@ -114,7 +214,19 @@ export class PatientRegistrationService {
             }
         }
 
-        return { message: "Patient details saved successfully." };
+        // Send clinic_reg WhatsApp template in background
+        (async () => {
+            try {
+                const u = await userRepository.findById(userId);
+                if (u) {
+                    await this.sendPatientRegistrationWhatsApp(u, registration.TokenNumber || u.TokenNumber);
+                }
+            } catch (err) {
+                console.error("[WhatsApp clinic_reg] Background trigger error:", err);
+            }
+        })();
+
+        return { message: "Patient details saved successfully.", tokenNumber: registration.TokenNumber };
     }
 
     async getPatients(page: number, pageSize: number, filters: any): Promise<any> {

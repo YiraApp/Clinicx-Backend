@@ -4,6 +4,12 @@ import { upload } from "../../middlewares/upload.middleware.js";
 
 const medicalDocumentRouter = Router();
 
+medicalDocumentRouter.post("/dental-consultation", medicalDocumentController.sendDentalConsultation.bind(medicalDocumentController));
+medicalDocumentRouter.post("/eye-consultation", medicalDocumentController.sendEyeConsultation.bind(medicalDocumentController));
+medicalDocumentRouter.post("/home-sample", medicalDocumentController.scheduleHomeSample.bind(medicalDocumentController));
+medicalDocumentRouter.post("/share-single", medicalDocumentController.shareSingle.bind(medicalDocumentController));
+medicalDocumentRouter.post("/notify-patient", medicalDocumentController.notifyPatient.bind(medicalDocumentController));
+medicalDocumentRouter.get("/notifications/:patientId", medicalDocumentController.getNotifications.bind(medicalDocumentController));
 medicalDocumentRouter.post("/upload", upload.array("files", 10), medicalDocumentController.upload.bind(medicalDocumentController));
 medicalDocumentRouter.get("/patient/:patientId", medicalDocumentController.getByPatient.bind(medicalDocumentController));
 medicalDocumentRouter.delete("/:id", medicalDocumentController.delete.bind(medicalDocumentController));

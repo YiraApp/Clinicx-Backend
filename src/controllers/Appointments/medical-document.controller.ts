@@ -3,6 +3,90 @@ import { medicalDocumentService } from "../../services/Appointments/medical-docu
 import { ApiResponse } from "../../utils/response.utils.js";
 
 export class MedicalDocumentController {
+
+    async sendDentalConsultation(req: Request, res: Response) {
+        try {
+            const { patientId, senderId } = req.body;
+            if (!patientId) {
+                return res.status(400).json(ApiResponse.error("Patient ID is required."));
+            }
+            const result = await medicalDocumentService.sendDentalConsultationWhatsApp(patientId, senderId);
+            return res.json(ApiResponse.success(result, "Dental Consultation WhatsApp notification sent."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] sendDentalConsultation Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+
+    async sendEyeConsultation(req: Request, res: Response) {
+        try {
+            const { patientId, senderId } = req.body;
+            if (!patientId) {
+                return res.status(400).json(ApiResponse.error("Patient ID is required."));
+            }
+            const result = await medicalDocumentService.sendEyeConsultationWhatsApp(patientId, senderId);
+            return res.json(ApiResponse.success(result, "Eye Consultation WhatsApp notification sent."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] sendEyeConsultation Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+
+    async scheduleHomeSample(req: Request, res: Response) {
+        try {
+            const { patientId, date, time, senderId } = req.body;
+            if (!patientId || !date || !time) {
+                return res.status(400).json(ApiResponse.error("Patient ID, Date, and Time are required."));
+            }
+            const result = await medicalDocumentService.scheduleHomeSampleCollection(patientId, date, time, senderId);
+            return res.json(ApiResponse.success(result, "Home Sample Collection scheduled and WhatsApp template sent."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] scheduleHomeSample Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+
+    async shareSingle(req: Request, res: Response) {
+        try {
+            const { documentId, patientId, senderId } = req.body;
+            if (!documentId || !patientId) {
+                return res.status(400).json(ApiResponse.error("Document ID and Patient ID are required."));
+            }
+            const result = await medicalDocumentService.shareSingleDocument(Number(documentId), patientId, senderId);
+            return res.json(ApiResponse.success(result, "Document shared via WhatsApp successfully."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] shareSingle Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+
+    async notifyPatient(req: Request, res: Response) {
+        try {
+            const { patientId, senderId } = req.body;
+            if (!patientId) return res.status(400).json(ApiResponse.error("Patient ID is required."));
+            const result = await medicalDocumentService.notifyPatientMedicalRecord(patientId, senderId);
+            return res.json(ApiResponse.success(result, "WhatsApp notification sent successfully."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] notifyPatient Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async getNotifications(req: Request, res: Response) {
+        try {
+            const { patientId } = req.params;
+            if (!patientId) return res.status(400).json(ApiResponse.error("Patient ID is required."));
+            const result = await medicalDocumentService.getNotificationHistory(patientId);
+            return res.json(ApiResponse.success(result, "Notification history fetched successfully."));
+        } catch (error: any) {
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
     async upload(req: Request, res: Response) {
         try {
             const files = req.files as Express.Multer.File[];

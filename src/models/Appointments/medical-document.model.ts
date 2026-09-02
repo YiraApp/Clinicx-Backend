@@ -114,6 +114,9 @@ export class MedicalDocument {
     @Column({ type: "varchar", length: 100, nullable: true })
     UpdatedBy?: string;
 
+    @Column({ type: "int", default: 0, nullable: true })
+    WhatsAppSentCount?: number;
+
     @Column({ type: "bit", default: false })
     IsDeleted: boolean;
 }
