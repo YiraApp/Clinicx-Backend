@@ -431,9 +431,22 @@ export class PostVisitService {
         const shareLink = await appointmentShareLinkRepository.findByToken(token);
         if (!shareLink) throw new Error("Invalid or expired share link");
 
-        // Return ALL post-visit documents for this appointment
-        // (no ShareLinkId filter — the token itself already secures access to this appointment)
-        return await postVisitDocumentRepository.findByAppointment(Number(shareLink.AppointmentId));
+        // 1. Primary: Return documents specifically linked to this ShareLink
+        const docsByShareLink = await postVisitDocumentRepository.findByShareLink(Number(shareLink.Id));
+        if (docsByShareLink && docsByShareLink.length > 0) {
+            return docsByShareLink;
+        }
+
+        // 2. Fallback for older links: ONLY if AppointmentId > 0 (real appointment, never for 0)
+        if (shareLink.AppointmentId && Number(shareLink.AppointmentId) > 0) {
+            const apptDocs = await postVisitDocumentRepository.findByAppointment(Number(shareLink.AppointmentId));
+            if (shareLink.PatientId) {
+                return apptDocs.filter(d => d.PatientId?.toUpperCase() === shareLink.PatientId.toUpperCase());
+            }
+            return apptDocs;
+        }
+
+        return [];
     }
 
     private getDocumentTypeFromFileName(fileName: string): string {

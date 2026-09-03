@@ -16,6 +16,13 @@ export class PostVisitDocumentRepository {
         });
     }
 
+    async findByShareLink(shareLinkId: number): Promise<PostVisitDocument[]> {
+        return await this.repo.find({
+            where: { ShareLinkId: shareLinkId, IsDeleted: false },
+            order: { CreatedAt: "DESC" }
+        });
+    }
+
     async findOne(criteria: any): Promise<PostVisitDocument | null> {
         return await this.repo.findOne({ where: criteria });
     }
