@@ -78,7 +78,7 @@ export class MedicalDocumentController {
 
     async getNotifications(req: Request, res: Response) {
         try {
-            const { patientId } = req.params;
+            const patientId = (req.params.patientId || req.query.patientId) as string;
             if (!patientId) return res.status(400).json(ApiResponse.error("Patient ID is required."));
             const result = await medicalDocumentService.getNotificationHistory(patientId);
             return res.json(ApiResponse.success(result, "Notification history fetched successfully."));

@@ -254,7 +254,7 @@ export class MedicalDocumentService {
         await postVisitDocumentRepository.create({
             AppointmentId: appointmentId,
             PatientId: patientId,
-            DoctorId: null,
+            DoctorId: doc.DoctorId || undefined,
             OrganizationId: doc.OrganizationId || 1,
             HospitalId: doc.HospitalId || 19,
             DocumentType: doc.DocumentCategory || "Medical Document",
@@ -391,7 +391,7 @@ export class MedicalDocumentService {
 
         return {
             success: true,
-            docCount,
+            docCount: generalCount,
             notification: notif,
             whatsappResult: result
         };

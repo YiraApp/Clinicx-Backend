@@ -82,7 +82,8 @@ export class PatientRegistrationService {
         const tokenPattern = `${prefix}-${year}-%`;
 
         // 1. Query PatientRegistration table across the hospital and year prefix
-        const regTokens = await patientRegistrationRepository.repo.createQueryBuilder("pr")
+        const regRepo = AppDataSource.getRepository(PatientRegistration);
+        const regTokens = await regRepo.createQueryBuilder("pr")
             .select("pr.TokenNumber", "token")
             .where("pr.TokenNumber LIKE :tokenPattern", { tokenPattern })
             .getRawMany();
@@ -235,7 +236,7 @@ export class PatientRegistrationService {
             try {
                 const u = await userRepository.findById(userId);
                 if (u) {
-                    await this.sendPatientRegistrationWhatsApp(u, registration.TokenNumber || u.TokenNumber);
+                    await this.sendPatientRegistrationWhatsApp(u, registration.TokenNumber || u.TokenNumber || undefined);
                 }
             } catch (err) {
                 console.error("[WhatsApp clinic_reg] Background trigger error:", err);
@@ -591,18 +592,9 @@ export class PatientRegistrationService {
         });
         const allFamilyMembers = Array.from(uniqueMembersMap.values());
 
-        // 4. Check hospital/org patient registration for each user (auto-resolving default hospital)
+        // 4. Check hospital/org patient registration strictly for the requested hospital/org
         let effectiveHospId = hospitalId ? Number(hospitalId) : undefined;
         let effectiveOrgId = organizationId ? Number(organizationId) : undefined;
-
-        if (!effectiveHospId) {
-            const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
-            const def = await defaultOrganizationRepository.getActiveDefault();
-            if (def) {
-                effectiveHospId = def.HospitalId;
-                if (!effectiveOrgId) effectiveOrgId = def.OrganizationId;
-            }
-        }
 
         const registeredUserIds = new Set<string>();
         const existingTokensMap = new Map<string, string>();
@@ -684,7 +676,7 @@ export class PatientRegistrationService {
                     gender: u.Gender,
                     dateOfBirth: u.DateOfBirth,
                     relation: u.Relation,
-                    isPrimary: Boolean(u.IsPrimary === true || u.IsPrimary === 1 || (u as any).isPrimary === true || (u as any).isPrimary === 1),
+                    isPrimary: Boolean(u.IsPrimary || (u as any).isPrimary),
                     status: u.Status,
                     bloodGroup: u.BloodGroup,
                     tokenNumber,
