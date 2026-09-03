@@ -246,7 +246,7 @@ export class DashboardRepository {
         };
     }
 
-    async getDashboardSummary(page: number = 1, pageSize: number = 10, orgId?: number, type?: string, search?: string) {
+    async getDashboardSummary(page: number = 1, pageSize: number = 1000, orgId?: number, type?: string, search?: string) {
         const orgRepo = AppDataSource.getRepository(Organization);
         const userRepo = AppDataSource.getRepository(User);
 

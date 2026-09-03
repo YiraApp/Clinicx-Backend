@@ -50,7 +50,7 @@ export class OrganizationController {
     async getAll(req: Request, res: Response) {
         try {
             const page = parseInt((req.query.page || req.query.PageNumber) as string) || 1;
-            const pageSize = parseInt((req.query.pageSize || req.query.limit || req.query.PageSize) as string) || 10;
+            const pageSize = parseInt((req.query.pageSize || req.query.limit || req.query.PageSize) as string) || 1000;
             const orgId = req.query.orgId || req.query.OrgId ? parseInt((req.query.orgId || req.query.OrgId) as string) : undefined;
             const type = req.query.type as string | undefined;
             const search = req.query.search as string | undefined;

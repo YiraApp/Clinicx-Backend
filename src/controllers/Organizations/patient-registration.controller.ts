@@ -31,7 +31,7 @@ export class PatientRegistrationController {
             const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
             const search = req.query.search as string | undefined;
 
-            const result = await patientRegistrationService.getPatients(page, pageSize, {
+            const result = await patientRegistrationService.getOrgHospPatients(page, pageSize, {
                 organizationId,
                 hospitalId,
                 search,

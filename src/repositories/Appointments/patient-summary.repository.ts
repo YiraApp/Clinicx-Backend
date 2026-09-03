@@ -44,10 +44,7 @@ export class PatientSummaryRepository {
 
         let latestVitals = null;
         const latestRecord = await AppDataSource.getRepository(PatientMedicalRecord).findOne({
-            where: [
-                { PatientId: patientId },
-                ...(registration?.Id ? [{ PatientId: registration.Id.toString() }] : [])
-            ],
+            where: { PatientId: patientId },
             order: { CreatedAt: "DESC" }
         });
         if (latestRecord) {

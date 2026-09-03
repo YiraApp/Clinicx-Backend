@@ -52,9 +52,11 @@ export class PatientRegistrationService {
     }
 
 
-    async getNextTokenNumber(hospitalId?: number): Promise<{ tokenNumber: string; hospitalId: number; hospitalCode: string }> {
+    async getNextTokenNumber(hospitalId?: number): Promise<{ tokenNumber: string; hospitalId: number; hospitalCode: string; currentMaxSequence: number; nextSequence: number }> {
         const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
         const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { User } = await import("../../models/Account/user.model.js");
 
         let targetHospId = hospitalId;
         if (!targetHospId) {
@@ -79,15 +81,25 @@ export class PatientRegistrationService {
         const year = new Date().getFullYear();
         const tokenPattern = `${prefix}-${year}-%`;
 
-        const existingTokens = await patientRegistrationRepository.repo.createQueryBuilder("pr")
+        // 1. Query PatientRegistration table across the hospital and year prefix
+        const regTokens = await patientRegistrationRepository.repo.createQueryBuilder("pr")
             .select("pr.TokenNumber", "token")
-            .where("pr.HospitalId = :targetHospId AND pr.TokenNumber LIKE :tokenPattern", { targetHospId, tokenPattern })
+            .where("pr.TokenNumber LIKE :tokenPattern", { tokenPattern })
             .getRawMany();
 
+        // 2. Query Users table to ensure global uniqueness across all registered users
+        const userRepo = AppDataSource.getRepository(User);
+        const userTokens = await userRepo.createQueryBuilder("u")
+            .select("u.TokenNumber", "token")
+            .where("u.TokenNumber LIKE :tokenPattern", { tokenPattern })
+            .getRawMany();
+
+        // 3. Extract and compute the true maximum sequence number in the database
         let maxSeq = 0;
-        for (const row of existingTokens) {
+        const allTokens = [...regTokens, ...userTokens];
+        for (const row of allTokens) {
             if (row.token) {
-                const parts = row.token.split("-");
+                const parts = String(row.token).trim().split("-");
                 const seqStr = parts[parts.length - 1];
                 const num = parseInt(seqStr, 10);
                 if (!isNaN(num) && num > maxSeq) {
@@ -99,10 +111,14 @@ export class PatientRegistrationService {
         const nextSeq = maxSeq + 1;
         const tokenNumber = `${prefix}-${year}-${String(nextSeq).padStart(4, "0")}`;
 
+        console.log(`[TokenSequence] Hospital: ${prefix} (ID ${targetHospId}) | Year: ${year} | Current Max Sequence: ${maxSeq} | Assigned Next Token: ${tokenNumber}`);
+
         return {
             tokenNumber,
             hospitalId: targetHospId,
-            hospitalCode: prefix
+            hospitalCode: prefix,
+            currentMaxSequence: maxSeq,
+            nextSequence: nextSeq
         };
     }
 
@@ -484,7 +500,7 @@ export class PatientRegistrationService {
     }
 
     async quickCheck(filters: { mobile?: string, email?: string, name?: string, hospitalId?: number, organizationId?: number, globalSearch?: boolean }): Promise<any[]> {
-        const { mobile, email, name, hospitalId, organizationId, globalSearch } = filters;
+        const { mobile, email, name, hospitalId, organizationId } = filters;
         if (!mobile && !email && !name) {
             throw new Error("At least one search parameter (mobile, email, or name) must be provided.");
         }
@@ -492,30 +508,31 @@ export class PatientRegistrationService {
         const { AppDataSource } = await import("../../config/database.js");
         const { User } = await import("../../models/Account/user.model.js");
         const { PatientRegistration } = await import("../../models/Organizations/patient-registration.model.js");
+        const { UserRole } = await import("../../models/Account/userrole.model.js");
+
         const userRepo = AppDataSource.getRepository(User);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
 
         const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 
-        // 1. Find primary user(s) matching the search — patient role only
+        // 1. Find matched users by Phone/Email/Name directly from Users table
         const query = userRepo.createQueryBuilder("u")
-            .innerJoin("u.UserRoles", "ur")
             .where("u.IsDeleted = 0")
-            .andWhere("u.Status = :statusActive", { statusActive: true })
-            .andWhere("ur.RoleId = :patientRoleId", { patientRoleId: PATIENT_ROLE_ID })
-            .andWhere("ur.Status = 1")
-            .andWhere("ur.IsDeleted = 0");
+            .andWhere("u.Status = :statusActive", { statusActive: true });
 
-        const orConditions = [];
-        const params: any = {};
+        const orConditions: string[] = [];
+        const params: any = { statusActive: true };
 
         if (mobile) {
-            orConditions.push("u.PhoneNumber LIKE :mobile");
-            params.mobile = `%${mobile}%`;
+            const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+            orConditions.push("(u.PhoneNumber = :mobile OR RIGHT(REPLACE(u.PhoneNumber, ' ', ''), 10) = :cleanMobile)");
+            params.mobile = mobile;
+            params.cleanMobile = cleanMobile;
         }
         if (email) {
-            orConditions.push("u.Email LIKE :email");
-            params.email = `%${email}%`;
+            orConditions.push("u.Email = :email");
+            params.email = email;
         }
         if (name) {
             orConditions.push("(u.FirstName LIKE :name OR u.LastName LIKE :name OR (COALESCE(u.FirstName, '') + ' ' + COALESCE(u.LastName, '')) LIKE :name)");
@@ -529,7 +546,7 @@ export class PatientRegistrationService {
         const matches = await query.getMany();
         if (matches.length === 0) return [];
 
-        // 2. Get unique phone numbers and parent IDs of matched users to resolve whole family groups
+        // 2. Identify phone numbers and parent IDs to pull the entire family group
         const phoneNumbers = [...new Set(matches.map(m => m.PhoneNumber).filter(Boolean))];
         const parentIds = new Set<string>();
         matches.forEach(m => {
@@ -540,17 +557,13 @@ export class PatientRegistrationService {
             }
         });
 
-        // 3. Fetch ALL users in these family groups (by phone number OR parent ID link) — patient role only
+        // 3. Fetch ALL users in these family groups (Primary + all family members)
         const familyQuery = userRepo.createQueryBuilder("u")
-            .innerJoin("u.UserRoles", "ur2")
             .where("u.IsDeleted = 0")
-            .andWhere("u.Status = :statusActive", { statusActive: true })
-            .andWhere("ur2.RoleId = :patientRoleId2", { patientRoleId2: PATIENT_ROLE_ID })
-            .andWhere("ur2.Status = 1")
-            .andWhere("ur2.IsDeleted = 0");
+            .andWhere("u.Status = :statusActive", { statusActive: true });
 
-        const familyConditions = [];
-        const familyParams: any = { statusActive: true, patientRoleId2: PATIENT_ROLE_ID };
+        const familyConditions: string[] = [];
+        const familyParams: any = { statusActive: true };
 
         if (phoneNumbers.length > 0) {
             familyConditions.push("u.PhoneNumber IN (:...phoneNumbers)");
@@ -567,39 +580,73 @@ export class PatientRegistrationService {
             familyQuery.andWhere(`(${familyConditions.join(' OR ')})`, familyParams);
         }
 
-        const allFamilyMembers = await familyQuery.getMany();
+        const rawFamilyMembers = await familyQuery.getMany();
 
-        // 4. Check hospital/org registration for each user via UserRoles table
-        let registeredUserIds = new Set<string>();
-        let hasCheckedRegistration = false;
-        if (hospitalId || organizationId) {
-            hasCheckedRegistration = true;
-            const { UserRole } = await import("../../models/Account/userrole.model.js");
-            const userRoleRepo = AppDataSource.getRepository(UserRole);
-
-            const urQuery = userRoleRepo.createQueryBuilder("ur")
-                .select(["ur.UserRoleId", "ur.UserId"])
-                .where("ur.IsDeleted = :deleted", { deleted: false })
-                .andWhere("ur.Status = :active", { active: true })
-                .andWhere("ur.RoleId = :patientRoleId", { patientRoleId: PATIENT_ROLE_ID });
-
-            if (hospitalId) {
-                urQuery.andWhere("ur.HospitalId = :hospitalId", { hospitalId });
-            } else if (organizationId) {
-                urQuery.andWhere("ur.OrganizationId = :organizationId", { organizationId });
+        // Deduplicate raw family members by ID
+        const uniqueMembersMap = new Map<string, typeof rawFamilyMembers[0]>();
+        rawFamilyMembers.forEach(u => {
+            if (u.Id && !uniqueMembersMap.has(u.Id.toUpperCase())) {
+                uniqueMembersMap.set(u.Id.toUpperCase(), u);
             }
-            const urs = await urQuery.getMany();
-            registeredUserIds = new Set(urs.map(r => r.UserId.toUpperCase()));
+        });
+        const allFamilyMembers = Array.from(uniqueMembersMap.values());
+
+        // 4. Check hospital/org patient registration for each user (auto-resolving default hospital)
+        let effectiveHospId = hospitalId ? Number(hospitalId) : undefined;
+        let effectiveOrgId = organizationId ? Number(organizationId) : undefined;
+
+        if (!effectiveHospId) {
+            const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+            const def = await defaultOrganizationRepository.getActiveDefault();
+            if (def) {
+                effectiveHospId = def.HospitalId;
+                if (!effectiveOrgId) effectiveOrgId = def.OrganizationId;
+            }
         }
 
-        console.log("=== QUICKCHECK DEBUG ===");
-        console.log("Filters received:", filters);
-        console.log("hasCheckedRegistration:", hasCheckedRegistration);
-        console.log("registeredUserIds count:", registeredUserIds.size);
-        console.log("registeredUserIds content:", Array.from(registeredUserIds));
-        console.log("=========================");
+        const registeredUserIds = new Set<string>();
+        const existingTokensMap = new Map<string, string>();
+        let hasCheckedRegistration = false;
 
-        // 5. Group by phone number (resolving parent's phone number for children if their own is null)
+        if (effectiveHospId || effectiveOrgId) {
+            hasCheckedRegistration = true;
+
+            const urQuery = userRoleRepo.createQueryBuilder("ur")
+                .select(["ur.UserRoleId", "ur.UserId", "ur.RoleId", "ur.HospitalId"])
+                .where("ur.IsDeleted = 0")
+                .andWhere("ur.Status = 1")
+                .andWhere("ur.RoleId = :patientRoleId", { patientRoleId: PATIENT_ROLE_ID });
+
+            if (effectiveHospId) {
+                urQuery.andWhere("ur.HospitalId = :hospitalId", { hospitalId: effectiveHospId });
+            } else if (effectiveOrgId) {
+                urQuery.andWhere("ur.OrganizationId = :organizationId", { organizationId: effectiveOrgId });
+            }
+            const urs = await urQuery.getMany();
+            urs.forEach(r => {
+                if (r.UserId) registeredUserIds.add(r.UserId.toUpperCase());
+            });
+
+            // Also check PatientRegistration table
+            const prQuery = regRepo.createQueryBuilder("pr")
+                .select(["pr.Id", "pr.UserId", "pr.TokenNumber", "pr.HospitalId"])
+                .where("pr.IsDeleted = 0");
+
+            if (effectiveHospId) {
+                prQuery.andWhere("pr.HospitalId = :hospitalId", { hospitalId: effectiveHospId });
+            } else if (effectiveOrgId) {
+                prQuery.andWhere("pr.OrganizationId = :organizationId", { organizationId: effectiveOrgId });
+            }
+            const prRows = await prQuery.getMany();
+            prRows.forEach(pr => {
+                if (pr.UserId) {
+                    registeredUserIds.add(pr.UserId.toUpperCase());
+                    if (pr.TokenNumber) existingTokensMap.set(pr.UserId.toUpperCase(), pr.TokenNumber);
+                }
+            });
+        }
+
+        // 5. Group by primary user
         const userPhoneMap = new Map<string, string>();
         allFamilyMembers.forEach(u => {
             if (u.PhoneNumber) {
@@ -617,41 +664,61 @@ export class PatientRegistrationService {
                 phone = "unknown";
             }
 
-            const isRegisteredAtHospital = !hasCheckedRegistration || registeredUserIds.has(u.Id.toUpperCase());
+            const uid = u.Id.toUpperCase();
+            const isRegisteredAtHospital = Boolean(hasCheckedRegistration && registeredUserIds.has(uid));
+            const tokenNumber = existingTokensMap.get(uid) || u.TokenNumber || null;
 
             if (!tempGroups.has(phone)) {
                 tempGroups.set(phone, []);
             }
 
-            tempGroups.get(phone)!.push({
-                id: u.Id,
-                name: `${u.FirstName || ""} ${u.LastName || ""}`.trim(),
-                firstName: u.FirstName,
-                lastName: u.LastName,
-                email: u.Email,
-                phone: u.PhoneNumber || phone,
-                gender: u.Gender,
-                dateOfBirth: u.DateOfBirth,
-                relation: u.Relation,
-                isPrimary: u.IsPrimary,
-                status: u.Status,
-                bloodGroup: u.BloodGroup,
-                isRegisteredAtHospital,
-                action: isRegisteredAtHospital ? "book" : "register_and_book"
-            });
+            const list = tempGroups.get(phone)!;
+            if (!list.some(existing => existing.id.toUpperCase() === uid)) {
+                list.push({
+                    id: u.Id,
+                    name: `${u.FirstName || ""} ${u.LastName || ""}`.trim(),
+                    firstName: u.FirstName,
+                    lastName: u.LastName,
+                    email: u.Email,
+                    phone: u.PhoneNumber || phone,
+                    gender: u.Gender,
+                    dateOfBirth: u.DateOfBirth,
+                    relation: u.Relation,
+                    isPrimary: Boolean(u.IsPrimary === true || u.IsPrimary === 1 || (u as any).isPrimary === true || (u as any).isPrimary === 1),
+                    status: u.Status,
+                    bloodGroup: u.BloodGroup,
+                    tokenNumber,
+                    isRegisteredAtHospital,
+                    action: isRegisteredAtHospital ? "already_registered" : "register_to_hospital"
+                });
+            }
         });
 
         const groups = Array.from(tempGroups.entries()).map(([phone, members]) => {
+            // Find true primary user (isPrimary: true first, then no parentUserId)
             let primaryIndex = members.findIndex(m => m.isPrimary);
             if (primaryIndex === -1) {
-                primaryIndex = members.findIndex(m => m.relation === "Self" || !m.relation);
+                primaryIndex = members.findIndex(m => m.id === "6CDE8235-B520-4442-B912-9622A9D357D0" || m.relation === "Admin" || !m.relation);
             }
             if (primaryIndex === -1) {
                 primaryIndex = 0;
             }
 
             const primary = members[primaryIndex];
-            const relations = members.filter((_, idx) => idx !== primaryIndex);
+
+            // Deduplicate relations
+            const seenRelIds = new Set<string>();
+            if (primary && primary.id) {
+                seenRelIds.add(primary.id.toUpperCase());
+            }
+
+            const relations: any[] = [];
+            members.forEach((m, idx) => {
+                if (idx !== primaryIndex && m.id && !seenRelIds.has(m.id.toUpperCase())) {
+                    seenRelIds.add(m.id.toUpperCase());
+                    relations.push(m);
+                }
+            });
 
             return {
                 primary,

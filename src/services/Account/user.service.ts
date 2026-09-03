@@ -199,13 +199,35 @@ export class UserService implements IUserService {
         let user: User | null = null;
 
         // 1. Find or Create User
+        const isSecondaryRelation = Boolean(data.ParentUserId) || 
+                                    (Boolean(data.Relation) && data.Relation !== "Admin" && data.Relation !== "Self" && data.Relation !== "Primary") ||
+                                    (data as any).IsPrimary === false;
+
         if (data.Id) {
             user = await userRepository.findById(data.Id);
             if (!user) {
                 throw new Error("User with provided ID not found.");
             }
+        } else if (isSecondaryRelation) {
+            // For a family member/relation, ALWAYS create a brand new user under the primary user account
+            // NEVER reuse or overwrite the primary user!
+            const createResult = await this.createUser({
+                FirstName: data.FirstName,
+                LastName: data.LastName,
+                Email: data.Email,
+                Password: data.Password,
+                PhoneNumber: data.PhoneNumber,
+                Gender: data.Gender,
+                CountryCode: data.CountryCode,
+                DateOfBirth: data.DateOfBirth,
+                BloodGroup: data.BloodGroup,
+                Relation: data.Relation || "Other",
+                ParentUserId: data.ParentUserId,
+                IsPrimary: false
+            } as any, true);
+            user = await userRepository.findById(createResult.Id);
         } else {
-            // Check if primary account already exists for this phone number or email before creating a new account
+            // Primary account creation or update
             if (data.PhoneNumber) {
                 user = await userRepository.findPrimaryByPhone(data.PhoneNumber);
             }
@@ -224,8 +246,9 @@ export class UserService implements IUserService {
                     CountryCode: data.CountryCode,
                     DateOfBirth: data.DateOfBirth,
                     BloodGroup: data.BloodGroup,
-                    Relation: data.Relation || "Admin"
-                }, true);
+                    Relation: data.Relation || "Admin",
+                    IsPrimary: true
+                } as any, true);
                 user = await userRepository.findById(createResult.Id);
             }
         }

@@ -93,7 +93,7 @@ export class UserRepository implements IUserRepository {
     }
 
     async getOrgUsers(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
-        const organizationId = filters.organizationId;
+        const organizationId = Number(filters.organizationId);
         if (!organizationId) {
             throw new Error("Organization ID is required for getOrgUsers");
         }
@@ -165,11 +165,11 @@ export class UserRepository implements IUserRepository {
             let contextRole: any = null;
 
             u.UserRoles?.forEach(ur => {
-                if (!ur.Role || ur.OrganizationId !== organizationId) return;
+                if (!ur.Role || Number(ur.OrganizationId) !== Number(organizationId)) return;
 
                 // Capture the role record matching the filters (hospitalId if filters.hospitalId is set, else org-wide)
                 if (filters.hospitalId) {
-                    if (ur.HospitalId === filters.hospitalId) {
+                    if (Number(ur.HospitalId) === Number(filters.hospitalId)) {
                         contextRole = ur;
                     }
                 } else {
