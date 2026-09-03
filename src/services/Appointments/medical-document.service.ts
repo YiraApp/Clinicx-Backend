@@ -238,7 +238,7 @@ export class MedicalDocumentService {
 
         const appointmentId = doc.AppointmentId || 0;
 
-        await appointmentShareLinkRepository.create({
+        const createdShareLink = await appointmentShareLinkRepository.create({
             AppointmentId: appointmentId,
             PatientId: patientId,
             OrganizationId: doc.OrganizationId || 1,
@@ -267,6 +267,7 @@ export class MedicalDocumentService {
             WhatsAppSentAt: new Date(),
             WhatsAppSentTo: normalizedPhone,
             WhatsAppSentCount: 1,
+            ShareLinkId: createdShareLink.Id,
             Status: "ACTIVE"
         });
 
