@@ -17,4 +17,5 @@ async function updateTemplates() {
         console.error(error);
     }
 }
+
 updateTemplates();
