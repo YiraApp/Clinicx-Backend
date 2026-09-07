@@ -84,4 +84,5 @@ export class HospitalSetting {
 
     @Column({ type: "int", nullable: true })
     UpdatedBy?: number | null;
+
 }
