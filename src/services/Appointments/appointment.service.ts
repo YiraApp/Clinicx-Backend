@@ -96,6 +96,8 @@ export class AppointmentService {
             const providedEmail = (data.patientEmail || (data as any).email || "").trim();
             targetUser.Email = providedEmail.length > 0 ? providedEmail : "";
             targetUser.PhoneNumber = cleanPhone;
+            targetUser.Gender = data.gender || null;
+            targetUser.DateOfBirth = data.dob || null;
             targetUser.Status = true;
             targetUser.IsDeleted = false;
             await userRepo.save(targetUser);
@@ -105,54 +107,66 @@ export class AppointmentService {
             const primaryUser = (parentId ? existingFamilyUsers.find(u => u.Id.toLowerCase() === String(parentId).toLowerCase()) : null) || existingFamilyUsers.find(u => u.IsPrimary) || existingFamilyUsers[0]!;
             const reqName = (data.patientName || "").trim().toLowerCase();
             const reqEmail = (data.patientEmail || "").trim().toLowerCase();
+            const reqRelation = ((data as any).relation || "").trim().toLowerCase();
+            const isBookingForDependent = Boolean(parentId || (reqRelation && reqRelation !== "self"));
 
-            // Match by UserId
+            // Match by explicit UserId
             if (data.userId) {
-                targetUser = existingFamilyUsers.find(u => u.Id.toLowerCase() === data.userId!.toLowerCase()) || null;
-                if (!targetUser) {
+                const candidate = existingFamilyUsers.find(u => u.Id.toLowerCase() === data.userId!.toLowerCase()) || null;
+                if (candidate) {
+                    if (isBookingForDependent && candidate.IsPrimary) {
+                        // User passed primary user ID while booking for dependent child -> ignore so dependent is created/resolved
+                    } else {
+                        targetUser = candidate;
+                    }
+                } else if (!isBookingForDependent) {
                     targetUser = await userRepo.findOne({ where: { Id: data.userId, IsDeleted: false } });
                 }
             }
 
-            // Match by Full Name
+            // Match by Full Name among family members
             if (!targetUser && reqName) {
                 targetUser = existingFamilyUsers.find(u => {
                     const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim().toLowerCase();
-                    return fullName === reqName || u.FirstName?.toLowerCase() === reqName;
+                    if (isBookingForDependent) {
+                        // When booking for dependent, do not match primary user
+                        if (u.IsPrimary) return false;
+                        return fullName === reqName;
+                    }
+                    return fullName === reqName;
                 }) || null;
             }
 
             // Match by Email
             if (!targetUser && reqEmail) {
-                targetUser = existingFamilyUsers.find(u => u.Email?.toLowerCase() === reqEmail) || null;
-            }
-
-            // Match by Relation (e.g., Spouse, Child, Father, Mother, Brother, Sister)
-            const reqRelation = ((data as any).relation || "").trim().toLowerCase();
-            if (!targetUser && reqRelation && reqRelation !== "self") {
-                targetUser = existingFamilyUsers.find(u => u.Relation?.toLowerCase() === reqRelation) || null;
+                targetUser = existingFamilyUsers.find(u => {
+                    if (isBookingForDependent && u.IsPrimary) return false;
+                    return u.Email && u.Email.toLowerCase() === reqEmail;
+                }) || null;
             }
 
             // If no exact match among existing family members:
             if (!targetUser) {
                 const primaryFullName = `${primaryUser.FirstName || ''} ${primaryUser.LastName || ''}`.trim().toLowerCase();
-                if (!reqName || reqName === primaryFullName || primaryUser.FirstName?.toLowerCase() === reqName) {
+                if (!isBookingForDependent && (!reqName || reqName === primaryFullName || primaryUser.FirstName?.toLowerCase() === reqName)) {
                     targetUser = primaryUser;
                 } else {
-                    // Create a Dependent / Secondary User linked to the Primary User (Do NOT duplicate primary user!)
+                    // Create a New User linked to the Primary User (Do NOT duplicate primary user!)
                     isNewRegistration = true;
                     targetUser = new User();
                     targetUser.Id = uuidv4();
                     targetUser.IsPrimary = false;
                     targetUser.ParentUserId = parentId || primaryUser.Id;
-                    targetUser.Relation = (data as any).relation || "Dependent";
+                    targetUser.Relation = (data as any).relation || "Family Member";
 
-                    const nameParts = reqName.split(" ");
-                    targetUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Family";
-                    targetUser.LastName = nameParts.slice(1).join(" ") || "Member";
+                    const nameParts = (data.patientName || "").trim().split(" ");
+                    targetUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "New User";
+                    targetUser.LastName = nameParts.slice(1).join(" ") || "";
                     const depProvidedEmail = (data.patientEmail || (data as any).email || "").trim();
                     targetUser.Email = depProvidedEmail.length > 0 ? depProvidedEmail : "";
                     targetUser.PhoneNumber = cleanPhone;
+                    targetUser.Gender = data.gender || null;
+                    targetUser.DateOfBirth = data.dob || null;
                     targetUser.Status = true;
                     targetUser.IsDeleted = false;
                     await userRepo.save(targetUser);
@@ -201,7 +215,7 @@ export class AppointmentService {
         if (!existingRoleMapping) {
             const roleRepo = AppDataSource.getRepository(Role);
             const patientRole = await roleRepo.findOne({ where: { RoleName: "Patient" } });
-            const roleId = patientRole ? patientRole.Id : "00000000-0000-0000-0000-000000000000";
+            const roleId = patientRole ? patientRole.Id : "4FC67429-28AE-4106-93EF-436228282ED0";
 
             const userRole = new UserRole();
             userRole.UserId = targetUser.Id;

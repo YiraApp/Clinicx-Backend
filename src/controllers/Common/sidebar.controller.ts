@@ -95,11 +95,13 @@ export const assignSidebarPermissions = async (req: Request, res: Response) => {
 export const createMenu = async (req: Request, res: Response) => {
     try {
         const { platform, ...menuData } = req.body;
-        const isMobile = platform === "mobile" || 
-                         req.query.platform === "mobile" || 
-                         menuData.TaskCode !== undefined || 
-                         menuData.TaskId !== undefined || 
-                         menuData.UseImage !== undefined;
+        const requestedPlatform = (platform || req.query.platform || "").toString().toLowerCase();
+        const isMobile = requestedPlatform === "mobile" || 
+                         (requestedPlatform !== "web" && (
+                             Boolean(menuData.TaskCode) || 
+                             Boolean(menuData.TaskId) || 
+                             menuData.UseImage === true
+                         ));
         let menu;
         if (isMobile) {
             menu = await sidebarService.createMobileMenu(menuData);
@@ -119,11 +121,13 @@ export const updateMenu = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { platform, ...menuData } = req.body;
-        const isMobile = platform === "mobile" || 
-                         req.query.platform === "mobile" || 
-                         menuData.TaskCode !== undefined || 
-                         menuData.TaskId !== undefined || 
-                         menuData.UseImage !== undefined;
+        const requestedPlatform = (platform || req.query.platform || "").toString().toLowerCase();
+        const isMobile = requestedPlatform === "mobile" || 
+                         (requestedPlatform !== "web" && (
+                             Boolean(menuData.TaskCode) || 
+                             Boolean(menuData.TaskId) || 
+                             menuData.UseImage === true
+                         ));
         let menu;
         if (isMobile) {
             menu = await sidebarService.updateMobileMenu(parseInt(id as string), menuData);

@@ -457,8 +457,40 @@ export class PaymentService {
     }) {
         const { data, total, totalCollected, totalPending } = await appointmentBillRepository.getBillsList(filters);
 
-        const formatted = data.map(b => {
+        const { Payment } = await import("../../models/Payments/payment.model.js");
+        const payRepo = AppDataSource.getRepository(Payment);
+
+        const formatted = await Promise.all(data.map(async (b) => {
             const provider = b.Provider || b.Appointment?.Doctor;
+
+            // Find latest payment record linked to this bill or appointment
+            let paymentMethod: string | null = null;
+            let paymentGateway: string | null = null;
+            let transactionId: string | null = null;
+
+            try {
+                const payRecords = await payRepo.find({
+                    where: [
+                        { AppointmentBillId: b.AppointmentBillId },
+                        ...(b.AppointmentId ? [{ AppointmentId: b.AppointmentId }] : [])
+                    ],
+                    order: { CreatedAt: "DESC" }
+                });
+
+                const successPay = payRecords.find(p => p.Status === "Success") || payRecords[0];
+                if (successPay) {
+                    paymentMethod = successPay.PaymentMethod || successPay.PaymentGateway || (Number(b.PaidAmount) > 0 ? "Cash" : null);
+                    paymentGateway = successPay.PaymentGateway || null;
+                    transactionId = successPay.TransactionId || null;
+                }
+            } catch {
+                // ignore
+            }
+
+            if (!paymentMethod && Number(b.PaidAmount) > 0) {
+                paymentMethod = "Cash";
+            }
+
             return {
                 billId: b.AppointmentBillId,
                 billNumber: b.BillNumber,
@@ -483,6 +515,9 @@ export class PaymentService {
                 providerName: provider ? `Dr. ${provider.FirstName} ${provider.LastName}` : "—",
                 notes: b.Notes || "",
                 appointmentChain: (b as any).appointmentChain || [],
+                paymentMethod: paymentMethod || (Number(b.PaidAmount) > 0 ? "Cash" : null),
+                paymentGateway: paymentGateway || (paymentMethod === "Razorpay" ? "Razorpay" : null),
+                transactionId: transactionId || null,
                 items: (b.BillItems || []).map(i => ({
                     itemName: i.ItemName,
                     itemType: i.ItemType,
@@ -493,7 +528,7 @@ export class PaymentService {
                     appointmentId: i.AppointmentId || null
                 }))
             };
-        });
+        }));
 
         return {
             data: formatted,

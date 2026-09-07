@@ -66,6 +66,8 @@ import { AppNotification } from "../models/Common/app-notification.model.js";
 import { DoctorSuggestion } from "../models/Appointments/doctor-suggestion.model.js";
 
 import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
+import { HospitalSetting } from "../models/Organizations/hospital-settings.model.js";
+import { HospitalSettingsHistory } from "../models/Organizations/hospital-settings-history.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -113,7 +115,9 @@ export const AppDataSource = new DataSource({
         UserDevice,
         AppVersion,
         AppNotification,
-        DoctorSuggestion
+        DoctorSuggestion,
+        HospitalSetting,
+        HospitalSettingsHistory
     ],
     extra: {
         encrypt: true,
@@ -267,7 +271,22 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions and core tables");
+        // Ensure ConsultationFeeForPackages column exists on HospitalSettings table
+        await AppDataSource.query(`
+            IF EXISTS (SELECT * FROM sys.tables WHERE name = 'HospitalSettings')
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns 
+                    WHERE object_id = OBJECT_ID(N'[dbo].[HospitalSettings]') 
+                      AND name = 'ConsultationFeeForPackages'
+                )
+                BEGIN
+                    ALTER TABLE [dbo].[HospitalSettings] ADD [ConsultationFeeForPackages] bit NOT NULL DEFAULT 0;
+                END
+            END
+        `);
+
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

@@ -19,6 +19,10 @@ const startServer = async () => {
         const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
         appointmentReminderService.startScheduler(60);
 
+        // Start automated background slot generator scheduler (syncs rolling slots for active hospitals)
+        const { hospitalSettingsService } = await import("./services/Organizations/hospital-settings.service.js");
+        hospitalSettingsService.startDailySlotScheduler(6);
+
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });
