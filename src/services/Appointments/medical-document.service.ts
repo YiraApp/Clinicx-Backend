@@ -133,6 +133,81 @@ export class MedicalDocumentService {
     }
 
 
+    async sendAppointmentBookingTemplate(patientId: string, hospitalId?: number, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+        const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        // Resolve hospital name
+        let hospitalName = "Yira Hospitals";
+        let targetHospId = hospitalId;
+        if (targetHospId) {
+            const hosp = await hospitalRepository.findById(targetHospId);
+            if (hosp?.Name) hospitalName = hosp.Name;
+        } else {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault?.HospitalName) hospitalName = activeDefault.HospitalName;
+            if (activeDefault?.HospitalId) targetHospId = activeDefault.HospitalId;
+        }
+
+        // Template 'yira_appointment_book' expects 2 body parameters:
+        // {{1}} - Patient Name
+        // {{2}} - Hospital Name
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName },
+                    { type: "text", text: hospitalName }
+                ]
+            }
+        ];
+
+        console.log(`[MedicalDocumentService] Sending WhatsApp 'yira_appointment_book' to ${normalizedPhone} for ${patientName} (${hospitalName})`);
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "yira_appointment_book", "en", components);
+
+        // Record in AppNotification
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "Appointment Booking Link Sent";
+        notif.Body = `Appointment booking template ('yira_appointment_book') sent to ${normalizedPhone} for ${hospitalName}`;
+        notif.Type = "WHATSAPP_APPOINTMENT_BOOK";
+        notif.ReferenceId = patientId;
+        notif.Route = targetHospId ? `/book-appointment?hospitalId=${targetHospId}` : "/book-appointment";
+        notif.IsRead = false;
+        await notifRepo.save(notif);
+
+        const apptBookCount = await notifRepo.count({
+            where: { UserId: patientId, Type: "WHATSAPP_APPOINTMENT_BOOK" }
+        });
+
+        return {
+            success: true,
+            apptBookCount,
+            whatsappResult: result,
+            notification: notif
+        };
+    }
+
+
     async scheduleHomeSampleCollection(patientId: string, date: string, time: string, senderId?: string): Promise<any> {
         const { userRepository } = await import("../../repositories/Account/user.repository.js");
         const { whatsappService } = await import("../Common/whatsapp.service.js");
@@ -407,7 +482,7 @@ export class MedicalDocumentService {
         const history = await notifRepo.find({
             where: { 
                 UserId: patientId, 
-                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION"]) 
+                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION", "WHATSAPP_APPOINTMENT_BOOK"]) 
             },
             order: { CreatedAt: "DESC" },
             take: 100
@@ -418,6 +493,7 @@ export class MedicalDocumentService {
         const homeSampleCount = history.filter(h => h.Type === "WHATSAPP_HOME_SAMPLE").length;
         const eyeConsultationCount = history.filter(h => h.Type === "WHATSAPP_EYE_CONSULTATION").length;
         const dentalConsultationCount = history.filter(h => h.Type === "WHATSAPP_DENTAL_CONSULTATION").length;
+        const appointmentBookCount = history.filter(h => h.Type === "WHATSAPP_APPOINTMENT_BOOK").length;
 
         return {
             generalCount,
@@ -425,6 +501,7 @@ export class MedicalDocumentService {
             homeSampleCount,
             eyeConsultationCount,
             dentalConsultationCount,
+            appointmentBookCount,
             count: history.length,
             history
         };

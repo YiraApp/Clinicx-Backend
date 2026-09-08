@@ -185,7 +185,11 @@ export class AppointmentService {
             } else if (targetUser.Email && targetUser.Email.includes("@yira.ai")) {
                 targetUser.Email = "";
             }
-            await userRepo.save(targetUser);
+            await userRepo.update(targetUser.Id, {
+                FirstName: targetUser.FirstName,
+                LastName: targetUser.LastName,
+                Email: targetUser.Email
+            });
         }
 
         // Send Welcome Credentials Email for new registrations
@@ -207,12 +211,16 @@ export class AppointmentService {
         // 3. Ensure Organization & Hospital Assignment in UserRoles & PatientRegistrations
         const userRoleRepo = AppDataSource.getRepository(UserRole);
         const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+        const { patientRegistrationService } = await import("../Organizations/patient-registration.service.js");
+
+        let isNewHospitalMapping = false;
 
         const existingRoleMapping = await userRoleRepo.findOne({
             where: { UserId: targetUser.Id, OrganizationId: data.orgId, HospitalId: data.hospitalId, IsDeleted: false }
         });
 
         if (!existingRoleMapping) {
+            isNewHospitalMapping = true;
             const roleRepo = AppDataSource.getRepository(Role);
             const patientRole = await roleRepo.findOne({ where: { RoleName: "Patient" } });
             const roleId = patientRole ? patientRole.Id : "4FC67429-28AE-4106-93EF-436228282ED0";
@@ -227,18 +235,52 @@ export class AppointmentService {
             await userRoleRepo.save(userRole);
         }
 
-        const existingPatientReg = await patientRegRepo.findOne({
+        let existingPatientReg = await patientRegRepo.findOne({
             where: { UserId: targetUser.Id, OrganizationId: data.orgId, HospitalId: data.hospitalId }
         });
 
+        // Resolve or generate TokenNumber for the hospital (same sequence as regular registration)
+        let assignedToken = existingPatientReg?.TokenNumber || null;
+        if (!assignedToken) {
+            try {
+                const tokenData = await patientRegistrationService.getNextTokenNumber(data.hospitalId);
+                assignedToken = tokenData.tokenNumber;
+                console.log(`[Pulse Booking] Generated token sequence ${assignedToken} for User ${targetUser.Id} at Hospital ${data.hospitalId}`);
+            } catch (tokenErr) {
+                console.error("[Pulse Booking] Error generating token number:", tokenErr);
+                assignedToken = `HOSP${data.hospitalId}-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+        }
+
         if (!existingPatientReg) {
+            isNewHospitalMapping = true;
             const patientReg = new PatientRegistration();
             patientReg.UserId = targetUser.Id;
             patientReg.OrganizationId = data.orgId;
             patientReg.HospitalId = data.hospitalId;
+            patientReg.TokenNumber = assignedToken;
             patientReg.Status = true;
             patientReg.IsDeleted = false;
             await patientRegRepo.save(patientReg);
+        } else if (!existingPatientReg.TokenNumber && assignedToken) {
+            existingPatientReg.TokenNumber = assignedToken;
+            await patientRegRepo.update(existingPatientReg.Id, { TokenNumber: assignedToken });
+        }
+
+        // Keep User.TokenNumber updated
+        if (assignedToken && targetUser.TokenNumber !== assignedToken) {
+            targetUser.TokenNumber = assignedToken;
+            await userRepo.update(targetUser.Id, { TokenNumber: assignedToken });
+        }
+
+        // Trigger Patient Registration WhatsApp template ('clinic_reg') when newly registered or newly mapped to hospital
+        if (isNewRegistration || isNewHospitalMapping) {
+            try {
+                console.log(`[Pulse Booking] Triggering clinic_reg WhatsApp template for ${targetUser.PhoneNumber} with token ${assignedToken}`);
+                await patientRegistrationService.sendPatientRegistrationWhatsApp(targetUser, assignedToken || undefined);
+            } catch (regErr: any) {
+                console.error("[Pulse Booking] Error sending clinic_reg WhatsApp message:", regErr?.message || regErr);
+            }
         }
 
         // 4. Book Appointment for the resolved Patient (Primary or Dependent)
@@ -365,6 +407,11 @@ export class AppointmentService {
             }
         }
 
+        if (appointment) {
+            (appointment as any).tokenNumber = assignedToken;
+            (appointment as any).appointmentNumber = appointment.AppointmentNumber;
+        }
+
         return {
             patient: {
                 userId: targetUser.Id,
@@ -373,12 +420,15 @@ export class AppointmentService {
                 email: targetUser.Email,
                 relation: targetUser.Relation || (targetUser.IsPrimary ? "Self" : "Dependent"),
                 isPrimary: targetUser.IsPrimary ?? false,
+                tokenNumber: assignedToken,
                 organizationId: data.orgId,
                 hospitalId: data.hospitalId,
                 isNewRegistration,
                 isHospitalMapped: true
             },
             appointment,
+            tokenNumber: assignedToken,
+            appointmentNumber: appointment?.AppointmentNumber || null,
             dynamicLink: (appointment as any)?.dynamicLink || null,
             videoCallUrl: (appointment as any)?.videoCallUrl || appointment?.MeetingUrl || null,
             redirectionUrlId: (appointment as any)?.redirectionUrlId || null
@@ -610,8 +660,15 @@ export class AppointmentService {
         // Async task: send WhatsApp confirmation with dynamic video call link
         try {
             const enrichedAppointment = await appointmentRepository.findById(newAppointment.Id);
-            if (enrichedAppointment && enrichedAppointment.User?.PhoneNumber) {
-                const appt = enrichedAppointment;
+            const appt = enrichedAppointment || newAppointment;
+            let apptUser: any = appt.User;
+            if (!apptUser || !apptUser.PhoneNumber) {
+                const { User } = await import("../../models/Account/user.model.js");
+                apptUser = await AppDataSource.getRepository(User).findOne({ where: { Id: appt.UserId } });
+                if (apptUser) (appt as any).User = apptUser;
+            }
+
+            if (apptUser && apptUser.PhoneNumber) {
                 const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
 
@@ -629,18 +686,45 @@ export class AppointmentService {
                 // Format details for WhatsApp
                 const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
 
-                const doctorName = appt.Doctor 
+                let doctorName = appt.Doctor 
                     ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
-                    : "N/A";
-                const hospitalName = appt.Hospital?.Name || "our clinic";
+                    : "";
+
+                if (!doctorName || doctorName === "N/A") {
+                    try {
+                        const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+                        const hp = await AppDataSource.getRepository(HealthcareProvider).findOne({
+                            where: [{ UserId: appt.DoctorId }, { Id: Number(appt.DoctorId) || 0 }],
+                            relations: ["User"]
+                        });
+                        if (hp && hp.User) {
+                            doctorName = `${hp.User.FirstName || ""} ${hp.User.LastName || ""}`.trim();
+                        } else if (hp && (hp as any).Name) {
+                            doctorName = (hp as any).Name;
+                        }
+                    } catch {
+                        // ignore
+                    }
+                }
+
+                if (!doctorName) doctorName = "Doctor";
+                if (!doctorName.toLowerCase().startsWith("dr.")) {
+                    doctorName = `Dr. ${doctorName}`;
+                }
+
+                const hospitalName = appt.Hospital?.Name || "Yira Hospitals";
 
                 const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
                     day: "2-digit", month: "short", year: "numeric"
                 });
-                const timeStr = appt.StartTime ? appt.StartTime.slice(0, 5) : "";
+                const timeStr = appt.StartTime ? String(appt.StartTime).slice(0, 5) : "";
 
-                const countryCode = appt.User?.CountryCode || "91";
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${(appt.User?.PhoneNumber || "").replace(/\D/g, "")}`;
+                // SAFE phone normalization: extract last 10 digits and prefix 91
+                let rawDigits = (appt.User?.PhoneNumber || "").replace(/\D/g, "");
+                if (rawDigits.length >= 10) {
+                    rawDigits = rawDigits.slice(-10);
+                }
+                const normalizedPhone = `91${rawDigits}`;
 
                 // Select template based on consultation type
                 const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
@@ -651,38 +735,36 @@ export class AppointmentService {
                         parameters: [
                             { type: "text", text: hospitalName }
                         ]
+                    },
+                    {
+                        type: "body",
+                        parameters: [
+                            { type: "text", text: patientName },
+                            { type: "text", text: doctorName },
+                            { type: "text", text: hospitalName },
+                            { type: "text", text: dateStr },
+                            { type: "text", text: timeStr }
+                        ]
                     }
                 ];
 
-                const bodyParameters = [
-                    { type: "text", text: patientName },
-                    { type: "text", text: doctorName },
-                    { type: "text", text: hospitalName },
-                    { type: "text", text: dateStr },
-                    { type: "text", text: timeStr }
-                ];
-
-                components.push({
-                    type: "body",
-                    parameters: bodyParameters
-                });
-
-                if (appt.IsTeleConsultation) {
+                if (appt.IsTeleConsultation && redirectionUrlId) {
                     components.push({
                         type: "button",
                         sub_type: "url",
                         index: "0",
                         parameters: [
-                            { type: "text", text: redirection.UrlId }
+                            { type: "text", text: redirectionUrlId }
                         ]
                     });
                 }
 
+                console.log(`[AppointmentService] Sending WhatsApp booking template '${templateName}' to ${normalizedPhone} for ${patientName} with ${doctorName}`);
                 await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
-                console.log(`[AppointmentService] WhatsApp appointment notification sent to ${normalizedPhone} using template ${templateName}`);
+                console.log(`[AppointmentService] WhatsApp appointment notification successfully sent to ${normalizedPhone} using template '${templateName}'`);
             }
-        } catch (err) {
-            console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err);
+        } catch (err: any) {
+            console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err?.message || err);
         }
 
         return newAppointment;

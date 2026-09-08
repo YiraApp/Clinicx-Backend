@@ -286,6 +286,21 @@ export const initializeDatabase = async () => {
             END
         `);
 
+        // Ensure AppointmentBookingTemplate column exists on HospitalSettings table
+        await AppDataSource.query(`
+            IF EXISTS (SELECT * FROM sys.tables WHERE name = 'HospitalSettings')
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns 
+                    WHERE object_id = OBJECT_ID(N'[dbo].[HospitalSettings]') 
+                      AND name = 'AppointmentBookingTemplate'
+                )
+                BEGIN
+                    ALTER TABLE [dbo].[HospitalSettings] ADD [AppointmentBookingTemplate] bit NOT NULL DEFAULT 0;
+                END
+            END
+        `);
+
         console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);

@@ -44,6 +44,7 @@ export class HospitalSettingsService {
                 DentalConsultation: false,
                 EyeCare: false,
                 NotifyTemplate: false,
+                AppointmentBookingTemplate: false,
                 AdditionalFlags: null,
                 Version: 0,
                 IsActive: true,
@@ -79,6 +80,10 @@ export class HospitalSettingsService {
                 ? data.ConsultationFeeForPackages 
                 : (data as any).consultationFeeForPackages;
 
+            const apptBookingVal = data.AppointmentBookingTemplate !== undefined
+                ? data.AppointmentBookingTemplate
+                : (data as any).appointmentBookingTemplate;
+
             const newSetting = this.settingsRepo.create({
                 HospitalId: hospitalId,
                 OrganizationId: hospital.OrganizationId,
@@ -94,6 +99,7 @@ export class HospitalSettingsService {
                 DentalConsultation: data.DentalConsultation !== undefined ? Boolean(data.DentalConsultation) : false,
                 EyeCare: data.EyeCare !== undefined ? Boolean(data.EyeCare) : false,
                 NotifyTemplate: data.NotifyTemplate !== undefined ? Boolean(data.NotifyTemplate) : false,
+                AppointmentBookingTemplate: apptBookingVal !== undefined ? Boolean(apptBookingVal) : false,
                 AdditionalFlags: data.AdditionalFlags 
                     ? (typeof data.AdditionalFlags === "string" ? data.AdditionalFlags : JSON.stringify(data.AdditionalFlags)) 
                     : null,
@@ -142,6 +148,7 @@ export class HospitalSettingsService {
             DentalConsultation: setting.DentalConsultation,
             EyeCare: setting.EyeCare,
             NotifyTemplate: setting.NotifyTemplate,
+            AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
             AdditionalFlags: setting.AdditionalFlags
         };
 
@@ -198,6 +205,13 @@ export class HospitalSettingsService {
             changedFields.push("NotifyTemplate");
             setting.NotifyTemplate = Boolean(data.NotifyTemplate);
         }
+        const apptBookingVal = data.AppointmentBookingTemplate !== undefined
+            ? data.AppointmentBookingTemplate
+            : (data as any).appointmentBookingTemplate;
+        if (apptBookingVal !== undefined && Boolean(apptBookingVal) !== setting.AppointmentBookingTemplate) {
+            changedFields.push("AppointmentBookingTemplate");
+            setting.AppointmentBookingTemplate = Boolean(apptBookingVal);
+        }
         if (data.AdditionalFlags !== undefined && data.AdditionalFlags !== setting.AdditionalFlags) {
             changedFields.push("AdditionalFlags");
             setting.AdditionalFlags = typeof data.AdditionalFlags === "string" 
@@ -229,6 +243,7 @@ export class HospitalSettingsService {
             DentalConsultation: setting.DentalConsultation,
             EyeCare: setting.EyeCare,
             NotifyTemplate: setting.NotifyTemplate,
+            AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
             AdditionalFlags: setting.AdditionalFlags
         };
 

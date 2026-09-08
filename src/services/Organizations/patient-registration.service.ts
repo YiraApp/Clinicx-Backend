@@ -22,17 +22,18 @@ export class PatientRegistrationService {
                 return;
             }
 
-            let normalizedPhone = patientMobile.replace(/\D/g, "");
-            if (normalizedPhone.length === 10) {
-                normalizedPhone = `91${normalizedPhone}`;
+            let rawDigits = patientMobile.replace(/\D/g, "");
+            if (rawDigits.length >= 10) {
+                rawDigits = rawDigits.slice(-10);
             }
+            const normalizedPhone = `91${rawDigits}`;
 
             const components = [
                 {
                     type: "body",
                     parameters: [
                         { type: "text", text: patientName },
-                        { type: "text", text: patientMobile },
+                        { type: "text", text: rawDigits },
                         { type: "text", text: memberRef }
                     ]
                 }
