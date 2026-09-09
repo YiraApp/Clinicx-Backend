@@ -186,6 +186,36 @@ export class UserController {
     }
 
     /**
+     * Checks if an email address is available or already used by another primary account.
+     */
+    async checkEmailAvailability(req: Request, res: Response): Promise<void> {
+        try {
+            const email = ((req.query.email as string) || req.body?.email || "").trim();
+            const phone = ((req.query.phone as string) || req.body?.phone || "").replace(/\D/g, "");
+            const userId = ((req.query.userId as string) || req.body?.userId || "").trim();
+            const parentUserId = ((req.query.parentUserId as string) || req.body?.parentUserId || "").trim();
+            const isDependent = req.query.isDependent === "true" || req.body?.isDependent === true;
+
+            if (!email) {
+                res.status(400).json(ApiResponse.error("Email address is required."));
+                return;
+            }
+
+            const result = await userService.checkEmailAvailability({
+                email,
+                phone,
+                userId,
+                parentUserId,
+                isDependent
+            });
+
+            res.json(ApiResponse.success(result, "Email check completed."));
+        } catch (error: any) {
+            res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
      * Toggles a user's activation status.
      * Body: { status: boolean }
      */

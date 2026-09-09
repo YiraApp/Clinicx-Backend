@@ -64,4 +64,15 @@ export interface IUserService {
      * Updates details of the authenticated patient's profile.
      */
     updatePatientProfile(userId: string, profileData: any): Promise<any>;
+
+    /**
+     * Checks if an email address is available or already used by another primary account.
+     */
+    checkEmailAvailability(params: {
+        email: string;
+        phone?: string;
+        userId?: string;
+        parentUserId?: string;
+        isDependent?: boolean;
+    }): Promise<any>;
 }

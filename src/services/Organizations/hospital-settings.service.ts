@@ -45,6 +45,8 @@ export class HospitalSettingsService {
                 EyeCare: false,
                 NotifyTemplate: false,
                 AppointmentBookingTemplate: false,
+                SendBookingAfterDocument: false,
+                BookingAfterDocumentMinutes: 20,
                 AdditionalFlags: null,
                 Version: 0,
                 IsActive: true,
@@ -84,6 +86,14 @@ export class HospitalSettingsService {
                 ? data.AppointmentBookingTemplate
                 : (data as any).appointmentBookingTemplate;
 
+            const sendBookingDocVal = data.SendBookingAfterDocument !== undefined
+                ? data.SendBookingAfterDocument
+                : (data as any).sendBookingAfterDocument;
+
+            const bookingDocMinsVal = data.BookingAfterDocumentMinutes !== undefined
+                ? data.BookingAfterDocumentMinutes
+                : (data as any).bookingAfterDocumentMinutes;
+
             const newSetting = this.settingsRepo.create({
                 HospitalId: hospitalId,
                 OrganizationId: hospital.OrganizationId,
@@ -100,6 +110,8 @@ export class HospitalSettingsService {
                 EyeCare: data.EyeCare !== undefined ? Boolean(data.EyeCare) : false,
                 NotifyTemplate: data.NotifyTemplate !== undefined ? Boolean(data.NotifyTemplate) : false,
                 AppointmentBookingTemplate: apptBookingVal !== undefined ? Boolean(apptBookingVal) : false,
+                SendBookingAfterDocument: sendBookingDocVal !== undefined ? Boolean(sendBookingDocVal) : false,
+                BookingAfterDocumentMinutes: bookingDocMinsVal !== undefined ? Number(bookingDocMinsVal) : 20,
                 AdditionalFlags: data.AdditionalFlags 
                     ? (typeof data.AdditionalFlags === "string" ? data.AdditionalFlags : JSON.stringify(data.AdditionalFlags)) 
                     : null,
@@ -149,6 +161,8 @@ export class HospitalSettingsService {
             EyeCare: setting.EyeCare,
             NotifyTemplate: setting.NotifyTemplate,
             AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
+            SendBookingAfterDocument: setting.SendBookingAfterDocument,
+            BookingAfterDocumentMinutes: setting.BookingAfterDocumentMinutes,
             AdditionalFlags: setting.AdditionalFlags
         };
 
@@ -212,6 +226,20 @@ export class HospitalSettingsService {
             changedFields.push("AppointmentBookingTemplate");
             setting.AppointmentBookingTemplate = Boolean(apptBookingVal);
         }
+        const sendBookingDocVal = data.SendBookingAfterDocument !== undefined
+            ? data.SendBookingAfterDocument
+            : (data as any).sendBookingAfterDocument;
+        if (sendBookingDocVal !== undefined && Boolean(sendBookingDocVal) !== setting.SendBookingAfterDocument) {
+            changedFields.push("SendBookingAfterDocument");
+            setting.SendBookingAfterDocument = Boolean(sendBookingDocVal);
+        }
+        const bookingDocMinsVal = data.BookingAfterDocumentMinutes !== undefined
+            ? data.BookingAfterDocumentMinutes
+            : (data as any).bookingAfterDocumentMinutes;
+        if (bookingDocMinsVal !== undefined && Number(bookingDocMinsVal) !== setting.BookingAfterDocumentMinutes) {
+            changedFields.push("BookingAfterDocumentMinutes");
+            setting.BookingAfterDocumentMinutes = Number(bookingDocMinsVal);
+        }
         if (data.AdditionalFlags !== undefined && data.AdditionalFlags !== setting.AdditionalFlags) {
             changedFields.push("AdditionalFlags");
             setting.AdditionalFlags = typeof data.AdditionalFlags === "string" 
@@ -244,6 +272,8 @@ export class HospitalSettingsService {
             EyeCare: setting.EyeCare,
             NotifyTemplate: setting.NotifyTemplate,
             AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
+            SendBookingAfterDocument: setting.SendBookingAfterDocument,
+            BookingAfterDocumentMinutes: setting.BookingAfterDocumentMinutes,
             AdditionalFlags: setting.AdditionalFlags
         };
 

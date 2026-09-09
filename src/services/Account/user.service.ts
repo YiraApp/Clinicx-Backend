@@ -505,6 +505,112 @@ export class UserService implements IUserService {
         };
     }
 
+    async checkEmailAvailability(params: {
+        email: string;
+        phone?: string;
+        userId?: string;
+        parentUserId?: string;
+        isDependent?: boolean;
+    }): Promise<{
+        available: boolean;
+        isCurrentProfile?: boolean;
+        isSharedFamilyEmail?: boolean;
+        message?: string;
+        existingUser?: any;
+    }> {
+        const { email, phone, userId, parentUserId, isDependent } = params;
+        const cleanEmail = (email || "").trim().toLowerCase();
+        if (!cleanEmail) {
+            return { available: false, message: "Email address is required." };
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(cleanEmail)) {
+            return { available: false, message: "Please enter a valid email address." };
+        }
+
+        const cleanPhone = phone ? phone.replace(/\D/g, "").slice(-10) : "";
+
+        const { User } = await import("../../models/Account/user.model.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const userRepo = AppDataSource.getRepository(User);
+
+        const usersWithEmail = await userRepo.createQueryBuilder("u")
+            .where("u.IsDeleted = 0")
+            .andWhere("LOWER(u.Email) = :email", { email: cleanEmail })
+            .getMany();
+
+        if (usersWithEmail.length === 0) {
+            return { available: true, message: "Email is available." };
+        }
+
+        // 1. If currently selected user profile ID matches one of the users holding this email
+        if (userId) {
+            const exactMatch = usersWithEmail.find(u => u.Id.toLowerCase() === userId.toLowerCase());
+            if (exactMatch) {
+                return { available: true, isCurrentProfile: true, message: "Email belongs to this profile." };
+            }
+        }
+
+        // 2. If this email belongs to ANY user under the SAME phone number / family group -> ALLOWED
+        if (cleanPhone) {
+            const sameFamilyUser = usersWithEmail.find(u => {
+                const uPhoneClean = (u.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+                return uPhoneClean === cleanPhone;
+            });
+
+            if (sameFamilyUser) {
+                return {
+                    available: true,
+                    isSharedFamilyEmail: !sameFamilyUser.IsPrimary || isDependent || Boolean(parentUserId),
+                    message: "Email belongs to your registered family account."
+                };
+            }
+        }
+
+        // 3. Match by parentUserId
+        if (parentUserId) {
+            const parentUser = await userRepo.findOne({ where: { Id: parentUserId, IsDeleted: false } });
+            if (parentUser && parentUser.Email && parentUser.Email.trim().toLowerCase() === cleanEmail) {
+                return {
+                    available: true,
+                    isSharedFamilyEmail: true,
+                    message: "Shared family email address (allowed for child/dependent)."
+                };
+            }
+        }
+
+        // 4. Check for PRIMARY users only!
+        // Dependent / patient users (IsPrimary = false) do not block account creation
+        const existingPrimaryUser = usersWithEmail.find(u => u.IsPrimary === true);
+        if (!existingPrimaryUser) {
+            return {
+                available: true,
+                message: "Email is available."
+            };
+        }
+
+        // 5. If an existing PRIMARY user has this email under a matching phone number
+        const existingPrimaryPhone = (existingPrimaryUser.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+        if (cleanPhone && existingPrimaryPhone === cleanPhone) {
+            return {
+                available: true,
+                isCurrentProfile: true,
+                message: "Email belongs to your primary account."
+            };
+        }
+
+        // 6. Duplicate! Email belongs to another primary user
+        return {
+            available: false,
+            message: "This email is already registered with another account. Please use a different email address.",
+            existingUser: {
+                id: existingPrimaryUser.Id,
+                isPrimary: true
+            }
+        };
+    }
+
     async exportUsers(filters: any): Promise<any[]> {
         return await userRepository.getAllUsersForExport(filters);
     }

@@ -16,6 +16,80 @@ function ensureUUID(str?: any): string {
 }
 
 export class MedicalDocumentService {
+    // In-memory tracker to avoid duplicate follow-up timers for the same patient in a 20-minute window
+    private scheduledBookingFollowups = new Set<string>();
+
+    /**
+     * Schedules the 'yira_appointment_book' template to be sent automatically after a configurable delay (default 20 mins).
+     * Only sends if the hospital has SendBookingAfterDocument = true in settings.
+     */
+    async scheduleAppointmentBookingFollowup(patientId: string, hospitalId?: number, senderId?: string, overrideDelayMinutes?: number): Promise<void> {
+        if (!patientId || patientId === DEFAULT_UUID) return;
+        const targetHospId = Number(hospitalId) || 19;
+        const cacheKey = `${patientId}_${targetHospId}`;
+
+        if (this.scheduledBookingFollowups.has(cacheKey)) {
+            console.log(`[MedicalDocumentService] Booking follow-up already scheduled for ${cacheKey}. Skipping duplicate.`);
+            return;
+        }
+
+        try {
+            const { hospitalSettingsService } = await import("../Organizations/hospital-settings.service.js");
+            const settings = await hospitalSettingsService.getSettings(targetHospId);
+
+            const isAutoBookingEnabled = Boolean(
+                settings && (
+                    settings.SendBookingAfterDocument === true ||
+                    (settings as any).SendBookingAfterDocument === 1 ||
+                    (settings as any).SendBookingAfterDocument === "true" ||
+                    (settings as any).SendBookingAfterDocument === "1"
+                )
+            );
+
+            if (!isAutoBookingEnabled) {
+                console.log(`[MedicalDocumentService] Hospital ${targetHospId} has SendBookingAfterDocument disabled (value: ${settings?.SendBookingAfterDocument}). Skipping auto booking follow-up.`);
+                return;
+            }
+
+            const delayMinutes = overrideDelayMinutes !== undefined && overrideDelayMinutes > 0
+                ? overrideDelayMinutes
+                : (Number(settings.BookingAfterDocumentMinutes) || 20);
+
+            this.scheduledBookingFollowups.add(cacheKey);
+            const delayMs = delayMinutes * 60 * 1000;
+            console.log(`[MedicalDocumentService] ⏳ Scheduled 'yira_appointment_book' follow-up for patient ${patientId} in ${delayMinutes} minutes (${delayMs}ms).`);
+
+            setTimeout(async () => {
+                try {
+                    this.scheduledBookingFollowups.delete(cacheKey);
+
+                    // Re-verify hospital settings before sending
+                    const currentSettings = await hospitalSettingsService.getSettings(targetHospId);
+                    const isStillEnabled = Boolean(
+                        currentSettings && (
+                            currentSettings.SendBookingAfterDocument === true ||
+                            (currentSettings as any).SendBookingAfterDocument === 1 ||
+                            (currentSettings as any).SendBookingAfterDocument === "true" ||
+                            (currentSettings as any).SendBookingAfterDocument === "1"
+                        )
+                    );
+
+                    if (!isStillEnabled) {
+                        console.log(`[MedicalDocumentService] Hospital ${targetHospId} has SendBookingAfterDocument disabled. Skipping auto follow-up.`);
+                        return;
+                    }
+
+                    console.log(`[MedicalDocumentService] ⏰ Auto-sending 'yira_appointment_book' follow-up to patient ${patientId} (after ${delayMinutes}m delay)...`);
+                    await this.sendAppointmentBookingTemplate(patientId, targetHospId, senderId);
+                    console.log(`[MedicalDocumentService] ✅ Auto-sent 'yira_appointment_book' follow-up to patient ${patientId}`);
+                } catch (err: any) {
+                    console.error(`[MedicalDocumentService] ❌ Error in auto-sending 'yira_appointment_book' follow-up:`, err?.message || err);
+                }
+            }, delayMs);
+        } catch (err: any) {
+            console.warn(`[MedicalDocumentService] Failed to check hospital settings for booking follow-up:`, err?.message || err);
+        }
+    }
 
     async sendDentalConsultationWhatsApp(patientId: string, senderId?: string): Promise<any> {
         const { userRepository } = await import("../../repositories/Account/user.repository.js");
@@ -65,6 +139,7 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/overview";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         return {
@@ -123,6 +198,7 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/overview";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         return {
@@ -193,6 +269,7 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = targetHospId ? `/book-appointment?hospitalId=${targetHospId}` : "/book-appointment";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         const apptBookCount = await notifRepo.count({
@@ -257,6 +334,7 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/overview";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         return {
@@ -399,11 +477,15 @@ export class MedicalDocumentService {
         notif.ReferenceId = String(documentId);
         notif.Route = "/view-summary/" + shareToken;
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         const docCount = await notifRepo.count({
             where: { UserId: patientId, ReferenceId: String(documentId), Type: "WHATSAPP_SINGLE_DOCUMENT" }
         });
+
+        // Automatically schedule follow-up for 'yira_appointment_book' template based on hospital settings
+        this.scheduleAppointmentBookingFollowup(patientId, doc.HospitalId || 19, senderId);
 
         return {
             success: true,
@@ -459,11 +541,15 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/documents";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         const generalCount = await notifRepo.count({
             where: { UserId: patientId, Type: "WHATSAPP_GENERAL_ALERT" }
         });
+
+        // Automatically schedule follow-up for 'yira_appointment_book' template based on hospital settings
+        this.scheduleAppointmentBookingFollowup(patientId, 19, senderId);
 
         return {
             success: true,
@@ -482,7 +568,7 @@ export class MedicalDocumentService {
         const history = await notifRepo.find({
             where: { 
                 UserId: patientId, 
-                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION", "WHATSAPP_APPOINTMENT_BOOK"]) 
+                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION", "WHATSAPP_APPOINTMENT_BOOK", "WHATSAPP_APPOINTMENT_CANCEL"]) 
             },
             order: { CreatedAt: "DESC" },
             take: 100
@@ -494,6 +580,7 @@ export class MedicalDocumentService {
         const eyeConsultationCount = history.filter(h => h.Type === "WHATSAPP_EYE_CONSULTATION").length;
         const dentalConsultationCount = history.filter(h => h.Type === "WHATSAPP_DENTAL_CONSULTATION").length;
         const appointmentBookCount = history.filter(h => h.Type === "WHATSAPP_APPOINTMENT_BOOK").length;
+        const appointmentCancelCount = history.filter(h => h.Type === "WHATSAPP_APPOINTMENT_CANCEL").length;
 
         return {
             generalCount,
@@ -502,6 +589,7 @@ export class MedicalDocumentService {
             eyeConsultationCount,
             dentalConsultationCount,
             appointmentBookCount,
+            appointmentCancelCount,
             count: history.length,
             history
         };
@@ -611,6 +699,22 @@ export class MedicalDocumentService {
                 });
             } catch (notifErr: any) {
                 console.error("[MedicalDocumentService] Push notification trigger warning:", notifErr?.message || notifErr);
+            }
+        }
+
+        // 4. Automatically send Medical Document WhatsApp template to patient upon upload & maintain history & schedule 20-min booking follow-up
+        const isDoctorOrStaff = (isDoctorUploaded === "true" || isDoctorUploaded === true) && (!isPatientUploaded || isPatientUploaded === "false");
+        if (isDoctorOrStaff && savedDocuments.length > 0 && validPatientId && validPatientId !== DEFAULT_UUID) {
+            for (const doc of savedDocuments) {
+                if (doc && doc.Id) {
+                    try {
+                        await this.shareSingleDocument(Number(doc.Id), validPatientId, uploadedByUserId);
+                        doc.WhatsAppSentCount = (Number(doc.WhatsAppSentCount) || 0) + 1;
+                        console.log(`[MedicalDocumentService] ✅ Auto-shared uploaded document ${doc.Id} on WhatsApp to patient ${validPatientId}`);
+                    } catch (autoErr: any) {
+                        console.warn(`[MedicalDocumentService] ⚠️ Auto document ${doc.Id} WhatsApp send warning:`, autoErr?.message || autoErr);
+                    }
+                }
             }
         }
 

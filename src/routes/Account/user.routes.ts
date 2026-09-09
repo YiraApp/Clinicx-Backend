@@ -36,6 +36,12 @@ userRouter.post("/updateUser", userController.updateUser.bind(userController));
 userRouter.get("/checkPrimary/:phoneNumber", userController.getPrimaryAccount.bind(userController));
 
 /**
+ * Check if an email is available or belongs to another primary user account.
+ */
+userRouter.get("/check-email", userController.checkEmailAvailability.bind(userController));
+userRouter.post("/check-email", userController.checkEmailAvailability.bind(userController));
+
+/**
  * Toggle user activation status.
  */
 userRouter.patch("/toggleStatus/:id", userController.toggleStatus.bind(userController));

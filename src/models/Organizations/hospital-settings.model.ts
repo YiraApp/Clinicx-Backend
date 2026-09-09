@@ -62,6 +62,12 @@ export class HospitalSetting {
     @Column({ type: "bit", default: false })
     AppointmentBookingTemplate: boolean; // WhatsApp Appointment Booking Template (yira_appointment_book)
 
+    @Column({ type: "bit", default: false })
+    SendBookingAfterDocument: boolean; // Auto-send Appointment Booking template after document upload
+
+    @Column({ type: "int", default: 20 })
+    BookingAfterDocumentMinutes: number; // Follow-up delay in minutes (default: 20)
+
     // ── Extensible Future Flags (JSON) ──
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     AdditionalFlags?: string | null; // Stores future dynamic flags as JSON: { [flagKey: string]: any }

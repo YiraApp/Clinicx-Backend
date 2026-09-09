@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, BeforeInsert } from "typeorm";
 
 @Entity({ name: "AppNotifications" })
 export class AppNotification {
@@ -35,4 +35,11 @@ export class AppNotification {
 
     @UpdateDateColumn({ type: "datetime", nullable: true })
     UpdatedAt: Date | null;
+
+    @BeforeInsert()
+    setDefaultDates() {
+        if (!this.CreatedAt) {
+            this.CreatedAt = new Date();
+        }
+    }
 }
