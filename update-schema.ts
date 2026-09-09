@@ -39,4 +39,5 @@ async function updateSchema() {
     }
 }
 
+
 updateSchema();
