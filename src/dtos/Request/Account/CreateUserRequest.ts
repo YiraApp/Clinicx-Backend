@@ -36,9 +36,10 @@ export interface CreateUserRequest {
     Weight?: number | undefined;
     TokenNumber?: string | undefined;
     Token?: string | undefined;
-    
+
     PermanentAddress?: AddressDTO | undefined;
     TemporaryAddress?: AddressDTO | undefined;
+
 
     // Fallback fields (if only one address is provided, it's treated as Permanent)
     AddressLine1?: string | undefined;
