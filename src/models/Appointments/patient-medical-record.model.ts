@@ -79,6 +79,9 @@ export class PatientMedicalRecord {
     @Column({ type: "nvarchar", length: 50, nullable: true })
     Height?: string;
 
+    @Column({ type: "nvarchar", length: 50, nullable: true })
+    SpO2?: string;
+
     @Column({ type: "nvarchar", length: 100, nullable: true })
     Status?: string;
 

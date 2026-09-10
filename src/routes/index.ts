@@ -34,6 +34,8 @@ import { meetingRedirectionRouter } from "./Appointments/meeting-redirection.rou
 
 
 import { snomedRouter } from "../snomed/snomed.routes.js";
+import { offerBannerRouter } from "./Offers/offer-banner.routes.js";
+import { pushCampaignRouter } from "./Notifications/push-campaign.routes.js";
 
 
 const router = Router();
@@ -73,7 +75,8 @@ router.use("/payments", paymentRouter);
 router.use("/treatment-plans", treatmentPlanRouter);
 router.use("/snomed", snomedRouter);
 router.use("/redirections", meetingRedirectionRouter);
-
+router.use("/offers", offerBannerRouter);
+router.use("/push-campaigns", pushCampaignRouter);
 
 router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });

@@ -60,6 +60,7 @@ export async function sendFcmPushToTokens(
     payload: {
         title: string;
         body: string;
+        imageUrl?: string;
         type?: string;
         route?: string;
         referenceId?: string;
@@ -75,17 +76,20 @@ export async function sendFcmPushToTokens(
     let successCount = 0;
     let failureCount = 0;
 
+    const imageUrl = payload.imageUrl?.trim() || payload.additionalData?.imageUrl?.trim() || undefined;
+
     for (const token of tokens) {
         if (!token || token.startsWith("ios_sim_") || token === "no_token_available") {
             continue;
         }
 
         try {
-            const message = {
+            const message: any = {
                 token: token,
                 notification: {
                     title: payload.title,
-                    body: payload.body
+                    body: payload.body,
+                    ...(imageUrl ? { imageUrl } : {})
                 },
                 data: {
                     title: payload.title,
@@ -93,6 +97,7 @@ export async function sendFcmPushToTokens(
                     type: payload.type || "SYSTEM",
                     route: payload.route || "",
                     referenceId: payload.referenceId || "",
+                    ...(imageUrl ? { imageUrl, image: imageUrl } : {}),
                     ...(payload.additionalData ? Object.fromEntries(
                         Object.entries(payload.additionalData).map(([k, v]) => [k, String(v)])
                     ) : {})
@@ -103,6 +108,7 @@ export async function sendFcmPushToTokens(
                         channelId: "high_importance_channel",
                         title: payload.title,
                         body: payload.body,
+                        ...(imageUrl ? { imageUrl } : {}),
                         sound: "default",
                         priority: "max" as const,
                         defaultVibrateTimings: true,
@@ -113,6 +119,7 @@ export async function sendFcmPushToTokens(
                     headers: {
                         "apns-priority": "10"
                     },
+                    ...(imageUrl ? { fcmOptions: { imageUrl } } : {}),
                     payload: {
                         aps: {
                             alert: {
@@ -121,7 +128,8 @@ export async function sendFcmPushToTokens(
                             },
                             sound: "default",
                             badge: 1,
-                            contentAvailable: true
+                            contentAvailable: true,
+                            mutableContent: true
                         }
                     }
                 }

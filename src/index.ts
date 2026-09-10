@@ -19,6 +19,10 @@ const startServer = async () => {
         const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
         appointmentReminderService.startScheduler(60);
 
+        // Start automated push notification campaign scheduler (checks every 60s for scheduled & recurring notifications)
+        const { pushCampaignService } = await import("./services/Notifications/push-campaign.service.js");
+        pushCampaignService.startScheduler(60);
+
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });

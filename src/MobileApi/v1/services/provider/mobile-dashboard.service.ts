@@ -964,7 +964,9 @@ export class MobileDashboardService {
                 is_tele_consultation: a.IsTeleConsultation || false,
                 meeting_url: a.MeetingUrl || "",
                 location: a.Location || (a.Hospital ? a.Hospital.Name : "Main Clinic"),
+                hospital_id: a.HospitalId || (a.Hospital ? a.Hospital.Id : null),
                 hospital_name: a.Hospital ? a.Hospital.Name : "",
+                hospital_logo: a.Hospital?.ImageUrl || (a.HospitalId === 19 || a.Hospital?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (a.Hospital?.Organization?.ImageUrl || null)),
                 hospital_address: a.Hospital ? (a.Hospital.Address || "") : "",
                 hospital_phone: a.Hospital ? (a.Hospital.MobileNumber || a.Hospital.HelplineNumber || "") : "",
                 doctor_id: a.DoctorId || "",
@@ -1028,7 +1030,7 @@ export class MobileDashboardService {
         const bpVal = latestRecord?.BloodPressure || user.BloodPressure || "None";
         const pulseVal = latestRecord?.HeartRate || user.HeartRate || "None";
         const tempVal = latestRecord?.Temperature || user.Temperature || "None";
-        const spO2Val = user.SpO2 || "99";
+        const spO2Val = latestRecord?.SpO2 || user.SpO2 || "None";
         const weightVal = latestRecord?.Weight || (user.Weight != null ? String(user.Weight) : "None");
         const heightVal = latestRecord?.Height || (user.Height != null ? String(user.Height) : "None");
 
@@ -1059,6 +1061,66 @@ export class MobileDashboardService {
             }
         };
 
+        // Resolve patient's hospital for overview from database
+        const hospitalRepo = AppDataSource.getRepository(Hospital);
+        let activeHospId = hospitalId || user.LatestHospitalId || reg?.HospitalId;
+        if (!activeHospId && allPatientAppts.length > 0) {
+            activeHospId = allPatientAppts[0].HospitalId;
+        }
+        if (!activeHospId) activeHospId = 19;
+
+        let activeHosp = await hospitalRepo.findOne({
+            where: { Id: Number(activeHospId), IsDeleted: false },
+            relations: ["Organization"]
+        }).catch(() => null);
+
+        if (!activeHosp) {
+            activeHosp = await hospitalRepo.findOne({
+                where: { Id: 19, IsDeleted: false },
+                relations: ["Organization"]
+            }).catch(() => null);
+        }
+
+        const hospLogo = activeHosp?.ImageUrl || (activeHosp?.Id === 19 || activeHosp?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (activeHosp?.Organization?.ImageUrl || null));
+
+        // Resolve upcoming appointment / next appointment if any
+        const upcomingFutureAppts = allPatientAppts.filter(a => {
+            const aptDateStr = new Date(a.AppointmentDate).toISOString().split("T")[0];
+            return aptDateStr >= todayStr && a.Status !== "Completed";
+        });
+        const nextApptRaw = upcomingFutureAppts.length > 0 ? upcomingFutureAppts[0] : null;
+
+        let next_appointment: any = null;
+        if (nextApptRaw) {
+            const nHosp = nextApptRaw.Hospital;
+            const nHospLogo = nHosp?.ImageUrl || (nextApptRaw.HospitalId === 19 || nHosp?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (nHosp?.Organization?.ImageUrl || hospLogo));
+            const docName = nextApptRaw.Doctor ? `Dr. ${nextApptRaw.Doctor.FirstName || ""} ${nextApptRaw.Doctor.LastName || ""}`.trim() : "Healthcare Provider";
+
+            next_appointment = {
+                id: nextApptRaw.Id,
+                appointment_id: String(nextApptRaw.Id),
+                doctor_name: docName,
+                doctor_id: nextApptRaw.DoctorId,
+                doctor_specialty: "General Practitioner",
+                hospital_id: nextApptRaw.HospitalId,
+                hospital_name: nHosp?.Name || activeHosp?.Name || "Yira Hospitals",
+                hospital_logo: nHospLogo,
+                hospital_address: nHosp?.Address || activeHosp?.Address || "",
+                hospital_phone: nHosp?.HelplineNumber || nHosp?.MobileNumber || activeHosp?.HelplineNumber || "",
+                org_id: nextApptRaw.OrgId,
+                org_name: nextApptRaw.Organization?.Name || "yira",
+                appointment_date: nextApptRaw.AppointmentDate,
+                formatted_date: formatDateMMMddyyyy(nextApptRaw.AppointmentDate),
+                start_time: nextApptRaw.StartTime,
+                formatted_time: formatTime12h(nextApptRaw.StartTime),
+                consultation_type: nextApptRaw.IsTeleConsultation ? "Video Consultation" : (nextApptRaw.AppointmentType || "In-Person"),
+                is_teleconsultation: nextApptRaw.IsTeleConsultation || false,
+                reason: nextApptRaw.Reason || nextApptRaw.ChiefComplaint || "Regular Checkup",
+                status: nextApptRaw.Status || "Scheduled",
+                meeting_url: nextApptRaw.MeetingUrl || null
+            };
+        }
+
         return {
             contact_information: {
                 phone: user.PhoneNumber || "",
@@ -1085,6 +1147,23 @@ export class MobileDashboardService {
                 last_check_in_visit,
                 next_scheduled_appointment
             },
+            hospital: activeHosp ? {
+                id: activeHosp.Id,
+                hospital_id: activeHosp.Id,
+                name: activeHosp.Name,
+                hospital_name: activeHosp.Name,
+                hospital_code: activeHosp.HospitalCode || "HOSP-11",
+                logo: hospLogo,
+                imageUrl: hospLogo,
+                hospital_logo: hospLogo,
+                address: activeHosp.Address || "",
+                city: activeHosp.City || "",
+                state: activeHosp.State || "",
+                helpline_number: activeHosp.HelplineNumber || activeHosp.MobileNumber || "",
+                phone: activeHosp.MobileNumber || activeHosp.HelplineNumber || "",
+                is_24_hours: activeHosp.Is24Hours ?? true
+            } : null,
+            next_appointment,
             appointments: mappedAppointments
         };
     }
@@ -1193,7 +1272,7 @@ export class MobileDashboardService {
                 unit: "°F"
             },
             spo2: {
-                value: "None", // Not in DB schema
+                value: latestRecord?.SpO2 || user.SpO2 || "None",
                 unit: "%"
             },
             weight: {
@@ -1258,6 +1337,9 @@ export class MobileDashboardService {
                 doctor_specialty: doctorSpecialty,
                 hospital_id: apt.HospitalId,
                 hospital_name: apt.Hospital?.Name || "",
+                hospital_logo: apt.Hospital?.ImageUrl || (apt.HospitalId === 19 || apt.Hospital?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (apt.Hospital?.Organization?.ImageUrl || null)),
+                hospital_address: apt.Hospital?.Address || "",
+                hospital_phone: apt.Hospital?.HelplineNumber || apt.Hospital?.MobileNumber || "",
                 org_id: apt.OrgId,
                 org_name: apt.Organization?.Name || "",
                 appointment_date: apt.AppointmentDate,

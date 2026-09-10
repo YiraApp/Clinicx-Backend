@@ -90,7 +90,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/verify_otp",
         "/v1/api/auth/change_password",
         "/v1/api/auth/reset_password",
-        "/v1/api/auth/app-version"
+        "/v1/api/auth/app-version",
+        "/v1/api/auth/offers",
+        "/api/offers",
+        "/api/push-campaigns"
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
