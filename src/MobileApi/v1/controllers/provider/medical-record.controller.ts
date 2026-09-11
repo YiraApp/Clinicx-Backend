@@ -52,6 +52,7 @@ export class MobileMedicalRecordController {
                 Temperature: body.temperature || body.Temperature,
                 Weight: body.weight || body.Weight,
                 Height: body.height || body.Height,
+                SpO2: body.spo2 || body.SpO2 || body.oxygenSaturation || body.OxygenSaturation,
                 OrganizationId: body.organizationId || body.OrganizationId,
                 HospitalId: body.hospitalId || body.HospitalId,
                 Status: body.status || body.Status || "Completed",
@@ -124,6 +125,9 @@ export class MobileMedicalRecordController {
             if (body.temperature !== undefined) data.Temperature = body.temperature;
             if (body.weight !== undefined) data.Weight = body.weight;
             if (body.height !== undefined) data.Height = body.height;
+            if (body.spo2 !== undefined || body.SpO2 !== undefined || body.oxygenSaturation !== undefined) {
+                data.SpO2 = body.spo2 || body.SpO2 || body.oxygenSaturation;
+            }
             if (body.organizationId !== undefined) data.OrganizationId = body.organizationId;
             if (body.hospitalId !== undefined) data.HospitalId = body.hospitalId;
             if (body.status !== undefined) data.Status = body.status;

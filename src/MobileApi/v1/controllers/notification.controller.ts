@@ -65,16 +65,22 @@ export class NotificationController {
             const limit = parseInt(req.query.limit as string || "30", 10);
             const skip = (page - 1) * limit;
 
-            const [notifications, total] = await this.notificationRepo.findAndCount({
-                where: { UserId: In(linkedUserIds) },
-                order: { CreatedAt: "DESC" },
-                skip,
-                take: limit,
-            });
+            const queryBuilder = this.notificationRepo.createQueryBuilder("n")
+                .where("n.UserId IN (:...linkedUserIds)", { linkedUserIds })
+                .andWhere("n.Type NOT LIKE 'WHATSAPP_%'")
+                .andWhere("n.Type NOT IN ('TEST_PUSH', 'TEST')")
+                .orderBy("n.CreatedAt", "DESC")
+                .skip(skip)
+                .take(limit);
 
-            const unreadCount = await this.notificationRepo.count({
-                where: { UserId: In(linkedUserIds), IsRead: false }
-            });
+            const [notifications, total] = await queryBuilder.getManyAndCount();
+
+            const unreadCount = await this.notificationRepo.createQueryBuilder("n")
+                .where("n.UserId IN (:...linkedUserIds)", { linkedUserIds })
+                .andWhere("n.IsRead = 0")
+                .andWhere("n.Type NOT LIKE 'WHATSAPP_%'")
+                .andWhere("n.Type NOT IN ('TEST_PUSH', 'TEST')")
+                .getCount();
 
             return res.json(ApiResponse.success({
                 notifications: notifications.map(n => ({
@@ -152,6 +158,61 @@ export class NotificationController {
         } catch (error: any) {
             console.error("Error marking all notifications as read:", error);
             return res.status(500).json(ApiResponse.error(error.message || "Failed to mark notifications as read"));
+        }
+    };
+
+    /**
+     * Clears / deletes all notifications for the authenticated user and their linked family accounts.
+     */
+    clearAll = async (req: Request, res: Response) => {
+        try {
+            const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req.query?.userId as string) || req.body?.userId;
+
+            if (!userId) {
+                return res.status(400).json(ApiResponse.error("User ID not found in session"));
+            }
+
+            const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+
+            if (linkedUserIds.length > 0) {
+                await this.notificationRepo.delete({
+                    UserId: In(linkedUserIds)
+                });
+            }
+
+            return res.json(ApiResponse.success(null, "All notifications cleared successfully"));
+        } catch (error: any) {
+            console.error("Error clearing all notifications:", error);
+            return res.status(500).json(ApiResponse.error(error.message || "Failed to clear notifications"));
+        }
+    };
+
+    /**
+     * Deletes a specific notification by ID.
+     */
+    deleteNotification = async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params;
+            const userId = (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req.query?.userId as string) || req.body?.userId;
+
+            if (!id) {
+                return res.status(400).json(ApiResponse.error("Notification ID is required"));
+            }
+
+            const deleteCriteria: any = { Id: id };
+            if (userId) {
+                const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+                if (linkedUserIds.length > 0) {
+                    deleteCriteria.UserId = In(linkedUserIds);
+                }
+            }
+
+            await this.notificationRepo.delete(deleteCriteria);
+
+            return res.json(ApiResponse.success(null, "Notification deleted successfully"));
+        } catch (error: any) {
+            console.error("Error deleting notification:", error);
+            return res.status(500).json(ApiResponse.error(error.message || "Failed to delete notification"));
         }
     };
 

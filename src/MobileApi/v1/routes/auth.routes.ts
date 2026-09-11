@@ -13,6 +13,8 @@ import { patientAccessConsentController } from "../controllers/consent/patient-a
 import { notificationController } from "../controllers/notification.controller.js";
 import { hospitalController } from "../../../controllers/Organizations/hospital.controller.js";
 import { mobileDoctorSuggestionController } from "../controllers/provider/doctor-suggestion.controller.js";
+import { getActiveOffers, getActivePopupAd } from "../controllers/offer-banner.controller.js";
+import { patientVitalsController } from "../controllers/patient-vitals.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
@@ -56,6 +58,9 @@ authRouter.post("/favorite-patients/toggle", authMiddleware, toggleFavoritePatie
 authRouter.post("/favorite-patients/list", authMiddleware, getFavoritePatientsList);
 authRouter.post("/patient/overview", authMiddleware, getPatientOverview);
 authRouter.post("/patient/details", authMiddleware, getPatientProfile);
+authRouter.get("/patient/vitals", authMiddleware, (req, res) => patientVitalsController.getPatientVitals(req, res));
+authRouter.get("/patient/vitals/:patientId", authMiddleware, (req, res) => patientVitalsController.getPatientVitals(req, res));
+authRouter.post("/patient/vitals", authMiddleware, (req, res) => patientVitalsController.recordPatientVitals(req, res));
 authRouter.post("/provider/profile", authMiddleware, getProviderProfile);
 authRouter.post("/provider/profile/update", authMiddleware, updateProviderProfile);
 authRouter.post("/provider/profile/upload-photo", authMiddleware, upload.single("photo"), uploadProviderProfilePhoto);
@@ -103,12 +108,19 @@ authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patient
 // In-App Notifications & Alerts
 authRouter.get("/notifications", authMiddleware, notificationController.getNotifications);
 authRouter.post("/notifications/test", authMiddleware, notificationController.sendTestNotification);
-authRouter.post("/notifications/:id/read", authMiddleware, notificationController.markAsRead);
 authRouter.post("/notifications/mark-all-read", authMiddleware, notificationController.markAllAsRead);
+authRouter.delete("/notifications/clear-all", authMiddleware, notificationController.clearAll);
+authRouter.post("/notifications/clear-all", authMiddleware, notificationController.clearAll);
+authRouter.post("/notifications/:id/read", authMiddleware, notificationController.markAsRead);
+authRouter.delete("/notifications/:id", authMiddleware, notificationController.deleteNotification);
 
 // Doctor Suggestions
 authRouter.get("/doctor-suggestions/patient/:patientId", authMiddleware, (req, res) => mobileDoctorSuggestionController.getPatientSuggestions(req, res));
 authRouter.post("/doctor-suggestions", authMiddleware, upload.any(), (req, res) => mobileDoctorSuggestionController.addSuggestion(req, res));
 authRouter.delete("/doctor-suggestions/:id", authMiddleware, (req, res) => mobileDoctorSuggestionController.deleteSuggestion(req, res));
+
+// Offer Banners & Popup Ads
+authRouter.get("/offers/popup", getActivePopupAd);
+authRouter.get("/offers", getActiveOffers);
 
 export { authRouter };

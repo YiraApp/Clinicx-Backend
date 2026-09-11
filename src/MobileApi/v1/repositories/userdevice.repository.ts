@@ -22,6 +22,12 @@ export class UserDeviceRepository {
         });
     }
 
+    async findAllActiveDevices(): Promise<UserDevice[]> {
+        return await this.deviceRepo.find({
+            where: { IsActive: true }
+        });
+    }
+
     async saveDevice(device: UserDevice): Promise<UserDevice> {
         return await this.deviceRepo.save(device);
     }

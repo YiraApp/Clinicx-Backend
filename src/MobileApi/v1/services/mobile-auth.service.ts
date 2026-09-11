@@ -977,10 +977,13 @@ export class MobileAuthService {
         for (const ur of userRoles) {
             if (ur.OrganizationId && ur.Organization) {
                 if (!orgMap.has(ur.OrganizationId)) {
+                    const orgLogo = ur.Organization.ImageUrl || (ur.OrganizationId === 1 ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : null);
                     orgMap.set(ur.OrganizationId, {
                         organizationId: ur.OrganizationId,
                         organizationName: ur.Organization.Name,
                         organizationCode: ur.Organization.OrgCode ?? null,
+                        imageUrl: orgLogo,
+                        logo: orgLogo,
                         hospitals: []
                     });
                 }
@@ -990,10 +993,14 @@ export class MobileAuthService {
                 if (ur.HospitalId && ur.Hospital) {
                     const exists = orgData.hospitals.some(h => h.hospitalId === ur.HospitalId);
                     if (!exists) {
+                        const hospLogo = ur.Hospital.ImageUrl || (ur.Hospital.Id === 19 ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (ur.Organization.ImageUrl || null));
                         orgData.hospitals.push({
                             hospitalId: ur.Hospital.Id,
                             hospitalCode: ur.Hospital.HospitalCode ?? null,
                             hospitalName: ur.Hospital.Name,
+                            imageUrl: hospLogo,
+                            logo: hospLogo,
+                            hospitalLogo: hospLogo,
                             email: ur.Hospital.Email ?? null,
                             mobileNumber: ur.Hospital.MobileNumber ?? null,
                             countryCode: ur.Hospital.CountryCode ?? null,
@@ -1014,10 +1021,14 @@ export class MobileAuthService {
                     for (const hosp of allOrgHospitals) {
                         const exists = orgData.hospitals.some(h => h.hospitalId === hosp.Id);
                         if (!exists) {
+                            const hospLogo = hosp.ImageUrl || (hosp.Id === 19 ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : ((orgData as any).imageUrl || null));
                             orgData.hospitals.push({
                                 hospitalId: hosp.Id,
                                 hospitalCode: hosp.HospitalCode ?? null,
                                 hospitalName: hosp.Name,
+                                imageUrl: hospLogo,
+                                logo: hospLogo,
+                                hospitalLogo: hospLogo,
                                 email: hosp.Email ?? null,
                                 mobileNumber: hosp.MobileNumber ?? null,
                                 countryCode: hosp.CountryCode ?? null,
@@ -1043,15 +1054,21 @@ export class MobileAuthService {
             const defaultHospitalId = activeDefault?.HospitalId ?? 19;
             const orgName = activeDefault?.Organization?.Name || "yira";
             const hospName = activeDefault?.Hospital?.Name || "Yira Hospitals";
+            const defaultHospLogo = activeDefault?.Hospital?.ImageUrl || "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg";
 
             orgMap.set(defaultOrgId, {
                 organizationId: defaultOrgId,
                 organizationName: orgName,
                 organizationCode: activeDefault?.Organization?.OrgCode ?? null,
+                imageUrl: activeDefault?.Organization?.ImageUrl || defaultHospLogo,
+                logo: activeDefault?.Organization?.ImageUrl || defaultHospLogo,
                 hospitals: [{
                     hospitalId: defaultHospitalId,
                     hospitalCode: activeDefault?.Hospital?.HospitalCode ?? null,
                     hospitalName: hospName,
+                    imageUrl: defaultHospLogo,
+                    logo: defaultHospLogo,
+                    hospitalLogo: defaultHospLogo,
                     email: activeDefault?.Hospital?.Email ?? null,
                     mobileNumber: activeDefault?.Hospital?.MobileNumber ?? null,
                     countryCode: activeDefault?.Hospital?.CountryCode ?? null,

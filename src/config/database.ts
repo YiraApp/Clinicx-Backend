@@ -64,6 +64,8 @@ import { UserDevice } from "../models/Account/userdevice.model.js";
 import { AppVersion } from "../models/Account/app-version.model.js";
 import { AppNotification } from "../models/Common/app-notification.model.js";
 import { DoctorSuggestion } from "../models/Appointments/doctor-suggestion.model.js";
+import { OfferBanner } from "../models/Offers/offer-banner.model.js";
+import { PushCampaign } from "../models/Notifications/push-campaign.model.js";
 
 import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
 import { HospitalSetting } from "../models/Organizations/hospital-settings.model.js";
@@ -117,7 +119,9 @@ export const AppDataSource = new DataSource({
         AppNotification,
         DoctorSuggestion,
         HospitalSetting,
-        HospitalSettingsHistory
+        HospitalSettingsHistory,
+        OfferBanner,
+        PushCampaign
     ],
     extra: {
         encrypt: true,
