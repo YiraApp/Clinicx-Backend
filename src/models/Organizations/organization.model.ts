@@ -38,4 +38,7 @@ export class Organization {
 
     @Column({ type: "varchar", length: 255, nullable: true })
     Website?: string;
+
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    ImageUrl?: string;
 }

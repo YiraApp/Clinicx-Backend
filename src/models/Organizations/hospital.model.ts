@@ -109,4 +109,7 @@ export class Hospital {
 
     @Column({ type: "bit", default: false })
     IsDeleted?: boolean;
+
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    ImageUrl?: string;
 }

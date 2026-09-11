@@ -37,6 +37,7 @@ export interface CreateHospitalRequest {
 
     // Metadata
     CreatedBy?: string;
+    ImageUrl?: string;
 }
 
 export interface CreateHospitalResponse {

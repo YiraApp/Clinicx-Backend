@@ -11,6 +11,7 @@ export interface CreateOrganizationRequest {
 
     Address?: string;
     Website?: string;
+    ImageUrl?: string;
     roleId: string;
     HospitalId?: number;
 }
