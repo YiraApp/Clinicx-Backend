@@ -15,6 +15,7 @@ import { hospitalController } from "../../../controllers/Organizations/hospital.
 import { mobileDoctorSuggestionController } from "../controllers/provider/doctor-suggestion.controller.js";
 import { getActiveOffers, getActivePopupAd } from "../controllers/offer-banner.controller.js";
 import { patientVitalsController } from "../controllers/patient-vitals.controller.js";
+import { patientFitnessController } from "../controllers/patient-fitness.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 
@@ -122,5 +123,11 @@ authRouter.delete("/doctor-suggestions/:id", authMiddleware, (req, res) => mobil
 // Offer Banners & Popup Ads
 authRouter.get("/offers/popup", getActivePopupAd);
 authRouter.get("/offers", getActiveOffers);
+
+// Patient Fitness & Activity (Apple Health & Google Health Connect)
+authRouter.post("/patient/fitness/sync", authMiddleware, (req, res) => patientFitnessController.syncFitness(req, res));
+authRouter.get("/patient/fitness/summary", authMiddleware, (req, res) => patientFitnessController.getFitnessSummary(req, res));
+authRouter.get("/patient/fitness/status", authMiddleware, (req, res) => patientFitnessController.getFitnessStatus(req, res));
+authRouter.post("/patient/fitness/disconnect", authMiddleware, (req, res) => patientFitnessController.disconnectFitness(req, res));
 
 export { authRouter };

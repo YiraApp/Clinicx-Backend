@@ -193,9 +193,9 @@ export class PatientVitalsController {
                 Height: height || null,
                 Status: "Completed",
                 CreatedBy: (req as any).user?.firstName 
-                    ? `${(req as any).user.firstName} (Self)`.trim()
+                    ? `${(req as any).user?.firstName} ${(req as any).user?.lastName || ''}`.trim() 
                     : "Patient"
-            });
+            } as any);
             await pmrRepo.save(record);
 
             // 3. Re-invoke getPatientVitals logic to return the fresh dynamic dataset
