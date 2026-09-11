@@ -123,9 +123,13 @@ export const AppDataSource = new DataSource({
         OfferBanner,
         PushCampaign
     ],
+    connectionTimeout: 30000,
+    requestTimeout: 30000,
     extra: {
         encrypt: true,
         trustServerCertificate: true,
+        connectionTimeout: 30000,
+        requestTimeout: 30000,
     },
 });
 
