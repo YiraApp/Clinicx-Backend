@@ -138,8 +138,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         requestLog.RequestBody = bodyStr.length > 2000 ? bodyStr.substring(0, 2000) + "... [truncated]" : bodyStr;
     }
 
-    if (process.env.NODE_ENV !== 'production') {
-        console.log(`[DEBUG] Request Method: ${req.method} | Path: ${req.path} | Body: ${requestLog.RequestBody || '{}'}`);
+    const timeStr = new Date().toLocaleTimeString();
+    console.log(`📥 [${timeStr}] ${req.method} ${req.originalUrl || req.url || req.path} (from ${ip || 'unknown'})`);
+    if (process.env.NODE_ENV !== 'production' && requestLog.RequestBody && requestLog.RequestBody !== '{}') {
+        console.log(`   Body: ${requestLog.RequestBody}`);
     }
 
     requestLog.RequestHeaders = JSON.stringify(req.headers).substring(0, 2000);
@@ -248,9 +250,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
             requestLog.ResponseTimeMs = durationMs;
             requestLog.UpdatedOn = new Date();
 
-            if (process.env.NODE_ENV !== 'production') {
-                console.log(`[DEBUG] Response Status: ${res.statusCode} | Path: ${req.path} | Duration: ${durationMs}ms | Body: ${requestLog.Response}`);
-            }
+            console.log(`📤 [${new Date().toLocaleTimeString()}] ${res.statusCode} ${req.method} ${req.originalUrl || req.url || req.path} (${durationMs}ms)`);
 
             // Fire and forget
             saveLog();
