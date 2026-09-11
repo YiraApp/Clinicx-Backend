@@ -281,7 +281,6 @@ export const initializeDatabase = async () => {
             END
         `);
 
-<<<<<<< HEAD
         // Ensure ConsultationFeeForPackages column exists on HospitalSettings table
         await AppDataSource.query(`
             IF EXISTS (SELECT * FROM sys.tables WHERE name = 'HospitalSettings')
@@ -297,8 +296,6 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings and core tables");
-=======
         // Ensure PatientFitnessData table exists
         await AppDataSource.query(`
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientFitnessData')
@@ -339,8 +336,7 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, PatientFitnessData and core tables");
->>>>>>> bba57d172ea9c5f2c46b8f914731d8ff08363cee
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings, PatientFitnessData and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;
