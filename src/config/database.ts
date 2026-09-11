@@ -66,6 +66,7 @@ import { AppNotification } from "../models/Common/app-notification.model.js";
 import { DoctorSuggestion } from "../models/Appointments/doctor-suggestion.model.js";
 import { OfferBanner } from "../models/Offers/offer-banner.model.js";
 import { PushCampaign } from "../models/Notifications/push-campaign.model.js";
+import { PatientFitnessData } from "../models/Fitness/patient-fitness.model.js";
 
 import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
 import { HospitalSetting } from "../models/Organizations/hospital-settings.model.js";
@@ -121,7 +122,8 @@ export const AppDataSource = new DataSource({
         HospitalSetting,
         HospitalSettingsHistory,
         OfferBanner,
-        PushCampaign
+        PushCampaign,
+        PatientFitnessData
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,
@@ -279,6 +281,7 @@ export const initializeDatabase = async () => {
             END
         `);
 
+<<<<<<< HEAD
         // Ensure ConsultationFeeForPackages column exists on HospitalSettings table
         await AppDataSource.query(`
             IF EXISTS (SELECT * FROM sys.tables WHERE name = 'HospitalSettings')
@@ -295,6 +298,49 @@ export const initializeDatabase = async () => {
         `);
 
         console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings and core tables");
+=======
+        // Ensure PatientFitnessData table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientFitnessData')
+            BEGIN
+                CREATE TABLE PatientFitnessData (
+                    Id UNIQUEIDENTIFIER DEFAULT NEWID() PRIMARY KEY,
+                    PatientId UNIQUEIDENTIFIER NOT NULL,
+                    Date DATE NOT NULL,
+                    Steps INT DEFAULT 0 NULL,
+                    Calories FLOAT DEFAULT 0 NULL,
+                    DistanceMeters FLOAT DEFAULT 0 NULL,
+                    ActiveMinutes INT DEFAULT 0 NULL,
+                    FlightsClimbed INT DEFAULT 0 NULL,
+                    HeartRateAvg FLOAT NULL,
+                    HeartRateMin FLOAT NULL,
+                    HeartRateMax FLOAT NULL,
+                    RestingHeartRate FLOAT NULL,
+                    BloodOxygen FLOAT NULL,
+                    BloodPressureSys FLOAT NULL,
+                    BloodPressureDia FLOAT NULL,
+                    SleepMinutes INT DEFAULT 0 NULL,
+                    SleepDeepMinutes INT DEFAULT 0 NULL,
+                    SleepRemMinutes INT DEFAULT 0 NULL,
+                    SleepLightMinutes INT DEFAULT 0 NULL,
+                    SleepAwakeMinutes INT DEFAULT 0 NULL,
+                    WeightKg FLOAT NULL,
+                    Bmi FLOAT NULL,
+                    WaterLiters FLOAT NULL,
+                    BloodGlucoseMgDl FLOAT NULL,
+                    Source VARCHAR(50) NOT NULL,
+                    RawHourlyJson NVARCHAR(MAX) NULL,
+                    RawMetricsJson NVARCHAR(MAX) NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    UpdatedAt DATETIME NULL,
+                    CONSTRAINT UQ_PatientFitness_Patient_Date UNIQUE (PatientId, Date)
+                );
+                CREATE NONCLUSTERED INDEX IX_PatientFitness_PatientId_Date ON PatientFitnessData (PatientId, Date DESC);
+            END
+        `);
+
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, PatientFitnessData and core tables");
+>>>>>>> bba57d172ea9c5f2c46b8f914731d8ff08363cee
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

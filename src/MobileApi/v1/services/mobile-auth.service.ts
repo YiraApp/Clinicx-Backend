@@ -971,6 +971,8 @@ export class MobileAuthService {
             organizationId: number;
             organizationName: string;
             organizationCode: string | null;
+            imageUrl?: string | null;
+            logo?: string | null;
             hospitals: any[];
         }>();
 
@@ -998,6 +1000,7 @@ export class MobileAuthService {
                             hospitalId: ur.Hospital.Id,
                             hospitalCode: ur.Hospital.HospitalCode ?? null,
                             hospitalName: ur.Hospital.Name,
+                            hospitalType: ur.Hospital.HospitalType ?? null,
                             imageUrl: hospLogo,
                             logo: hospLogo,
                             hospitalLogo: hospLogo,
@@ -1011,6 +1014,11 @@ export class MobileAuthService {
                             state: ur.Hospital.State ?? null,
                             country: ur.Hospital.Country ?? null,
                             pincode: ur.Hospital.Pincode ?? null,
+                            totalBeds: ur.Hospital.TotalBeds ?? null,
+                            emergencyBeds: ur.Hospital.EmergencyBeds ?? null,
+                            icuBeds: ur.Hospital.ICUBeds ?? null,
+                            openingTime: ur.Hospital.OpeningTime ?? null,
+                            closingTime: ur.Hospital.ClosingTime ?? null,
                             status: ur.Hospital.Status ?? null,
                             is24Hours: ur.Hospital.Is24Hours ?? null
                         });
@@ -1026,6 +1034,7 @@ export class MobileAuthService {
                                 hospitalId: hosp.Id,
                                 hospitalCode: hosp.HospitalCode ?? null,
                                 hospitalName: hosp.Name,
+                                hospitalType: hosp.HospitalType ?? null,
                                 imageUrl: hospLogo,
                                 logo: hospLogo,
                                 hospitalLogo: hospLogo,
@@ -1039,6 +1048,11 @@ export class MobileAuthService {
                                 state: hosp.State ?? null,
                                 country: hosp.Country ?? null,
                                 pincode: hosp.Pincode ?? null,
+                                totalBeds: hosp.TotalBeds ?? null,
+                                emergencyBeds: hosp.EmergencyBeds ?? null,
+                                icuBeds: hosp.ICUBeds ?? null,
+                                openingTime: hosp.OpeningTime ?? null,
+                                closingTime: hosp.ClosingTime ?? null,
                                 status: hosp.Status ?? null,
                                 is24Hours: hosp.Is24Hours ?? null
                             });
@@ -1066,6 +1080,7 @@ export class MobileAuthService {
                     hospitalId: defaultHospitalId,
                     hospitalCode: activeDefault?.Hospital?.HospitalCode ?? null,
                     hospitalName: hospName,
+                    hospitalType: activeDefault?.Hospital?.HospitalType ?? null,
                     imageUrl: defaultHospLogo,
                     logo: defaultHospLogo,
                     hospitalLogo: defaultHospLogo,
@@ -1079,6 +1094,11 @@ export class MobileAuthService {
                     state: activeDefault?.Hospital?.State ?? null,
                     country: activeDefault?.Hospital?.Country ?? null,
                     pincode: activeDefault?.Hospital?.Pincode ?? null,
+                    totalBeds: activeDefault?.Hospital?.TotalBeds ?? null,
+                    emergencyBeds: activeDefault?.Hospital?.EmergencyBeds ?? null,
+                    icuBeds: activeDefault?.Hospital?.ICUBeds ?? null,
+                    openingTime: activeDefault?.Hospital?.OpeningTime ?? null,
+                    closingTime: activeDefault?.Hospital?.ClosingTime ?? null,
                     status: activeDefault?.Hospital?.Status ?? true,
                     is24Hours: activeDefault?.Hospital?.Is24Hours ?? true
                 }]
