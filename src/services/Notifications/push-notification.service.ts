@@ -318,12 +318,13 @@ export class PushNotificationService {
         appointmentId: string | number;
         doctorId: string;
         patientId: string;
+        parentUserId?: string | null;
         doctorName: string;
         patientName: string;
         date: string;
         status: string;
     }) {
-        const { appointmentId, doctorId, patientId, doctorName, patientName, date, status } = params;
+        const { appointmentId, doctorId, patientId, parentUserId, doctorName, patientName, date, status } = params;
 
         const formattedStatus = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
         const formattedDoctor = this.formatDoctorName(doctorName);
@@ -339,6 +340,20 @@ export class PushNotificationService {
             route: "/appointmentDashboardScreen",
             additionalData: { appointmentId, status, date }
         });
+
+        // Notify Parent account if this is a dependent patient
+        if (parentUserId && parentUserId !== patientId) {
+            await this.sendNotification({
+                userId: parentUserId,
+                senderId: doctorId,
+                title: `Appointment ${formattedStatus}`,
+                body: `Appointment for ${patientName} with ${formattedDoctor} on ${date} has been marked as ${formattedStatus}.`,
+                type: "APPOINTMENT_STATUS",
+                referenceId: String(appointmentId),
+                route: "/appointmentDashboardScreen",
+                additionalData: { appointmentId, status, date, dependentId: patientId }
+            });
+        }
     }
 
     /**

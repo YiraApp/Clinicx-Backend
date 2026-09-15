@@ -494,7 +494,7 @@ export class MobileAppointmentService {
         appointment.Reason = data.reason || "General Checkup";
         appointment.AppointmentType = data.appointmentType || (data.isTeleConsultation ? "Video Consultation" : "In-Clinic");
         appointment.IsTeleConsultation = data.isTeleConsultation || false;
-        appointment.Status = requiresOnlinePayment ? "PendingPayment" : "Scheduled";
+        appointment.Status = requiresOnlinePayment ? "PendingPayment" : "Confirmed";
         appointment.CreatedBy = "MobileApp";
         if (data.parentAppointmentId) {
             appointment.ParentAppointmentId = Number(data.parentAppointmentId);
@@ -832,7 +832,7 @@ export class MobileAppointmentService {
         if (appointmentId && !isNaN(Number(appointmentId)) && Number(appointmentId) > 0) {
             appointment = await appointmentRepo.findOne({ 
                 where: { Id: Number(appointmentId) },
-                relations: ["User", "Doctor"]
+                relations: ["User", "Doctor", "Hospital"]
             });
         }
 
@@ -840,6 +840,7 @@ export class MobileAppointmentService {
             const query = appointmentRepo.createQueryBuilder("apt")
                 .leftJoinAndSelect("apt.User", "user")
                 .leftJoinAndSelect("apt.Doctor", "doctor")
+                .leftJoinAndSelect("apt.Hospital", "hospital")
                 .where("apt.UserId = :patientId", { patientId });
             if (doctorId) {
                 query.andWhere("apt.DoctorId = :doctorId", { doctorId });
@@ -858,8 +859,10 @@ export class MobileAppointmentService {
         appointment.Status = normalizedStatus;
         await appointmentRepo.save(appointment);
 
+        const isCancelled = normalizedStatus.toLowerCase() === "cancelled" || normalizedStatus.toLowerCase() === "canceled";
+
         // If status is cancelled, free up the doctor's schedule slot
-        if ((normalizedStatus.toLowerCase() === "cancelled" || normalizedStatus.toLowerCase() === "canceled") && appointment.SlotId) {
+        if (isCancelled && appointment.SlotId) {
             try {
                 const slotRepo = AppDataSource.getRepository(HealthcareProviderScheduleSlot);
                 const slot = await slotRepo.findOne({ where: { Id: appointment.SlotId } });
@@ -874,18 +877,22 @@ export class MobileAppointmentService {
             }
         }
 
-        // Trigger Push Notification for status update
-        try {
-            const patientName = appointment.User ? `${appointment.User.FirstName || ""} ${appointment.User.LastName || ""}`.trim() : "Patient";
-            const doctorName = appointment.Doctor ? `${appointment.Doctor.FirstName || ""} ${appointment.Doctor.LastName || ""}`.trim() : "Doctor";
-            const dateStr = new Date(appointment.AppointmentDate).toLocaleDateString("en-IN", {
-                day: "2-digit", month: "short", year: "numeric"
-            });
+        const patientName = appointment.User ? `${appointment.User.FirstName || ""} ${appointment.User.LastName || ""}`.trim() : "Patient";
+        let doctorName = appointment.Doctor ? `${appointment.Doctor.FirstName || ""} ${appointment.Doctor.LastName || ""}`.trim() : "Doctor";
+        if (doctorName && !doctorName.startsWith("Dr.") && !doctorName.startsWith("Dr ")) {
+            doctorName = `Dr. ${doctorName}`;
+        }
+        const dateStr = new Date(appointment.AppointmentDate).toLocaleDateString("en-IN", {
+            day: "2-digit", month: "short", year: "numeric"
+        });
 
+        // Trigger Push Notification for status update (both patient and parent account if dependent)
+        try {
             await pushNotificationService.notifyAppointmentStatusChanged({
                 appointmentId: appointment.Id,
                 doctorId: appointment.DoctorId,
                 patientId: appointment.UserId,
+                parentUserId: appointment.User?.ParentUserId || null,
                 doctorName,
                 patientName,
                 date: dateStr,
@@ -893,6 +900,24 @@ export class MobileAppointmentService {
             });
         } catch (e) {
             console.error("Failed to send status update push notification:", e);
+        }
+
+        // Trigger WhatsApp Cancellation message to Patient if cancelled
+        if (isCancelled && appointment.User?.PhoneNumber) {
+            try {
+                const hospitalRepo = AppDataSource.getRepository(Hospital);
+                const hospital = appointment.Hospital || (appointment.HospitalId ? await hospitalRepo.findOne({ where: { Id: appointment.HospitalId } }) : null);
+                const hospitalName = hospital?.Name || "our clinic";
+                const countryCode = appointment.User.CountryCode || "91";
+                const cleanDigits = appointment.User.PhoneNumber.replace(/\D/g, "");
+                const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
+
+                const cancelMsg = `Hello ${patientName},\n\nYour appointment with ${doctorName} at ${hospitalName} scheduled for ${dateStr} has been cancelled.\n\nIf you have questions or would like to reschedule, please contact ${hospitalName}.`;
+                await whatsappService.sendTextMessage(normalizedPhone, cancelMsg);
+                console.log(`[MobileAppointmentService] WhatsApp cancellation message sent to ${normalizedPhone}`);
+            } catch (waErr) {
+                console.error("[MobileAppointmentService] Failed to send WhatsApp cancellation message:", waErr);
+            }
         }
 
         return { appointmentId, status: appointment.Status };
@@ -1042,9 +1067,10 @@ export class MobileAppointmentService {
 
         // Find or establish the primary account
         let primaryUser: User | null = null;
-        if (data.parentUserId) {
+        const isUuid = (id?: string): boolean => Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim()));
+        if (data.parentUserId && isUuid(data.parentUserId)) {
             primaryUser = await userRepo.findOne({
-                where: { Id: data.parentUserId, IsDeleted: false }
+                where: { Id: data.parentUserId.trim(), IsDeleted: false }
             });
         }
         if (!primaryUser) {

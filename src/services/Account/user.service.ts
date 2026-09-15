@@ -266,6 +266,9 @@ export class UserService implements IUserService {
                 throw new Error("Maximum of 6 users allowed per phone number account.");
             }
             user.PhoneNumber = data.PhoneNumber;
+            if (user.IsPrimary) {
+                await AppDataSource.getRepository(User).update({ ParentUserId: user.Id }, { PhoneNumber: data.PhoneNumber });
+            }
         }
 
         // 2b. Check if email is provided and already belongs to another primary user account
@@ -741,7 +744,12 @@ export class UserService implements IUserService {
         if (personal.firstName !== undefined) user.FirstName = personal.firstName;
         if (personal.lastName !== undefined) user.LastName = personal.lastName;
         if (personal.email !== undefined) user.Email = personal.email;
-        if (personal.phone !== undefined) user.PhoneNumber = personal.phone;
+        if (personal.phone !== undefined) {
+            user.PhoneNumber = personal.phone;
+            if (user.IsPrimary) {
+                await AppDataSource.getRepository(User).update({ ParentUserId: user.Id }, { PhoneNumber: personal.phone });
+            }
+        }
         if (personal.dateOfBirth !== undefined) user.DateOfBirth = personal.dateOfBirth;
         if (personal.gender !== undefined) user.Gender = personal.gender;
 
@@ -902,7 +910,7 @@ export class UserService implements IUserService {
                 firstName: member.FirstName,
                 lastName: member.LastName,
                 name: `${member.FirstName || ""} ${member.LastName || ""}`.trim(),
-                phone: member.PhoneNumber,
+                phone: member.PhoneNumber || primaryMember.PhoneNumber,
                 email: member.Email,
                 gender: member.Gender,
                 dateOfBirth: member.DateOfBirth,
