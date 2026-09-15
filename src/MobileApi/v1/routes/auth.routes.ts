@@ -18,6 +18,7 @@ import { patientVitalsController } from "../controllers/patient-vitals.controlle
 import { patientFitnessController } from "../controllers/patient-fitness.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
+import { paymentController } from "../../../controllers/Payments/payment.controller.js";
 
 const authRouter = Router();
 
@@ -129,5 +130,10 @@ authRouter.post("/patient/fitness/sync", authMiddleware, (req, res) => patientFi
 authRouter.get("/patient/fitness/summary", authMiddleware, (req, res) => patientFitnessController.getFitnessSummary(req, res));
 authRouter.get("/patient/fitness/status", authMiddleware, (req, res) => patientFitnessController.getFitnessStatus(req, res));
 authRouter.post("/patient/fitness/disconnect", authMiddleware, (req, res) => patientFitnessController.disconnectFitness(req, res));
+
+// Online Payments & Razorpay (Teleconsultation & In-Person Prepayments)
+authRouter.post("/payments/create-order", authMiddleware, (req, res) => paymentController.createOrder(req, res));
+authRouter.post("/payments/verify", authMiddleware, (req, res) => paymentController.verify(req, res));
+authRouter.get("/payments/by-appointment/:appointmentId", authMiddleware, (req, res) => paymentController.getPaymentByAppointment(req, res));
 
 export { authRouter };

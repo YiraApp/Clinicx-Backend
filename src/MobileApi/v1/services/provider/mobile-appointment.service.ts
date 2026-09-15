@@ -473,6 +473,15 @@ export class MobileAppointmentService {
             await patientRegRepo.save(patientReg);
         }
 
+        const defaultDoctorFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null)
+            ? Number(provider.ConsultationFee)
+            : 0;
+        const isFeeIncluded = data.includeConsultationFee !== false && data.appointmentType !== "Without Consultation";
+        const consultationFee = isFeeIncluded
+            ? (data.consultationFee !== undefined && data.consultationFee !== null ? Number(data.consultationFee) : defaultDoctorFee)
+            : 0;
+        const requiresOnlinePayment = Boolean(data.isTeleConsultation && consultationFee > 0);
+
         // Create & Save Appointment
         const appointment = new Appointment();
         appointment.UserId = patientUser.Id;
@@ -485,7 +494,7 @@ export class MobileAppointmentService {
         appointment.Reason = data.reason || "General Checkup";
         appointment.AppointmentType = data.appointmentType || (data.isTeleConsultation ? "Video Consultation" : "In-Clinic");
         appointment.IsTeleConsultation = data.isTeleConsultation || false;
-        appointment.Status = "Scheduled";
+        appointment.Status = requiresOnlinePayment ? "PendingPayment" : "Scheduled";
         appointment.CreatedBy = "MobileApp";
         if (data.parentAppointmentId) {
             appointment.ParentAppointmentId = Number(data.parentAppointmentId);
@@ -566,15 +575,6 @@ export class MobileAppointmentService {
         // 2. Create/consolidate Appointment Bill (matching web API logic)
         try {
             const { appointmentBillRepository } = await import("../../../../repositories/Payments/appointment-bill.repository.js");
-            const defaultDoctorFee = (provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null)
-                ? Number(provider.ConsultationFee)
-                : 0;
-
-            const isFeeIncluded = data.includeConsultationFee !== false && data.appointmentType !== "Without Consultation";
-            const consultationFee = isFeeIncluded
-                ? (data.consultationFee !== undefined && data.consultationFee !== null ? Number(data.consultationFee) : defaultDoctorFee)
-                : 0;
-
             const discountAmount = Number(data.discountAmount || 0);
 
             // If it's a follow-up, locate the root parent appointment and append to existing bill
@@ -625,47 +625,73 @@ export class MobileAppointmentService {
             console.error("Error creating appointment bill in mobile booking:", billErr);
         }
 
-        // Mark Slot as Booked in Database
-        if (slot) {
+        // Mark Slot as Booked in Database:
+        // Only in-clinic visits or zero-fee appointments can schedule/book the slot immediately without upfront online payment.
+        // For online consultations requiring payment, the slot must NOT be scheduled/booked until payment is confirmed!
+        if (slot && !requiresOnlinePayment) {
             slot.IsBooked = true;
+            slot.Status = "Booked";
             await slotRepo.save(slot);
         }
 
-        // Fetch Doctor details for notifications
-        const resolvedDoctorUserId = doctorUserId || data.doctorId;
-        const doctorUser = await userRepo.findOne({ where: { Id: resolvedDoctorUserId } });
-        const doctorName = doctorUser ? `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() : (provider?.FirstName ? `${provider.FirstName} ${provider.LastName || ""}`.trim() : "Doctor");
-        const patientName = `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim() || data.patientName || "Patient";
-
-        const dateStr = new Date(savedAppointment.AppointmentDate).toLocaleDateString("en-IN", {
-            day: "2-digit", month: "short", year: "numeric"
-        });
-
-        // 1. Trigger Push Notification to Doctor & Patient (and Parent account if dependent)
-        try {
-            await pushNotificationService.notifyAppointmentBooked({
-                appointmentId: savedAppointment.Id,
-                doctorId: resolvedDoctorUserId,
-                patientId: patientUser.Id,
-                parentUserId: patientUser.ParentUserId || null,
-                doctorName,
-                patientName,
-                date: dateStr,
-                time: savedAppointment.StartTime || "10:00 AM",
-                consultationType: savedAppointment.AppointmentType
-            });
-        } catch (e) {
-            console.error("Failed to send appointment push notification:", e);
+        if (!requiresOnlinePayment) {
+            // For in-clinic visits or zero-fee teleconsultations, send notifications immediately
+            await this.sendAppointmentConfirmationNotifications(savedAppointment.Id);
+        } else {
+            console.log(`[MobileAppointmentService] Appointment #${savedAppointment.Id} is a teleconsultation requiring payment (₹${consultationFee}). Notifications withheld until payment is confirmed.`);
         }
 
-        // 2. Trigger WhatsApp Message to Patient
+        return {
+            appointmentId: savedAppointment.Id,
+            patientUserId: patientUser.Id,
+            patientName: `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim(),
+            appointmentDate: savedAppointment.AppointmentDate,
+            startTime: savedAppointment.StartTime,
+            status: savedAppointment.Status,
+            requiresOnlinePayment
+        };
+    }
+
+    /**
+     * Dispatches Push Notifications (to doctor, patient & parent account) and WhatsApp booking template.
+     * Called immediately for in-clinic/free bookings, or after payment verification for paid teleconsultations.
+     */
+    async sendAppointmentConfirmationNotifications(appointmentId: number): Promise<void> {
         try {
-            const hospitalRepo = AppDataSource.getRepository(Hospital);
-            const hospital = await hospitalRepo.findOne({ where: { Id: data.hospitalId } });
-            const hospitalName = hospital?.Name || "our clinic";
-            const countryCode = patientUser.CountryCode || "91";
-            const cleanDigits = patientUser.PhoneNumber.replace(/\D/g, "");
-            const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
+            const appointmentRepo = AppDataSource.getRepository(Appointment);
+            const userRepo = AppDataSource.getRepository(User);
+            const appt = await appointmentRepo.findOne({
+                where: { Id: appointmentId },
+                relations: ["User", "Doctor", "Hospital"]
+            });
+
+            if (!appt) {
+                console.warn(`[MobileAppointmentService] Appointment #${appointmentId} not found for sending confirmation notifications.`);
+                return;
+            }
+
+            const patientUser = appt.User;
+            if (!patientUser) {
+                console.warn(`[MobileAppointmentService] Patient user missing on appointment #${appointmentId}.`);
+                return;
+            }
+
+            let doctorName = appt.Doctor ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim() : "";
+            if (!doctorName || doctorName === "Doctor") {
+                try {
+                    const doctorUser = await userRepo.findOne({ where: { Id: appt.DoctorId } });
+                    if (doctorUser?.FirstName) {
+                        doctorName = `${doctorUser.FirstName} ${doctorUser.LastName || ""}`.trim();
+                    }
+                } catch (_) {}
+            }
+            if (!doctorName) doctorName = "Doctor";
+
+            const patientName = `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim() || "Patient";
+
+            const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
+                day: "2-digit", month: "short", year: "numeric"
+            });
 
             const formatTime12h = (timeStr: string) => {
                 if (!timeStr) return "10:00 AM";
@@ -683,82 +709,106 @@ export class MobileAppointmentService {
                 return `${hour}:${minute} ${ampm}`;
             };
 
-            const formattedDoctorName = doctorName.startsWith("Dr.") || doctorName.startsWith("Dr ") ? doctorName : `Dr. ${doctorName}`;
-            const timeDisplay = formatTime12h(savedAppointment.StartTime || "10:00:00");
-            const templateName = data.isTeleConsultation ? "video_call_template" : "appointment_conformation";
+            const timeDisplay = formatTime12h(appt.StartTime || "10:00:00");
 
-            let redirectionUrlId = "";
-            if (data.isTeleConsultation) {
-                try {
-                    const { meetingRedirectionService } = await import("../../../../services/Appointments/meeting-redirection.service.js");
-                    const redirection = await meetingRedirectionService.getOrCreateRedirection({
-                        AppointmentId: savedAppointment.Id,
-                        PatientId: patientUser.Id,
-                        DoctorId: data.doctorId,
-                        HospitalId: data.hospitalId,
-                        OrganizationId: data.orgId,
-                        MeetingUrl: savedAppointment.MeetingUrl || "",
-                        AppointmentDate: savedAppointment.AppointmentDate,
-                        StartTime: savedAppointment.StartTime
-                    });
-                    if (redirection && redirection.UrlId) {
-                        redirectionUrlId = redirection.UrlId;
-                    }
-                } catch (redirErr) {
-                    console.error("[MobileAppointmentService] Error creating meeting redirection for WhatsApp:", redirErr);
-                }
-            }
-
-            const components: any[] = [
-                {
-                    type: "header",
-                    parameters: [{ type: "text", text: hospitalName }]
-                },
-                {
-                    type: "body",
-                    parameters: [
-                        { type: "text", text: patientName },
-                        { type: "text", text: formattedDoctorName },
-                        { type: "text", text: hospitalName },
-                        { type: "text", text: dateStr },
-                        { type: "text", text: timeDisplay }
-                    ]
-                }
-            ];
-
-            if (data.isTeleConsultation && redirectionUrlId) {
-                components.push({
-                    type: "button",
-                    sub_type: "url",
-                    index: "0",
-                    parameters: [
-                        { type: "text", text: redirectionUrlId }
-                    ]
-                });
-            }
-
+            // 1. Trigger Push Notification to Doctor & Patient (and Parent account if dependent)
             try {
-                await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
-                console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone} for ${patientName}`);
-            } catch (templateErr) {
-                console.warn(`[MobileAppointmentService] WhatsApp template message failed, sending fallback text:`, templateErr);
-                const joinCallInfo = savedAppointment.MeetingUrl ? `\nJoin Call: ${savedAppointment.MeetingUrl}` : "";
-                const fallbackMessage = `Hello ${patientName},\n\nYour ${data.isTeleConsultation ? 'online consultation ' : ''}appointment with ${formattedDoctorName} at ${hospitalName} is confirmed for ${dateStr} at ${timeDisplay}.${joinCallInfo}\n\nThank you for choosing ${hospitalName}!`;
-                await whatsappService.sendTextMessage(normalizedPhone, fallbackMessage);
-                console.log(`[MobileAppointmentService] WhatsApp text message sent to ${normalizedPhone}`);
+                await pushNotificationService.notifyAppointmentBooked({
+                    appointmentId: appt.Id,
+                    doctorId: appt.DoctorId,
+                    patientId: patientUser.Id,
+                    parentUserId: patientUser.ParentUserId || null,
+                    doctorName,
+                    patientName,
+                    date: dateStr,
+                    time: timeDisplay,
+                    consultationType: appt.AppointmentType || (appt.IsTeleConsultation ? "Video Consultation" : "In-Clinic")
+                });
+                console.log(`[MobileAppointmentService] Push notification sent for confirmed appointment #${appt.Id}`);
+            } catch (pushErr) {
+                console.error("[MobileAppointmentService] Failed to send appointment push notification:", pushErr);
             }
-        } catch (waErr) {
-            console.error("[MobileAppointmentService] WhatsApp messaging error:", waErr);
-        }
 
-        return {
-            appointmentId: savedAppointment.Id,
-            patientUserId: patientUser.Id,
-            patientName: `${patientUser.FirstName || ""} ${patientUser.LastName || ""}`.trim(),
-            appointmentDate: savedAppointment.AppointmentDate,
-            startTime: savedAppointment.StartTime,
-            status: savedAppointment.Status
-        };
+            // 2. Trigger WhatsApp Message to Patient
+            if (patientUser.PhoneNumber) {
+                try {
+                    const hospitalRepo = AppDataSource.getRepository(Hospital);
+                    const hospital = appt.Hospital || (appt.HospitalId ? await hospitalRepo.findOne({ where: { Id: appt.HospitalId } }) : null);
+                    const hospitalName = hospital?.Name || "our clinic";
+                    const countryCode = patientUser.CountryCode || "91";
+                    const cleanDigits = patientUser.PhoneNumber.replace(/\D/g, "");
+                    const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
+
+                    const formattedDoctorName = doctorName.startsWith("Dr.") || doctorName.startsWith("Dr ") ? doctorName : `Dr. ${doctorName}`;
+                    const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
+
+                    let redirectionUrlId = "";
+                    if (appt.IsTeleConsultation) {
+                        try {
+                            const { meetingRedirectionService } = await import("../../../../services/Appointments/meeting-redirection.service.js");
+                            const redirection = await meetingRedirectionService.getOrCreateRedirection({
+                                AppointmentId: appt.Id,
+                                PatientId: patientUser.Id,
+                                DoctorId: appt.DoctorId,
+                                HospitalId: appt.HospitalId,
+                                OrganizationId: appt.OrgId,
+                                MeetingUrl: appt.MeetingUrl || "",
+                                AppointmentDate: appt.AppointmentDate,
+                                StartTime: appt.StartTime
+                            });
+                            if (redirection && redirection.UrlId) {
+                                redirectionUrlId = redirection.UrlId;
+                            }
+                        } catch (redirErr) {
+                            console.error("[MobileAppointmentService] Error creating meeting redirection for WhatsApp:", redirErr);
+                        }
+                    }
+
+                    const components: any[] = [
+                        {
+                            type: "header",
+                            parameters: [{ type: "text", text: hospitalName }]
+                        },
+                        {
+                            type: "body",
+                            parameters: [
+                                { type: "text", text: patientName },
+                                { type: "text", text: formattedDoctorName },
+                                { type: "text", text: hospitalName },
+                                { type: "text", text: dateStr },
+                                { type: "text", text: timeDisplay }
+                            ]
+                        }
+                    ];
+
+                    if (appt.IsTeleConsultation && redirectionUrlId) {
+                        components.push({
+                            type: "button",
+                            sub_type: "url",
+                            index: "0",
+                            parameters: [
+                                { type: "text", text: redirectionUrlId }
+                            ]
+                        });
+                    }
+
+                    try {
+                        await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
+                        console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone} for ${patientName}`);
+                    } catch (templateErr) {
+                        console.warn(`[MobileAppointmentService] WhatsApp template message failed, sending fallback text:`, templateErr);
+                        const joinCallInfo = appt.MeetingUrl ? `\nJoin Call: ${appt.MeetingUrl}` : "";
+                        const fallbackMessage = `Hello ${patientName},\n\nYour ${appt.IsTeleConsultation ? 'online consultation ' : ''}appointment with ${formattedDoctorName} at ${hospitalName} is confirmed for ${dateStr} at ${timeDisplay}.${joinCallInfo}\n\nThank you for choosing ${hospitalName}!`;
+                        await whatsappService.sendTextMessage(normalizedPhone, fallbackMessage);
+                        console.log(`[MobileAppointmentService] WhatsApp text message sent to ${normalizedPhone}`);
+                    }
+                } catch (waErr) {
+                    console.error("[MobileAppointmentService] WhatsApp messaging error:", waErr);
+                }
+            }
+        } catch (err) {
+            console.error("[MobileAppointmentService] Error in sendAppointmentConfirmationNotifications:", err);
+        }
     }
 
     async updateAppointmentStatus(options: { appointmentId?: string; patientId?: string; doctorId?: string; status: string } | string, statusArg?: string): Promise<any> {
@@ -807,6 +857,22 @@ export class MobileAppointmentService {
         const normalizedStatus = status.trim();
         appointment.Status = normalizedStatus;
         await appointmentRepo.save(appointment);
+
+        // If status is cancelled, free up the doctor's schedule slot
+        if ((normalizedStatus.toLowerCase() === "cancelled" || normalizedStatus.toLowerCase() === "canceled") && appointment.SlotId) {
+            try {
+                const slotRepo = AppDataSource.getRepository(HealthcareProviderScheduleSlot);
+                const slot = await slotRepo.findOne({ where: { Id: appointment.SlotId } });
+                if (slot) {
+                    slot.IsBooked = false;
+                    slot.Status = "Available";
+                    await slotRepo.save(slot);
+                    console.log(`[MobileAppointmentService] Slot #${appointment.SlotId} released for cancelled appointment #${appointment.Id}`);
+                }
+            } catch (slotErr) {
+                console.error("[MobileAppointmentService] Error releasing slot on cancellation:", slotErr);
+            }
+        }
 
         // Trigger Push Notification for status update
         try {

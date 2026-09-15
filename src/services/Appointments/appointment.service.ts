@@ -512,12 +512,15 @@ export class AppointmentService {
                 }
             }
 
-            // 6. Mark Slot as Booked
-            await manager.update("HealthcareProviderScheduleSlots", data.slotId, {
-                IsBooked: true,
-                Status: "Booked",
-                UpdatedAt: new Date()
-            });
+            // 6. Mark Slot as Booked: Only book slot immediately for in-clinic or free appointments
+            const isOnlinePending = isTele && (data.status === "PendingPayment" || data.status === "Pending");
+            if (!isOnlinePending && data.slotId) {
+                await manager.update("HealthcareProviderScheduleSlots", data.slotId, {
+                    IsBooked: true,
+                    Status: "Booked",
+                    UpdatedAt: new Date()
+                });
+            }
 
             // 7. Create/consolidate complete Appointment Bill immediately
             const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
@@ -611,7 +614,10 @@ export class AppointmentService {
         try {
             const enrichedAppointment = await appointmentRepository.findById(newAppointment.Id);
             if (enrichedAppointment && enrichedAppointment.User?.PhoneNumber) {
-                const appt = enrichedAppointment;
+                if (enrichedAppointment.Status === "PendingPayment" || enrichedAppointment.Status === "Pending") {
+                    console.log(`[AppointmentService] Appointment #${enrichedAppointment.Id} is ${enrichedAppointment.Status}. WhatsApp confirmation withheld until payment confirmation.`);
+                } else {
+                    const appt = enrichedAppointment;
                 const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
 
@@ -680,6 +686,7 @@ export class AppointmentService {
 
                 await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
                 console.log(`[AppointmentService] WhatsApp appointment notification sent to ${normalizedPhone} using template ${templateName}`);
+                }
             }
         } catch (err) {
             console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err);

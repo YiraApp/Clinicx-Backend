@@ -141,6 +141,22 @@ export async function sendFcmPushToTokens(
         } catch (err: any) {
             console.error(`[FirebaseAdmin] Failed to send to token ${token.substring(0, 15)}...:`, err?.message || err);
             failureCount++;
+
+            const msg = (err?.message || "").toLowerCase();
+            const code = err?.code || "";
+            if (
+                code === "messaging/registration-token-not-registered" ||
+                code === "messaging/invalid-registration-token" ||
+                msg.includes("not a valid fcm registration token") ||
+                msg.includes("apns device token is disabled") ||
+                msg.includes("requested entity was not found")
+            ) {
+                try {
+                    const { userDeviceRepository } = await import("../../MobileApi/v1/repositories/userdevice.repository.js");
+                    await userDeviceRepository.deactivateToken(token);
+                    console.log(`[FirebaseAdmin] Deactivated stale device token ${token.substring(0, 15)}...`);
+                } catch (_) {}
+            }
         }
     }
 
