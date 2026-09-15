@@ -247,10 +247,10 @@ export class OTPService {
             };
         }
 
-        // 2. Post-verification: Update User table ONLY if the purpose is VERIFICATION
+        // 2. Post-verification: Update User table if the purpose is VERIFICATION or LOGIN
         let verifiedField: 'email' | 'mobile' = isEmail ? 'email' : 'mobile';
 
-        if (purpose === OTPPurpose.VERIFICATION) {
+        if (purpose === OTPPurpose.VERIFICATION || purpose === OTPPurpose.LOGIN || purpose === 'LOGIN') {
             try {
                 let userId: string | null = null;
                 if (isEmail) {
