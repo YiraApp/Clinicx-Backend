@@ -283,7 +283,7 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        // Ensure ConsultationFeeForPackages column exists on HospitalSettings table
+        // Ensure ConsultationFeeForPackages, AppointmentBookingTemplate, SendBookingAfterDocument, BookingAfterDocumentMinutes exist on HospitalSettings table
         await AppDataSource.query(`
             IF EXISTS (SELECT * FROM sys.tables WHERE name = 'HospitalSettings')
             BEGIN
@@ -294,6 +294,33 @@ export const initializeDatabase = async () => {
                 )
                 BEGIN
                     ALTER TABLE [dbo].[HospitalSettings] ADD [ConsultationFeeForPackages] bit NOT NULL DEFAULT 0;
+                END
+
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns 
+                    WHERE object_id = OBJECT_ID(N'[dbo].[HospitalSettings]') 
+                      AND name = 'AppointmentBookingTemplate'
+                )
+                BEGIN
+                    ALTER TABLE [dbo].[HospitalSettings] ADD [AppointmentBookingTemplate] bit NOT NULL DEFAULT 0;
+                END
+
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns 
+                    WHERE object_id = OBJECT_ID(N'[dbo].[HospitalSettings]') 
+                      AND name = 'SendBookingAfterDocument'
+                )
+                BEGIN
+                    ALTER TABLE [dbo].[HospitalSettings] ADD [SendBookingAfterDocument] bit NOT NULL DEFAULT 0;
+                END
+
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns 
+                    WHERE object_id = OBJECT_ID(N'[dbo].[HospitalSettings]') 
+                      AND name = 'BookingAfterDocumentMinutes'
+                )
+                BEGIN
+                    ALTER TABLE [dbo].[HospitalSettings] ADD [BookingAfterDocumentMinutes] int NOT NULL DEFAULT 20;
                 END
             END
         `);

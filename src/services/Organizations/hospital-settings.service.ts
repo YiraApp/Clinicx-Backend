@@ -44,6 +44,9 @@ export class HospitalSettingsService {
                 DentalConsultation: false,
                 EyeCare: false,
                 NotifyTemplate: false,
+                AppointmentBookingTemplate: false,
+                SendBookingAfterDocument: false,
+                BookingAfterDocumentMinutes: 20,
                 AdditionalFlags: null,
                 Version: 0,
                 IsActive: true,
@@ -94,6 +97,15 @@ export class HospitalSettingsService {
                 DentalConsultation: data.DentalConsultation !== undefined ? Boolean(data.DentalConsultation) : false,
                 EyeCare: data.EyeCare !== undefined ? Boolean(data.EyeCare) : false,
                 NotifyTemplate: data.NotifyTemplate !== undefined ? Boolean(data.NotifyTemplate) : false,
+                AppointmentBookingTemplate: data.AppointmentBookingTemplate !== undefined 
+                    ? Boolean(data.AppointmentBookingTemplate) 
+                    : ((data as any).appointmentBookingTemplate !== undefined ? Boolean((data as any).appointmentBookingTemplate) : false),
+                SendBookingAfterDocument: data.SendBookingAfterDocument !== undefined 
+                    ? Boolean(data.SendBookingAfterDocument) 
+                    : ((data as any).sendBookingAfterDocument !== undefined ? Boolean((data as any).sendBookingAfterDocument) : false),
+                BookingAfterDocumentMinutes: data.BookingAfterDocumentMinutes !== undefined 
+                    ? Number(data.BookingAfterDocumentMinutes) 
+                    : ((data as any).bookingAfterDocumentMinutes !== undefined ? Number((data as any).bookingAfterDocumentMinutes) : 20),
                 AdditionalFlags: data.AdditionalFlags 
                     ? (typeof data.AdditionalFlags === "string" ? data.AdditionalFlags : JSON.stringify(data.AdditionalFlags)) 
                     : null,
@@ -142,6 +154,9 @@ export class HospitalSettingsService {
             DentalConsultation: setting.DentalConsultation,
             EyeCare: setting.EyeCare,
             NotifyTemplate: setting.NotifyTemplate,
+            AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
+            SendBookingAfterDocument: setting.SendBookingAfterDocument,
+            BookingAfterDocumentMinutes: setting.BookingAfterDocumentMinutes,
             AdditionalFlags: setting.AdditionalFlags
         };
 
@@ -198,6 +213,27 @@ export class HospitalSettingsService {
             changedFields.push("NotifyTemplate");
             setting.NotifyTemplate = Boolean(data.NotifyTemplate);
         }
+        const apptBookingVal = data.AppointmentBookingTemplate !== undefined 
+            ? data.AppointmentBookingTemplate 
+            : (data as any).appointmentBookingTemplate;
+        if (apptBookingVal !== undefined && Boolean(apptBookingVal) !== setting.AppointmentBookingTemplate) {
+            changedFields.push("AppointmentBookingTemplate");
+            setting.AppointmentBookingTemplate = Boolean(apptBookingVal);
+        }
+        const sendBookingDocVal = data.SendBookingAfterDocument !== undefined 
+            ? data.SendBookingAfterDocument 
+            : (data as any).sendBookingAfterDocument;
+        if (sendBookingDocVal !== undefined && Boolean(sendBookingDocVal) !== setting.SendBookingAfterDocument) {
+            changedFields.push("SendBookingAfterDocument");
+            setting.SendBookingAfterDocument = Boolean(sendBookingDocVal);
+        }
+        const bookingDocMinsVal = data.BookingAfterDocumentMinutes !== undefined 
+            ? data.BookingAfterDocumentMinutes 
+            : (data as any).bookingAfterDocumentMinutes;
+        if (bookingDocMinsVal !== undefined && Number(bookingDocMinsVal) !== setting.BookingAfterDocumentMinutes) {
+            changedFields.push("BookingAfterDocumentMinutes");
+            setting.BookingAfterDocumentMinutes = Number(bookingDocMinsVal);
+        }
         if (data.AdditionalFlags !== undefined && data.AdditionalFlags !== setting.AdditionalFlags) {
             changedFields.push("AdditionalFlags");
             setting.AdditionalFlags = typeof data.AdditionalFlags === "string" 
@@ -229,6 +265,9 @@ export class HospitalSettingsService {
             DentalConsultation: setting.DentalConsultation,
             EyeCare: setting.EyeCare,
             NotifyTemplate: setting.NotifyTemplate,
+            AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
+            SendBookingAfterDocument: setting.SendBookingAfterDocument,
+            BookingAfterDocumentMinutes: setting.BookingAfterDocumentMinutes,
             AdditionalFlags: setting.AdditionalFlags
         };
 
