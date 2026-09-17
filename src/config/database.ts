@@ -71,6 +71,7 @@ import { PatientFitnessData } from "../models/Fitness/patient-fitness.model.js";
 import { DefaultOrganization } from "../models/Organizations/default-organization.model.js";
 import { HospitalSetting } from "../models/Organizations/hospital-settings.model.js";
 import { HospitalSettingsHistory } from "../models/Organizations/hospital-settings-history.model.js";
+import { Feedback } from "../models/Feedback/feedback.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -123,7 +124,8 @@ export const AppDataSource = new DataSource({
         HospitalSettingsHistory,
         OfferBanner,
         PushCampaign,
-        PatientFitnessData
+        PatientFitnessData,
+        Feedback
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,
@@ -336,7 +338,35 @@ export const initializeDatabase = async () => {
             END
         `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings, PatientFitnessData and core tables");
+        // Ensure Feedbacks table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Feedbacks')
+            BEGIN
+                CREATE TABLE Feedbacks (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    UserId UNIQUEIDENTIFIER NULL,
+                    Name NVARCHAR(150) NOT NULL,
+                    Phone NVARCHAR(50) NULL,
+                    Email NVARCHAR(150) NULL,
+                    Rating INT NOT NULL,
+                    Category NVARCHAR(100) NULL,
+                    Message NVARCHAR(MAX) NOT NULL,
+                    OrganizationId INT NULL,
+                    OrganizationName NVARCHAR(255) NULL,
+                    HospitalId INT NULL,
+                    HospitalName NVARCHAR(255) NULL,
+                    Source VARCHAR(50) DEFAULT 'Public' NOT NULL,
+                    Status VARCHAR(50) DEFAULT 'New' NOT NULL,
+                    AdminNotes NVARCHAR(MAX) NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    UpdatedAt DATETIME NULL
+                );
+                CREATE NONCLUSTERED INDEX IX_Feedbacks_HospitalId ON Feedbacks (HospitalId, CreatedAt DESC);
+                CREATE NONCLUSTERED INDEX IX_Feedbacks_OrganizationId ON Feedbacks (OrganizationId, CreatedAt DESC);
+            END
+        `);
+
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings, PatientFitnessData, Feedbacks and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;
