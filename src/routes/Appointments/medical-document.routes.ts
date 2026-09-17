@@ -4,6 +4,7 @@ import { upload } from "../../middlewares/upload.middleware.js";
 
 const medicalDocumentRouter = Router();
 
+medicalDocumentRouter.post("/appointment-booking", medicalDocumentController.sendAppointmentBooking.bind(medicalDocumentController));
 medicalDocumentRouter.post("/dental-consultation", medicalDocumentController.sendDentalConsultation.bind(medicalDocumentController));
 medicalDocumentRouter.post("/eye-consultation", medicalDocumentController.sendEyeConsultation.bind(medicalDocumentController));
 medicalDocumentRouter.post("/home-sample", medicalDocumentController.scheduleHomeSample.bind(medicalDocumentController));

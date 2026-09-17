@@ -4,6 +4,20 @@ import { ApiResponse } from "../../utils/response.utils.js";
 
 export class MedicalDocumentController {
 
+    async sendAppointmentBooking(req: Request, res: Response) {
+        try {
+            const { patientId, hospitalId, senderId } = req.body;
+            if (!patientId) {
+                return res.status(400).json(ApiResponse.error("Patient ID is required."));
+            }
+            const result = await medicalDocumentService.sendAppointmentBookingWhatsApp(patientId, hospitalId, senderId);
+            return res.json(ApiResponse.success(result, "Appointment Booking WhatsApp notification sent successfully."));
+        } catch (error: any) {
+            console.error("[MedicalDocumentController] sendAppointmentBooking Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
     async sendDentalConsultation(req: Request, res: Response) {
         try {
             const { patientId, senderId } = req.body;

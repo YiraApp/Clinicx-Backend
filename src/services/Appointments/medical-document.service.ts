@@ -15,7 +15,304 @@ function ensureUUID(str?: any): string {
     return DEFAULT_UUID;
 }
 
+function toNullableUUID(str?: any): string | null {
+    if (!str) return null;
+    const s = String(str).trim();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(s)) return s;
+    return null;
+}
+
 export class MedicalDocumentService {
+    private pendingBookingTimers: Map<string, NodeJS.Timeout> = new Map();
+    private bookingCronInterval: NodeJS.Timeout | null = null;
+
+    /**
+     * Send Appointment Booking WhatsApp template (yira_appointment_book) to patient.
+     * Can be invoked manually from UI or automatically by the document upload scheduler.
+     */
+    async sendAppointmentBookingWhatsApp(patientId: string, hospitalId?: number, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+        const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        // Resolve hospital name
+        let targetHospId = hospitalId ? Number(hospitalId) : undefined;
+        let hospitalName = "Yira Hospitals";
+
+        if (targetHospId) {
+            const hosp = await hospitalRepository.findById(targetHospId);
+            if (hosp && hosp.Name) {
+                hospitalName = hosp.Name;
+            }
+        } else {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault) {
+                targetHospId = activeDefault.HospitalId || 19;
+                hospitalName = activeDefault.HospitalName || "Yira Hospitals";
+            }
+        }
+
+        // WhatsApp template: yira_appointment_book
+        // Body {{1}}: Patient Name, Body {{2}}: Hospital Name
+        // Meta template button is a static URL, so components only supply body parameters
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName },
+                    { type: "text", text: hospitalName }
+                ]
+            }
+        ];
+
+        console.log(`[MedicalDocumentService] Sending WhatsApp 'yira_appointment_book' to ${normalizedPhone} (Hospital: ${hospitalName})`);
+        let whatsappResult: any = null;
+        try {
+            whatsappResult = await whatsappService.sendTemplateMessage(normalizedPhone, "yira_appointment_book", "en", components);
+        } catch (waErr: any) {
+            console.error(`[MedicalDocumentService] Failed to send 'yira_appointment_book' to ${normalizedPhone}:`, waErr.message);
+            throw waErr;
+        }
+
+        // Record in AppNotification
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = toNullableUUID(senderId);
+        notif.Title = "Appointment Booking Link Sent";
+        notif.Body = `Appointment booking portal link sent to ${normalizedPhone} ('yira_appointment_book' template) for ${hospitalName}`;
+        notif.Type = "WHATSAPP_APPOINTMENT_BOOK";
+        notif.ReferenceId = patientId;
+        notif.Route = "/book-appointment/" + (targetHospId || 19);
+        notif.IsRead = true;
+        await notifRepo.save(notif);
+
+        return {
+            success: true,
+            whatsappResult,
+            notification: notif
+        };
+    }
+
+    /**
+     * Trigger automatic appointment booking WhatsApp link after document upload
+     * if enabled in HospitalSettings for this facility.
+     */
+    async triggerAutoBookingAfterDocument(patientId: string, hospitalId: number, senderId?: string): Promise<void> {
+        try {
+            const { hospitalSettingsService } = await import("../Organizations/hospital-settings.service.js");
+            const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+            const { AppDataSource } = await import("../../config/database.js");
+            const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+            const { MoreThan } = await import("typeorm");
+
+            let targetHospId = Number(hospitalId) || 0;
+            let settings = targetHospId > 0 ? await hospitalSettingsService.getSettings(targetHospId) : null;
+
+            // Fallback to active default organization if hospitalId is <= 1 or settings not enabled on hospital 1
+            if (!settings?.SendBookingAfterDocument) {
+                const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+                if (activeDefault?.HospitalId && activeDefault.HospitalId !== targetHospId) {
+                    const defaultSettings = await hospitalSettingsService.getSettings(activeDefault.HospitalId);
+                    if (defaultSettings?.SendBookingAfterDocument) {
+                        console.log(`[MedicalDocumentService] Using default Hospital #${activeDefault.HospitalId} settings for auto-booking`);
+                        targetHospId = activeDefault.HospitalId;
+                        settings = defaultSettings;
+                    }
+                }
+            }
+
+            if (!settings || !settings.SendBookingAfterDocument) {
+                console.log(`[MedicalDocumentService] Auto-booking link disabled for Hospital #${targetHospId || hospitalId}. Skipping.`);
+                return;
+            }
+
+            const delayMinutes = Math.max(0, Number(settings.BookingAfterDocumentMinutes) || 0);
+            console.log(`[MedicalDocumentService] SendBookingAfterDocument is ACTIVE for Hospital #${targetHospId} with ${delayMinutes}m delay.`);
+
+            const notifRepo = AppDataSource.getRepository(AppNotification);
+
+            if (delayMinutes <= 0) {
+                // Immediate dispatch with debounce protection (check if already sent in last 5 minutes to avoid batch upload spam)
+                const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+                const recentBooking = await notifRepo.findOne({
+                    where: {
+                        UserId: patientId,
+                        Type: "WHATSAPP_APPOINTMENT_BOOK",
+                        CreatedAt: MoreThan(fiveMinutesAgo)
+                    }
+                });
+                if (recentBooking) {
+                    console.log(`[MedicalDocumentService] Appointment booking link already sent to Patient ${patientId} recently. Skipping duplicate.`);
+                    return;
+                }
+
+                console.log(`[MedicalDocumentService] Immediate dispatch of appointment booking link for Patient ${patientId}`);
+                await this.sendAppointmentBookingWhatsApp(patientId, targetHospId, senderId || "AUTO_DOCUMENT_UPLOAD");
+                return;
+            }
+
+            // Scheduled dispatch with debouncing
+            const delayMs = delayMinutes * 60 * 1000;
+            const executeAt = Date.now() + delayMs;
+
+            // Clear any previously pending timer for this patient so we don't send duplicate spam
+            if (this.pendingBookingTimers.has(patientId)) {
+                clearTimeout(this.pendingBookingTimers.get(patientId)!);
+                this.pendingBookingTimers.delete(patientId);
+            }
+
+            // Record pending notification in DB for crash recovery
+            let pendingNotif = await notifRepo.findOne({
+                where: { UserId: patientId, Type: "WHATSAPP_APPOINTMENT_BOOK_PENDING", IsRead: false }
+            });
+
+            if (!pendingNotif) {
+                pendingNotif = new AppNotification();
+                pendingNotif.UserId = patientId;
+                pendingNotif.SenderId = toNullableUUID(senderId);
+                pendingNotif.Title = "Pending Auto-Booking Link";
+                pendingNotif.Type = "WHATSAPP_APPOINTMENT_BOOK_PENDING";
+                pendingNotif.ReferenceId = patientId;
+                pendingNotif.IsRead = false;
+            }
+
+            pendingNotif.Body = JSON.stringify({ hospitalId: targetHospId, executeAt, delayMinutes, senderId });
+            pendingNotif.Route = "/book-appointment/" + targetHospId;
+            await notifRepo.save(pendingNotif);
+
+            const pendingId = pendingNotif.Id;
+
+            // Schedule in-memory execution
+            const timer = setTimeout(async () => {
+                this.pendingBookingTimers.delete(patientId);
+                try {
+                    const { AppDataSource } = await import("../../config/database.js");
+                    if (!AppDataSource.isInitialized) {
+                        console.warn("[MedicalDocumentService] AppDataSource not initialized during timer expiry. Scheduler cron will process.");
+                        return;
+                    }
+                    const notifRepository = AppDataSource.getRepository(AppNotification);
+                    // Check if already claimed/processed by scheduler cron
+                    const freshNotif = await notifRepository.findOne({ where: { Id: pendingId } });
+                    if (!freshNotif || freshNotif.IsRead) {
+                        console.log(`[MedicalDocumentService] Pending auto-booking ${pendingId} already processed. Skipping.`);
+                        return;
+                    }
+                    freshNotif.IsRead = true;
+                    await notifRepository.save(freshNotif);
+
+                    console.log(`[MedicalDocumentService] Timer expired: Sending scheduled auto-booking link to Patient ${patientId} (after ${delayMinutes}m)`);
+                    await this.sendAppointmentBookingWhatsApp(patientId, targetHospId, "AUTO_DOCUMENT_SCHEDULER");
+                } catch (sendErr: any) {
+                    console.error(`[MedicalDocumentService] Error executing scheduled booking link for Patient ${patientId}:`, sendErr.message);
+                }
+            }, delayMs);
+
+            this.pendingBookingTimers.set(patientId, timer);
+            console.log(`[MedicalDocumentService] Successfully scheduled appointment booking link for Patient ${patientId} in ${delayMinutes} minute(s).`);
+
+        } catch (err: any) {
+            console.error("[MedicalDocumentService] Error in triggerAutoBookingAfterDocument:", err.message);
+        }
+    }
+
+    /**
+     * Process due pending auto-booking notifications from DB (crash recovery & polling fallback)
+     */
+    async processDueBookingNotifications(): Promise<number> {
+        try {
+            const { AppDataSource } = await import("../../config/database.js");
+            if (!AppDataSource.isInitialized) {
+                return 0;
+            }
+            const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+            const notifRepo = AppDataSource.getRepository(AppNotification);
+
+            const pendingList = await notifRepo.find({
+                where: { Type: "WHATSAPP_APPOINTMENT_BOOK_PENDING", IsRead: false },
+                take: 50
+            });
+
+            const now = Date.now();
+            let processed = 0;
+
+            for (const item of pendingList) {
+                try {
+                    let data: any = {};
+                    try {
+                        data = JSON.parse(item.Body);
+                    } catch (e) {
+                        data = {};
+                    }
+
+                    const executeAt = Number(data.executeAt) || 0;
+                    if (executeAt > 0 && now >= executeAt) {
+                        // Atomically claim notification so in-memory timer or concurrent crons do not double-send
+                        item.IsRead = true;
+                        await notifRepo.save(item);
+
+                        // Clear any in-memory timer
+                        if (this.pendingBookingTimers.has(item.UserId)) {
+                            clearTimeout(this.pendingBookingTimers.get(item.UserId)!);
+                            this.pendingBookingTimers.delete(item.UserId);
+                        }
+
+                        const hospitalId = Number(data.hospitalId) || 19;
+                        console.log(`[MedicalDocumentService] Scheduler picked up due auto-booking notification for Patient ${item.UserId}`);
+                        await this.sendAppointmentBookingWhatsApp(item.UserId, hospitalId, "AUTO_DOCUMENT_SCHEDULER");
+                        processed++;
+                    }
+                } catch (itemErr: any) {
+                    console.error(`[MedicalDocumentService] Error processing pending item ${item.Id}:`, itemErr.message);
+                }
+            }
+
+            return processed;
+        } catch (err: any) {
+            console.error("[MedicalDocumentService] Error in processDueBookingNotifications:", err.message);
+            return 0;
+        }
+    }
+
+    /**
+     * Start background polling scheduler for due auto-booking notifications
+     */
+    startBookingScheduler(intervalSeconds: number = 30): void {
+        if (this.bookingCronInterval) {
+            clearInterval(this.bookingCronInterval);
+        }
+
+        console.log(`[MedicalDocumentService] Document auto-booking scheduler started (checking every ${intervalSeconds}s)`);
+        this.bookingCronInterval = setInterval(() => {
+            this.processDueBookingNotifications();
+        }, intervalSeconds * 1000);
+    }
+
+    stopBookingScheduler(): void {
+        if (this.bookingCronInterval) {
+            clearInterval(this.bookingCronInterval);
+            this.bookingCronInterval = null;
+            console.log("[MedicalDocumentService] Document auto-booking scheduler stopped.");
+        }
+    }
 
     async sendDentalConsultationWhatsApp(patientId: string, senderId?: string): Promise<any> {
         const { userRepository } = await import("../../repositories/Account/user.repository.js");
@@ -407,7 +704,7 @@ export class MedicalDocumentService {
         const history = await notifRepo.find({
             where: { 
                 UserId: patientId, 
-                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION"]) 
+                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION", "WHATSAPP_APPOINTMENT_BOOK"]) 
             },
             order: { CreatedAt: "DESC" },
             take: 100
@@ -418,6 +715,7 @@ export class MedicalDocumentService {
         const homeSampleCount = history.filter(h => h.Type === "WHATSAPP_HOME_SAMPLE").length;
         const eyeConsultationCount = history.filter(h => h.Type === "WHATSAPP_EYE_CONSULTATION").length;
         const dentalConsultationCount = history.filter(h => h.Type === "WHATSAPP_DENTAL_CONSULTATION").length;
+        const appointmentBookCount = history.filter(h => h.Type === "WHATSAPP_APPOINTMENT_BOOK").length;
 
         return {
             generalCount,
@@ -425,6 +723,7 @@ export class MedicalDocumentService {
             homeSampleCount,
             eyeConsultationCount,
             dentalConsultationCount,
+            appointmentBookCount,
             count: history.length,
             history
         };
@@ -453,7 +752,12 @@ export class MedicalDocumentService {
 
         const validPatientId = ensureUUID(patientId);
         const validOrgId = Number(organizationId) || 1;
-        const validHospId = Number(hospitalId) || 1;
+        let validHospId = Number(hospitalId);
+        if (!validHospId || isNaN(validHospId)) {
+            const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            validHospId = activeDefault?.HospitalId || 19;
+        }
         const cat = documentCategory || category || "General";
 
         // 1. Upload to Azure Blob Storage
@@ -534,6 +838,13 @@ export class MedicalDocumentService {
                 });
             } catch (notifErr: any) {
                 console.error("[MedicalDocumentService] Push notification trigger warning:", notifErr?.message || notifErr);
+            }
+
+            // 4. Trigger Automatic Appointment Booking Link if enabled in HospitalSettings
+            try {
+                await this.triggerAutoBookingAfterDocument(validPatientId, validHospId, uploadedByUserId);
+            } catch (autoErr: any) {
+                console.error("[MedicalDocumentService] Auto-booking trigger warning:", autoErr?.message || autoErr);
             }
         }
 

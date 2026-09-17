@@ -27,6 +27,10 @@ const startServer = async () => {
         const { pushCampaignService } = await import("./services/Notifications/push-campaign.service.js");
         pushCampaignService.startScheduler(60);
 
+        // Start automated background document upload booking link scheduler (checks every 30s)
+        const { medicalDocumentService } = await import("./services/Appointments/medical-document.service.js");
+        medicalDocumentService.startBookingScheduler(30);
+
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });

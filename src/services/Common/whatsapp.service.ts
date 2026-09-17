@@ -97,9 +97,10 @@ export class WhatsAppService {
 
     let result = await makeRequest(components);
 
-    // If Meta returns error about button component mismatch, retry automatically without button component
-    if (!result.ok && components && JSON.stringify(result.body).includes("Template does not contain button components")) {
-      console.warn(`[WhatsAppService] Template '${templateName}' does not have button components on Meta. Retrying without button...`);
+    // If Meta returns error about button component mismatch or parameters not allowed on static buttons, retry automatically without button component
+    const errStr = JSON.stringify(result.body);
+    if (!result.ok && components && (errStr.includes("Template does not contain button components") || errStr.includes("does not require parameters") || errStr.includes("button"))) {
+      console.warn(`[WhatsAppService] Template '${templateName}' button component error from Meta. Retrying with body only...`);
       const bodyOnlyComponents = components.filter(c => c.type !== "button");
       result = await makeRequest(bodyOnlyComponents);
     }
