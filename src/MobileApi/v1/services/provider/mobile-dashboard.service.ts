@@ -1659,6 +1659,40 @@ export class MobileDashboardService {
             total: favPatients.length
         };
     }
+
+    /**
+     * Soft-deletes (deactivates) a user account by setting Status = false and IsDeleted = true.
+     * Also deactivates all dependent accounts under this user.
+     */
+    async deactivateAccount(userId: string): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+
+        const user = await userRepo.findOne({ where: { Id: userId } });
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        // Deactivate the primary user
+        user.Status = false;
+        user.IsDeleted = true;
+        user.UpdatedAt = new Date();
+        await userRepo.save(user);
+
+        // Also deactivate all dependent accounts under this user
+        const dependents = await userRepo.find({ where: { ParentUserId: userId } });
+        for (const dep of dependents) {
+            dep.Status = false;
+            dep.IsDeleted = true;
+            dep.UpdatedAt = new Date();
+            await userRepo.save(dep);
+        }
+
+        return {
+            message: "Account has been deactivated successfully",
+            deactivatedAt: new Date().toISOString(),
+            dependentsDeactivated: dependents.length,
+        };
+    }
 }
 
 export const mobileDashboardService = new MobileDashboardService();

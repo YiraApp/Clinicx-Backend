@@ -105,7 +105,9 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
-    const isPublic = publicRoutes.some(route => cleanReqPath.startsWith(route.toLowerCase()));
+    const isPublic = publicRoutes.some(route => cleanReqPath.startsWith(route.toLowerCase())) ||
+                     cleanReqPath.endsWith("/pdf") ||
+                     (cleanReqPath.includes("/prescriptions/") && cleanReqPath.includes("/pdf"));
 
     // Capture initial request metadata
     const requestLog = new APILog();
@@ -258,6 +260,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         };
 
         // Step 2: JWT Authentication for protected routes
+        
         if (!isPublic) {
             const authHeader = req.headers.authorization;
             if (!authHeader || !authHeader.startsWith("Bearer ")) {

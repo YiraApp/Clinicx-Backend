@@ -2,7 +2,7 @@ import { Router } from "express";
 import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPassword, resetPassword, getRoleDetails, updateLatestContext, getUserData, verifyOTP, changePassword, sendSignupOtp, register } from "../controllers/auth.controller.js";
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
-import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList } from "../controllers/provider/dashboard.controller.js";
+import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList, deactivateUserAccount } from "../controllers/provider/dashboard.controller.js";
 import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone, addDependentPatient, getHospitalDoctors } from "../controllers/provider/appointment.controller.js";
 import { mobileSnomedController } from "../controllers/snomed.controller.js";
 import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
@@ -65,10 +65,15 @@ authRouter.get("/patient/vitals/:patientId", authMiddleware, (req, res) => patie
 authRouter.post("/patient/vitals", authMiddleware, (req, res) => patientVitalsController.recordPatientVitals(req, res));
 authRouter.post("/provider/profile", authMiddleware, getProviderProfile);
 authRouter.post("/provider/profile/update", authMiddleware, updateProviderProfile);
+authRouter.post("/user/profile/update", authMiddleware, updateProviderProfile);
+authRouter.post("/patient/profile/update", authMiddleware, updateProviderProfile);
 authRouter.post("/provider/profile/upload-photo", authMiddleware, upload.single("photo"), uploadProviderProfilePhoto);
+authRouter.post("/user/profile/upload-photo", authMiddleware, upload.single("photo"), uploadProviderProfilePhoto);
+authRouter.post("/patient/profile/upload-photo", authMiddleware, upload.single("photo"), uploadProviderProfilePhoto);
 authRouter.post("/sidebar", authMiddleware, getSidebarMenu);
 authRouter.post("/latest-context", authMiddleware, updateLatestContext);
 authRouter.post("/device-token", authMiddleware, registerDeviceToken);
+authRouter.post("/account/deactivate", authMiddleware, deactivateUserAccount);
 authRouter.get("/app-version", getLatestAppVersion);
 authRouter.post("/app-version/status", getVersionAndTokenStatus);
 authRouter.post("/app-version", authMiddleware, registerNewAppVersion);
@@ -91,6 +96,7 @@ authRouter.delete("/medical-records/:id", authMiddleware, (req, res) => mobileMe
 // Prescriptions
 authRouter.get("/prescriptions/patient/:patientId", authMiddleware, (req, res) => mobilePrescriptionController.getPatientPrescriptions(req, res));
 authRouter.post("/prescriptions", authMiddleware, (req, res) => mobilePrescriptionController.addPrescription(req, res));
+authRouter.get("/prescriptions/:id/pdf", (req, res) => mobilePrescriptionController.getPrescriptionPdf(req, res));
 authRouter.put("/prescriptions/:id", authMiddleware, (req, res) => mobilePrescriptionController.updatePrescription(req, res));
 authRouter.delete("/prescriptions/:id", authMiddleware, (req, res) => mobilePrescriptionController.deletePrescription(req, res));
 

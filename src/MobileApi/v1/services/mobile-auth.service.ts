@@ -82,15 +82,27 @@ export class MobileAuthService {
         let lookupIdentity = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
 
         // Find user (ONLY primary, non-deleted user)
-        const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
+        let user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
 
         if (!user) {
+            const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupIdentity);
+            if (existingUser) {
+                if (existingUser.IsDeleted) {
+                    throw new Error("Your account was deactivated. Contact administrator.");
+                }
+                if (!existingUser.Status) {
+                    throw new Error("Your account is inactive. Contact admin.");
+                }
+            }
             throw new Error("User not registered");
         }
 
-        // Check if account is active
+        // Check if account is deleted or inactive
+        if (user.IsDeleted) {
+            throw new Error("Your account was deactivated. Contact administrator.");
+        }
         if (!user.Status) {
-            throw new Error("User account is inactive");
+            throw new Error("Your account is inactive. Contact admin.");
         }
 
         // Fetch user roles
@@ -582,13 +594,25 @@ export class MobileAuthService {
                 throw new Error("Invalid email format");
             }
 
-            const user = await mobileAuthRepository.findPrimaryUser(identity);
+            let user = await mobileAuthRepository.findPrimaryUser(identity);
             if (!user) {
+                const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(identity);
+                if (existingUser) {
+                    if (existingUser.IsDeleted) {
+                        throw new Error("Your account was deactivated. Contact administrator.");
+                    }
+                    if (!existingUser.Status) {
+                        throw new Error("Your account is inactive. Contact admin.");
+                    }
+                }
                 throw new Error("Invalid emailid");
             }
 
+            if (user.IsDeleted) {
+                throw new Error("Your account was deactivated. Contact administrator.");
+            }
             if (!user.Status) {
-                throw new Error("Invalid emailid");
+                throw new Error("Your account is inactive. Contact admin.");
             }
 
             if (!password) {
@@ -769,14 +793,26 @@ export class MobileAuthService {
                 throw new Error("Invalid OTP. Please check the code and try again.");
             }
 
-            const user = await mobileAuthRepository.findPrimaryUser(lookupContact);
+            let user = await mobileAuthRepository.findPrimaryUser(lookupContact);
             if (!user) {
+                const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupContact);
+                if (existingUser) {
+                    if (existingUser.IsDeleted) {
+                        throw new Error("Your account was deactivated. Contact administrator.");
+                    }
+                    if (!existingUser.Status) {
+                        throw new Error("Your account is inactive. Contact admin.");
+                    }
+                }
                 throw new Error("Authentication failed. Please try again.");
             }
 
-            // Check if account is active
+            // Check if account is deleted or inactive
+            if (user.IsDeleted) {
+                throw new Error("Your account was deactivated. Contact administrator.");
+            }
             if (!user.Status) {
-                throw new Error("Authentication failed. Please try again.");
+                throw new Error("Your account is inactive. Contact admin.");
             }
 
             // Fetch user roles and ensure patient has default org & hospital
@@ -1383,13 +1419,25 @@ export class MobileAuthService {
             }
         }
 
-        const user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
+        let user = await mobileAuthRepository.findPrimaryUser(lookupIdentity);
         if (!user) {
+            const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupIdentity);
+            if (existingUser) {
+                if (existingUser.IsDeleted) {
+                    throw new Error("Your account was deactivated. Contact administrator.");
+                }
+                if (!existingUser.Status) {
+                    throw new Error("Your account is inactive. Contact admin.");
+                }
+            }
             throw new Error("User not registered");
         }
 
+        if (user.IsDeleted) {
+            throw new Error("Your account was deactivated. Contact administrator.");
+        }
         if (!user.Status) {
-            throw new Error("User account is inactive");
+            throw new Error("Your account is inactive. Contact admin.");
         }
 
         const otpTarget = isEmail ? user.Email : user.PhoneNumber;

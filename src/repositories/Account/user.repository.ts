@@ -214,8 +214,8 @@ export class UserRepository implements IUserRepository {
                 }
             });
 
-            const joinedDate = contextRole 
-                ? (contextRole.UpdatedAt || contextRole.CreatedAt) 
+            const joinedDate = contextRole
+                ? (contextRole.UpdatedAt || contextRole.CreatedAt)
                 : u.CreatedAt;
 
             return {
@@ -271,16 +271,30 @@ export class UserRepository implements IUserRepository {
     async findPrimaryByPhone(phone: string): Promise<User | null> {
         if (!phone) return null;
         const cleanPhone = phone.replace(/\D/g, '').slice(-10);
-        return await this.repo.createQueryBuilder('u')
+        let user = await this.repo.createQueryBuilder('u')
             .where('u.IsPrimary = 1 AND u.IsDeleted = 0')
             .andWhere('(u.PhoneNumber = :phone OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone)', { phone, cleanPhone })
+            .getOne();
+        if (user) return user;
+
+        return await this.repo.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere('(u.PhoneNumber = :phone OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone)', { phone, cleanPhone })
+            .orderBy('u.IsPrimary', 'DESC')
+            .addOrderBy('u.CreatedAt', 'ASC')
             .getOne();
     }
 
     async findPrimaryByEmail(email: string): Promise<User | null> {
         if (!email) return null;
-        return await this.repo.findOne({
+        let user = await this.repo.findOne({
             where: { Email: email, IsPrimary: true, IsDeleted: false }
+        });
+        if (user) return user;
+
+        return await this.repo.findOne({
+            where: { Email: email, IsDeleted: false },
+            order: { IsPrimary: "DESC", CreatedAt: "ASC" }
         });
     }
 
