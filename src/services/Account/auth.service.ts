@@ -25,7 +25,7 @@ export class AuthService implements IAuthService {
         user: Partial<User> & { Roles: any[] }
     }> {
         // Find user by Email OR PhoneNumber (including inactive)
-        const user = await this.userRepository.findOne({
+        let user = await this.userRepository.findOne({
             where: [
                 { Email: identity, IsDeleted: false, IsPrimary: true },
                 { PhoneNumber: identity, IsDeleted: false, IsPrimary: true }
@@ -33,12 +33,49 @@ export class AuthService implements IAuthService {
         });
 
         if (!user) {
+            user = await this.userRepository.findOne({
+                where: [
+                    { Email: identity, IsDeleted: false },
+                    { PhoneNumber: identity, IsDeleted: false }
+                ],
+                order: { IsPrimary: "DESC", CreatedAt: "ASC" }
+            });
+        }
+
+        if (!user) {
+            // Check if there is an inactive/deactivated account
+            let existingUser = await this.userRepository.findOne({
+                where: [
+                    { Email: identity, IsPrimary: true },
+                    { PhoneNumber: identity, IsPrimary: true }
+                ]
+            });
+            if (!existingUser) {
+                existingUser = await this.userRepository.findOne({
+                    where: [
+                        { Email: identity },
+                        { PhoneNumber: identity }
+                    ],
+                    order: { IsPrimary: "DESC", CreatedAt: "ASC" }
+                });
+            }
+            if (existingUser) {
+                if (existingUser.IsDeleted) {
+                    throw new Error("Your account was deactivated. Contact administrator.");
+                }
+                if (!existingUser.Status) {
+                    throw new Error("Your account is inactive. Contact admin.");
+                }
+            }
             throw new Error("Invalid Mobile Or Email");
         }
 
-        // Check if account is inactive
+        // Check if account is deleted or inactive
+        if (user.IsDeleted) {
+            throw new Error("Your account was deactivated. Contact administrator.");
+        }
         if (!user.Status) {
-            throw new Error("User account is inactive");
+            throw new Error("Your account is inactive. Contact admin.");
         }
 
         // Check password if provided and stored

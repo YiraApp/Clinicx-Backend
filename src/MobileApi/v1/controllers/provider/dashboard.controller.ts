@@ -393,3 +393,27 @@ export const getFavoritePatientsList = async (req: Request, res: Response) => {
 };
 
 
+/**
+ * Deactivates (soft-deletes) a user account by setting Status = false and IsDeleted = true.
+ */
+export const deactivateUserAccount = async (req: Request, res: Response) => {
+    try {
+        const { userId } = req.body;
+        const targetUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+
+        if (!targetUserId) {
+            return res.status(400).json({
+                status: false,
+                message: "User ID is required"
+            });
+        }
+
+        const result = await mobileDashboardService.deactivateAccount(targetUserId);
+        return res.json(ApiResponse.success(result, "Account deactivated successfully"));
+    } catch (error: any) {
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to deactivate account"
+        });
+    }
+};

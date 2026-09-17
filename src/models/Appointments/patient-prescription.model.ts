@@ -8,6 +8,9 @@ export class PatientPrescription {
     @PrimaryGeneratedColumn("uuid")
     Id: string;
 
+    @Column({ type: "int", nullable: true, insert: false, update: false })
+    PrescriptionNumber?: number;
+
     @Column({ type: "nvarchar", length: 255, nullable: true, default: null })
     AppointmentId?: string | null;
 
@@ -47,6 +50,9 @@ export class PatientPrescription {
 
     @Column({ type: "nvarchar", length: 4000, nullable: true })
     Notes?: string | null;
+
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    PdfUrl?: string | null;
 
     @OneToMany(() => PrescriptionDiagnosis, (diagnosis) => diagnosis.Prescription, { cascade: true })
     Diagnoses?: Relation<PrescriptionDiagnosis[]>;

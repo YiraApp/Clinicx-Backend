@@ -5,12 +5,15 @@ import { loggingMiddleware } from './middlewares/logging.middleware.js';
 import router from './routes/index.js';
 import { mobileRouterV1 } from './MobileApi/v1/routes/index.js';
 
+import path from 'path';
+
 // ClinicX Backend Application
 const app: Application = express();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/public', express.static(path.resolve(process.cwd(), 'public')));
 
 // Global Logging + Auth Middleware
 app.use(loggingMiddleware);

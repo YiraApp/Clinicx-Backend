@@ -9,13 +9,45 @@ export class MobileAuthRepository {
 
     /**
      * Finds a primary user by email or phone number.
+     * Prioritizes IsPrimary = true, but falls back to matching user if no primary user exists.
      */
     async findPrimaryUser(identity: string): Promise<User | null> {
-        return await this.userRepo.findOne({
+        let user = await this.userRepo.findOne({
             where: [
                 { Email: identity, IsPrimary: true, IsDeleted: false },
                 { PhoneNumber: identity, IsPrimary: true, IsDeleted: false }
             ]
+        });
+        if (user) return user;
+
+        return await this.userRepo.findOne({
+            where: [
+                { Email: identity, IsDeleted: false },
+                { PhoneNumber: identity, IsDeleted: false }
+            ],
+            order: { IsPrimary: "DESC", CreatedAt: "ASC" }
+        });
+    }
+
+    /**
+     * Finds a user by email or phone number, including deactivated / soft-deleted users.
+     * Prioritizes IsPrimary = true, but falls back to matching user if no primary user exists.
+     */
+    async findPrimaryUserIncludingDeleted(identity: string): Promise<User | null> {
+        let user = await this.userRepo.findOne({
+            where: [
+                { Email: identity, IsPrimary: true },
+                { PhoneNumber: identity, IsPrimary: true }
+            ]
+        });
+        if (user) return user;
+
+        return await this.userRepo.findOne({
+            where: [
+                { Email: identity },
+                { PhoneNumber: identity }
+            ],
+            order: { IsPrimary: "DESC", CreatedAt: "ASC" }
         });
     }
 

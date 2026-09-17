@@ -70,6 +70,13 @@ export const login = async (req: Request, res: Response) => {
         } else if (error.message.includes("Access denied")) {
             code = "ACCESS_DENIED";
             status = 400;
+        } else if (
+            error.message === "User account is inactive" ||
+            error.message.toLowerCase().includes("deactivated") ||
+            error.message.toLowerCase().includes("inactive")
+        ) {
+            code = "INACTIVE_USER";
+            status = 400;
         }
 
         const responseBody: any = {
@@ -119,9 +126,18 @@ export const sendOTP = async (req: Request, res: Response) => {
         } else if (error.message.includes("Access denied")) {
             status = 400;
             code = "ACCESS_DENIED";
-        } else if (error.message === "User account is inactive") {
+        } else if (error.message.toLowerCase().includes("deactivated")) {
             status = 400;
             code = "INACTIVE_USER";
+            message = "Your account was deactivated. Contact administrator.";
+        } else if (
+            error.message === "User account is inactive" ||
+            error.message.toLowerCase().includes("inactive") ||
+            error.message.toLowerCase().includes("contact admin")
+        ) {
+            status = 400;
+            code = "INACTIVE_USER";
+            message = "Your account is inactive. Contact admin.";
         } else if (error.message === "Email cannot be used for OTP login") {
             status = 400;
             code = "EMAIL_NOT_ALLOWED";
@@ -320,6 +336,12 @@ export const verifyLogin = async (req: Request, res: Response) => {
             code = "INVALID_OTP";
         } else if (error.message.includes("Access denied")) {
             code = "ACCESS_DENIED";
+            status = 400;
+        } else if (
+            error.message.toLowerCase().includes("deactivated") ||
+            error.message.toLowerCase().includes("inactive")
+        ) {
+            code = "INACTIVE_USER";
             status = 400;
         }
         return res.status(status).json({

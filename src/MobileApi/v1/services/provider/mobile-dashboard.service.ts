@@ -182,38 +182,52 @@ export class MobileDashboardService {
         const totalToday = todaysAppointments.length;
         const completedToday = todaysAppointments.filter(a => (a.Status || "").toLowerCase().includes("complet")).length;
 
-        // Unique active patients total of this doctor
-        const totalPatientsQuery = appointmentRepo.createQueryBuilder("appointment")
-            .select("COUNT(DISTINCT appointment.UserId)", "count")
-            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
-            .andWhere("appointment.UserId IS NOT NULL");
+        // Unique active patients total of this doctor (aligned with Patients List)
+        let totalPatients = 0;
+        let newPatientsThisWeek = 0;
+        try {
+            const patientsResult = await this.getPatientsList(userId, orgId, hospId);
+            const allPatients = patientsResult?.patients || [];
+            totalPatients = allPatients.length;
 
-        if (hospId && hospId > 0) {
-            totalPatientsQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+            // New patients this week: patients whose first appointment or registration with this doctor is in the last 7 days
+            const earliestAppts = await appointmentRepo.createQueryBuilder("a")
+                .select("a.UserId", "UserId")
+                .addSelect("MIN(a.AppointmentDate)", "firstDate")
+                .where("(a.DoctorId = :doctorId OR a.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
+                .andWhere("a.UserId IS NOT NULL")
+                .groupBy("a.UserId")
+                .getRawMany();
+
+            const earliestMap = new Map<string, Date>();
+            earliestAppts.forEach(r => {
+                if (r.UserId && r.firstDate) {
+                    earliestMap.set(r.UserId.toLowerCase(), new Date(r.firstDate));
+                }
+            });
+
+            newPatientsThisWeek = allPatients.filter((p: any) => {
+                const uid = (p.patientUserId || p.id || "").toLowerCase();
+                const firstDate = earliestMap.get(uid);
+                if (firstDate && firstDate >= sevenDaysAgo) return true;
+                if (!firstDate && p.registeredDate) {
+                    const regDate = new Date(p.registeredDate);
+                    return !isNaN(regDate.getTime()) && regDate >= sevenDaysAgo;
+                }
+                return false;
+            }).length;
+        } catch (patErr) {
+            console.error("Error calculating provider patients metrics:", patErr);
+            const totalPatientsResult = await appointmentRepo.createQueryBuilder("appointment")
+                .select("COUNT(DISTINCT appointment.UserId)", "count")
+                .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
+                .andWhere("appointment.UserId IS NOT NULL")
+                .getRawOne();
+            totalPatients = parseInt(totalPatientsResult?.count || "0", 10);
         }
-        if (orgId && orgId > 0) {
-            totalPatientsQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
-        }
-
-        const totalPatientsResult = await totalPatientsQuery.getRawOne();
-        const totalPatients = parseInt(totalPatientsResult?.count || "0", 10);
-
-        // Unique patients new in the last 7 days
-        const newPatientsWeekQuery = appointmentRepo.createQueryBuilder("a1")
-            .select("COUNT(DISTINCT a1.UserId)", "count")
-            .where("(a1.DoctorId = :doctorId OR a1.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
-            .andWhere("a1.UserId IS NOT NULL")
-            .andWhere("a1.AppointmentDate >= CAST(DATEADD(day, -7, GETDATE()) AS DATE)");
-
-        if (hospId && hospId > 0) {
-            newPatientsWeekQuery.andWhere("(a1.HospitalId = :hospId OR a1.HospitalId IS NULL)", { hospId });
-        }
-        if (orgId && orgId > 0) {
-            newPatientsWeekQuery.andWhere("(a1.OrgId = :orgId OR a1.OrgId IS NULL)", { orgId });
-        }
-
-        const newPatientsWeekResult = await newPatientsWeekQuery.getRawOne();
-        const newPatientsThisWeek = parseInt(newPatientsWeekResult?.count || "0", 10);
 
         const metrics = {
             today: {
@@ -881,7 +895,7 @@ export class MobileDashboardService {
             .leftJoinAndSelect("apt.Hospital", "hospital")
             .leftJoinAndSelect("apt.Organization", "org")
             .where("apt.UserId = :patientId", { patientId })
-            .andWhere("LOWER(apt.Status) NOT IN ('cancelled', 'deleted', 'canceled')")
+            .andWhere("LOWER(apt.Status) != 'deleted'")
             .orderBy("apt.AppointmentDate", "ASC")
             .addOrderBy("apt.StartTime", "ASC")
             .getMany();
@@ -1027,12 +1041,18 @@ export class MobileDashboardService {
             order: { Date: "DESC", CreatedAt: "DESC" }
         }).catch(() => null);
 
-        const bpVal = latestRecord?.BloodPressure || user.BloodPressure || "None";
-        const pulseVal = latestRecord?.HeartRate || user.HeartRate || "None";
-        const tempVal = latestRecord?.Temperature || user.Temperature || "None";
-        const spO2Val = latestRecord?.SpO2 || user.SpO2 || "None";
-        const weightVal = latestRecord?.Weight || (user.Weight != null ? String(user.Weight) : "None");
-        const heightVal = latestRecord?.Height || (user.Height != null ? String(user.Height) : "None");
+        const cleanVital = (val?: string | null) => {
+            if (!val) return "--";
+            const s = String(val).trim();
+            if (s === "" || s.toLowerCase() === "none" || s === "--" || s.toLowerCase() === "null") return "--";
+            return s;
+        };
+        const bpVal = cleanVital(latestRecord?.BloodPressure || user.BloodPressure);
+        const pulseVal = cleanVital(latestRecord?.HeartRate || user.HeartRate);
+        const tempVal = cleanVital(latestRecord?.Temperature || user.Temperature);
+        const spO2Val = cleanVital(latestRecord?.SpO2 || user.SpO2);
+        const weightVal = cleanVital(latestRecord?.Weight || (user.Weight != null ? String(user.Weight) : null));
+        const heightVal = cleanVital(latestRecord?.Height || (user.Height != null ? String(user.Height) : null));
 
         const latest_vitals = {
             blood_pressure: {
@@ -1272,7 +1292,7 @@ export class MobileDashboardService {
                 unit: "°F"
             },
             spo2: {
-                value: latestRecord?.SpO2 || user.SpO2 || "None",
+                value: (latestRecord?.SpO2 && latestRecord.SpO2.trim() !== "" && latestRecord.SpO2.toLowerCase() !== "none") ? latestRecord.SpO2 : (user.SpO2 && user.SpO2.trim() !== "" && user.SpO2.toLowerCase() !== "none" ? user.SpO2 : "--"),
                 unit: "%"
             },
             weight: {
@@ -1503,7 +1523,12 @@ export class MobileDashboardService {
         if (data.firstName !== undefined) user.FirstName = data.firstName;
         if (data.lastName !== undefined) user.LastName = data.lastName;
         if (data.email !== undefined) user.Email = data.email;
-        if (data.phoneNumber !== undefined) user.PhoneNumber = data.phoneNumber;
+        if (data.phoneNumber !== undefined) {
+            user.PhoneNumber = data.phoneNumber;
+            if (user.IsPrimary) {
+                await userRepo.update({ ParentUserId: user.Id }, { PhoneNumber: data.phoneNumber });
+            }
+        }
         if (data.gender !== undefined) user.Gender = data.gender;
         if (data.dob !== undefined || data.dateOfBirth !== undefined) {
             const dobVal = data.dob || data.dateOfBirth;
@@ -1632,6 +1657,40 @@ export class MobileDashboardService {
         return {
             patients: favPatients,
             total: favPatients.length
+        };
+    }
+
+    /**
+     * Soft-deletes (deactivates) a user account by setting Status = false and IsDeleted = true.
+     * Also deactivates all dependent accounts under this user.
+     */
+    async deactivateAccount(userId: string): Promise<any> {
+        const userRepo = AppDataSource.getRepository(User);
+
+        const user = await userRepo.findOne({ where: { Id: userId } });
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        // Deactivate the primary user
+        user.Status = false;
+        user.IsDeleted = true;
+        user.UpdatedAt = new Date();
+        await userRepo.save(user);
+
+        // Also deactivate all dependent accounts under this user
+        const dependents = await userRepo.find({ where: { ParentUserId: userId } });
+        for (const dep of dependents) {
+            dep.Status = false;
+            dep.IsDeleted = true;
+            dep.UpdatedAt = new Date();
+            await userRepo.save(dep);
+        }
+
+        return {
+            message: "Account has been deactivated successfully",
+            deactivatedAt: new Date().toISOString(),
+            dependentsDeactivated: dependents.length,
         };
     }
 }

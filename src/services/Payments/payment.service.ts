@@ -163,6 +163,8 @@ export class PaymentService {
             throw new Error("Payment verification failed.");
         }
 
+        const wasAlreadySuccess = payment.Status === "Success";
+
         // Complete the payment & transition appointment to Confirmed in a secure transaction block
         await AppDataSource.transaction(async (manager) => {
             await manager.update("Payments", payment.PaymentId, {
@@ -173,10 +175,23 @@ export class PaymentService {
                 UpdatedAt: new Date()
             });
 
-            await manager.update("Appointments", payment.AppointmentId!, {
-                Status: "Confirmed",
-                UpdatedAt: new Date()
-            });
+            if (payment.AppointmentId) {
+                await manager.update("Appointments", payment.AppointmentId, {
+                    Status: "Confirmed",
+                    UpdatedAt: new Date()
+                });
+
+                // Book the doctor's schedule slot now that online payment is verified
+                const appt = await appointmentRepository.findById(payment.AppointmentId);
+                if (appt && appt.SlotId) {
+                    await manager.update("HealthcareProviderScheduleSlots", appt.SlotId, {
+                        IsBooked: true,
+                        Status: "Booked",
+                        UpdatedAt: new Date()
+                    });
+                    console.log(`[PaymentService] Slot #${appt.SlotId} successfully marked as Booked after payment verification for appointment #${appt.Id}`);
+                }
+            }
         });
 
         // Update AppointmentBill — only on success
@@ -188,6 +203,16 @@ export class PaymentService {
             orderId: data.razorpay_order_id,
             paymentId: data.razorpay_payment_id
         });
+
+        // Dispatch WhatsApp & push notifications ONLY after successful confirmation
+        if (!wasAlreadySuccess && payment.AppointmentId) {
+            try {
+                const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
+                await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
+            } catch (notifyErr) {
+                console.error("[PaymentService] Error sending confirmation notifications post-verification:", notifyErr);
+            }
+        }
 
         return { success: true };
     }
@@ -224,10 +249,23 @@ export class PaymentService {
                         UpdatedAt: new Date()
                     });
 
-                    await manager.update("Appointments", payment.AppointmentId!, {
-                        Status: "Confirmed",
-                        UpdatedAt: new Date()
-                    });
+                    if (payment.AppointmentId) {
+                        await manager.update("Appointments", payment.AppointmentId, {
+                            Status: "Confirmed",
+                            UpdatedAt: new Date()
+                        });
+
+                        // Book the doctor's schedule slot now that online payment is verified via webhook
+                        const appt = await appointmentRepository.findById(payment.AppointmentId);
+                        if (appt && appt.SlotId) {
+                            await manager.update("HealthcareProviderScheduleSlots", appt.SlotId, {
+                                IsBooked: true,
+                                Status: "Booked",
+                                UpdatedAt: new Date()
+                            });
+                            console.log(`[PaymentService] Slot #${appt.SlotId} successfully marked as Booked after webhook payment confirmation for appointment #${appt.Id}`);
+                        }
+                    }
                 });
 
                 // Update AppointmentBill on webhook recovery
@@ -236,6 +274,16 @@ export class PaymentService {
                 }
 
                 await paymentLogRepository.log(payment.PaymentId, "WEBHOOK_RECOVERY", "Success", "Missed callback recovered successfully via webhook");
+
+                // Dispatch WhatsApp & push notifications ONLY after successful confirmation
+                if (payment.AppointmentId) {
+                    try {
+                        const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
+                        await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
+                    } catch (notifyErr) {
+                        console.error("[PaymentService] Error sending confirmation notifications via webhook:", notifyErr);
+                    }
+                }
             }
         }
 
@@ -316,6 +364,23 @@ export class PaymentService {
 
         // Write to payment audit log
         await paymentLogRepository.log(payment.PaymentId, "CASH_PAYMENT", "Success", "Cash payment recorded successfully");
+
+        if (data.appointmentId) {
+            try {
+                const appt = await appointmentRepository.findById(data.appointmentId);
+                if (appt && appt.SlotId) {
+                    await AppDataSource.getRepository("HealthcareProviderScheduleSlots").update(appt.SlotId, {
+                        IsBooked: true,
+                        Status: "Booked",
+                        UpdatedAt: new Date()
+                    });
+                }
+                const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
+                await mobileAppointmentService.sendAppointmentConfirmationNotifications(data.appointmentId);
+            } catch (notifyErr) {
+                console.error("[PaymentService] Error sending confirmation notifications post cash payment:", notifyErr);
+            }
+        }
 
         return { success: true, transactionId };
     }

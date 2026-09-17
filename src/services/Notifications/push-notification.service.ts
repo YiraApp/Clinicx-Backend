@@ -17,6 +17,13 @@ export class PushNotificationService {
     private notificationRepo = AppDataSource.getRepository(AppNotification);
 
     /**
+     * Helper to validate if a string is a valid UUID/GUID
+     */
+    private isUuid(id?: string | null): id is string {
+        return Boolean(id && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id.trim()));
+    }
+
+    /**
      * Resolves all candidate and linked family user identifiers (Primary account + all linked dependents, up to 6 accounts)
      */
     private async resolveActualUserIds(userId: string): Promise<{ directIds: string[]; familyMemberIds: string[] }> {
@@ -24,8 +31,10 @@ export class PushNotificationService {
         const familyMemberIds = new Set<string>();
         if (!userId) return { directIds: [], familyMemberIds: [] };
 
-        directIds.add(userId);
-        familyMemberIds.add(userId);
+        if (this.isUuid(userId)) {
+            directIds.add(userId);
+            familyMemberIds.add(userId);
+        }
 
         try {
             const { User } = await import("../../models/Account/user.model.js");
@@ -38,7 +47,7 @@ export class PushNotificationService {
             const numId = parseInt(userId, 10);
             if (!isNaN(numId)) {
                 const reg = await regRepo.findOne({ where: { Id: numId } }).catch(() => null);
-                if (reg?.UserId) {
+                if (reg?.UserId && this.isUuid(reg.UserId)) {
                     directIds.add(reg.UserId);
                     familyMemberIds.add(reg.UserId);
                 }
@@ -54,7 +63,7 @@ export class PushNotificationService {
                 .getOne()
                 .catch(() => null);
 
-            if (user?.Id) {
+            if (user?.Id && this.isUuid(user.Id)) {
                 directIds.add(user.Id);
                 familyMemberIds.add(user.Id);
             }
@@ -62,11 +71,11 @@ export class PushNotificationService {
             // 3. Check PatientRegistrations pointing to this user
             const patientRegs = await regRepo.find({ where: { UserId: userId } }).catch(() => []);
             for (const r of patientRegs) {
-                if (r.UserId) {
+                if (r.UserId && this.isUuid(r.UserId)) {
                     directIds.add(r.UserId);
                     familyMemberIds.add(r.UserId);
                 }
-                directIds.add(String(r.Id));
+                // Do NOT add String(r.Id) because it is a numeric ID, not a valid GUID for AppNotifications.UserId
             }
 
             // 4. Resolve ALL linked family members / dependents (up to 6 accounts linked to same family/device)
@@ -74,7 +83,7 @@ export class PushNotificationService {
                 const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
                 const parentId = user.ParentUserId || user.Id;
 
-                if (user.ParentUserId) {
+                if (user.ParentUserId && this.isUuid(user.ParentUserId)) {
                     familyMemberIds.add(user.ParentUserId);
                 }
 
@@ -89,7 +98,9 @@ export class PushNotificationService {
                     .catch(() => []);
 
                 for (const m of familyMembers) {
-                    familyMemberIds.add(m.Id);
+                    if (this.isUuid(m.Id)) {
+                        familyMemberIds.add(m.Id);
+                    }
                 }
             }
         } catch (err) {
@@ -97,8 +108,8 @@ export class PushNotificationService {
         }
 
         return {
-            directIds: Array.from(directIds),
-            familyMemberIds: Array.from(familyMemberIds)
+            directIds: Array.from(directIds).filter((id): id is string => this.isUuid(id)),
+            familyMemberIds: Array.from(familyMemberIds).filter((id): id is string => this.isUuid(id))
         };
     }
 
@@ -114,10 +125,14 @@ export class PushNotificationService {
         // 1. Persist notification in database for in-app Recent Notifications Center for all direct candidate IDs
         let primarySaved: AppNotification | null = null;
         for (const uid of directIds) {
+            if (!this.isUuid(uid)) {
+                console.warn(`[PushNotificationService] Skipping in-app notification for non-UUID uid: "${uid}"`);
+                continue;
+            }
             try {
                 const notification = new AppNotification();
                 notification.UserId = uid;
-                notification.SenderId = senderId || null;
+                notification.SenderId = this.isUuid(senderId) ? senderId : null;
                 notification.Title = title;
                 notification.Body = body;
                 notification.Type = type || "SYSTEM";
@@ -127,7 +142,7 @@ export class PushNotificationService {
                 notification.CreatedAt = new Date();
 
                 const saved = await this.notificationRepo.save(notification);
-                if (!primarySaved || uid.length > 20) {
+                if (!primarySaved) {
                     primarySaved = saved;
                 }
             } catch (err) {
@@ -303,12 +318,13 @@ export class PushNotificationService {
         appointmentId: string | number;
         doctorId: string;
         patientId: string;
+        parentUserId?: string | null;
         doctorName: string;
         patientName: string;
         date: string;
         status: string;
     }) {
-        const { appointmentId, doctorId, patientId, doctorName, patientName, date, status } = params;
+        const { appointmentId, doctorId, patientId, parentUserId, doctorName, patientName, date, status } = params;
 
         const formattedStatus = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
         const formattedDoctor = this.formatDoctorName(doctorName);
@@ -324,6 +340,20 @@ export class PushNotificationService {
             route: "/appointmentDashboardScreen",
             additionalData: { appointmentId, status, date }
         });
+
+        // Notify Parent account if this is a dependent patient
+        if (parentUserId && parentUserId !== patientId) {
+            await this.sendNotification({
+                userId: parentUserId,
+                senderId: doctorId,
+                title: `Appointment ${formattedStatus}`,
+                body: `Appointment for ${patientName} with ${formattedDoctor} on ${date} has been marked as ${formattedStatus}.`,
+                type: "APPOINTMENT_STATUS",
+                referenceId: String(appointmentId),
+                route: "/appointmentDashboardScreen",
+                additionalData: { appointmentId, status, date, dependentId: patientId }
+            });
+        }
     }
 
     /**
