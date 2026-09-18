@@ -874,7 +874,6 @@ export class AppointmentService {
                     console.error(`[AppointmentService] Error sending doctor appointment confirmation for appointment #${appt.Id}:`, docNotifyErr?.message || docNotifyErr);
                 }
             }
-            }
         } catch (err: any) {
             console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err?.message || err);
         }

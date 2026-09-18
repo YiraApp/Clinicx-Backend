@@ -314,10 +314,6 @@ export class MedicalDocumentService {
         }
     }
 
-    async sendAppointmentBookingTemplate(patientId: string, hospitalId?: number, senderId?: string): Promise<any> {
-        return this.sendAppointmentBookingWhatsApp(patientId, hospitalId, senderId);
-    }
-
     async scheduleAppointmentBookingFollowup(patientId: string, hospitalId?: number, senderId?: string, overrideDelayMinutes?: number): Promise<void> {
         return this.triggerAutoBookingAfterDocument(patientId, hospitalId || 0, senderId);
     }
