@@ -409,11 +409,11 @@ export const deactivateUserAccount = async (req: Request, res: Response) => {
         }
 
         const result = await mobileDashboardService.deactivateAccount(targetUserId);
-        return res.json(ApiResponse.success(result, "Account deactivated successfully"));
+        return res.json(ApiResponse.success(result, "Account deleted successfully"));
     } catch (error: any) {
         return res.status(400).json({
             status: false,
-            message: error.message || "Failed to deactivate account"
+            message: error.message || "Failed to delete account"
         });
     }
 };
