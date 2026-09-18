@@ -314,6 +314,14 @@ export class MedicalDocumentService {
         }
     }
 
+    async sendAppointmentBookingTemplate(patientId: string, hospitalId?: number, senderId?: string): Promise<any> {
+        return this.sendAppointmentBookingWhatsApp(patientId, hospitalId, senderId);
+    }
+
+    async scheduleAppointmentBookingFollowup(patientId: string, hospitalId?: number, senderId?: string, overrideDelayMinutes?: number): Promise<void> {
+        return this.triggerAutoBookingAfterDocument(patientId, hospitalId || 0, senderId);
+    }
+
     async sendDentalConsultationWhatsApp(patientId: string, senderId?: string): Promise<any> {
         const { userRepository } = await import("../../repositories/Account/user.repository.js");
         const { whatsappService } = await import("../Common/whatsapp.service.js");
@@ -362,6 +370,7 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/overview";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         return {
@@ -420,10 +429,87 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/overview";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         return {
             success: true,
+            whatsappResult: result,
+            notification: notif
+        };
+    }
+
+
+    async sendAppointmentBookingTemplate(patientId: string, hospitalId?: number, senderId?: string): Promise<any> {
+        const { userRepository } = await import("../../repositories/Account/user.repository.js");
+        const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+        const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
+        const { whatsappService } = await import("../Common/whatsapp.service.js");
+        const { AppDataSource } = await import("../../config/database.js");
+        const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        const patient = await userRepository.findById(patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        const phone = patient.PhoneNumber;
+        if (!phone) throw new Error("Patient does not have a registered mobile number.");
+
+        let normalizedPhone = phone.replace(/\D/g, "");
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = "91" + normalizedPhone;
+        }
+
+        const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
+
+        // Resolve hospital name
+        let hospitalName = "Yira Hospitals";
+        let targetHospId = hospitalId;
+        if (targetHospId) {
+            const hosp = await hospitalRepository.findById(targetHospId);
+            if (hosp?.Name) hospitalName = hosp.Name;
+        } else {
+            const activeDefault = await defaultOrganizationRepository.getActiveDefault();
+            if (activeDefault?.HospitalName) hospitalName = activeDefault.HospitalName;
+            if (activeDefault?.HospitalId) targetHospId = activeDefault.HospitalId;
+        }
+
+        // Template 'yira_appointment_book' expects 2 body parameters:
+        // {{1}} - Patient Name
+        // {{2}} - Hospital Name
+        const components = [
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: patientName },
+                    { type: "text", text: hospitalName }
+                ]
+            }
+        ];
+
+        console.log(`[MedicalDocumentService] Sending WhatsApp 'yira_appointment_book' to ${normalizedPhone} for ${patientName} (${hospitalName})`);
+        const result = await whatsappService.sendTemplateMessage(normalizedPhone, "yira_appointment_book", "en", components);
+
+        // Record in AppNotification
+        const notifRepo = AppDataSource.getRepository(AppNotification);
+        const notif = new AppNotification();
+        notif.UserId = patientId;
+        notif.SenderId = senderId || null;
+        notif.Title = "Appointment Booking Link Sent";
+        notif.Body = `Appointment booking template ('yira_appointment_book') sent to ${normalizedPhone} for ${hospitalName}`;
+        notif.Type = "WHATSAPP_APPOINTMENT_BOOK";
+        notif.ReferenceId = patientId;
+        notif.Route = targetHospId ? `/book-appointment?hospitalId=${targetHospId}` : "/book-appointment";
+        notif.IsRead = false;
+        notif.CreatedAt = new Date();
+        await notifRepo.save(notif);
+
+        const apptBookCount = await notifRepo.count({
+            where: { UserId: patientId, Type: "WHATSAPP_APPOINTMENT_BOOK" }
+        });
+
+        return {
+            success: true,
+            apptBookCount,
             whatsappResult: result,
             notification: notif
         };
@@ -479,6 +565,7 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/overview";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         return {
@@ -621,11 +708,15 @@ export class MedicalDocumentService {
         notif.ReferenceId = String(documentId);
         notif.Route = "/view-summary/" + shareToken;
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         const docCount = await notifRepo.count({
             where: { UserId: patientId, ReferenceId: String(documentId), Type: "WHATSAPP_SINGLE_DOCUMENT" }
         });
+
+        // Automatically schedule follow-up for 'yira_appointment_book' template based on hospital settings
+        this.scheduleAppointmentBookingFollowup(patientId, doc.HospitalId || 19, senderId);
 
         return {
             success: true,
@@ -681,11 +772,15 @@ export class MedicalDocumentService {
         notif.ReferenceId = patientId;
         notif.Route = "/patient/documents";
         notif.IsRead = false;
+        notif.CreatedAt = new Date();
         await notifRepo.save(notif);
 
         const generalCount = await notifRepo.count({
             where: { UserId: patientId, Type: "WHATSAPP_GENERAL_ALERT" }
         });
+
+        // Automatically schedule follow-up for 'yira_appointment_book' template based on hospital settings
+        this.scheduleAppointmentBookingFollowup(patientId, 19, senderId);
 
         return {
             success: true,
@@ -704,7 +799,7 @@ export class MedicalDocumentService {
         const history = await notifRepo.find({
             where: { 
                 UserId: patientId, 
-                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION", "WHATSAPP_APPOINTMENT_BOOK"]) 
+                Type: In(["WHATSAPP_GENERAL_ALERT", "WHATSAPP_SINGLE_DOCUMENT", "WHATSAPP_MEDICAL_RECORD", "WHATSAPP_HOME_SAMPLE", "WHATSAPP_EYE_CONSULTATION", "WHATSAPP_DENTAL_CONSULTATION", "WHATSAPP_APPOINTMENT_BOOK", "WHATSAPP_APPOINTMENT_CANCEL"]) 
             },
             order: { CreatedAt: "DESC" },
             take: 100
@@ -716,6 +811,7 @@ export class MedicalDocumentService {
         const eyeConsultationCount = history.filter(h => h.Type === "WHATSAPP_EYE_CONSULTATION").length;
         const dentalConsultationCount = history.filter(h => h.Type === "WHATSAPP_DENTAL_CONSULTATION").length;
         const appointmentBookCount = history.filter(h => h.Type === "WHATSAPP_APPOINTMENT_BOOK").length;
+        const appointmentCancelCount = history.filter(h => h.Type === "WHATSAPP_APPOINTMENT_CANCEL").length;
 
         return {
             generalCount,
@@ -724,6 +820,7 @@ export class MedicalDocumentService {
             eyeConsultationCount,
             dentalConsultationCount,
             appointmentBookCount,
+            appointmentCancelCount,
             count: history.length,
             history
         };
@@ -845,6 +942,22 @@ export class MedicalDocumentService {
                 await this.triggerAutoBookingAfterDocument(validPatientId, validHospId, uploadedByUserId);
             } catch (autoErr: any) {
                 console.error("[MedicalDocumentService] Auto-booking trigger warning:", autoErr?.message || autoErr);
+            }
+        }
+
+        // 4. Automatically send Medical Document WhatsApp template to patient upon upload & maintain history & schedule 20-min booking follow-up
+        const isDoctorOrStaff = (isDoctorUploaded === "true" || isDoctorUploaded === true) && (!isPatientUploaded || isPatientUploaded === "false");
+        if (isDoctorOrStaff && savedDocuments.length > 0 && validPatientId && validPatientId !== DEFAULT_UUID) {
+            for (const doc of savedDocuments) {
+                if (doc && doc.Id) {
+                    try {
+                        await this.shareSingleDocument(Number(doc.Id), validPatientId, uploadedByUserId);
+                        doc.WhatsAppSentCount = (Number(doc.WhatsAppSentCount) || 0) + 1;
+                        console.log(`[MedicalDocumentService] ✅ Auto-shared uploaded document ${doc.Id} on WhatsApp to patient ${validPatientId}`);
+                    } catch (autoErr: any) {
+                        console.warn(`[MedicalDocumentService] ⚠️ Auto document ${doc.Id} WhatsApp send warning:`, autoErr?.message || autoErr);
+                    }
+                }
             }
         }
 

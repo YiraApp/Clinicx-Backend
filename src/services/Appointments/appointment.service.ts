@@ -48,6 +48,17 @@ export class AppointmentService {
             throw new Error("Patient mobile number is required to allocate or register the patient.");
         }
 
+        // 1b. Mandatory Email check & format validation
+        const rawEmail = (data.patientEmail || (data as any).email || "").trim();
+        if (!rawEmail) {
+            throw new Error("Patient email address is required.");
+        }
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(rawEmail)) {
+            throw new Error("Please provide a valid email address.");
+        }
+        const cleanEmail = rawEmail.toLowerCase();
+
         if (!data.orgId || !data.hospitalId) {
             const activeDefault = await defaultOrganizationRepository.getActiveDefault();
             if (activeDefault) {
@@ -67,6 +78,26 @@ export class AppointmentService {
 
         const userRepo = AppDataSource.getRepository(User);
         const last10Digits = cleanPhone.slice(-10);
+
+        // 1c. Prevent duplicate emails across different primary users
+        const usersWithEmail = await userRepo.createQueryBuilder("u")
+            .where("u.IsDeleted = 0")
+            .andWhere("u.IsPrimary = 1")
+            .andWhere("LOWER(u.Email) = :email", { email: cleanEmail })
+            .getMany();
+
+        if (usersWithEmail.length > 0) {
+            const belongsToDifferentPrimary = usersWithEmail.some(u => {
+                const uPhone = (u.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+                if (uPhone && uPhone === last10Digits) return false;
+                if (data.userId && u.Id.toLowerCase() === data.userId.toLowerCase()) return false;
+                return true;
+            });
+
+            if (belongsToDifferentPrimary) {
+                throw new Error("This email is already registered with another account. Please use a different email address.");
+            }
+        }
 
         // 2. Fetch all users registered under this phone number (Primary + Family Dependents)
         const existingFamilyUsers = await userRepo.createQueryBuilder("u")
@@ -93,8 +124,7 @@ export class AppointmentService {
             const nameParts = (data.patientName || "Pulse Patient").trim().split(" ");
             targetUser.FirstName = nameParts[0];
             targetUser.LastName = nameParts.slice(1).join(" ") || "";
-            const providedEmail = (data.patientEmail || (data as any).email || "").trim();
-            targetUser.Email = providedEmail.length > 0 ? providedEmail : "";
+            targetUser.Email = cleanEmail;
             targetUser.PhoneNumber = cleanPhone;
             targetUser.Gender = data.gender || null;
             targetUser.DateOfBirth = data.dob || null;
@@ -162,8 +192,7 @@ export class AppointmentService {
                     const nameParts = (data.patientName || "").trim().split(" ");
                     targetUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "New User";
                     targetUser.LastName = nameParts.slice(1).join(" ") || "";
-                    const depProvidedEmail = (data.patientEmail || (data as any).email || "").trim();
-                    targetUser.Email = depProvidedEmail.length > 0 ? depProvidedEmail : "";
+                    targetUser.Email = cleanEmail;
                     targetUser.PhoneNumber = cleanPhone;
                     targetUser.Gender = data.gender || null;
                     targetUser.DateOfBirth = data.dob || null;
@@ -185,7 +214,11 @@ export class AppointmentService {
             } else if (targetUser.Email && targetUser.Email.includes("@yira.ai")) {
                 targetUser.Email = "";
             }
-            await userRepo.save(targetUser);
+            await userRepo.update(targetUser.Id, {
+                FirstName: targetUser.FirstName,
+                LastName: targetUser.LastName,
+                Email: targetUser.Email
+            });
         }
 
         // Send Welcome Credentials Email for new registrations
@@ -207,12 +240,16 @@ export class AppointmentService {
         // 3. Ensure Organization & Hospital Assignment in UserRoles & PatientRegistrations
         const userRoleRepo = AppDataSource.getRepository(UserRole);
         const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
+        const { patientRegistrationService } = await import("../Organizations/patient-registration.service.js");
+
+        let isNewHospitalMapping = false;
 
         const existingRoleMapping = await userRoleRepo.findOne({
             where: { UserId: targetUser.Id, OrganizationId: data.orgId, HospitalId: data.hospitalId, IsDeleted: false }
         });
 
         if (!existingRoleMapping) {
+            isNewHospitalMapping = true;
             const roleRepo = AppDataSource.getRepository(Role);
             const patientRole = await roleRepo.findOne({ where: { RoleName: "Patient" } });
             const roleId = patientRole ? patientRole.Id : "4FC67429-28AE-4106-93EF-436228282ED0";
@@ -227,18 +264,52 @@ export class AppointmentService {
             await userRoleRepo.save(userRole);
         }
 
-        const existingPatientReg = await patientRegRepo.findOne({
+        let existingPatientReg = await patientRegRepo.findOne({
             where: { UserId: targetUser.Id, OrganizationId: data.orgId, HospitalId: data.hospitalId }
         });
 
+        // Resolve or generate TokenNumber for the hospital (same sequence as regular registration)
+        let assignedToken = existingPatientReg?.TokenNumber || null;
+        if (!assignedToken) {
+            try {
+                const tokenData = await patientRegistrationService.getNextTokenNumber(data.hospitalId);
+                assignedToken = tokenData.tokenNumber;
+                console.log(`[Pulse Booking] Generated token sequence ${assignedToken} for User ${targetUser.Id} at Hospital ${data.hospitalId}`);
+            } catch (tokenErr) {
+                console.error("[Pulse Booking] Error generating token number:", tokenErr);
+                assignedToken = `HOSP${data.hospitalId}-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+        }
+
         if (!existingPatientReg) {
+            isNewHospitalMapping = true;
             const patientReg = new PatientRegistration();
             patientReg.UserId = targetUser.Id;
             patientReg.OrganizationId = data.orgId;
             patientReg.HospitalId = data.hospitalId;
+            patientReg.TokenNumber = assignedToken;
             patientReg.Status = true;
             patientReg.IsDeleted = false;
             await patientRegRepo.save(patientReg);
+        } else if (!existingPatientReg.TokenNumber && assignedToken) {
+            existingPatientReg.TokenNumber = assignedToken;
+            await patientRegRepo.update(existingPatientReg.Id, { TokenNumber: assignedToken });
+        }
+
+        // Keep User.TokenNumber updated
+        if (assignedToken && targetUser.TokenNumber !== assignedToken) {
+            targetUser.TokenNumber = assignedToken;
+            await userRepo.update(targetUser.Id, { TokenNumber: assignedToken });
+        }
+
+        // Trigger Patient Registration WhatsApp template ('clinic_reg') when newly registered or newly mapped to hospital
+        if (isNewRegistration || isNewHospitalMapping) {
+            try {
+                console.log(`[Pulse Booking] Triggering clinic_reg WhatsApp template for ${targetUser.PhoneNumber} with token ${assignedToken}`);
+                await patientRegistrationService.sendPatientRegistrationWhatsApp(targetUser, assignedToken || undefined);
+            } catch (regErr: any) {
+                console.error("[Pulse Booking] Error sending clinic_reg WhatsApp message:", regErr?.message || regErr);
+            }
         }
 
         // 4. Book Appointment for the resolved Patient (Primary or Dependent)
@@ -365,6 +436,11 @@ export class AppointmentService {
             }
         }
 
+        if (appointment) {
+            (appointment as any).tokenNumber = assignedToken;
+            (appointment as any).appointmentNumber = appointment.AppointmentNumber;
+        }
+
         return {
             patient: {
                 userId: targetUser.Id,
@@ -373,12 +449,15 @@ export class AppointmentService {
                 email: targetUser.Email,
                 relation: targetUser.Relation || (targetUser.IsPrimary ? "Self" : "Dependent"),
                 isPrimary: targetUser.IsPrimary ?? false,
+                tokenNumber: assignedToken,
                 organizationId: data.orgId,
                 hospitalId: data.hospitalId,
                 isNewRegistration,
                 isHospitalMapped: true
             },
             appointment,
+            tokenNumber: assignedToken,
+            appointmentNumber: appointment?.AppointmentNumber || null,
             dynamicLink: (appointment as any)?.dynamicLink || null,
             videoCallUrl: (appointment as any)?.videoCallUrl || appointment?.MeetingUrl || null,
             redirectionUrlId: (appointment as any)?.redirectionUrlId || null
@@ -613,158 +692,191 @@ export class AppointmentService {
         // Async task: send WhatsApp confirmation to Patient and Doctor
         try {
             const enrichedAppointment = await appointmentRepository.findById(newAppointment.Id);
-            if (enrichedAppointment) {
-                if (enrichedAppointment.Status === "PendingPayment" || enrichedAppointment.Status === "Pending") {
-                    console.log(`[AppointmentService] Appointment #${enrichedAppointment.Id} is ${enrichedAppointment.Status}. WhatsApp confirmation withheld until payment confirmation.`);
-                } else {
-                    const appt = enrichedAppointment;
-                    const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
-                    const { whatsappService } = await import("../Common/whatsapp.service.js");
+            const appt = enrichedAppointment || newAppointment;
 
-                    const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
-                    const doctorName = appt.Doctor 
-                        ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
-                        : "N/A";
-                    const hospitalName = appt.Hospital?.Name || "our clinic";
+            if (appt.Status === "PendingPayment" || appt.Status === "Pending") {
+                console.log(`[AppointmentService] Appointment #${appt.Id} is ${appt.Status}. WhatsApp confirmation withheld until payment confirmation.`);
+            } else {
+                let apptUser: any = appt.User;
+                if (!apptUser || !apptUser.PhoneNumber) {
+                    const { User } = await import("../../models/Account/user.model.js");
+                    apptUser = await AppDataSource.getRepository(User).findOne({ where: { Id: appt.UserId } });
+                    if (apptUser) (appt as any).User = apptUser;
+                }
 
-                    const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
-                        day: "2-digit", month: "short", year: "numeric"
-                    });
+                const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
+                const { whatsappService } = await import("../Common/whatsapp.service.js");
 
-                    const formatTime12h = (timeStr: string) => {
-                        if (!timeStr) return "10:00 AM";
-                        const clean = timeStr.trim();
-                        if (clean.toUpperCase().includes("AM") || clean.toUpperCase().includes("PM")) {
-                            return clean;
-                        }
-                        const parts = clean.split(":");
-                        if (parts.length === 0) return clean;
-                        let hour = parseInt(parts[0], 10);
-                        const minute = parts.length > 1 ? parts[1].padStart(2, "0") : "00";
-                        const ampm = hour >= 12 ? "PM" : "AM";
-                        hour = hour % 12;
-                        if (hour === 0) hour = 12;
-                        return `${hour}:${minute} ${ampm}`;
-                    };
-                    const timeStr = formatTime12h(appt.StartTime || "10:00:00");
+                const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
 
-                    // 1. Send WhatsApp to Patient
-                    if (appt.User?.PhoneNumber) {
-                        try {
-                            const redirection = await meetingRedirectionService.getOrCreateRedirection({
-                                AppointmentId: appt.Id,
-                                PatientId: appt.UserId,
-                                DoctorId: appt.DoctorId,
-                                HospitalId: appt.HospitalId,
-                                OrganizationId: appt.OrgId,
-                                MeetingUrl: appt.MeetingUrl || "",
-                                AppointmentDate: appt.AppointmentDate,
-                                StartTime: appt.StartTime
-                            });
+                let doctorName = appt.Doctor 
+                    ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
+                    : "";
 
-                            const countryCode = appt.User?.CountryCode || "91";
-                            const cleanPatientDigits = (appt.User?.PhoneNumber || "").replace(/\D/g, "");
-                            const normalizedPhone = cleanPatientDigits.length === 10
-                                ? `${countryCode.replace(/\D/g, "")}${cleanPatientDigits}`
-                                : cleanPatientDigits;
-
-                            // Select template based on consultation type
-                            const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
-
-                            const components: any[] = [
-                                {
-                                    type: "header",
-                                    parameters: [
-                                        { type: "text", text: hospitalName }
-                                    ]
-                                },
-                                {
-                                    type: "body",
-                                    parameters: [
-                                        { type: "text", text: patientName },
-                                        { type: "text", text: doctorName },
-                                        { type: "text", text: hospitalName },
-                                        { type: "text", text: dateStr },
-                                        { type: "text", text: timeStr }
-                                    ]
-                                }
-                            ];
-
-                            if (appt.IsTeleConsultation && redirection?.UrlId) {
-                                components.push({
-                                    type: "button",
-                                    sub_type: "url",
-                                    index: "0",
-                                    parameters: [
-                                        { type: "text", text: redirection.UrlId }
-                                    ]
-                                });
-                            }
-
-                            await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
-                            console.log(`[AppointmentService] WhatsApp appointment notification sent to patient ${normalizedPhone} using template ${templateName}`);
-                        } catch (patientErr) {
-                            console.error(`[AppointmentService] Error sending patient WhatsApp for appointment #${appt.Id}:`, patientErr);
-                        }
-                    }
-
-                    // 2. Send WhatsApp to Doctor using doctor_appointment_confirmation
+                if (!doctorName || doctorName === "N/A") {
                     try {
-                        let doctorUser = appt.Doctor;
-                        if ((!doctorUser || !doctorUser.PhoneNumber) && appt.DoctorId) {
-                            const { User } = await import("../../models/Account/user.model.js");
-                            const userRepo = AppDataSource.getRepository(User);
-                            const fetchedDoctor = await userRepo.findOne({ where: { Id: appt.DoctorId } });
-                            if (fetchedDoctor) doctorUser = fetchedDoctor;
+                        const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+                        const hp = await AppDataSource.getRepository(HealthcareProvider).findOne({
+                            where: [{ UserId: appt.DoctorId }, { Id: Number(appt.DoctorId) || 0 }],
+                            relations: ["User"]
+                        });
+                        if (hp && hp.User) {
+                            doctorName = `${hp.User.FirstName || ""} ${hp.User.LastName || ""}`.trim();
+                        } else if (hp && (hp as any).Name) {
+                            doctorName = (hp as any).Name;
                         }
-
-                        if (doctorUser?.PhoneNumber) {
-                            const docCountryCode = doctorUser.CountryCode || "91";
-                            const cleanDocDigits = doctorUser.PhoneNumber.replace(/\D/g, "");
-                            const normalizedDocPhone = cleanDocDigits.length === 10
-                                ? `${docCountryCode.replace(/\D/g, "")}${cleanDocDigits}`
-                                : cleanDocDigits;
-
-                            let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim();
-                            docDisplayName = docDisplayName.replace(/^dr\.?\s+/i, "").trim() || "Doctor";
-
-                            const doctorComponents = [
-                                {
-                                    type: "body",
-                                    parameters: [
-                                        { type: "text", text: docDisplayName },
-                                        { type: "text", text: hospitalName },
-                                        { type: "text", text: patientName },
-                                        { type: "text", text: dateStr },
-                                        { type: "text", text: timeStr }
-                                    ]
-                                }
-                            ];
-
-                            try {
-                                await whatsappService.sendTemplateMessage(
-                                    normalizedDocPhone,
-                                    "doctor_appointment_confirmation",
-                                    "en",
-                                    doctorComponents
-                                );
-                                console.log(`[AppointmentService] WhatsApp doctor confirmation sent to Dr. ${docDisplayName} (${normalizedDocPhone}) for appointment #${appt.Id}`);
-                            } catch (docTplErr) {
-                                console.warn(`[AppointmentService] WhatsApp template 'doctor_appointment_confirmation' failed for doctor ${normalizedDocPhone}, sending fallback text:`, docTplErr);
-                                const fallbackMessage = `Dear Dr. ${docDisplayName},\n\nYour appointment at ${hospitalName} has been confirmed.\n\nPatient: ${patientName}\nDate: ${dateStr}\nTime: ${timeStr}\n\nThank you.\nYira Clinx`;
-                                await whatsappService.sendTextMessage(normalizedDocPhone, fallbackMessage);
-                                console.log(`[AppointmentService] WhatsApp text fallback sent to doctor ${normalizedDocPhone}`);
-                            }
-                        } else {
-                            console.warn(`[AppointmentService] Doctor for appointment #${appt.Id} has no phone number, skipping doctor WhatsApp.`);
-                        }
-                    } catch (docNotifyErr) {
-                        console.error(`[AppointmentService] Error sending doctor appointment confirmation for appointment #${appt.Id}:`, docNotifyErr);
+                    } catch {
+                        // ignore
                     }
                 }
+
+                if (!doctorName) doctorName = "Doctor";
+                if (!doctorName.toLowerCase().startsWith("dr.")) {
+                    doctorName = `Dr. ${doctorName}`;
+                }
+
+                const hospitalName = appt.Hospital?.Name || "Yira Hospitals";
+
+                const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
+                    day: "2-digit", month: "short", year: "numeric"
+                });
+
+                const formatTime12h = (timeStr: string) => {
+                    if (!timeStr) return "10:00 AM";
+                    const clean = timeStr.trim();
+                    if (clean.toUpperCase().includes("AM") || clean.toUpperCase().includes("PM")) {
+                        return clean;
+                    }
+                    const parts = clean.split(":");
+                    if (parts.length === 0) return clean;
+                    let hour = parseInt(parts[0], 10);
+                    const minute = parts.length > 1 ? parts[1].padStart(2, "0") : "00";
+                    const ampm = hour >= 12 ? "PM" : "AM";
+                    hour = hour % 12;
+                    if (hour === 0) hour = 12;
+                    return `${hour}:${minute} ${ampm}`;
+                };
+                const timeStr = formatTime12h(appt.StartTime || "10:00:00");
+
+                // 1. Send WhatsApp to Patient
+                if (appt.User?.PhoneNumber) {
+                    try {
+                        const redirection = await meetingRedirectionService.getOrCreateRedirection({
+                            AppointmentId: appt.Id,
+                            PatientId: appt.UserId,
+                            DoctorId: appt.DoctorId,
+                            HospitalId: appt.HospitalId,
+                            OrganizationId: appt.OrgId,
+                            MeetingUrl: appt.MeetingUrl || "",
+                            AppointmentDate: appt.AppointmentDate,
+                            StartTime: appt.StartTime
+                        });
+
+                        const countryCode = appt.User?.CountryCode || "91";
+                        const cleanPatientDigits = (appt.User?.PhoneNumber || "").replace(/\D/g, "");
+                        const normalizedPhone = cleanPatientDigits.length === 10
+                            ? `${countryCode.replace(/\D/g, "")}${cleanPatientDigits}`
+                            : cleanPatientDigits;
+
+                        // Select template based on consultation type
+                        const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
+
+                        const components: any[] = [
+                            {
+                                type: "header",
+                                parameters: [
+                                    { type: "text", text: hospitalName }
+                                ]
+                            },
+                            {
+                                type: "body",
+                                parameters: [
+                                    { type: "text", text: patientName },
+                                    { type: "text", text: doctorName },
+                                    { type: "text", text: hospitalName },
+                                    { type: "text", text: dateStr },
+                                    { type: "text", text: timeStr }
+                                ]
+                            }
+                        ];
+
+                        const redId = redirection?.UrlId || redirectionUrlId;
+                        if (appt.IsTeleConsultation && redId) {
+                            components.push({
+                                type: "button",
+                                sub_type: "url",
+                                index: "0",
+                                parameters: [
+                                    { type: "text", text: redId }
+                                ]
+                            });
+                        }
+
+                        console.log(`[AppointmentService] Sending WhatsApp booking template '${templateName}' to ${normalizedPhone} for ${patientName} with ${doctorName}`);
+                        await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
+                        console.log(`[AppointmentService] WhatsApp appointment notification sent to patient ${normalizedPhone} using template ${templateName}`);
+                    } catch (patientErr: any) {
+                        console.error(`[AppointmentService] Error sending patient WhatsApp for appointment #${appt.Id}:`, patientErr?.message || patientErr);
+                    }
+                }
+
+                // 2. Send WhatsApp to Doctor using doctor_appointment_confirmation
+                try {
+                    let doctorUser = appt.Doctor;
+                    if ((!doctorUser || !doctorUser.PhoneNumber) && appt.DoctorId) {
+                        const { User } = await import("../../models/Account/user.model.js");
+                        const userRepo = AppDataSource.getRepository(User);
+                        const fetchedDoctor = await userRepo.findOne({ where: { Id: appt.DoctorId } });
+                        if (fetchedDoctor) doctorUser = fetchedDoctor;
+                    }
+
+                    if (doctorUser?.PhoneNumber) {
+                        const docCountryCode = doctorUser.CountryCode || "91";
+                        const cleanDocDigits = doctorUser.PhoneNumber.replace(/\D/g, "");
+                        const normalizedDocPhone = cleanDocDigits.length === 10
+                            ? `${docCountryCode.replace(/\D/g, "")}${cleanDocDigits}`
+                            : cleanDocDigits;
+
+                        let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim();
+                        docDisplayName = docDisplayName.replace(/^dr\.?\s+/i, "").trim() || "Doctor";
+
+                        const doctorComponents = [
+                            {
+                                type: "body",
+                                parameters: [
+                                    { type: "text", text: docDisplayName },
+                                    { type: "text", text: hospitalName },
+                                    { type: "text", text: patientName },
+                                    { type: "text", text: dateStr },
+                                    { type: "text", text: timeStr }
+                                ]
+                            }
+                        ];
+
+                        try {
+                            await whatsappService.sendTemplateMessage(
+                                normalizedDocPhone,
+                                "doctor_appointment_confirmation",
+                                "en",
+                                doctorComponents
+                            );
+                            console.log(`[AppointmentService] WhatsApp doctor confirmation sent to Dr. ${docDisplayName} (${normalizedDocPhone}) for appointment #${appt.Id}`);
+                        } catch (docTplErr) {
+                            console.warn(`[AppointmentService] WhatsApp template 'doctor_appointment_confirmation' failed for doctor ${normalizedDocPhone}, sending fallback text:`, docTplErr);
+                            const fallbackMessage = `Dear Dr. ${docDisplayName},\n\nYour appointment at ${hospitalName} has been confirmed.\n\nPatient: ${patientName}\nDate: ${dateStr}\nTime: ${timeStr}\n\nThank you.\nYira Clinx`;
+                            await whatsappService.sendTextMessage(normalizedDocPhone, fallbackMessage);
+                            console.log(`[AppointmentService] WhatsApp text fallback sent to doctor ${normalizedDocPhone}`);
+                        }
+                    } else {
+                        console.warn(`[AppointmentService] Doctor for appointment #${appt.Id} has no phone number, skipping doctor WhatsApp.`);
+                    }
+                } catch (docNotifyErr: any) {
+                    console.error(`[AppointmentService] Error sending doctor appointment confirmation for appointment #${appt.Id}:`, docNotifyErr?.message || docNotifyErr);
+                }
             }
-        } catch (err) {
-            console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err);
+            }
+        } catch (err: any) {
+            console.error("[AppointmentService] Error generating redirection or sending WhatsApp notification:", err?.message || err);
         }
 
         return newAppointment;
@@ -932,23 +1044,155 @@ export class AppointmentService {
         return { data: enriched, summary, total, page: filters.page || 1, pageSize: filters.pageSize || 50 };
     }
 
-    async cancelAppointment(appointmentId: number, slotId: number) {
-        return await AppDataSource.transaction(async (manager) => {
+    async cancelAppointment(appointmentId: number, slotId?: number) {
+        const result = await AppDataSource.transaction(async (manager) => {
             await manager.update("Appointments", appointmentId, {
                 Status: "Cancelled",
                 UpdatedAt: new Date()
             });
 
-            await manager.update("HealthcareProviderScheduleSlots", slotId, {
-                IsBooked: false,
-                Status: "Available",
-                UpdatedAt: new Date()
-            });
+            if (slotId) {
+                await manager.update("HealthcareProviderScheduleSlots", slotId, {
+                    IsBooked: false,
+                    Status: "Available",
+                    UpdatedAt: new Date()
+                });
+            } else {
+                const appt = await manager.findOne(Appointment, { where: { Id: appointmentId } });
+                if (appt && appt.SlotId) {
+                    await manager.update("HealthcareProviderScheduleSlots", appt.SlotId, {
+                        IsBooked: false,
+                        Status: "Available",
+                        UpdatedAt: new Date()
+                    });
+                }
+            }
         });
+
+        // Trigger WhatsApp cancellation notification (clinix_appointment_cancel)
+        try {
+            await this.sendAppointmentCancellationWhatsApp(appointmentId);
+        } catch (err: any) {
+            console.error(`[AppointmentService] Failed to send cancellation WhatsApp for appointment ${appointmentId}:`, err?.message || err);
+        }
+
+        return result;
+    }
+
+    async sendAppointmentCancellationWhatsApp(appointmentId: number): Promise<any> {
+        try {
+            const appointmentRepo = AppDataSource.getRepository(Appointment);
+            const appt = await appointmentRepo.findOne({
+                where: { Id: appointmentId },
+                relations: ["User", "Doctor", "Hospital"]
+            });
+
+            if (!appt) {
+                console.warn(`[AppointmentService] Appointment ${appointmentId} not found for cancellation WhatsApp.`);
+                return { success: false, error: "Appointment not found" };
+            }
+
+            // Find patient phone number (or parent phone if dependent)
+            let phone: string | null | undefined = appt.User?.PhoneNumber;
+            if (!phone && appt.User?.ParentUserId) {
+                const { User } = await import("../../models/Account/user.model.js");
+                const userRepo = AppDataSource.getRepository(User);
+                const parent = await userRepo.findOne({ where: { Id: appt.User.ParentUserId } });
+                phone = parent?.PhoneNumber;
+            }
+
+            if (!phone) {
+                console.warn(`[AppointmentService] No phone number for patient on appointment ${appointmentId}. Skipping cancellation WhatsApp.`);
+                return { success: false, error: "Patient phone number not found" };
+            }
+
+            let normalizedPhone = phone.replace(/\D/g, "");
+            if (normalizedPhone.length === 10) {
+                normalizedPhone = "91" + normalizedPhone;
+            }
+
+            // Parameter 1: Patient Name
+            const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Valued Patient";
+
+            // Parameter 2: Doctor Name (strip leading 'Dr.' since template says 'with Dr. {{2}}')
+            let docName = `${appt.Doctor?.FirstName || ""} ${appt.Doctor?.LastName || ""}`.trim() || "Doctor";
+            docName = docName.replace(/^dr\.?\s+/i, "");
+
+            // Parameter 3: Hospital Name
+            const hospitalName = appt.Hospital?.Name || "Yira Hospitals";
+
+            // Parameter 4: Scheduled Date (e.g. 09 Sep 2026)
+            const dateObj = new Date(appt.AppointmentDate);
+            const dateStr = !isNaN(dateObj.getTime())
+                ? dateObj.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                : String(appt.AppointmentDate);
+
+            // Parameter 5: Scheduled Time (e.g. 10:30 AM)
+            let timeStr = appt.StartTime ? appt.StartTime.slice(0, 5) : "";
+            if (appt.StartTime && appt.StartTime.includes(":")) {
+                const [h, m] = appt.StartTime.split(":");
+                const hourNum = parseInt(h, 10);
+                const period = hourNum >= 12 ? "PM" : "AM";
+                const displayHour = hourNum % 12 || 12;
+                timeStr = `${displayHour}:${m} ${period}`;
+            }
+
+            const hospId = String(appt.HospitalId || 19);
+
+            const components = [
+                {
+                    type: "body",
+                    parameters: [
+                        { type: "text", text: patientName },
+                        { type: "text", text: docName },
+                        { type: "text", text: hospitalName },
+                        { type: "text", text: dateStr },
+                        { type: "text", text: timeStr }
+                    ]
+                },
+                {
+                    type: "button",
+                    sub_type: "url",
+                    index: "0",
+                    parameters: [
+                        { type: "text", text: hospId }
+                    ]
+                }
+            ];
+
+            const { whatsappService } = await import("../Common/whatsapp.service.js");
+            console.log(`[AppointmentService] Sending 'clinix_appointment_cancel' WhatsApp to ${normalizedPhone} for appointment ${appointmentId}...`);
+            const result = await whatsappService.sendTemplateMessage(normalizedPhone, "clinix_appointment_cancel", "en", components);
+            console.log(`[AppointmentService] ✅ Sent cancellation WhatsApp to ${normalizedPhone}:`, result?.messages?.[0]?.id || "OK");
+
+            // Save history notification in AppNotifications
+            try {
+                const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+                const notifRepo = AppDataSource.getRepository(AppNotification);
+                const notif = new AppNotification();
+                notif.UserId = appt.UserId;
+                notif.SenderId = appt.DoctorId || null;
+                notif.Title = "Appointment Cancelled";
+                notif.Body = `Your appointment with Dr. ${docName} at ${hospitalName} scheduled for ${dateStr} at ${timeStr} has been cancelled ('clinix_appointment_cancel' template sent to ${normalizedPhone})`;
+                notif.Type = "WHATSAPP_APPOINTMENT_CANCEL";
+                notif.ReferenceId = String(appointmentId);
+                notif.Route = `/book-appointment/${hospId}`;
+                notif.IsRead = false;
+                notif.CreatedAt = new Date();
+                await notifRepo.save(notif);
+            } catch (notifErr: any) {
+                console.warn("[AppointmentService] Failed to save AppNotification for cancellation:", notifErr?.message || notifErr);
+            }
+
+            return { success: true, result };
+        } catch (err: any) {
+            console.error(`[AppointmentService] Error in sendAppointmentCancellationWhatsApp for appointment ${appointmentId}:`, err?.message || err);
+            return { success: false, error: err?.message || err };
+        }
     }
 
     async updateAppointmentStatus(appointmentId: number, status: string) {
-        return await AppDataSource.transaction(async (manager) => {
+        const result = await AppDataSource.transaction(async (manager) => {
             // Update appointment status
             await manager.update(Appointment, appointmentId, { Status: status, UpdatedAt: new Date() });
 
@@ -1017,6 +1261,16 @@ export class AppointmentService {
                 }
             }
         });
+
+        if (status.toLowerCase() === AppointmentStatus.Cancelled.toLowerCase()) {
+            try {
+                await this.sendAppointmentCancellationWhatsApp(appointmentId);
+            } catch (err: any) {
+                console.error(`[AppointmentService] Failed to send cancellation WhatsApp for appointment ${appointmentId}:`, err?.message || err);
+            }
+        }
+
+        return result;
     }
 
     async rescheduleAppointment(appointmentId: number, data: { newSlotId: number; newDoctorId: string; newDate: string; startTime: string; endTime: string }) {

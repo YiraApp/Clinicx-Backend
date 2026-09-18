@@ -10,8 +10,12 @@ export class MedicalDocumentController {
             if (!patientId) {
                 return res.status(400).json(ApiResponse.error("Patient ID is required."));
             }
-            const result = await medicalDocumentService.sendAppointmentBookingWhatsApp(patientId, hospitalId, senderId);
-            return res.json(ApiResponse.success(result, "Appointment Booking WhatsApp notification sent successfully."));
+            const result = await medicalDocumentService.sendAppointmentBookingWhatsApp(
+                patientId,
+                hospitalId ? Number(hospitalId) : undefined,
+                senderId
+            );
+            return res.json(ApiResponse.success(result, "Appointment booking WhatsApp notification sent."));
         } catch (error: any) {
             console.error("[MedicalDocumentController] sendAppointmentBooking Error:", error);
             return res.status(500).json(ApiResponse.error(error.message));

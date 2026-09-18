@@ -289,7 +289,7 @@ export class DashboardRepository {
             .select([
                 "org.Id", "org.Name", "org.OrgCode", "org.OrganizationType",
                 "org.Email", "org.MobileNumber", "org.CountryCode",
-                "org.Address", "org.Status", "org.CreatedAt", "org.Website"
+                "org.Address", "org.Status", "org.CreatedAt", "org.Website", "org.ImageUrl"
             ])
             .addSelect(subQuery => {
                 return subQuery
@@ -337,6 +337,7 @@ export class DashboardRepository {
             Status: org.org_Status,
             CreatedAt: org.org_CreatedAt,
             Website: org.org_Website,
+            ImageUrl: org.org_ImageUrl,
             UserCount: parseInt(org.UserCount || "0"),
             PatientCount: parseInt(org.PatientCount || "0")
         }));

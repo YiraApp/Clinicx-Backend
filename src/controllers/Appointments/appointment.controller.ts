@@ -143,6 +143,16 @@ export class AppointmentController {
         }
     }
 
+    async sendCancellationWhatsApp(req: Request, res: Response) {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            const result = await appointmentService.sendAppointmentCancellationWhatsApp(id);
+            return res.json(ApiResponse.success(result, "Appointment cancellation WhatsApp message processed."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async createInstantMeeting(req: Request, res: Response) {
         try {
             const topic = req.body.topic || "Instant Consultation";

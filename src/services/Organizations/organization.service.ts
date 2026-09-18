@@ -57,6 +57,7 @@ export class OrganizationService implements IOrganizationService {
             if (data.Email) orgPrepare.Email = data.Email;
             if (data.Address) orgPrepare.Address = data.Address;
             if (data.Website) orgPrepare.Website = data.Website;
+            if (data.ImageUrl) orgPrepare.ImageUrl = data.ImageUrl;
 
             const org = await organizationRepository.createOrganization(orgPrepare);
 
@@ -165,6 +166,7 @@ export class OrganizationService implements IOrganizationService {
             if (data.Address) org.Address = data.Address;
 
             if (data.Website) org.Website = data.Website;
+            if (data.ImageUrl !== undefined) org.ImageUrl = data.ImageUrl;
             if (data.Status !== undefined) org.Status = data.Status;
 
             await transactionalEntityManager.save(Organization, org);

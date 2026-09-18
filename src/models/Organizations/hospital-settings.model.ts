@@ -66,7 +66,7 @@ export class HospitalSetting {
     SendBookingAfterDocument: boolean; // Auto-send appointment booking template after document upload
 
     @Column({ type: "int", default: 20 })
-    BookingAfterDocumentMinutes: number; // Follow-up delay in minutes
+    BookingAfterDocumentMinutes: number; // Follow-up delay in minutes (default: 20)
 
     // ── Extensible Future Flags (JSON) ──
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
@@ -93,4 +93,5 @@ export class HospitalSetting {
 
     @Column({ type: "int", nullable: true })
     UpdatedBy?: number | null;
+
 }

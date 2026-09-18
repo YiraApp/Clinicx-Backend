@@ -82,6 +82,18 @@ export class HospitalSettingsService {
                 ? data.ConsultationFeeForPackages 
                 : (data as any).consultationFeeForPackages;
 
+            const apptBookingVal = data.AppointmentBookingTemplate !== undefined
+                ? data.AppointmentBookingTemplate
+                : (data as any).appointmentBookingTemplate;
+
+            const sendBookingDocVal = data.SendBookingAfterDocument !== undefined
+                ? data.SendBookingAfterDocument
+                : (data as any).sendBookingAfterDocument;
+
+            const bookingDocMinsVal = data.BookingAfterDocumentMinutes !== undefined
+                ? data.BookingAfterDocumentMinutes
+                : (data as any).bookingAfterDocumentMinutes;
+
             const newSetting = this.settingsRepo.create({
                 HospitalId: hospitalId,
                 OrganizationId: hospital.OrganizationId,
@@ -97,15 +109,9 @@ export class HospitalSettingsService {
                 DentalConsultation: data.DentalConsultation !== undefined ? Boolean(data.DentalConsultation) : false,
                 EyeCare: data.EyeCare !== undefined ? Boolean(data.EyeCare) : false,
                 NotifyTemplate: data.NotifyTemplate !== undefined ? Boolean(data.NotifyTemplate) : false,
-                AppointmentBookingTemplate: data.AppointmentBookingTemplate !== undefined 
-                    ? Boolean(data.AppointmentBookingTemplate) 
-                    : ((data as any).appointmentBookingTemplate !== undefined ? Boolean((data as any).appointmentBookingTemplate) : false),
-                SendBookingAfterDocument: data.SendBookingAfterDocument !== undefined 
-                    ? Boolean(data.SendBookingAfterDocument) 
-                    : ((data as any).sendBookingAfterDocument !== undefined ? Boolean((data as any).sendBookingAfterDocument) : false),
-                BookingAfterDocumentMinutes: data.BookingAfterDocumentMinutes !== undefined 
-                    ? Number(data.BookingAfterDocumentMinutes) 
-                    : ((data as any).bookingAfterDocumentMinutes !== undefined ? Number((data as any).bookingAfterDocumentMinutes) : 20),
+                AppointmentBookingTemplate: apptBookingVal !== undefined ? Boolean(apptBookingVal) : false,
+                SendBookingAfterDocument: sendBookingDocVal !== undefined ? Boolean(sendBookingDocVal) : false,
+                BookingAfterDocumentMinutes: bookingDocMinsVal !== undefined ? Number(bookingDocMinsVal) : 20,
                 AdditionalFlags: data.AdditionalFlags 
                     ? (typeof data.AdditionalFlags === "string" ? data.AdditionalFlags : JSON.stringify(data.AdditionalFlags)) 
                     : null,

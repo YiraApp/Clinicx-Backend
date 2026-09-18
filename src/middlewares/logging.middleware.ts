@@ -52,6 +52,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/patients",
         "/api/users/updateUser",
         "/api/users/checkPrimary",
+        "/api/users/check-email",
         "/api/Account/checkPrimary",
         "/api/otp/checkPrimary",
         "/api/default-organization",

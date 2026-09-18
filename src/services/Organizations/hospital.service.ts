@@ -217,7 +217,8 @@ export class HospitalService implements IHospitalService {
                 City: current.City || null,
                 State: current.State || null,
                 Is24Hours: !!current.Is24Hours,
-                MedicalStaff: current.MedicalStaff || 0
+                MedicalStaff: current.MedicalStaff || 0,
+                ImageUrl: current.ImageUrl || null
             });
 
             return acc;

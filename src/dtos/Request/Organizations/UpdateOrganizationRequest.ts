@@ -12,6 +12,7 @@ export interface UpdateOrganizationRequest {
 
     Address?: string;
     Website?: string;
+    ImageUrl?: string;
     Status?: boolean;
     roleId?: string; // Admin role to assign if MobileNumber changes
     HospitalId?: number;
