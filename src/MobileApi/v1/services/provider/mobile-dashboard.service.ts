@@ -995,25 +995,44 @@ export class MobileDashboardService {
                 notes: a.Notes || "",
                 created_at: a.CreatedAt ? formatDateMMMddyyyy(a.CreatedAt) : "",
                 created_by: a.CreatedBy || "",
-                prescriptions: apptPrescriptions.map(p => ({
-                    id: String(p.Id),
-                    date: formatDateMMMddyyyy(p.Date || p.CreatedAt),
-                    notes: p.Notes || "",
-                    doctor_name: p.Doctor ? (p.Doctor.FirstName ? `Dr. ${p.Doctor.FirstName} ${p.Doctor.LastName || ''}`.trim() : "Doctor") : "Doctor",
-                    medications: (p.Medications || []).map(m => ({
-                        id: String(m.Id),
-                        name: m.Medication || "Medication",
-                        dosage: m.Dosage || "",
-                        frequency: m.FrequencyType || "",
-                        duration: m.DurationValue ? `${m.DurationValue} ${m.DurationUnit || 'days'}` : "",
-                        instructions: m.Instructions || ""
-                    })),
-                    diagnoses: (p.Diagnoses || []).map(d => ({
-                        id: String(d.Id),
-                        name: d.Diagnosis || "",
-                        icd10: d.DiagnosisConceptId || ""
-                    }))
-                })),
+                prescriptions: apptPrescriptions.map(p => {
+                    const rawDate = p.CreatedAt || p.Date;
+                    let timeFormatted = "";
+                    if (rawDate) {
+                        const d = new Date(rawDate);
+                        if (!isNaN(d.getTime())) {
+                            let hour = d.getHours();
+                            const min = d.getMinutes();
+                            const ampm = hour >= 12 ? "PM" : "AM";
+                            hour = hour % 12;
+                            hour = hour ? hour : 12;
+                            const hourStr = hour < 10 ? `0${hour}` : `${hour}`;
+                            const minStr = min < 10 ? `0${min}` : `${min}`;
+                            timeFormatted = `${hourStr}:${minStr} ${ampm}`;
+                        }
+                    }
+                    return {
+                        id: String(p.Id),
+                        date: formatDateMMMddyyyy(p.Date || p.CreatedAt),
+                        time: timeFormatted,
+                        created_at: rawDate ? new Date(rawDate).toISOString() : "",
+                        notes: p.Notes || "",
+                        doctor_name: p.Doctor ? (p.Doctor.FirstName ? `Dr. ${p.Doctor.FirstName} ${p.Doctor.LastName || ''}`.trim() : "Doctor") : "Doctor",
+                        medications: (p.Medications || []).map(m => ({
+                            id: String(m.Id),
+                            name: m.Medication || "Medication",
+                            dosage: m.Dosage || "",
+                            frequency: m.FrequencyType || "",
+                            duration: m.DurationValue ? `${m.DurationValue} ${m.DurationUnit || 'days'}` : "",
+                            instructions: m.Instructions || ""
+                        })),
+                        diagnoses: (p.Diagnoses || []).map(d => ({
+                            id: String(d.Id),
+                            name: d.Diagnosis || "",
+                            icd10: d.DiagnosisConceptId || ""
+                        }))
+                    };
+                }),
                 clinical_notes: apptNotes.map(n => ({
                     id: String(n.Id),
                     notes: n.Notes || "",
@@ -1146,6 +1165,8 @@ export class MobileDashboardService {
                 phone: user.PhoneNumber || "",
                 email_address: user.Email || "",
                 residential_address: residential_address || "None",
+                imagePath: user.ImagePath || null,
+                profileImageUrl: user.ImagePath || null,
                 emergency_contact: {
                     name: user.EmergencyContactName || "None",
                     phone: user.EmergencyContactPhone || "None"
@@ -1418,7 +1439,9 @@ export class MobileDashboardService {
                 name: `${user.FirstName || ""} ${user.LastName || ""}`.trim(),
                 age: age_label,
                 gender,
-                last_visit: lastVisitDate
+                last_visit: lastVisitDate,
+                imagePath: user.ImagePath || null,
+                profileImageUrl: user.ImagePath || null
             },
             contact_information: {
                 phone: user.PhoneNumber || "",
@@ -1612,6 +1635,7 @@ export class MobileDashboardService {
         return {
             photoUrl,
             imagePath: photoUrl,
+            profileImageUrl: photoUrl,
             message: "Profile photo uploaded successfully"
         };
     }

@@ -103,7 +103,10 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/offers",
         "/api/offers",
         "/api/push-campaigns",
-        "/api/feedback"
+        "/api/feedback",
+        "/v1/api/auth/device-token",
+        "/mobile/api/v1/auth/device-token",
+        "/api/v1/mobile/auth/device-token"
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
@@ -264,6 +267,16 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         // Step 2: JWT Authentication for protected routes
         
         if (!isPublic) {
+            // Check for Mobile User/Device header or body fallback
+            const queryUserId = req.body?.userId || req.query.userId || req.headers["x-user-id"];
+            const queryDeviceId = req.body?.deviceId || req.query.deviceId || req.headers["x-device-id"];
+            if (queryUserId && queryDeviceId) {
+                (req as any).userId = String(queryUserId);
+                (req as any).user = { userId: String(queryUserId) };
+                next();
+                return;
+            }
+
             const authHeader = req.headers.authorization;
             if (!authHeader || !authHeader.startsWith("Bearer ")) {
                 res.status(401).json({ error: "No token provided, access denied" });

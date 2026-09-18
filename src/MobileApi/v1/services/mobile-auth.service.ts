@@ -53,7 +53,9 @@ export class MobileAuthService {
                 isPrimary: isPrimary,
                 gender: u.Gender ?? null,
                 dob: formatDOB(u.DateOfBirth),
-                accountType: isPrimary ? "Independent" : "Dependent"
+                accountType: isPrimary ? "Independent" : "Dependent",
+                imagePath: u.ImagePath || null,
+                profileImageUrl: u.ImagePath || null
             };
         });
     }
@@ -473,7 +475,9 @@ export class MobileAuthService {
                 roleName: "User/ Patient",
                 status: true
             }],
-            token: accessToken
+            token: accessToken,
+            imagePath: user.ImagePath || null,
+            profileImageUrl: user.ImagePath || null
         };
     }
 
@@ -584,6 +588,8 @@ export class MobileAuthService {
         latestUserRole: string | null;
         navigationId: string | null;
         profiles?: any[];
+        imagePath?: string | null;
+        profileImageUrl?: string | null;
     }> {
         const type = loginType === "mobileNumber" ? "mobile" : (loginType || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity) ? "email" : "mobile"));
 
@@ -770,7 +776,9 @@ export class MobileAuthService {
                 latestHospitalId: effectiveHospitalId ?? null,
                 latestUserRole: latestUserRole ?? userRoleName,
                 navigationId: navigationId,
-                profiles: await this.getProfilesForUser(user)
+                profiles: await this.getProfilesForUser(user),
+                imagePath: user.ImagePath || null,
+                profileImageUrl: user.ImagePath || null
             };
         } else {
             // Mobile OTP Login: calls verification in login method
@@ -951,7 +959,9 @@ export class MobileAuthService {
                 latestHospitalId: effectiveHospitalId ?? null,
                 latestUserRole: latestUserRole ?? userRoleName,
                 navigationId: navigationId,
-                profiles: await this.getProfilesForUser(user)
+                profiles: await this.getProfilesForUser(user),
+                imagePath: user.ImagePath || null,
+                profileImageUrl: user.ImagePath || null
             };
         }
     }
@@ -1252,6 +1262,8 @@ export class MobileAuthService {
         latestUserRole: string | null;
         navigationId: string | null;
         profiles?: any[];
+        imagePath?: string | null;
+        profileImageUrl?: string | null;
     }> {
         const user = await mobileAuthRepository.findUserById(userId);
         if (!user) {
@@ -1395,7 +1407,9 @@ export class MobileAuthService {
             latestHospitalId: effectiveHospitalId ?? null,
             latestUserRole: latestUserRole ?? userRoleName,
             navigationId: navigationId,
-            profiles: await this.getProfilesForUser(user)
+            profiles: await this.getProfilesForUser(user),
+            imagePath: user.ImagePath || null,
+            profileImageUrl: user.ImagePath || null
         };
     }
 

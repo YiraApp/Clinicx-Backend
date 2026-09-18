@@ -294,8 +294,8 @@ export const getProviderProfile = async (req: Request, res: Response) => {
  */
 export const updateProviderProfile = async (req: Request, res: Response) => {
     try {
-        const { doctorId, userId } = req.body;
-        const targetUserId = doctorId || userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        const { doctorId, userId, patientId } = req.body;
+        const targetUserId = userId || patientId || doctorId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
 
         if (!targetUserId) {
             return res.status(400).json({
@@ -327,8 +327,8 @@ export const uploadProviderProfilePhoto = async (req: Request, res: Response) =>
             });
         }
 
-        const { doctorId, userId } = req.body;
-        const targetUserId = doctorId || userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        const { doctorId, userId, patientId } = req.body;
+        const targetUserId = userId || patientId || doctorId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
 
         if (!targetUserId) {
             return res.status(400).json({
