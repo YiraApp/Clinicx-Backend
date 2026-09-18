@@ -61,7 +61,7 @@ export class AuthService implements IAuthService {
             }
             if (existingUser) {
                 if (existingUser.IsDeleted) {
-                    throw new Error("Your account was deactivated. Contact administrator.");
+                    throw new Error("Account does not exist. Please create an account.");
                 }
                 if (!existingUser.Status) {
                     throw new Error("Your account is inactive. Contact admin.");
@@ -72,7 +72,7 @@ export class AuthService implements IAuthService {
 
         // Check if account is deleted or inactive
         if (user.IsDeleted) {
-            throw new Error("Your account was deactivated. Contact administrator.");
+            throw new Error("Account does not exist. Please create an account.");
         }
         if (!user.Status) {
             throw new Error("Your account is inactive. Contact admin.");

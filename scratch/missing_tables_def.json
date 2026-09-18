@@ -1,0 +1,848 @@
+{
+  "ConsentTemplateFields": {
+    "cols": [
+      {
+        "COLUMN_NAME": "FieldId",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 1
+      },
+      {
+        "COLUMN_NAME": "TemplateId",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "PageNumber",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "X",
+        "DATA_TYPE": "float",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Y",
+        "DATA_TYPE": "float",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Width",
+        "DATA_TYPE": "float",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((150))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Height",
+        "DATA_TYPE": "float",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((50))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "FieldType",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsRequired",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Status",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsDeleted",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((0))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedBy",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 100,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UpdatedBy",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 100,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UpdatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "FieldKey",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 100,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      }
+    ],
+    "pks": [
+      {
+        "COLUMN_NAME": "FieldId"
+      }
+    ]
+  },
+  "Feedbacks": {
+    "cols": [
+      {
+        "COLUMN_NAME": "Id",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 1
+      },
+      {
+        "COLUMN_NAME": "UserId",
+        "DATA_TYPE": "uniqueidentifier",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Name",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 150,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Phone",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Email",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 150,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Rating",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Category",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 100,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Message",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "OrganizationId",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "OrganizationName",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 255,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "HospitalId",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "HospitalName",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 255,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Source",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('Public')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Status",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('New')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "AdminNotes",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UpdatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      }
+    ],
+    "pks": [
+      {
+        "COLUMN_NAME": "Id"
+      }
+    ]
+  },
+  "OfferBanners": {
+    "cols": [
+      {
+        "COLUMN_NAME": "Id",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 1
+      },
+      {
+        "COLUMN_NAME": "Title",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 255,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Description",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ImageUrl",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 1000,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RedirectionType",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('browser')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RedirectionUrl",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 1000,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "InAppRoute",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 255,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "InAppParams",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsAllOrganizations",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "TargetOrganizationIds",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsActive",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "DisplayOrder",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((0))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "StartDate",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "EndDate",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UpdatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ShowTitle",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ShowDescription",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ShowOfferTag",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "OfferTag",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 100,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "('SPECIAL OFFER')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Placement",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('carousel')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "MaxDisplayCount",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "((0))",
+        "IsIdentity": 0
+      }
+    ],
+    "pks": [
+      {
+        "COLUMN_NAME": "Id"
+      }
+    ]
+  },
+  "PasswordResetTokens": {
+    "cols": [
+      {
+        "COLUMN_NAME": "Id",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 1
+      },
+      {
+        "COLUMN_NAME": "UserId",
+        "DATA_TYPE": "uniqueidentifier",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Token",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 500,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ExpiryTime",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsUsed",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "((0))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UsedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      }
+    ],
+    "pks": [
+      {
+        "COLUMN_NAME": "Id"
+      }
+    ]
+  },
+  "PatientAccessConsents": {
+    "cols": [
+      {
+        "COLUMN_NAME": "Id",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 1
+      },
+      {
+        "COLUMN_NAME": "PatientId",
+        "DATA_TYPE": "uniqueidentifier",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "DoctorId",
+        "DATA_TYPE": "uniqueidentifier",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "HospitalId",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "OrganizationId",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Duration",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "DurationMinutes",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((60))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Status",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('PENDING')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RequestedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ApprovedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ExpiresAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Notes",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 500,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UpdatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      }
+    ],
+    "pks": [
+      {
+        "COLUMN_NAME": "Id"
+      }
+    ]
+  },
+  "PushCampaigns": {
+    "cols": [
+      {
+        "COLUMN_NAME": "Id",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 1
+      },
+      {
+        "COLUMN_NAME": "Title",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 255,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Body",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ImageUrl",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 1000,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "HasImage",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((0))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ScheduleType",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('now')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ScheduledDate",
+        "DATA_TYPE": "date",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "ScheduledTime",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 10,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RecurringPattern",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RecurringDays",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RedirectionType",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('in_app')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "RedirectionUrl",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": 1000,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "InAppRoute",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 255,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": "('/patientDashboard')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "InAppParams",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsAllOrganizations",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "TargetOrganizationIds",
+        "DATA_TYPE": "nvarchar",
+        "CHARACTER_MAXIMUM_LENGTH": -1,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "NotificationCategory",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('GENERAL')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "Status",
+        "DATA_TYPE": "varchar",
+        "CHARACTER_MAXIMUM_LENGTH": 50,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "('ACTIVE')",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "IsActive",
+        "DATA_TYPE": "bit",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((1))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "TotalSentCount",
+        "DATA_TYPE": "int",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "((0))",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "LastSentAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "CreatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "NO",
+        "COLUMN_DEFAULT": "(getdate())",
+        "IsIdentity": 0
+      },
+      {
+        "COLUMN_NAME": "UpdatedAt",
+        "DATA_TYPE": "datetime",
+        "CHARACTER_MAXIMUM_LENGTH": null,
+        "IS_NULLABLE": "YES",
+        "COLUMN_DEFAULT": null,
+        "IsIdentity": 0
+      }
+    ],
+    "pks": [
+      {
+        "COLUMN_NAME": "Id"
+      }
+    ]
+  }
+}

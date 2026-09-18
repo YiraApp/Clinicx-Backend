@@ -2,6 +2,8 @@ import { AppDataSource } from "../../../../config/database.js";
 import { Appointment } from "../../../../models/Appointments/appointment.model.js";
 import { HealthcareProvider } from "../../../../models/Organizations/healthcare-provider.model.js";
 import { User } from "../../../../models/Account/user.model.js";
+import { UserRole } from "../../../../models/Account/userrole.model.js";
+import { UserDevice } from "../../../../models/Account/userdevice.model.js";
 import { Hospital } from "../../../../models/Organizations/hospital.model.js";
 import { PatientRegistration } from "../../../../models/Organizations/patient-registration.model.js";
 import { clinicalNoteRepository } from "../../../../repositories/Appointments/clinical-note.repository.js";
@@ -1661,36 +1663,74 @@ export class MobileDashboardService {
     }
 
     /**
-     * Soft-deletes (deactivates) a user account by setting Status = false and IsDeleted = true.
-     * Also deactivates all dependent accounts under this user.
+     * Deactivates and soft-deletes an account for both patient and doctor.
+     * Sets IsDeleted = true and Status / IsActive = false across User, HealthcareProvider (doctor),
+     * UserRole, and UserDevice, along with any linked dependent accounts.
      */
     async deactivateAccount(userId: string): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+        const deviceRepo = AppDataSource.getRepository(UserDevice);
 
         const user = await userRepo.findOne({ where: { Id: userId } });
         if (!user) {
             throw new Error("User not found");
         }
 
-        // Deactivate the primary user
-        user.Status = false;
-        user.IsDeleted = true;
-        user.UpdatedAt = new Date();
+        const now = new Date();
+
+        // 1. Deactivate & soft-delete the primary user (doctor or patient)
+        user.Status = false;     // isActive flag = false
+        user.IsDeleted = true;   // isDelete flag = true
+        user.UpdatedAt = now;
         await userRepo.save(user);
 
-        // Also deactivate all dependent accounts under this user
+        // 2. If the user is a doctor/healthcare provider, update their provider records
+        const providers = await providerRepo.find({ where: { UserId: userId } });
+        for (const prov of providers) {
+            prov.Status = false;    // isActive flag = false
+            prov.IsDeleted = true;  // isDelete flag = true
+            await providerRepo.save(prov);
+        }
+
+        // 3. Deactivate & soft-delete user roles
+        const userRoles = await userRoleRepo.find({ where: { UserId: userId } });
+        for (const role of userRoles) {
+            role.Status = false;    // isActive flag = false
+            role.IsDeleted = true;  // isDelete flag = true
+            await userRoleRepo.save(role);
+        }
+
+        // 4. Inactivate all user push/device session records
+        try {
+            await deviceRepo.update({ UserId: userId }, { IsActive: false, UpdatedAt: now });
+        } catch (deviceErr) {
+            console.error("Failed to deactivate user devices:", deviceErr);
+        }
+
+        // 5. Also deactivate & soft-delete all dependent accounts under this user (for patients)
         const dependents = await userRepo.find({ where: { ParentUserId: userId } });
         for (const dep of dependents) {
-            dep.Status = false;
-            dep.IsDeleted = true;
-            dep.UpdatedAt = new Date();
+            dep.Status = false;     // isActive flag = false
+            dep.IsDeleted = true;   // isDelete flag = true
+            dep.UpdatedAt = now;
             await userRepo.save(dep);
+
+            // Also deactivate dependent roles and devices
+            try {
+                await userRoleRepo.update({ UserId: dep.Id }, { Status: false, IsDeleted: true });
+                await deviceRepo.update({ UserId: dep.Id }, { IsActive: false, UpdatedAt: now });
+            } catch (_) {}
         }
 
         return {
-            message: "Account has been deactivated successfully",
-            deactivatedAt: new Date().toISOString(),
-            dependentsDeactivated: dependents.length,
+            message: "Account has been deleted successfully",
+            deletedAt: now.toISOString(),
+            isDeleted: true,
+            isActive: false,
+            dependentsDeleted: dependents.length,
+            providersDeleted: providers.length,
         };
     }
 }

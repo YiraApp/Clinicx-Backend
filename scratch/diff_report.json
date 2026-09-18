@@ -1,0 +1,92 @@
+{
+  "missingTablesInProd": [
+    "ConsentTemplateFields",
+    "Feedbacks",
+    "OfferBanners",
+    "PasswordResetTokens",
+    "PatientAccessConsents",
+    "PushCampaigns"
+  ],
+  "missingColumnsInProd": [
+    {
+      "TABLE_NAME": "Hospitals",
+      "COLUMN_NAME": "ImageUrl",
+      "DATA_TYPE": "nvarchar",
+      "CHARACTER_MAXIMUM_LENGTH": -1,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "HospitalSettingsHistory",
+      "COLUMN_NAME": "AppointmentBookingTemplate",
+      "DATA_TYPE": "bit",
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "MobileSidebarMenus",
+      "COLUMN_NAME": "TaskCode",
+      "DATA_TYPE": "varchar",
+      "CHARACTER_MAXIMUM_LENGTH": 100,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "MobileSidebarMenus",
+      "COLUMN_NAME": "TaskId",
+      "DATA_TYPE": "varchar",
+      "CHARACTER_MAXIMUM_LENGTH": 100,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "Organizations",
+      "COLUMN_NAME": "ImageUrl",
+      "DATA_TYPE": "nvarchar",
+      "CHARACTER_MAXIMUM_LENGTH": -1,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "PatientMedicalRecord",
+      "COLUMN_NAME": "SpO2",
+      "DATA_TYPE": "nvarchar",
+      "CHARACTER_MAXIMUM_LENGTH": 50,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "PatientPrescription",
+      "COLUMN_NAME": "PdfUrl",
+      "DATA_TYPE": "nvarchar",
+      "CHARACTER_MAXIMUM_LENGTH": -1,
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null
+    },
+    {
+      "TABLE_NAME": "PatientPrescription",
+      "COLUMN_NAME": "PrescriptionNumber",
+      "DATA_TYPE": "int",
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0
+    }
+  ]
+}

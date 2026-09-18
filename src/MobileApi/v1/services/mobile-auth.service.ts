@@ -14,6 +14,7 @@ import { userRepository } from "../../../repositories/Account/user.repository.js
 import { UserRole } from "../../../models/Account/userrole.model.js";
 import { PatientRegistration } from "../../../models/Organizations/patient-registration.model.js";
 import { defaultOrganizationRepository } from "../../../repositories/Organizations/default-organization.repository.js";
+import { HealthcareProvider } from "../../../models/Organizations/healthcare-provider.model.js";
 
 export class MobileAuthService {
     /**
@@ -88,7 +89,7 @@ export class MobileAuthService {
             const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupIdentity);
             if (existingUser) {
                 if (existingUser.IsDeleted) {
-                    throw new Error("Your account was deactivated. Contact administrator.");
+                    throw new Error("Account does not exist. Please create an account.");
                 }
                 if (!existingUser.Status) {
                     throw new Error("Your account is inactive. Contact admin.");
@@ -99,7 +100,7 @@ export class MobileAuthService {
 
         // Check if account is deleted or inactive
         if (user.IsDeleted) {
-            throw new Error("Your account was deactivated. Contact administrator.");
+            throw new Error("Account does not exist. Please create an account.");
         }
         if (!user.Status) {
             throw new Error("Your account is inactive. Contact admin.");
@@ -193,36 +194,16 @@ export class MobileAuthService {
                 where: { Email: cleanEmail, IsDeleted: false }
             });
             if (existingEmailUser && existingEmailUser.Status) {
-                throw new Error("An account with this email address is already registered. Please Sign In or use another email.");
-            }
-        }
-
-        // 2. Check if user already exists and ALREADY has the Patient role
-        const existingUsers = await userRepo.find({
-            where: [
-                { PhoneNumber: cleanPhone, IsDeleted: false },
-                { PhoneNumber: `+91${cleanPhone}`, IsDeleted: false },
-                { PhoneNumber: `91${cleanPhone}`, IsDeleted: false },
-            ]
-        });
-
-        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
-        const userRoleRepo = AppDataSource.getRepository(UserRole);
-
-        for (const existingUser of existingUsers) {
-            if (existingUser.Status) {
-                const roles = await userRoleRepo.find({
-                    where: { UserId: existingUser.Id, IsDeleted: false, Status: true }
-                });
-                const hasPatientRole = roles.some(r => r.RoleId && (
-                    r.RoleId.toUpperCase() === PATIENT_ROLE_ID.toUpperCase()
-                ));
-
-                if (hasPatientRole) {
-                    throw new Error("An account is already registered as a patient with this mobile number. Please Sign In.");
+                const existingPhoneClean = (existingEmailUser.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+                if (existingPhoneClean !== cleanPhone) {
+                    throw new Error("An account with this email address is already registered. Please Sign In or use another email.");
                 }
             }
         }
+
+        // Allow registration/re-activation whenever user requests signup OTP
+        // Any changed data (height, weight, email, name, etc.) will be updated upon OTP verification,
+        // and IsDeleted will be set to false and Status (isActive) set to true.
 
         const otpResult = await otpService.sendOTP(
             cleanPhone,
@@ -258,6 +239,8 @@ export class MobileAuthService {
         gender?: string;
         dateOfBirth?: string;
         bloodGroup?: string;
+        height?: number | string;
+        weight?: number | string;
         profileImageUrl?: string;
         deviceInfo?: string;
         ipAddress?: string;
@@ -318,27 +301,56 @@ export class MobileAuthService {
         const defaultHospitalId = activeDefault?.HospitalId ?? 19;
         const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 
-        // 4. Create or update User
-        let user = await mobileAuthRepository.findPrimaryUser(cleanPhone);
+        // 4. Create or update User (including previously deleted accounts)
+        let user = await mobileAuthRepository.findPrimaryUserIncludingDeleted(cleanPhone);
         const salt = await bcrypt.genSalt(10);
         const passwordHash = await bcrypt.hash(data.password, salt);
 
         if (user) {
-            user.FirstName = data.firstName.trim();
-            user.LastName = data.lastName?.trim() || user.LastName || "";
+            if (data.firstName && data.firstName.trim()) user.FirstName = data.firstName.trim();
+            if (data.lastName !== undefined) user.LastName = data.lastName.trim();
             if (cleanEmail) user.Email = cleanEmail;
             user.PasswordHash = passwordHash;
-            user.Status = true;
-            user.IsDeleted = false;
+            user.Status = true;        // make is active to true
+            user.IsDeleted = false;    // make isdelete to false
             user.IsMobileVerified = true;
-            user.LatestRoleId = PATIENT_ROLE_ID;
-            user.LatestOrgId = defaultOrgId;
-            user.LatestHospitalId = defaultHospitalId;
+            user.LatestRoleId = user.LatestRoleId || PATIENT_ROLE_ID;
+            user.LatestOrgId = user.LatestOrgId || defaultOrgId;
+            user.LatestHospitalId = user.LatestHospitalId || defaultHospitalId;
             user.LastLoginTime = new Date();
+            user.UpdatedAt = new Date();
             if (data.gender) user.Gender = data.gender;
             if (data.dateOfBirth) user.DateOfBirth = data.dateOfBirth;
             if (data.bloodGroup) user.BloodGroup = data.bloodGroup;
+            if (data.height !== undefined && data.height !== null && data.height !== '') {
+                const parsedH = parseFloat(data.height.toString());
+                if (!isNaN(parsedH)) user.Height = parsedH;
+            }
+            if (data.weight !== undefined && data.weight !== null && data.weight !== '') {
+                const parsedW = parseFloat(data.weight.toString());
+                if (!isNaN(parsedW)) user.Weight = parsedW;
+            }
+            if (data.profileImageUrl) user.ImagePath = data.profileImageUrl;
             await userRepository.save(user);
+
+            // Re-activate any doctor / provider records if this user was a doctor
+            const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+            const providers = await providerRepo.find({ where: { UserId: user.Id } });
+            for (const p of providers) {
+                p.Status = true;
+                p.IsDeleted = false;
+                p.UpdatedAt = new Date();
+                await providerRepo.save(p);
+            }
+
+            // Re-activate any user roles
+            const userRoleRepo = AppDataSource.getRepository(UserRole);
+            const userRoles = await userRoleRepo.find({ where: { UserId: user.Id } });
+            for (const r of userRoles) {
+                r.Status = true;
+                r.IsDeleted = false;
+                await userRoleRepo.save(r);
+            }
         } else {
             user = new User();
             user.Id = uuidv4();
@@ -356,6 +368,14 @@ export class MobileAuthService {
             user.Gender = data.gender;
             user.DateOfBirth = data.dateOfBirth;
             user.BloodGroup = data.bloodGroup;
+            if (data.height !== undefined && data.height !== null && data.height !== '') {
+                const parsedH = parseFloat(data.height.toString());
+                if (!isNaN(parsedH)) user.Height = parsedH;
+            }
+            if (data.weight !== undefined && data.weight !== null && data.weight !== '') {
+                const parsedW = parseFloat(data.weight.toString());
+                if (!isNaN(parsedW)) user.Weight = parsedW;
+            }
             if (data.profileImageUrl) user.ImagePath = data.profileImageUrl;
             user.LatestRoleId = PATIENT_ROLE_ID;
             user.LatestOrgId = defaultOrgId;
@@ -434,6 +454,34 @@ export class MobileAuthService {
             ...(data.ipAddress && { IPAddress: data.ipAddress })
         });
 
+        // Query all active roles for this user
+        const allUserRoles = await mobileAuthRepository.findUserRoles(user.Id);
+        const uniqueRolesMap = new Map<string, any>();
+        for (const ur of allUserRoles) {
+            if (ur.RoleId) {
+                const roleIdUpper = ur.RoleId.toUpperCase();
+                if (!uniqueRolesMap.has(roleIdUpper)) {
+                    let roleName = ur.Role?.RoleName ?? null;
+                    if (roleIdUpper === PATIENT_ROLE_ID.toUpperCase() && roleName === "Patient") {
+                        roleName = "User/ Patient";
+                    }
+                    uniqueRolesMap.set(roleIdUpper, {
+                        roleId: ur.RoleId,
+                        roleName: roleName,
+                        status: ur.Status
+                    });
+                }
+            }
+        }
+        const rolesList = Array.from(uniqueRolesMap.values());
+        if (rolesList.length === 0) {
+            rolesList.push({
+                roleId: PATIENT_ROLE_ID,
+                roleName: "User/ Patient",
+                status: true
+            });
+        }
+
         // 9. Return standard login payload matching Flutter DataModel
         return {
             accessToken: accessToken,
@@ -455,24 +503,16 @@ export class MobileAuthService {
             weightUnit: "kgs",
             isMobileVerified: user.IsMobileVerified,
             isEmailVerified: user.IsEmailVerified,
-            latestRoleId: PATIENT_ROLE_ID,
-            latestUserRole: "User/ Patient",
+            latestRoleId: user.LatestRoleId || PATIENT_ROLE_ID,
+            latestUserRole: rolesList.some(r => r.roleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C") ? "Doctor" : "User/ Patient",
             latestOrgId: defaultOrgId,
             latestHospitalId: defaultHospitalId,
-            roleCount: 1,
+            roleCount: rolesList.length,
             organizationCount: 1,
             hospitalCount: 1,
-            navigationId: "1", // Patient Navigation
-            roles: [{
-                roleId: PATIENT_ROLE_ID,
-                roleName: "User/ Patient",
-                status: true
-            }],
-            rolesList: [{
-                roleId: PATIENT_ROLE_ID,
-                roleName: "User/ Patient",
-                status: true
-            }],
+            navigationId: rolesList.some(r => r.roleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C") ? "2" : "1",
+            roles: rolesList,
+            rolesList: rolesList,
             token: accessToken
         };
     }
@@ -599,7 +639,7 @@ export class MobileAuthService {
                 const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(identity);
                 if (existingUser) {
                     if (existingUser.IsDeleted) {
-                        throw new Error("Your account was deactivated. Contact administrator.");
+                        throw new Error("Account does not exist. Please create an account.");
                     }
                     if (!existingUser.Status) {
                         throw new Error("Your account is inactive. Contact admin.");
@@ -609,7 +649,7 @@ export class MobileAuthService {
             }
 
             if (user.IsDeleted) {
-                throw new Error("Your account was deactivated. Contact administrator.");
+                throw new Error("Account does not exist. Please create an account.");
             }
             if (!user.Status) {
                 throw new Error("Your account is inactive. Contact admin.");
@@ -798,7 +838,7 @@ export class MobileAuthService {
                 const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupContact);
                 if (existingUser) {
                     if (existingUser.IsDeleted) {
-                        throw new Error("Your account was deactivated. Contact administrator.");
+                        throw new Error("Account does not exist. Please create an account.");
                     }
                     if (!existingUser.Status) {
                         throw new Error("Your account is inactive. Contact admin.");
@@ -809,7 +849,7 @@ export class MobileAuthService {
 
             // Check if account is deleted or inactive
             if (user.IsDeleted) {
-                throw new Error("Your account was deactivated. Contact administrator.");
+                throw new Error("Account does not exist. Please create an account.");
             }
             if (!user.Status) {
                 throw new Error("Your account is inactive. Contact admin.");
@@ -1424,7 +1464,7 @@ export class MobileAuthService {
             const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupIdentity);
             if (existingUser) {
                 if (existingUser.IsDeleted) {
-                    throw new Error("Your account was deactivated. Contact administrator.");
+                    throw new Error("Account does not exist. Please create an account.");
                 }
                 if (!existingUser.Status) {
                     throw new Error("Your account is inactive. Contact admin.");
@@ -1434,7 +1474,7 @@ export class MobileAuthService {
         }
 
         if (user.IsDeleted) {
-            throw new Error("Your account was deactivated. Contact administrator.");
+            throw new Error("Account does not exist. Please create an account.");
         }
         if (!user.Status) {
             throw new Error("Your account is inactive. Contact admin.");

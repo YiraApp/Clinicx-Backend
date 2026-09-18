@@ -43,7 +43,20 @@ export const login = async (req: Request, res: Response) => {
         let code = "AUTHENTICATION_FAILED";
         let status = 400;
 
-        if (error.message === "Invalid emailid") {
+        if (
+            error.message === "Account does not exist. Please create an account." ||
+            error.message === "No Account Found Please Register" ||
+            error.message === "User not registered" ||
+            error.message === "No patient account found for this mobile number." ||
+            error.message.toLowerCase().includes("not exist") ||
+            error.message.toLowerCase().includes("create account") ||
+            error.message.toLowerCase().includes("please register") ||
+            error.message.toLowerCase().includes("deactivated")
+        ) {
+            code = "USER_NOT_REGISTERED";
+            status = 404;
+            error.message = "Account does not exist. Please create an account.";
+        } else if (error.message === "Invalid emailid") {
             code = "INVALID_EMAILID";
             status = 200;
         } else if (error.message === "Invalid password") {
@@ -72,7 +85,6 @@ export const login = async (req: Request, res: Response) => {
             status = 400;
         } else if (
             error.message === "User account is inactive" ||
-            error.message.toLowerCase().includes("deactivated") ||
             error.message.toLowerCase().includes("inactive")
         ) {
             code = "INACTIVE_USER";
@@ -119,17 +131,22 @@ export const sendOTP = async (req: Request, res: Response) => {
         let code = "OTP_SEND_FAILED";
         let message = error.message;
 
-        if (error.message === "User not registered" || error.message === "No patient account found for this mobile number.") {
+        if (
+            error.message === "Account does not exist. Please create an account." ||
+            error.message === "User not registered" || 
+            error.message === "No patient account found for this mobile number." ||
+            error.message === "No Account Found Please Register" ||
+            error.message.toLowerCase().includes("not exist") ||
+            error.message.toLowerCase().includes("create account") ||
+            error.message.toLowerCase().includes("please register") ||
+            error.message.toLowerCase().includes("deactivated")
+        ) {
             status = 404;
             code = "USER_NOT_REGISTERED";
-            message = "No Account Found Please Register";
+            message = "Account does not exist. Please create an account.";
         } else if (error.message.includes("Access denied")) {
             status = 400;
             code = "ACCESS_DENIED";
-        } else if (error.message.toLowerCase().includes("deactivated")) {
-            status = 400;
-            code = "INACTIVE_USER";
-            message = "Your account was deactivated. Contact administrator.";
         } else if (
             error.message === "User account is inactive" ||
             error.message.toLowerCase().includes("inactive") ||
@@ -207,11 +224,15 @@ export const register = async (req: Request, res: Response) => {
             sessionId,
             gender,
             dateOfBirth,
+            dob,
             bloodGroup,
-            profileImageUrl
+            profileImageUrl,
+            height,
+            weight
         } = req.body;
 
         const targetPhone = phoneNumber || identity;
+        const targetDob = dateOfBirth || dob;
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
@@ -257,8 +278,10 @@ export const register = async (req: Request, res: Response) => {
             otp,
             sessionId,
             gender,
-            dateOfBirth,
+            dateOfBirth: targetDob,
             bloodGroup,
+            height,
+            weight,
             profileImageUrl,
             deviceInfo,
             ipAddress
@@ -332,15 +355,24 @@ export const verifyLogin = async (req: Request, res: Response) => {
     } catch (error: any) {
         let code = "AUTHENTICATION_FAILED";
         let status = 400;
-        if (error.message === "Invalid OTP. Please check the code and try again.") {
+        if (
+            error.message === "Account does not exist. Please create an account." ||
+            error.message === "No Account Found Please Register" ||
+            error.message === "User not registered" ||
+            error.message.toLowerCase().includes("not exist") ||
+            error.message.toLowerCase().includes("create account") ||
+            error.message.toLowerCase().includes("please register") ||
+            error.message.toLowerCase().includes("deactivated")
+        ) {
+            code = "USER_NOT_REGISTERED";
+            status = 404;
+            error.message = "Account does not exist. Please create an account.";
+        } else if (error.message === "Invalid OTP. Please check the code and try again.") {
             code = "INVALID_OTP";
         } else if (error.message.includes("Access denied")) {
             code = "ACCESS_DENIED";
             status = 400;
-        } else if (
-            error.message.toLowerCase().includes("deactivated") ||
-            error.message.toLowerCase().includes("inactive")
-        ) {
+        } else if (error.message.toLowerCase().includes("inactive")) {
             code = "INACTIVE_USER";
             status = 400;
         }
