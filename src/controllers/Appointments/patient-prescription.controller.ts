@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { patientPrescriptionService } from "../../services/Appointments/patient-prescription.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
 import { AppDataSource } from "../../config/database.js";
+import { uploadPrescriptionPdfToBlob } from "../../MobileApi/v1/controllers/provider/prescription.controller.js";
 
 const normalizeMedication = (med: any) => ({
     Medication: med.medication || med.Medication,
@@ -62,11 +63,31 @@ export class PatientPrescriptionController {
             if (Array.isArray(body) && !body[0]?.medications) {
                 for (const item of body) {
                     const prescription = buildPrescriptionHeader(item);
-                    results.push(await patientPrescriptionService.addPrescription(prescription));
+                    const saved = await patientPrescriptionService.addPrescription(prescription);
+                    if (saved?.Id) {
+                        try {
+                            const blobUrl = await uploadPrescriptionPdfToBlob(String(saved.Id), item);
+                            saved.PdfUrl = blobUrl;
+                            (saved as any).pdfUrl = blobUrl;
+                        } catch (blobErr) {
+                            console.error("[PatientPrescriptionController] Azure Blob upload error:", blobErr);
+                        }
+                    }
+                    results.push(saved);
                 }
             } else {
                 const header = buildPrescriptionHeader(body);
-                results.push(await patientPrescriptionService.addPrescription(header));
+                const saved = await patientPrescriptionService.addPrescription(header);
+                if (saved?.Id) {
+                    try {
+                        const blobUrl = await uploadPrescriptionPdfToBlob(String(saved.Id), body);
+                        saved.PdfUrl = blobUrl;
+                        (saved as any).pdfUrl = blobUrl;
+                    } catch (blobErr) {
+                        console.error("[PatientPrescriptionController] Azure Blob upload error:", blobErr);
+                    }
+                }
+                results.push(saved);
             }
 
             res.status(201).json(ApiResponse.success(results, "Prescription added successfully"));
@@ -120,23 +141,17 @@ export class PatientPrescriptionController {
             console.info("updatePrescription called", { id, body });
             const prescription = buildPrescriptionHeader(body);
 
-            const host = req.get("host") || "192.168.68.94:5000";
-            const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
-            const pdfUrl = `${protocol}://${host}/v1/api/auth/prescriptions/${id}/pdf`;
-            (prescription as any).PdfUrl = pdfUrl;
-
             await patientPrescriptionService.updatePrescription(id, prescription);
 
-            // Update PdfUrl in database without re-uploading
-            await AppDataSource.query("UPDATE PatientPrescription SET PdfUrl = @0, UpdatedAt = GETDATE() WHERE Id = @1", [pdfUrl, id]);
-
-            // Update MedicalDocuments archive if existing
-            try {
-                await AppDataSource.query(
-                    "UPDATE MedicalDocuments SET BlobUrl = @0, UpdatedAt = GETDATE() WHERE FileName LIKE @1 OR AppointmentId = @2",
-                    [pdfUrl, `%${id}%`, prescription.AppointmentId ? Number(prescription.AppointmentId) : -1]
-                );
-            } catch (_) {}
+            // Generate and upload updated PDF directly to Azure Blob Storage
+            let pdfUrl: string = body.pdfUrl || body.PdfUrl || "";
+            if (!pdfUrl || !pdfUrl.startsWith("http") || pdfUrl.includes("localhost") || pdfUrl.includes("192.168.")) {
+                try {
+                    pdfUrl = await uploadPrescriptionPdfToBlob(id, body);
+                } catch (uploadErr) {
+                    console.error("[PatientPrescriptionController] Failed to upload updated PDF to Azure Blob:", uploadErr);
+                }
+            }
 
             res.status(200).json(ApiResponse.success({ id, pdfUrl }, "Prescription updated successfully"));
         } catch (error: any) {
