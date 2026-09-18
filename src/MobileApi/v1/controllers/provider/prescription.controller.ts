@@ -48,19 +48,24 @@ const buildPrescriptionHeader = (source: any) => {
         ? source.medications.map(normalizeMedication).filter((med: any) => !!med.Medication)
         : [normalizeMedication(source)].filter((med: any) => !!med.Medication);
 
+    const docName = source.doctorName || source.doctor || "";
+    const hospName = source.hospitalName || source.hospital || "";
+    const externalLabel = docName ? (hospName ? `${docName} - ${hospName}` : docName) : "Doctor";
+
     return {
         PatientId: source.patientId || source.PatientId,
-        DoctorId: source.doctorId || source.DoctorId,
+        DoctorId: source.doctorId || source.DoctorId || null,
         AppointmentId: source.appointmentId ?? source.AppointmentId ?? null,
         MedicalRecordId: source.medicalRecordId || source.MedicalRecordId,
         OrganizationId: source.organizationId || source.OrganizationId || source.orgId || source.OrgId,
         HospitalId: source.hospitalId || source.HospitalId || source.hospId,
-        CreatedBy: source.createdBy || source.CreatedBy || "Doctor",
+        CreatedBy: source.createdBy || source.CreatedBy || externalLabel,
         CreatedAt: source.createdAt ? new Date(source.createdAt) : undefined,
         UpdatedAt: source.updatedAt ? new Date(source.updatedAt) : undefined,
         Diagnoses: diagnoses,
         Medications: medications,
-        Notes: source.notes || source.Notes || source.prescriptionNotes || null
+        Notes: source.notes || source.Notes || source.prescriptionNotes || null,
+        PdfUrl: source.pdfUrl || source.PdfUrl || null
     };
 };
 
@@ -170,10 +175,10 @@ export class MobilePrescriptionController {
 
             // ── Automated Digital Prescription PDF Generation ──
             try {
-                // 1. Fetch Doctor details strictly from database
-                let doctorName = "";
-                let doctorQual = "";
-                let doctorSpec = "";
+                // 1. Fetch Doctor details strictly from database or body
+                let doctorName = body.doctorName || body.doctor || "";
+                let doctorQual = body.doctorQual || "";
+                let doctorSpec = body.specialty || body.Specialty || "";
                 let doctorReg = "";
 
                 if (doctorId) {
@@ -191,7 +196,7 @@ export class MobilePrescriptionController {
                     }
                 }
 
-                // 2. Fetch Hospital details strictly from database
+                // 2. Fetch Hospital details strictly from database or body
                 let effectiveHospitalId = hospitalId || firstResult?.HospitalId || body.HospitalId || body.hospitalId;
                 if (!effectiveHospitalId && doctorId) {
                     const hpRepo = AppDataSource.getRepository(HealthcareProvider);
@@ -204,10 +209,10 @@ export class MobilePrescriptionController {
                     }
                 }
 
-                let hospitalName = "";
-                let hospitalAddress = "";
-                let hospitalCity = "";
-                let hospitalState = "";
+                let hospitalName = body.hospitalName || body.hospital || "External Healthcare Center";
+                let hospitalAddress = body.hospitalAddress || "";
+                let hospitalCity = body.hospitalCity || "";
+                let hospitalState = body.hospitalState || "";
                 let hospitalPincode = "";
                 let hospitalHelpline = "";
                 let hospitalEmail = "";
@@ -340,11 +345,12 @@ export class MobilePrescriptionController {
                 const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
                 const pdfUrl = `${protocol}://${host}/v1/api/auth/prescriptions/${firstResult?.Id || prescriptionId}/pdf`;
 
-                // 6. Update PatientPrescription record with PdfUrl
-                if (firstResult?.Id && pdfUrl) {
-                    await AppDataSource.query("UPDATE PatientPrescription SET PdfUrl = @0 WHERE Id = @1", [pdfUrl, firstResult.Id]);
-                    firstResult.PdfUrl = pdfUrl;
-                    firstResult.pdfUrl = pdfUrl;
+                // 6. Update PatientPrescription record with PdfUrl (preserve uploaded external file if provided)
+                const finalPdfUrl = body.pdfUrl || body.PdfUrl || pdfUrl;
+                if (firstResult?.Id && finalPdfUrl) {
+                    await AppDataSource.query("UPDATE PatientPrescription SET PdfUrl = @0 WHERE Id = @1", [finalPdfUrl, firstResult.Id]);
+                    firstResult.PdfUrl = finalPdfUrl;
+                    firstResult.pdfUrl = finalPdfUrl;
                 }
 
                 // 7. Save into MedicalDocuments archive with the dynamic PDF URL
