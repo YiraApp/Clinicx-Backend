@@ -46,10 +46,11 @@ jobs:
           name: node-app
       
       - name: 'Deploy to Azure Web App'
-        id: deploy-to-webapp
+        id: deploy-to-webapp-qa
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'Clinicx-api-qa'
           slot-name: 'Production'
           package: .
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_C820B2D03C0440CCB8BCFDD0E0C3FB3F }}
+
