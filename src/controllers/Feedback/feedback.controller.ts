@@ -49,7 +49,7 @@ export class FeedbackController {
 
     async getUserContext(req: Request, res: Response) {
         try {
-            const { userId } = req.params;
+            const userId = String(req.params.userId || "");
             if (!userId) {
                 return res.status(400).json(ApiResponse.error("User ID is required."));
             }
@@ -122,7 +122,7 @@ export class FeedbackController {
 
     async updateStatus(req: Request, res: Response) {
         try {
-            const id = parseInt(req.params.id);
+            const id = parseInt(String(req.params.id), 10);
             const { status, adminNotes } = req.body;
 
             if (isNaN(id)) {

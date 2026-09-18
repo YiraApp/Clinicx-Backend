@@ -610,82 +610,157 @@ export class AppointmentService {
         (newAppointment as any).videoCallUrl = dynamicLink || newAppointment.MeetingUrl || null;
         (newAppointment as any).redirectionUrlId = redirectionUrlId;
 
-        // Async task: send WhatsApp confirmation with dynamic video call link
+        // Async task: send WhatsApp confirmation to Patient and Doctor
         try {
             const enrichedAppointment = await appointmentRepository.findById(newAppointment.Id);
-            if (enrichedAppointment && enrichedAppointment.User?.PhoneNumber) {
+            if (enrichedAppointment) {
                 if (enrichedAppointment.Status === "PendingPayment" || enrichedAppointment.Status === "Pending") {
                     console.log(`[AppointmentService] Appointment #${enrichedAppointment.Id} is ${enrichedAppointment.Status}. WhatsApp confirmation withheld until payment confirmation.`);
                 } else {
                     const appt = enrichedAppointment;
-                const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
-                const { whatsappService } = await import("../Common/whatsapp.service.js");
+                    const { meetingRedirectionService } = await import("./meeting-redirection.service.js");
+                    const { whatsappService } = await import("../Common/whatsapp.service.js");
 
-                const redirection = await meetingRedirectionService.getOrCreateRedirection({
-                    AppointmentId: appt.Id,
-                    PatientId: appt.UserId,
-                    DoctorId: appt.DoctorId,
-                    HospitalId: appt.HospitalId,
-                    OrganizationId: appt.OrgId,
-                    MeetingUrl: appt.MeetingUrl || "",
-                    AppointmentDate: appt.AppointmentDate,
-                    StartTime: appt.StartTime
-                });
+                    const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
+                    const doctorName = appt.Doctor 
+                        ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
+                        : "N/A";
+                    const hospitalName = appt.Hospital?.Name || "our clinic";
 
-                // Format details for WhatsApp
-                const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
-
-                const doctorName = appt.Doctor 
-                    ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
-                    : "N/A";
-                const hospitalName = appt.Hospital?.Name || "our clinic";
-
-                const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
-                    day: "2-digit", month: "short", year: "numeric"
-                });
-                const timeStr = appt.StartTime ? appt.StartTime.slice(0, 5) : "";
-
-                const countryCode = appt.User?.CountryCode || "91";
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${(appt.User?.PhoneNumber || "").replace(/\D/g, "")}`;
-
-                // Select template based on consultation type
-                const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
-
-                const components: any[] = [
-                    {
-                        type: "header",
-                        parameters: [
-                            { type: "text", text: hospitalName }
-                        ]
-                    }
-                ];
-
-                const bodyParameters = [
-                    { type: "text", text: patientName },
-                    { type: "text", text: doctorName },
-                    { type: "text", text: hospitalName },
-                    { type: "text", text: dateStr },
-                    { type: "text", text: timeStr }
-                ];
-
-                components.push({
-                    type: "body",
-                    parameters: bodyParameters
-                });
-
-                if (appt.IsTeleConsultation) {
-                    components.push({
-                        type: "button",
-                        sub_type: "url",
-                        index: "0",
-                        parameters: [
-                            { type: "text", text: redirection.UrlId }
-                        ]
+                    const dateStr = new Date(appt.AppointmentDate).toLocaleDateString("en-IN", {
+                        day: "2-digit", month: "short", year: "numeric"
                     });
-                }
 
-                await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
-                console.log(`[AppointmentService] WhatsApp appointment notification sent to ${normalizedPhone} using template ${templateName}`);
+                    const formatTime12h = (timeStr: string) => {
+                        if (!timeStr) return "10:00 AM";
+                        const clean = timeStr.trim();
+                        if (clean.toUpperCase().includes("AM") || clean.toUpperCase().includes("PM")) {
+                            return clean;
+                        }
+                        const parts = clean.split(":");
+                        if (parts.length === 0) return clean;
+                        let hour = parseInt(parts[0], 10);
+                        const minute = parts.length > 1 ? parts[1].padStart(2, "0") : "00";
+                        const ampm = hour >= 12 ? "PM" : "AM";
+                        hour = hour % 12;
+                        if (hour === 0) hour = 12;
+                        return `${hour}:${minute} ${ampm}`;
+                    };
+                    const timeStr = formatTime12h(appt.StartTime || "10:00:00");
+
+                    // 1. Send WhatsApp to Patient
+                    if (appt.User?.PhoneNumber) {
+                        try {
+                            const redirection = await meetingRedirectionService.getOrCreateRedirection({
+                                AppointmentId: appt.Id,
+                                PatientId: appt.UserId,
+                                DoctorId: appt.DoctorId,
+                                HospitalId: appt.HospitalId,
+                                OrganizationId: appt.OrgId,
+                                MeetingUrl: appt.MeetingUrl || "",
+                                AppointmentDate: appt.AppointmentDate,
+                                StartTime: appt.StartTime
+                            });
+
+                            const countryCode = appt.User?.CountryCode || "91";
+                            const cleanPatientDigits = (appt.User?.PhoneNumber || "").replace(/\D/g, "");
+                            const normalizedPhone = cleanPatientDigits.length === 10
+                                ? `${countryCode.replace(/\D/g, "")}${cleanPatientDigits}`
+                                : cleanPatientDigits;
+
+                            // Select template based on consultation type
+                            const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
+
+                            const components: any[] = [
+                                {
+                                    type: "header",
+                                    parameters: [
+                                        { type: "text", text: hospitalName }
+                                    ]
+                                },
+                                {
+                                    type: "body",
+                                    parameters: [
+                                        { type: "text", text: patientName },
+                                        { type: "text", text: doctorName },
+                                        { type: "text", text: hospitalName },
+                                        { type: "text", text: dateStr },
+                                        { type: "text", text: timeStr }
+                                    ]
+                                }
+                            ];
+
+                            if (appt.IsTeleConsultation && redirection?.UrlId) {
+                                components.push({
+                                    type: "button",
+                                    sub_type: "url",
+                                    index: "0",
+                                    parameters: [
+                                        { type: "text", text: redirection.UrlId }
+                                    ]
+                                });
+                            }
+
+                            await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
+                            console.log(`[AppointmentService] WhatsApp appointment notification sent to patient ${normalizedPhone} using template ${templateName}`);
+                        } catch (patientErr) {
+                            console.error(`[AppointmentService] Error sending patient WhatsApp for appointment #${appt.Id}:`, patientErr);
+                        }
+                    }
+
+                    // 2. Send WhatsApp to Doctor using doctor_appointment_confirmation
+                    try {
+                        let doctorUser = appt.Doctor;
+                        if ((!doctorUser || !doctorUser.PhoneNumber) && appt.DoctorId) {
+                            const { User } = await import("../../models/Account/user.model.js");
+                            const userRepo = AppDataSource.getRepository(User);
+                            const fetchedDoctor = await userRepo.findOne({ where: { Id: appt.DoctorId } });
+                            if (fetchedDoctor) doctorUser = fetchedDoctor;
+                        }
+
+                        if (doctorUser?.PhoneNumber) {
+                            const docCountryCode = doctorUser.CountryCode || "91";
+                            const cleanDocDigits = doctorUser.PhoneNumber.replace(/\D/g, "");
+                            const normalizedDocPhone = cleanDocDigits.length === 10
+                                ? `${docCountryCode.replace(/\D/g, "")}${cleanDocDigits}`
+                                : cleanDocDigits;
+
+                            let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim();
+                            docDisplayName = docDisplayName.replace(/^dr\.?\s+/i, "").trim() || "Doctor";
+
+                            const doctorComponents = [
+                                {
+                                    type: "body",
+                                    parameters: [
+                                        { type: "text", text: docDisplayName },
+                                        { type: "text", text: hospitalName },
+                                        { type: "text", text: patientName },
+                                        { type: "text", text: dateStr },
+                                        { type: "text", text: timeStr }
+                                    ]
+                                }
+                            ];
+
+                            try {
+                                await whatsappService.sendTemplateMessage(
+                                    normalizedDocPhone,
+                                    "doctor_appointment_confirmation",
+                                    "en",
+                                    doctorComponents
+                                );
+                                console.log(`[AppointmentService] WhatsApp doctor confirmation sent to Dr. ${docDisplayName} (${normalizedDocPhone}) for appointment #${appt.Id}`);
+                            } catch (docTplErr) {
+                                console.warn(`[AppointmentService] WhatsApp template 'doctor_appointment_confirmation' failed for doctor ${normalizedDocPhone}, sending fallback text:`, docTplErr);
+                                const fallbackMessage = `Dear Dr. ${docDisplayName},\n\nYour appointment at ${hospitalName} has been confirmed.\n\nPatient: ${patientName}\nDate: ${dateStr}\nTime: ${timeStr}\n\nThank you.\nYira Clinx`;
+                                await whatsappService.sendTextMessage(normalizedDocPhone, fallbackMessage);
+                                console.log(`[AppointmentService] WhatsApp text fallback sent to doctor ${normalizedDocPhone}`);
+                            }
+                        } else {
+                            console.warn(`[AppointmentService] Doctor for appointment #${appt.Id} has no phone number, skipping doctor WhatsApp.`);
+                        }
+                    } catch (docNotifyErr) {
+                        console.error(`[AppointmentService] Error sending doctor appointment confirmation for appointment #${appt.Id}:`, docNotifyErr);
+                    }
                 }
             }
         } catch (err) {

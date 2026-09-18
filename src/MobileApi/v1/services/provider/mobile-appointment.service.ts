@@ -729,12 +729,13 @@ export class MobileAppointmentService {
                 console.error("[MobileAppointmentService] Failed to send appointment push notification:", pushErr);
             }
 
+            const hospitalRepo = AppDataSource.getRepository(Hospital);
+            const hospital = appt.Hospital || (appt.HospitalId ? await hospitalRepo.findOne({ where: { Id: appt.HospitalId } }) : null);
+            const hospitalName = hospital?.Name || "our clinic";
+
             // 2. Trigger WhatsApp Message to Patient
             if (patientUser.PhoneNumber) {
                 try {
-                    const hospitalRepo = AppDataSource.getRepository(Hospital);
-                    const hospital = appt.Hospital || (appt.HospitalId ? await hospitalRepo.findOne({ where: { Id: appt.HospitalId } }) : null);
-                    const hospitalName = hospital?.Name || "our clinic";
                     const countryCode = patientUser.CountryCode || "91";
                     const cleanDigits = patientUser.PhoneNumber.replace(/\D/g, "");
                     const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
@@ -805,6 +806,57 @@ export class MobileAppointmentService {
                 } catch (waErr) {
                     console.error("[MobileAppointmentService] WhatsApp messaging error:", waErr);
                 }
+            }
+
+            // 3. Trigger WhatsApp Message to Doctor using template 'doctor_appointment_confirmation'
+            try {
+                let doctorUser: User | null = appt.Doctor || null;
+                if ((!doctorUser || !doctorUser.PhoneNumber) && appt.DoctorId) {
+                    doctorUser = await userRepo.findOne({ where: { Id: appt.DoctorId } });
+                }
+
+                if (doctorUser?.PhoneNumber) {
+                    const docCountryCode = doctorUser.CountryCode || "91";
+                    const cleanDocDigits = doctorUser.PhoneNumber.replace(/\D/g, "");
+                    const normalizedDocPhone = cleanDocDigits.length === 10
+                        ? `${docCountryCode.replace(/\D/g, "")}${cleanDocDigits}`
+                        : cleanDocDigits;
+
+                    let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() || doctorName;
+                    docDisplayName = docDisplayName.replace(/^dr\.?\s+/i, "").trim() || "Doctor";
+
+                    const doctorComponents = [
+                        {
+                            type: "body",
+                            parameters: [
+                                { type: "text", text: docDisplayName },
+                                { type: "text", text: hospitalName },
+                                { type: "text", text: patientName },
+                                { type: "text", text: dateStr },
+                                { type: "text", text: timeDisplay }
+                            ]
+                        }
+                    ];
+
+                    try {
+                        await whatsappService.sendTemplateMessage(
+                            normalizedDocPhone,
+                            "doctor_appointment_confirmation",
+                            "en",
+                            doctorComponents
+                        );
+                        console.log(`[MobileAppointmentService] WhatsApp doctor confirmation sent to Dr. ${docDisplayName} (${normalizedDocPhone}) for appointment #${appt.Id}`);
+                    } catch (tplErr) {
+                        console.warn(`[MobileAppointmentService] WhatsApp template 'doctor_appointment_confirmation' failed for doctor ${normalizedDocPhone}, sending fallback text:`, tplErr);
+                        const fallbackMessage = `Dear Dr. ${docDisplayName},\n\nYour appointment at ${hospitalName} has been confirmed.\n\nPatient: ${patientName}\nDate: ${dateStr}\nTime: ${timeDisplay}\n\nThank you.\nYira Clinx`;
+                        await whatsappService.sendTextMessage(normalizedDocPhone, fallbackMessage);
+                        console.log(`[MobileAppointmentService] WhatsApp text fallback sent to doctor ${normalizedDocPhone}`);
+                    }
+                } else {
+                    console.warn(`[MobileAppointmentService] Doctor for appointment #${appt.Id} has no phone number, skipping doctor WhatsApp.`);
+                }
+            } catch (docWaErr) {
+                console.error("[MobileAppointmentService] Error sending doctor WhatsApp notification:", docWaErr);
             }
         } catch (err) {
             console.error("[MobileAppointmentService] Error in sendAppointmentConfirmationNotifications:", err);
