@@ -15,6 +15,7 @@ export class SidebarRepository implements ISidebarRepository {
     private mobileRepo = AppDataSource.getRepository(RoleMobileSidebarMenu);
     private mobileMenuRepo = AppDataSource.getRepository(MobileSidebarMenu);
 
+
     async getRoleSidebarMenus(roleId: string, orgId?: number | null, hospId?: number | null): Promise<RoleSidebarMenu[]> {
         // Fetch all potential records for this role across all levels (Global, Org, Hosp)
         const query = this.repo.createQueryBuilder("rsm")
@@ -28,15 +29,15 @@ export class SidebarRepository implements ISidebarRepository {
         if (orgId) {
             contextConditions.push("(rsm.OrganizationId = :orgId AND rsm.HospitalId IS NULL)");
             params.orgId = orgId;
-            
+
             if (hospId) {
                 contextConditions.push("(rsm.OrganizationId = :orgId AND rsm.HospitalId = :hospId)");
                 params.hospId = hospId;
             }
         }
-        
+
         query.andWhere(`(${contextConditions.join(" OR ")})`, params);
-        
+
         // We need all records to determine overrides, even inactive ones
         const allRecords = await query.getMany();
 
@@ -45,7 +46,7 @@ export class SidebarRepository implements ISidebarRepository {
 
         for (const record of allRecords) {
             const existing = menuMap.get(record.MenuId);
-            
+
             if (!existing) {
                 menuMap.set(record.MenuId, record);
                 continue;
@@ -181,8 +182,8 @@ export class SidebarRepository implements ISidebarRepository {
                     // We need an override record at this scope
                     if (existingRecord) {
                         // Update existing record to match target status
-                        await transactionalEntityManager.update(RoleSidebarMenu, existingRecord.RoleSidebarMenuId, { 
-                            Status: isTargetActive 
+                        await transactionalEntityManager.update(RoleSidebarMenu, existingRecord.RoleSidebarMenuId, {
+                            Status: isTargetActive
                         });
                     } else {
                         // Create new override record
@@ -219,15 +220,15 @@ export class SidebarRepository implements ISidebarRepository {
         if (orgId) {
             contextConditions.push("(rsm.OrganizationId = :orgId AND rsm.HospitalId IS NULL)");
             params.orgId = orgId;
-            
+
             if (hospId) {
                 contextConditions.push("(rsm.OrganizationId = :orgId AND rsm.HospitalId = :hospId)");
                 params.hospId = hospId;
             }
         }
-        
+
         query.andWhere(`(${contextConditions.join(" OR ")})`, params);
-        
+
         const allRecords = await query.getMany();
         const menuMap = new Map<number, RoleMobileSidebarMenu>();
 
@@ -321,8 +322,8 @@ export class SidebarRepository implements ISidebarRepository {
 
                 if (isTargetActive !== isInheritedActive) {
                     if (existingRecord) {
-                        await transactionalEntityManager.update(RoleMobileSidebarMenu, existingRecord.RoleMobileSidebarMenuId, { 
-                            Status: isTargetActive 
+                        await transactionalEntityManager.update(RoleMobileSidebarMenu, existingRecord.RoleMobileSidebarMenuId, {
+                            Status: isTargetActive
                         });
                     } else {
                         const newRecord = new RoleMobileSidebarMenu();
