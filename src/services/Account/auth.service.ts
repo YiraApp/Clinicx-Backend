@@ -111,8 +111,11 @@ export class AuthService implements IAuthService {
             ...(ipAddress && { IPAddress: ipAddress })
         });
 
-        // Update LastLoginTime
+        // Update LastLoginTime and ensure mobile is marked verified for OTP-based logins
         user.LastLoginTime = new Date();
+        if (!password && !user.IsMobileVerified) {
+            user.IsMobileVerified = true;
+        }
         await this.userRepository.save(user);
 
         // Fetch User Roles
