@@ -49,9 +49,14 @@ export class PatientFitnessService {
             if (!item.date) continue;
             const dateStr = item.date.split("T")[0]; // ensure YYYY-MM-DD
 
-            let existing = await this.fitnessRepo.findOne({
-                where: { PatientId: patientId, Date: dateStr }
-            }).catch(() => null);
+            let existing = await this.fitnessRepo
+                .createQueryBuilder("f")
+                .where("f.PatientId = :patientId AND CAST(f.Date AS DATE) = CAST(:dateStr AS DATE)", {
+                    patientId,
+                    dateStr
+                })
+                .getOne()
+                .catch(() => null);
 
             if (!existing) {
                 existing = this.fitnessRepo.create({
@@ -65,28 +70,34 @@ export class PatientFitnessService {
                 if (source) existing.Source = source;
             }
 
-            // Assign numerical fields if provided and valid
-            if (item.steps !== undefined && item.steps !== null) existing.Steps = Math.round(Number(item.steps));
-            if (item.calories !== undefined && item.calories !== null) existing.Calories = Number(item.calories);
-            if (item.distanceMeters !== undefined && item.distanceMeters !== null) existing.DistanceMeters = Number(item.distanceMeters);
-            if (item.activeMinutes !== undefined && item.activeMinutes !== null) existing.ActiveMinutes = Math.round(Number(item.activeMinutes));
-            if (item.flightsClimbed !== undefined && item.flightsClimbed !== null) existing.FlightsClimbed = Math.round(Number(item.flightsClimbed));
+            // Assign numerical fields with positive fallback preservation
+            if (item.steps !== undefined && item.steps !== null && (Number(item.steps) > 0 || !existing.Steps)) existing.Steps = Math.round(Number(item.steps));
+            if (item.calories !== undefined && item.calories !== null && (Number(item.calories) > 0 || !existing.Calories)) existing.Calories = Number(item.calories);
+            if (item.distanceMeters !== undefined && item.distanceMeters !== null && (Number(item.distanceMeters) > 0 || !existing.DistanceMeters)) existing.DistanceMeters = Number(item.distanceMeters);
+            if (item.activeMinutes !== undefined && item.activeMinutes !== null && (Number(item.activeMinutes) > 0 || !existing.ActiveMinutes)) existing.ActiveMinutes = Math.round(Number(item.activeMinutes));
+            if (item.flightsClimbed !== undefined && item.flightsClimbed !== null && (Number(item.flightsClimbed) > 0 || !existing.FlightsClimbed)) existing.FlightsClimbed = Math.round(Number(item.flightsClimbed));
 
-            if (item.heartRateAvg !== undefined && item.heartRateAvg !== null) existing.HeartRateAvg = Number(item.heartRateAvg);
-            if (item.heartRateMin !== undefined && item.heartRateMin !== null) existing.HeartRateMin = Number(item.heartRateMin);
-            if (item.heartRateMax !== undefined && item.heartRateMax !== null) existing.HeartRateMax = Number(item.heartRateMax);
-            if (item.restingHeartRate !== undefined && item.restingHeartRate !== null) existing.RestingHeartRate = Number(item.restingHeartRate);
-            if (item.bloodOxygen !== undefined && item.bloodOxygen !== null) existing.BloodOxygen = Number(item.bloodOxygen);
-            if (item.bloodPressureSys !== undefined && item.bloodPressureSys !== null) existing.BloodPressureSys = Number(item.bloodPressureSys);
-            if (item.bloodPressureDia !== undefined && item.bloodPressureDia !== null) existing.BloodPressureDia = Number(item.bloodPressureDia);
+            if (item.heartRateAvg !== undefined && item.heartRateAvg !== null && (Number(item.heartRateAvg) > 0 || !existing.HeartRateAvg)) existing.HeartRateAvg = Number(item.heartRateAvg);
+            if (item.heartRateMin !== undefined && item.heartRateMin !== null && (Number(item.heartRateMin) > 0 || !existing.HeartRateMin)) existing.HeartRateMin = Number(item.heartRateMin);
+            if (item.heartRateMax !== undefined && item.heartRateMax !== null && (Number(item.heartRateMax) > 0 || !existing.HeartRateMax)) existing.HeartRateMax = Number(item.heartRateMax);
+            if (item.restingHeartRate !== undefined && item.restingHeartRate !== null && (Number(item.restingHeartRate) > 0 || !existing.RestingHeartRate)) existing.RestingHeartRate = Number(item.restingHeartRate);
 
-            if (item.sleepMinutes !== undefined && item.sleepMinutes !== null) existing.SleepMinutes = Math.round(Number(item.sleepMinutes));
-            if (item.sleepDeepMinutes !== undefined && item.sleepDeepMinutes !== null) existing.SleepDeepMinutes = Math.round(Number(item.sleepDeepMinutes));
-            if (item.sleepRemMinutes !== undefined && item.sleepRemMinutes !== null) existing.SleepRemMinutes = Math.round(Number(item.sleepRemMinutes));
-            if (item.sleepLightMinutes !== undefined && item.sleepLightMinutes !== null) existing.SleepLightMinutes = Math.round(Number(item.sleepLightMinutes));
-            if (item.sleepAwakeMinutes !== undefined && item.sleepAwakeMinutes !== null) existing.SleepAwakeMinutes = Math.round(Number(item.sleepAwakeMinutes));
+            // Blood oxygen (SpO2): if value is a fractional ratio (<= 1.0, e.g. 0.99), normalize to percentage (99.0)
+            if (item.bloodOxygen !== undefined && item.bloodOxygen !== null) {
+                let spo2 = Number(item.bloodOxygen);
+                if (spo2 > 0 && spo2 <= 1.0) spo2 = spo2 * 100.0;
+                if (spo2 > 0 || !existing.BloodOxygen) existing.BloodOxygen = Number(spo2.toFixed(1));
+            }
+            if (item.bloodPressureSys !== undefined && item.bloodPressureSys !== null && (Number(item.bloodPressureSys) > 0 || !existing.BloodPressureSys)) existing.BloodPressureSys = Number(item.bloodPressureSys);
+            if (item.bloodPressureDia !== undefined && item.bloodPressureDia !== null && (Number(item.bloodPressureDia) > 0 || !existing.BloodPressureDia)) existing.BloodPressureDia = Number(item.bloodPressureDia);
 
-            if (item.weightKg !== undefined && item.weightKg !== null) existing.WeightKg = Number(item.weightKg);
+            if (item.sleepMinutes !== undefined && item.sleepMinutes !== null && (Number(item.sleepMinutes) > 0 || !existing.SleepMinutes)) existing.SleepMinutes = Math.round(Number(item.sleepMinutes));
+            if (item.sleepDeepMinutes !== undefined && item.sleepDeepMinutes !== null && (Number(item.sleepDeepMinutes) > 0 || !existing.SleepDeepMinutes)) existing.SleepDeepMinutes = Math.round(Number(item.sleepDeepMinutes));
+            if (item.sleepRemMinutes !== undefined && item.sleepRemMinutes !== null && (Number(item.sleepRemMinutes) > 0 || !existing.SleepRemMinutes)) existing.SleepRemMinutes = Math.round(Number(item.sleepRemMinutes));
+            if (item.sleepLightMinutes !== undefined && item.sleepLightMinutes !== null && (Number(item.sleepLightMinutes) > 0 || !existing.SleepLightMinutes)) existing.SleepLightMinutes = Math.round(Number(item.sleepLightMinutes));
+            if (item.sleepAwakeMinutes !== undefined && item.sleepAwakeMinutes !== null && (Number(item.sleepAwakeMinutes) > 0 || !existing.SleepAwakeMinutes)) existing.SleepAwakeMinutes = Math.round(Number(item.sleepAwakeMinutes));
+
+            if (item.weightKg !== undefined && item.weightKg !== null && (Number(item.weightKg) > 0 || !existing.WeightKg)) existing.WeightKg = Number(item.weightKg);
             if (item.bmi !== undefined && item.bmi !== null) existing.Bmi = Number(item.bmi);
             if (item.waterLiters !== undefined && item.waterLiters !== null) existing.WaterLiters = Number(item.waterLiters);
             if (item.bloodGlucoseMgDl !== undefined && item.bloodGlucoseMgDl !== null) existing.BloodGlucoseMgDl = Number(item.bloodGlucoseMgDl);
@@ -112,7 +123,7 @@ export class PatientFitnessService {
     /**
      * Retrieve fitness summary, stats, and chart trend points.
      */
-    async getFitnessSummary(patientId: string, period: "day" | "week" | "month" = "week") {
+    async getFitnessSummary(patientId: string, period: "day" | "week" | "month" = "week", todayDate?: string) {
         if (!patientId) throw new Error("patientId is required");
 
         const daysLimit = period === "day" ? 1 : period === "week" ? 7 : 30;
@@ -125,9 +136,23 @@ export class PatientFitnessService {
             .take(daysLimit)
             .getMany();
 
-        // Today's record
-        const todayStr = new Date().toISOString().split("T")[0];
-        const todayRecord = records.find(r => r.Date === todayStr) || records[0] || null;
+        // Date normalizer helper to handle Date objects and string formats
+        const normalizeDate = (d: any): string => {
+            if (!d) return "";
+            if (d instanceof Date) return d.toISOString().split("T")[0];
+            return String(d).split("T")[0];
+        };
+
+        // Normalize SpO2 helper (converts legacy decimal ratios like 0.99 into 99.0)
+        const normalizeSpo2 = (val: any): number => {
+            const n = Number(val || 0);
+            if (n > 0 && n <= 1.0) return Number((n * 100.0).toFixed(1));
+            return Number(n.toFixed(1));
+        };
+
+        // Today's record: match client's local date if provided, otherwise server UTC date
+        const targetToday = todayDate || new Date().toISOString().split("T")[0];
+        const todayRecord = records.find(r => normalizeDate(r.Date) === targetToday) || records[0] || null;
 
         // Reverse to chronological order (Oldest -> Newest) for charts
         const chronological = [...records].reverse();
@@ -142,7 +167,7 @@ export class PatientFitnessService {
             }
 
             return {
-                date: r.Date,
+                date: normalizeDate(r.Date),
                 steps: r.Steps || 0,
                 calories: r.Calories || 0,
                 distanceMeters: r.DistanceMeters || 0,
@@ -150,7 +175,7 @@ export class PatientFitnessService {
                 heartRateMin: r.HeartRateMin || 0,
                 heartRateMax: r.HeartRateMax || 0,
                 restingHeartRate: r.RestingHeartRate || 0,
-                bloodOxygen: r.BloodOxygen || 0,
+                bloodOxygen: normalizeSpo2(r.BloodOxygen),
                 sleepMinutes: r.SleepMinutes || 0,
                 sleepDeepMinutes: r.SleepDeepMinutes || 0,
                 sleepRemMinutes: r.SleepRemMinutes || 0,
@@ -200,7 +225,7 @@ export class PatientFitnessService {
             patientId,
             period,
             today: todayRecord ? {
-                date: todayRecord.Date,
+                date: normalizeDate(todayRecord.Date),
                 steps: todayRecord.Steps || 0,
                 calories: todayRecord.Calories || 0,
                 distanceMeters: todayRecord.DistanceMeters || 0,
@@ -208,7 +233,7 @@ export class PatientFitnessService {
                 heartRateMin: todayRecord.HeartRateMin || 0,
                 heartRateMax: todayRecord.HeartRateMax || 0,
                 restingHeartRate: todayRecord.RestingHeartRate || 0,
-                bloodOxygen: todayRecord.BloodOxygen || 0,
+                bloodOxygen: normalizeSpo2(todayRecord.BloodOxygen),
                 sleepMinutes: todayRecord.SleepMinutes || 0,
                 sleepFormatted: `${Math.floor((todayRecord.SleepMinutes || 0) / 60)}h ${(todayRecord.SleepMinutes || 0) % 60}m`,
                 weightKg: todayRecord.WeightKg || 0,

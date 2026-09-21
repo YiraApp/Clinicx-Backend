@@ -1170,8 +1170,9 @@ export class MobileDashboardService {
                 imagePath: user.ImagePath || null,
                 profileImageUrl: user.ImagePath || null,
                 emergency_contact: {
-                    name: user.EmergencyContactName || "None",
-                    phone: user.EmergencyContactPhone || "None"
+                    name: user.EmergencyContactName || "",
+                    relationship: user.EmergencyContactRelation || "",
+                    phone: user.EmergencyContactPhone || ""
                 }
             },
             medical_information: {

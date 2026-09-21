@@ -91,7 +91,7 @@ export class MobileAuthService {
             const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupIdentity);
             if (existingUser) {
                 if (existingUser.IsDeleted) {
-                    throw new Error("Account does not exist. Please create an account.");
+                    throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
                 }
                 if (!existingUser.Status) {
                     throw new Error("Your account is inactive. Contact admin.");
@@ -102,7 +102,7 @@ export class MobileAuthService {
 
         // Check if account is deleted or inactive
         if (user.IsDeleted) {
-            throw new Error("Account does not exist. Please create an account.");
+            throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
         }
         if (!user.Status) {
             throw new Error("Your account is inactive. Contact admin.");
@@ -185,7 +185,7 @@ export class MobileAuthService {
 
         const userRepo = AppDataSource.getRepository(User);
 
-        // 1. Check if email is provided and already registered
+        // 1. Check if email is provided and already registered for an active, non-deleted user
         if (email && email.trim().length > 0) {
             const cleanEmail = email.trim().toLowerCase();
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -193,20 +193,32 @@ export class MobileAuthService {
                 throw new Error("Please enter a valid email address.");
             }
             const existingEmailUser = await userRepo.findOne({
-                where: { Email: cleanEmail, IsDeleted: false }
+                where: { Email: cleanEmail, IsDeleted: false, Status: true }
             });
-            if (existingEmailUser && existingEmailUser.Status) {
+            if (existingEmailUser) {
                 const existingPhoneClean = (existingEmailUser.PhoneNumber || "").replace(/\D/g, "").slice(-10);
                 if (existingPhoneClean !== cleanPhone) {
-                    throw new Error("An account with this email address is already registered. Please Sign In or use another email.");
+                    throw new Error("This email address is already in use. Please enter a different email address.");
                 }
             }
         }
 
-        // Allow registration/re-activation whenever user requests signup OTP
-        // Any changed data (height, weight, email, name, etc.) will be updated upon OTP verification,
-        // and IsDeleted will be set to false and Status (isActive) set to true.
+        // 2. Check if mobile number already exists for an active, non-deleted user
+        const existingPhoneUser = await userRepo
+            .createQueryBuilder("user")
+            .where("user.IsDeleted = :isDeleted", { isDeleted: false })
+            .andWhere("user.Status = :status", { status: true })
+            .andWhere("(user.PhoneNumber = :phone OR user.PhoneNumber LIKE :likePhone)", {
+                phone: cleanPhone,
+                likePhone: `%${cleanPhone}`
+            })
+            .getOne();
 
+        if (existingPhoneUser) {
+            throw new Error("User already exists in Yira. An account with this mobile number already exists. Please login.");
+        }
+
+        // Allow registration/re-activation if user does not exist or was soft-deleted/deactivated
         const otpResult = await otpService.sendOTP(
             cleanPhone,
             OTPPurpose.VERIFICATION,
@@ -286,13 +298,13 @@ export class MobileAuthService {
                 throw new Error("Please enter a valid email address.");
             }
             const existingEmailUser = await userRepo.findOne({
-                where: { Email: cleanEmail, IsDeleted: false }
+                where: { Email: cleanEmail, IsDeleted: false, Status: true }
             });
-            if (existingEmailUser && existingEmailUser.Status) {
+            if (existingEmailUser) {
                 // If the user already has this phone number and email, it's allowed for profile update; otherwise error
                 const existingPhoneClean = (existingEmailUser.PhoneNumber || "").replace(/\D/g, "").slice(-10);
                 if (existingPhoneClean !== cleanPhone) {
-                    throw new Error("An account with this email address is already registered. Please Sign In.");
+                    throw new Error("This email address is already in use. Please enter a different email address.");
                 }
             }
         }
@@ -303,88 +315,55 @@ export class MobileAuthService {
         const defaultHospitalId = activeDefault?.HospitalId ?? 19;
         const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 
-        // 4. Create or update User (including previously deleted accounts)
-        let user = await mobileAuthRepository.findPrimaryUserIncludingDeleted(cleanPhone);
+        // 4. Check if active primary user already exists with this phone number
+        const existingActiveUser = await userRepo
+            .createQueryBuilder("user")
+            .where("user.IsDeleted = :isDeleted", { isDeleted: false })
+            .andWhere("user.Status = :status", { status: true })
+            .andWhere("(user.PhoneNumber = :phone OR user.PhoneNumber LIKE :likePhone)", {
+                phone: cleanPhone,
+                likePhone: `%${cleanPhone}`
+            })
+            .getOne();
+
+        if (existingActiveUser) {
+            throw new Error("User already exists in Yira. An account with this mobile number already exists. Please login.");
+        }
+
+        // If no user exists or previous user was deleted (IsDeleted = true), create a brand NEW User in DB
         const salt = await bcrypt.genSalt(10);
         const passwordHash = await bcrypt.hash(data.password, salt);
 
-        if (user) {
-            if (data.firstName && data.firstName.trim()) user.FirstName = data.firstName.trim();
-            if (data.lastName !== undefined) user.LastName = data.lastName.trim();
-            if (cleanEmail) user.Email = cleanEmail;
-            user.PasswordHash = passwordHash;
-            user.Status = true;        // make is active to true
-            user.IsDeleted = false;    // make isdelete to false
-            user.IsMobileVerified = true;
-            user.LatestRoleId = user.LatestRoleId || PATIENT_ROLE_ID;
-            user.LatestOrgId = user.LatestOrgId || defaultOrgId;
-            user.LatestHospitalId = user.LatestHospitalId || defaultHospitalId;
-            user.LastLoginTime = new Date();
-            user.UpdatedAt = new Date();
-            if (data.gender) user.Gender = data.gender;
-            if (data.dateOfBirth) user.DateOfBirth = data.dateOfBirth;
-            if (data.bloodGroup) user.BloodGroup = data.bloodGroup;
-            if (data.height !== undefined && data.height !== null && data.height !== '') {
-                const parsedH = parseFloat(data.height.toString());
-                if (!isNaN(parsedH)) user.Height = parsedH;
-            }
-            if (data.weight !== undefined && data.weight !== null && data.weight !== '') {
-                const parsedW = parseFloat(data.weight.toString());
-                if (!isNaN(parsedW)) user.Weight = parsedW;
-            }
-            if (data.profileImageUrl) user.ImagePath = data.profileImageUrl;
-            await userRepository.save(user);
-
-            // Re-activate any doctor / provider records if this user was a doctor
-            const providerRepo = AppDataSource.getRepository(HealthcareProvider);
-            const providers = await providerRepo.find({ where: { UserId: user.Id } });
-            for (const p of providers) {
-                p.Status = true;
-                p.IsDeleted = false;
-                p.UpdatedAt = new Date();
-                await providerRepo.save(p);
-            }
-
-            // Re-activate any user roles
-            const userRoleRepo = AppDataSource.getRepository(UserRole);
-            const userRoles = await userRoleRepo.find({ where: { UserId: user.Id } });
-            for (const r of userRoles) {
-                r.Status = true;
-                r.IsDeleted = false;
-                await userRoleRepo.save(r);
-            }
-        } else {
-            user = new User();
-            user.Id = uuidv4();
-            user.PhoneNumber = cleanPhone;
-            user.CountryCode = (data.countryCode || "91").replace(/\D/g, "");
-            user.FirstName = data.firstName.trim();
-            user.LastName = data.lastName?.trim() || "";
-            user.Email = cleanEmail;
-            user.PasswordHash = passwordHash;
-            user.Status = true;
-            user.IsDeleted = false;
-            user.IsPrimary = true;
-            user.Relation = "Self";
-            user.IsMobileVerified = true;
-            user.Gender = data.gender;
-            user.DateOfBirth = data.dateOfBirth;
-            user.BloodGroup = data.bloodGroup;
-            if (data.height !== undefined && data.height !== null && data.height !== '') {
-                const parsedH = parseFloat(data.height.toString());
-                if (!isNaN(parsedH)) user.Height = parsedH;
-            }
-            if (data.weight !== undefined && data.weight !== null && data.weight !== '') {
-                const parsedW = parseFloat(data.weight.toString());
-                if (!isNaN(parsedW)) user.Weight = parsedW;
-            }
-            if (data.profileImageUrl) user.ImagePath = data.profileImageUrl;
-            user.LatestRoleId = PATIENT_ROLE_ID;
-            user.LatestOrgId = defaultOrgId;
-            user.LatestHospitalId = defaultHospitalId;
-            user.LastLoginTime = new Date();
-            user = await userRepository.save(user);
+        let user = new User();
+        user.Id = uuidv4();
+        user.PhoneNumber = cleanPhone;
+        user.CountryCode = (data.countryCode || "91").replace(/\D/g, "");
+        user.FirstName = data.firstName.trim();
+        user.LastName = data.lastName?.trim() || "";
+        user.Email = cleanEmail;
+        user.PasswordHash = passwordHash;
+        user.Status = true;
+        user.IsDeleted = false;
+        user.IsPrimary = true;
+        user.Relation = "Self";
+        user.IsMobileVerified = true;
+        user.Gender = data.gender;
+        user.DateOfBirth = data.dateOfBirth;
+        user.BloodGroup = data.bloodGroup;
+        if (data.height !== undefined && data.height !== null && data.height !== '') {
+            const parsedH = parseFloat(data.height.toString());
+            if (!isNaN(parsedH)) user.Height = parsedH;
         }
+        if (data.weight !== undefined && data.weight !== null && data.weight !== '') {
+            const parsedW = parseFloat(data.weight.toString());
+            if (!isNaN(parsedW)) user.Weight = parsedW;
+        }
+        if (data.profileImageUrl) user.ImagePath = data.profileImageUrl;
+        user.LatestRoleId = PATIENT_ROLE_ID;
+        user.LatestOrgId = defaultOrgId;
+        user.LatestHospitalId = defaultHospitalId;
+        user.LastLoginTime = new Date();
+        user = await userRepository.save(user);
 
         // 5. Ensure UserRole exists for Patient in default Org/Hospital
         const userRoleRepo = AppDataSource.getRepository(UserRole);
@@ -645,8 +624,8 @@ export class MobileAuthService {
                 const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(identity);
                 if (existingUser) {
                     if (existingUser.IsDeleted) {
-                        throw new Error("Account does not exist. Please create an account.");
-                    }
+                    throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
+                }
                     if (!existingUser.Status) {
                         throw new Error("Your account is inactive. Contact admin.");
                     }
@@ -655,8 +634,8 @@ export class MobileAuthService {
             }
 
             if (user.IsDeleted) {
-                throw new Error("Account does not exist. Please create an account.");
-            }
+            throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
+        }
             if (!user.Status) {
                 throw new Error("Your account is inactive. Contact admin.");
             }
@@ -846,8 +825,8 @@ export class MobileAuthService {
                 const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupContact);
                 if (existingUser) {
                     if (existingUser.IsDeleted) {
-                        throw new Error("Account does not exist. Please create an account.");
-                    }
+                    throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
+                }
                     if (!existingUser.Status) {
                         throw new Error("Your account is inactive. Contact admin.");
                     }
@@ -857,8 +836,8 @@ export class MobileAuthService {
 
             // Check if account is deleted or inactive
             if (user.IsDeleted) {
-                throw new Error("Account does not exist. Please create an account.");
-            }
+            throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
+        }
             if (!user.Status) {
                 throw new Error("Your account is inactive. Contact admin.");
             }
@@ -1478,7 +1457,7 @@ export class MobileAuthService {
             const existingUser = await mobileAuthRepository.findPrimaryUserIncludingDeleted(lookupIdentity);
             if (existingUser) {
                 if (existingUser.IsDeleted) {
-                    throw new Error("Account does not exist. Please create an account.");
+                    throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
                 }
                 if (!existingUser.Status) {
                     throw new Error("Your account is inactive. Contact admin.");
@@ -1488,7 +1467,7 @@ export class MobileAuthService {
         }
 
         if (user.IsDeleted) {
-            throw new Error("Account does not exist. Please create an account.");
+            throw new Error("User account is deleted. Please contact administrator or sign up for new user registration.");
         }
         if (!user.Status) {
             throw new Error("Your account is inactive. Contact admin.");

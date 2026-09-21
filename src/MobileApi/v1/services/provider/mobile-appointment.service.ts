@@ -954,21 +954,14 @@ export class MobileAppointmentService {
             console.error("Failed to send status update push notification:", e);
         }
 
-        // Trigger WhatsApp Cancellation message to Patient if cancelled
-        if (isCancelled && appointment.User?.PhoneNumber) {
+        // Trigger WhatsApp Cancellation template message to Patient if cancelled
+        if (isCancelled) {
             try {
-                const hospitalRepo = AppDataSource.getRepository(Hospital);
-                const hospital = appointment.Hospital || (appointment.HospitalId ? await hospitalRepo.findOne({ where: { Id: appointment.HospitalId } }) : null);
-                const hospitalName = hospital?.Name || "our clinic";
-                const countryCode = appointment.User.CountryCode || "91";
-                const cleanDigits = appointment.User.PhoneNumber.replace(/\D/g, "");
-                const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
-
-                const cancelMsg = `Hello ${patientName},\n\nYour appointment with ${doctorName} at ${hospitalName} scheduled for ${dateStr} has been cancelled.\n\nIf you have questions or would like to reschedule, please contact ${hospitalName}.`;
-                await whatsappService.sendTextMessage(normalizedPhone, cancelMsg);
-                console.log(`[MobileAppointmentService] WhatsApp cancellation message sent to ${normalizedPhone}`);
+                const { appointmentService } = await import("../../../../services/Appointments/appointment.service.js");
+                await appointmentService.sendAppointmentCancellationWhatsApp(appointment.Id);
+                console.log(`[MobileAppointmentService] WhatsApp cancellation template sent for appointment #${appointment.Id}`);
             } catch (waErr) {
-                console.error("[MobileAppointmentService] Failed to send WhatsApp cancellation message:", waErr);
+                console.error("[MobileAppointmentService] Failed to send WhatsApp cancellation template:", waErr);
             }
         }
 

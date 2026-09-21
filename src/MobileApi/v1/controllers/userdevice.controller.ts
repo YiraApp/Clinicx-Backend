@@ -48,6 +48,10 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
             resolvedDeviceId
         );
 
+        if (!device) {
+            return res.json(ApiResponse.success(null, "Device token registration skipped (user does not exist)"));
+        }
+
         const responseData = {
             Id: device.Id,
             UserId: device.UserId,

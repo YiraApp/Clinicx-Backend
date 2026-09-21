@@ -33,12 +33,13 @@ export class PatientFitnessController {
         try {
             const patientId = (req.query.patientId as string) || (req as any).user?.userId;
             const period = ((req.query.period as string) || "week") as "day" | "week" | "month";
+            const todayDate = req.query.todayDate as string | undefined;
 
             if (!patientId) {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
-            const summary = await patientFitnessService.getFitnessSummary(patientId, period);
+            const summary = await patientFitnessService.getFitnessSummary(patientId, period, todayDate);
             return res.status(200).json(ApiResponse.success(summary, "Fitness summary retrieved"));
         } catch (error: any) {
             console.error("❌ Error retrieving fitness summary:", error);

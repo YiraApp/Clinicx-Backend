@@ -117,9 +117,10 @@ export class SMSService {
         const isIndia = normalizedTo.startsWith("91");
 
         if (isIndia) {
-            // EXACT message for SMS Striker (DLT requirement)
-            const message = `Hello, your One Time Password (OTP) for ClinicX application authentication is ${otp} this OTP is valid for 10 minutes only. Do not share it with anyone - YIRA AI`;
-            return await this.sendSMS(to, message);
+            // EXACT message for SMS Striker (DLT requirement for template 1707168128214603848)
+            const templateId = "1707168128214603848";
+            const message = `Hello, Your One Time Password (OTP) for Yira AI Mobile Application login authentication is ${otp} - YIRA AI`;
+            return await this.sendSMSWithCustomTemplate(to, message, templateId);
         } else {
             // International flow using 2Factor.in
             const apiKey = "55b36a1d-a3fe-11eb-80ea-0200cd936042"; // From provided C# logic
