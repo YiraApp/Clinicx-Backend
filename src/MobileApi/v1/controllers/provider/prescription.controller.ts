@@ -471,9 +471,22 @@ export class MobilePrescriptionController {
             }
 
             const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
-            const prescription = await prescriptionRepo.findOne({
-                where: { Id: String(id) }
-            });
+            const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(id));
+            let prescription = null;
+            if (isUuid) {
+                prescription = await prescriptionRepo.findOne({
+                    where: { Id: String(id) }
+                });
+            } else {
+                // Support looking up by AppointmentId or PrescriptionNumber
+                prescription = await prescriptionRepo.findOne({
+                    where: [
+                        { AppointmentId: String(id) },
+                        ...(isNaN(Number(id)) ? [] : [{ PrescriptionNumber: Number(id) }])
+                    ],
+                    order: { CreatedAt: "DESC" }
+                });
+            }
 
             if (!prescription) {
                 return res.status(404).json(ApiResponse.error("Prescription not found"));
@@ -485,7 +498,7 @@ export class MobilePrescriptionController {
             }
 
             // Otherwise, generate and upload to Azure Blob Storage now
-            const blobUrl = await uploadPrescriptionPdfToBlob(String(id));
+            const blobUrl = await uploadPrescriptionPdfToBlob(String(prescription.Id));
             return res.redirect(blobUrl);
         } catch (error: any) {
             console.error("Prescription PDF fetch error:", error);
