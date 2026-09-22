@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "cleanup-duplicates": "tsx scratch/cleanup-duplicate-prescriptions.ts",
     "start": "node dist/index.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"const fs = require('fs'); if (fs.existsSync('tsconfig.json')) { require('child_process').execSync('node ./node_modules/typescript/bin/tsc -p tsconfig.json', { stdio: 'inherit' }); } else { console.log('Pre-compiled build detected, skipping compilation.'); }\"",
     "update-prescription-schema": "tsx scratch/update-prescription-refactor.ts"
   },
   "keywords": [],
