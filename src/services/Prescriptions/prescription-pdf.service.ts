@@ -44,6 +44,7 @@ export interface PrescriptionPdfInput {
             duration?: string;
             route?: string;
             instructions?: string;
+            note?: string;
         }>;
         notes?: string;
     };
@@ -366,18 +367,20 @@ export class PrescriptionPdfService {
                 cursorY += 26;
 
                 // ── Medications Table ──
-                const colSnoWidth = 26;
-                const colMedWidth = 190;
-                const colDosageWidth = 100;
-                const colFreqWidth = 130;
-                const colDurWidth = contentWidth - (colSnoWidth + colMedWidth + colDosageWidth + colFreqWidth); // ~77.28
+                const colSnoWidth = 24;
+                const colMedWidth = 145;
+                const colDosageWidth = 75;
+                const colFreqWidth = 105;
+                const colDurWidth = 65;
+                const colNoteWidth = contentWidth - (colSnoWidth + colMedWidth + colDosageWidth + colFreqWidth + colDurWidth); // ~109.28
 
                 const colX = {
                     sno: margin,
                     med: margin + colSnoWidth,
                     dosage: margin + colSnoWidth + colMedWidth,
                     freq: margin + colSnoWidth + colMedWidth + colDosageWidth,
-                    dur: margin + colSnoWidth + colMedWidth + colDosageWidth + colFreqWidth
+                    dur: margin + colSnoWidth + colMedWidth + colDosageWidth + colFreqWidth,
+                    note: margin + colSnoWidth + colMedWidth + colDosageWidth + colFreqWidth + colDurWidth
                 };
 
                 // Table Header Row
@@ -389,10 +392,11 @@ export class PrescriptionPdfService {
                    .fillColor("#FFFFFF");
 
                 doc.text("#", colX.sno, cursorY + 6, { width: colSnoWidth, align: "center" });
-                doc.text("MEDICINE & FORM", colX.med + 6, cursorY + 6, { width: colMedWidth - 6 });
+                doc.text("MEDICINE & FORM", colX.med + 5, cursorY + 6, { width: colMedWidth - 5 });
                 doc.text("DOSAGE / ROUTE", colX.dosage + 4, cursorY + 6, { width: colDosageWidth - 4 });
                 doc.text("FREQUENCY & TIMING", colX.freq + 4, cursorY + 6, { width: colFreqWidth - 4 });
-                doc.text("DURATION", colX.dur + 4, cursorY + 6, { width: colDurWidth - 4, align: "center" });
+                doc.text("DURATION", colX.dur + 2, cursorY + 6, { width: colDurWidth - 4, align: "center" });
+                doc.text("NOTE", colX.note + 4, cursorY + 6, { width: colNoteWidth - 6 });
 
                 cursorY += tableHeaderHeight;
 
@@ -411,7 +415,7 @@ export class PrescriptionPdfService {
                 } else {
                     for (let i = 0; i < meds.length; i++) {
                         const med = meds[i];
-                        const rowHeight = 28;
+                        const rowHeight = 30;
                         const isEven = i % 2 === 0;
 
                         // Row background
@@ -433,38 +437,57 @@ export class PrescriptionPdfService {
 
                         // Medicine Name
                         const medName = (med.name && med.name.trim()) ? med.name.trim() : "NA";
-                        doc.fontSize(9)
+                        doc.fontSize(8.5)
                            .font("Helvetica-Bold")
                            .fillColor("#0F172A")
-                           .text(medName, colX.med + 6, cursorY + 6, { width: colMedWidth - 10, ellipsis: true });
+                           .text(medName, colX.med + 5, cursorY + 5, { width: colMedWidth - 8, ellipsis: true });
 
                         // Route subtext
                         const routeText = (med.route && med.route.trim()) ? `Route: ${med.route.trim()}` : "Route: NA";
                         doc.fontSize(7)
                            .font("Helvetica")
                            .fillColor("#64748B")
-                           .text(routeText, colX.med + 6, cursorY + 17, { width: colMedWidth - 10 });
+                           .text(routeText, colX.med + 5, cursorY + 17, { width: colMedWidth - 8 });
 
                         // Dosage
                         const dosageText = (med.dosage && med.dosage.trim()) ? med.dosage.trim() : "NA";
-                        doc.fontSize(8.5)
+                        doc.fontSize(8)
                            .font("Helvetica")
                            .fillColor("#1E293B")
                            .text(dosageText, colX.dosage + 4, cursorY + 9, { width: colDosageWidth - 6 });
 
                         // Frequency & Timing
                         const freqText = (med.frequency && med.frequency.trim()) ? med.frequency.trim() : "NA";
-                        doc.fontSize(8.5)
+                        doc.fontSize(8)
                            .font("Helvetica-Bold")
                            .fillColor("#0284C7")
                            .text(freqText, colX.freq + 4, cursorY + 9, { width: colFreqWidth - 6, ellipsis: true });
 
-                        // Duration
-                        const durText = (med.duration && med.duration.trim()) ? med.duration.trim() : "NA";
-                        doc.fontSize(8.5)
+                        // Duration (Ensure display or "NA")
+                        let rawDur = (med.duration && String(med.duration).trim()) ? String(med.duration).trim() : "";
+                        let durText = "NA";
+                        if (rawDur.length > 0 && rawDur !== "0" && rawDur !== "0 Days") {
+                            durText = rawDur.toLowerCase().includes("day") ? rawDur : `${rawDur} Days`;
+                        }
+                        doc.fontSize(8)
                            .font("Helvetica")
                            .fillColor("#334155")
-                           .text(durText, colX.dur + 4, cursorY + 9, { width: colDurWidth - 6, align: "center" });
+                           .text(durText, colX.dur + 2, cursorY + 9, { width: colDurWidth - 4, align: "center" });
+
+                        // Note / Instructions (or "NA" if not available)
+                        const rawNote = (med.instructions && med.instructions.trim()) 
+                            ? med.instructions.trim() 
+                            : ((med.note && med.note.trim()) ? med.note.trim() : "");
+                        const noteText = rawNote.length > 0 ? rawNote : "NA";
+
+                        doc.fontSize(7.5)
+                           .font("Helvetica")
+                           .fillColor(noteText === "NA" ? "#94A3B8" : "#334155")
+                           .text(noteText, colX.note + 4, cursorY + 6, {
+                               width: colNoteWidth - 8,
+                               height: 20,
+                               ellipsis: true
+                           });
 
                         cursorY += rowHeight;
                     }

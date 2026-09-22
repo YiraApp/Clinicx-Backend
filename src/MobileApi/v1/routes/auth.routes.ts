@@ -16,6 +16,7 @@ import { mobileDoctorSuggestionController } from "../controllers/provider/doctor
 import { getActiveOffers, getActivePopupAd } from "../controllers/offer-banner.controller.js";
 import { patientVitalsController } from "../controllers/patient-vitals.controller.js";
 import { patientFitnessController } from "../controllers/patient-fitness.controller.js";
+import { patientMedicationReminderController } from "../controllers/patient-medication-reminder.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
@@ -141,5 +142,11 @@ authRouter.post("/patient/fitness/disconnect", authMiddleware, (req, res) => pat
 authRouter.post("/payments/create-order", authMiddleware, (req, res) => paymentController.createOrder(req, res));
 authRouter.post("/payments/verify", authMiddleware, (req, res) => paymentController.verify(req, res));
 authRouter.get("/payments/by-appointment/:appointmentId", authMiddleware, (req, res) => paymentController.getPaymentByAppointment(req, res));
+
+// Patient Medication Reminders
+authRouter.post("/patient/medication-reminders", authMiddleware, (req, res) => patientMedicationReminderController.saveReminder(req, res));
+authRouter.get("/patient/medication-reminders", authMiddleware, (req, res) => patientMedicationReminderController.getReminders(req, res));
+authRouter.delete("/patient/medication-reminders/:id", authMiddleware, (req, res) => patientMedicationReminderController.deleteReminder(req, res));
+authRouter.post("/patient/medication-reminders/sync", authMiddleware, (req, res) => patientMedicationReminderController.syncReminders(req, res));
 
 export { authRouter };
