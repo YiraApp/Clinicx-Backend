@@ -70,6 +70,7 @@ export class NotificationController {
                 .andWhere("n.Type NOT LIKE 'WHATSAPP_%'")
                 .andWhere("n.Type NOT IN ('TEST_PUSH', 'TEST')")
                 .orderBy("n.CreatedAt", "DESC")
+                .addOrderBy("n.Id", "DESC")
                 .skip(skip)
                 .take(limit);
 

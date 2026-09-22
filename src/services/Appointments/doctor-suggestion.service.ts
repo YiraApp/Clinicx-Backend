@@ -79,7 +79,8 @@ export class DoctorSuggestionService {
             FilePath: data.filePath,
             FileName: data.fileName,
             OrganizationId: data.organizationId,
-            HospitalId: data.hospitalId
+            HospitalId: data.hospitalId,
+            CreatedAt: new Date()
         });
     }
 

@@ -22,16 +22,37 @@ export class MobileAuthService {
      */
     private async getProfilesForUser(user: User): Promise<any[]> {
         const userRepo = AppDataSource.getRepository(User);
-        let allFamilyUsers: User[] = [user];
+        let primaryUser: User = user;
+
+        // If current user is a dependent or child, resolve the root primary parent
+        if (user.ParentUserId) {
+            try {
+                const parent = await userRepo.findOne({ where: { Id: user.ParentUserId, IsDeleted: false } });
+                if (parent) {
+                    primaryUser = parent;
+                }
+            } catch (_) {}
+        } else if (user.IsPrimary === false) {
+            try {
+                const parentByPhone = await userRepo.findOne({
+                    where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false }
+                });
+                if (parentByPhone) {
+                    primaryUser = parentByPhone;
+                }
+            } catch (_) {}
+        }
+
+        let allFamilyUsers: User[] = [primaryUser];
         try {
             const dependents = await userRepo.find({
                 where: [
-                    { ParentUserId: user.Id, IsDeleted: false },
-                    { PhoneNumber: user.PhoneNumber, IsPrimary: false, IsDeleted: false }
+                    { ParentUserId: primaryUser.Id, IsDeleted: false },
+                    { PhoneNumber: primaryUser.PhoneNumber, IsPrimary: false, IsDeleted: false }
                 ]
             });
             if (dependents.length > 0) {
-                const seen = new Set([user.Id]);
+                const seen = new Set([primaryUser.Id]);
                 for (const dep of dependents) {
                     if (!seen.has(dep.Id)) {
                         seen.add(dep.Id);
@@ -42,7 +63,7 @@ export class MobileAuthService {
         } catch (_) {}
 
         return allFamilyUsers.map(u => {
-            const isPrimary = u.IsPrimary === true || !u.ParentUserId;
+            const isPrimary = u.Id === primaryUser.Id;
             const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim() || (isPrimary ? "Primary Account" : "Family Member");
             return {
                 id: u.Id,
@@ -50,7 +71,7 @@ export class MobileAuthService {
                 lastName: u.LastName ?? null,
                 name: fullName,
                 phoneNumber: u.PhoneNumber,
-                relation: u.Relation || (isPrimary ? "Self" : "Dependent"),
+                relation: isPrimary ? "Self" : (u.Relation || "Dependent"),
                 isPrimary: isPrimary,
                 gender: u.Gender ?? null,
                 dob: formatDOB(u.DateOfBirth),

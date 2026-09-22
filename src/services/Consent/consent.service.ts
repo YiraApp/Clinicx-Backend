@@ -341,6 +341,30 @@ export class ConsentService {
             });
         }
 
+        // Also dispatch in-app and push notification to patient
+        try {
+            const { pushNotificationService } = await import("../Notifications/push-notification.service.js");
+            if (patient && patient.Id) {
+                await pushNotificationService.sendNotification({
+                    userId: patient.Id,
+                    senderId: appointment.DoctorId || null,
+                    title: "Consent Form Required",
+                    body: `Please review and sign the required clinical consent form for your treatment at ${hospitalName}.`,
+                    type: "CONSENT_REQUIRED",
+                    referenceId: String(appointment.Id || ""),
+                    route: "/patientConsentsScreen",
+                    additionalData: {
+                        batchLink,
+                        signUrl,
+                        appointmentId: appointment.Id
+                    }
+                });
+                console.log(`[SendConsent] Push notification dispatched for consent batchLink ${batchLink}`);
+            }
+        } catch (pushErr) {
+            console.error("[SendConsent] Push notification warning:", pushErr);
+        }
+
         return { batchLink, SignUrl: signUrl };
     }
 

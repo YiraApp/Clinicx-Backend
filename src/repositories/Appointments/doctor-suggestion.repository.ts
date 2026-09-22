@@ -23,7 +23,7 @@ export class DoctorSuggestionRepository {
         const qb = this.repo.createQueryBuilder("s")
             .leftJoinAndSelect("s.Doctor", "Doctor")
             .where("s.PatientId IN (:...patientIds)", { patientIds: validIds })
-            .orderBy("s.CreatedAt", "DESC");
+            .orderBy("s.Id", "DESC");
 
         if (orgId) {
             qb.andWhere("s.OrganizationId = :orgId", { orgId });
