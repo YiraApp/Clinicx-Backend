@@ -4,20 +4,33 @@ import { ApiResponse } from "../../utils/response.utils.js";
 import { AppDataSource } from "../../config/database.js";
 import { uploadPrescriptionPdfToBlob } from "../../MobileApi/v1/controllers/provider/prescription.controller.js";
 
-const normalizeMedication = (med: any) => ({
-    Medication: med.medication || med.Medication,
-    ConceptId: med.conceptId || med.ConceptId,
-    Dosage: med.dosage || med.Dosage,
-    DurationValue: typeof med.durationValue === "number" ? med.durationValue : undefined,
-    DurationUnit: med.durationUnit || med.Duration || med.duration,
-    FrequencyType: med.frequencyType || med.FrequencyType || med.frequency || med.Frequency,
-    Instructions: med.instructions || med.Instructions,
-    Route: med.route || med.Route,
-    CreatedBy: med.createdBy || med.CreatedBy,
-    UpdatedBy: med.updatedBy || med.UpdatedBy,
-    Schedules: med.schedules,
-    Days: med.days
-});
+const normalizeMedication = (med: any) => {
+    let durVal: number | undefined = undefined;
+    if (typeof med.durationValue === "number" && !isNaN(med.durationValue)) {
+        durVal = med.durationValue;
+    } else if (med.durationValue) {
+        const parsed = parseInt(String(med.durationValue).replace(/[^0-9]/g, ""));
+        if (!isNaN(parsed)) durVal = parsed;
+    } else if (med.duration) {
+        const parsed = parseInt(String(med.duration).replace(/[^0-9]/g, ""));
+        if (!isNaN(parsed)) durVal = parsed;
+    }
+
+    return {
+        Medication: med.medication || med.Medication || med.name || med.Name,
+        ConceptId: med.conceptId || med.ConceptId,
+        Dosage: med.dosage || med.Dosage,
+        DurationValue: durVal,
+        DurationUnit: med.durationUnit || med.DurationUnit || (med.duration && isNaN(Number(med.duration)) ? med.duration : "Days"),
+        FrequencyType: med.frequencyType || med.FrequencyType || med.frequency || med.Frequency,
+        Instructions: med.instructions || med.Instructions || med.note || med.Note,
+        Route: med.route || med.Route,
+        CreatedBy: med.createdBy || med.CreatedBy,
+        UpdatedBy: med.updatedBy || med.UpdatedBy,
+        Schedules: med.schedules,
+        Days: med.days
+    };
+};
 
 const normalizeDiagnosis = (diag: any) => {
     if (!diag) return null;
@@ -40,7 +53,7 @@ const buildPrescriptionHeader = (source: any) => {
 
     return {
         PatientId: source.patientId || source.PatientId,
-        DoctorId: source.doctorId || source.DoctorId,
+        DoctorId: source.doctorId || source.DoctorId || null,
         AppointmentId: source.appointmentId ?? source.AppointmentId ?? null,
         MedicalRecordId: source.medicalRecordId || source.MedicalRecordId,
         OrganizationId: source.organizationId || source.OrganizationId || source.orgId || source.OrgId,
@@ -50,7 +63,8 @@ const buildPrescriptionHeader = (source: any) => {
         UpdatedAt: source.updatedAt ? new Date(source.updatedAt) : undefined,
         Diagnoses: diagnoses,
         Medications: medications,
-        Notes: source.notes || source.Notes || source.prescriptionNotes || null
+        Notes: source.notes || source.Notes || source.prescriptionNotes || null,
+        PdfUrl: source.pdfUrl || source.PdfUrl || null
     };
 };
 
@@ -64,7 +78,8 @@ export class PatientPrescriptionController {
                 for (const item of body) {
                     const prescription = buildPrescriptionHeader(item);
                     const saved = await patientPrescriptionService.addPrescription(prescription);
-                    if (saved?.Id) {
+                    const isManual = Boolean(item.isManual || item.isPatientManual || item.type === "manual" || (!item.doctorId && !item.DoctorId));
+                    if (saved?.Id && !isManual) {
                         try {
                             const blobUrl = await uploadPrescriptionPdfToBlob(String(saved.Id), item);
                             saved.PdfUrl = blobUrl;
@@ -78,7 +93,8 @@ export class PatientPrescriptionController {
             } else {
                 const header = buildPrescriptionHeader(body);
                 const saved = await patientPrescriptionService.addPrescription(header);
-                if (saved?.Id) {
+                const isManual = Boolean(body.isManual || body.isPatientManual || body.type === "manual" || (!body.doctorId && !body.DoctorId));
+                if (saved?.Id && !isManual) {
                     try {
                         const blobUrl = await uploadPrescriptionPdfToBlob(String(saved.Id), body);
                         saved.PdfUrl = blobUrl;

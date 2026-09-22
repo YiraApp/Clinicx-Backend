@@ -14,20 +14,33 @@ import { MedicalDocument } from "../../../../models/Appointments/medical-documen
 import { medicalDocumentRepository } from "../../../../repositories/Appointments/medical-document.repository.js";
 import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
 
-const normalizeMedication = (med: any) => ({
-    Medication: med.medication || med.Medication,
-    ConceptId: med.conceptId || med.ConceptId,
-    Dosage: med.dosage || med.Dosage,
-    DurationValue: typeof med.durationValue === "number" ? med.durationValue : (med.durationValue ? parseInt(med.durationValue) : undefined),
-    DurationUnit: med.durationUnit || med.Duration || med.duration || "Days",
-    FrequencyType: med.frequencyType || med.FrequencyType || med.frequency || med.Frequency,
-    Instructions: med.instructions || med.Instructions,
-    Route: med.route || med.Route,
-    CreatedBy: med.createdBy || med.CreatedBy,
-    UpdatedBy: med.updatedBy || med.UpdatedBy,
-    Schedules: med.schedules,
-    Days: med.days
-});
+const normalizeMedication = (med: any) => {
+    let durVal: number | undefined = undefined;
+    if (typeof med.durationValue === "number" && !isNaN(med.durationValue)) {
+        durVal = med.durationValue;
+    } else if (med.durationValue) {
+        const parsed = parseInt(String(med.durationValue).replace(/[^0-9]/g, ""));
+        if (!isNaN(parsed)) durVal = parsed;
+    } else if (med.duration) {
+        const parsed = parseInt(String(med.duration).replace(/[^0-9]/g, ""));
+        if (!isNaN(parsed)) durVal = parsed;
+    }
+
+    return {
+        Medication: med.medication || med.Medication || med.name || med.Name,
+        ConceptId: med.conceptId || med.ConceptId,
+        Dosage: med.dosage || med.Dosage,
+        DurationValue: durVal,
+        DurationUnit: med.durationUnit || med.DurationUnit || (med.duration && isNaN(Number(med.duration)) ? med.duration : "Days"),
+        FrequencyType: med.frequencyType || med.FrequencyType || med.frequency || med.Frequency,
+        Instructions: med.instructions || med.Instructions || med.note || med.Note,
+        Route: med.route || med.Route,
+        CreatedBy: med.createdBy || med.CreatedBy,
+        UpdatedBy: med.updatedBy || med.UpdatedBy,
+        Schedules: med.schedules,
+        Days: med.days
+    };
+};
 
 const normalizeDiagnosis = (diag: any) => {
     if (!diag) return null;
@@ -190,14 +203,36 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
     }
 
     // 4. Medications & Diagnoses
-    const medications = (prescription.Medications || []).map((m: any) => ({
-        name: m.Medication || m.medication || m.name || "",
-        dosage: m.Dosage || m.dosage || "",
-        frequency: m.FrequencyType || m.frequencyType || m.frequency || "",
-        duration: m.DurationValue ? `${m.DurationValue} ${m.DurationUnit || 'Days'}` : (m.duration || ""),
-        route: m.Route || m.route || "",
-        instructions: m.Instructions || m.instructions || ""
-    }));
+    const medications = (prescription.Medications || []).map((m: any, idx: number) => {
+        const overrideMed = Array.isArray(overrides?.medications)
+            ? (overrides.medications[idx] || overrides.medications.find((om: any) => (om.medication || om.name || om.Medication) === (m.Medication || m.medication)))
+            : null;
+
+        let dur = "";
+        if (m.DurationValue) {
+            dur = `${m.DurationValue} ${m.DurationUnit || 'Days'}`;
+        } else if (overrideMed?.durationValue) {
+            dur = `${overrideMed.durationValue} ${overrideMed.durationUnit || 'Days'}`;
+        } else if (overrideMed?.duration) {
+            dur = String(overrideMed.duration);
+        } else if (m.duration) {
+            dur = String(m.duration);
+        } else if (m.DurationUnit && isNaN(Number(m.DurationUnit))) {
+            dur = m.DurationUnit;
+        }
+
+        const instr = m.Instructions || m.instructions || overrideMed?.instructions || overrideMed?.note || overrideMed?.Instructions || m.note || "";
+
+        return {
+            name: m.Medication || m.medication || m.name || overrideMed?.medication || overrideMed?.name || "",
+            dosage: m.Dosage || m.dosage || overrideMed?.dosage || "",
+            frequency: m.FrequencyType || m.frequencyType || m.frequency || overrideMed?.frequency || overrideMed?.frequencyType || "",
+            duration: dur,
+            route: m.Route || m.route || overrideMed?.route || "",
+            instructions: instr,
+            note: instr
+        };
+    });
 
     const diagnoses = (prescription.Diagnoses || []).map((d: any) =>
         typeof d === "string" ? d : (d.Diagnosis || d.diagnosis || "")
@@ -334,8 +369,14 @@ export class MobilePrescriptionController {
                 const header = buildPrescriptionHeader(body);
                 await patientPrescriptionService.updatePrescription(String(existingPrescriptionId), header);
 
+                const isManualPrescription = Boolean(
+                    body.isManual === true ||
+                    body.isPatientManual === true ||
+                    body.type === "manual" ||
+                    (!body.doctorId && !body.DoctorId && !header.DoctorId)
+                );
                 let pdfUrl: string = body.pdfUrl || body.PdfUrl || "";
-                if (!pdfUrl || !pdfUrl.startsWith("http") || pdfUrl.includes("localhost") || pdfUrl.includes("192.168.")) {
+                if (!isManualPrescription && (!pdfUrl || !pdfUrl.startsWith("http") || pdfUrl.includes("localhost") || pdfUrl.includes("192.168."))) {
                     try {
                         pdfUrl = await uploadPrescriptionPdfToBlob(String(existingPrescriptionId), body);
                     } catch (uploadErr) {
@@ -381,14 +422,20 @@ export class MobilePrescriptionController {
             const doctorId = firstResult?.DoctorId || body.doctorId || body.DoctorId;
 
             // ── Automated Digital Prescription PDF Generation & Upload to Azure Blob ──
+            const isManualPrescription = Boolean(
+                body.isManual === true ||
+                body.isPatientManual === true ||
+                body.type === "manual" ||
+                (!doctorId && !body.doctorId && !body.DoctorId)
+            );
             let pdfUrl: string = body.pdfUrl || body.PdfUrl || "";
             try {
                 if (firstResult?.Id) {
-                    if (!pdfUrl || !pdfUrl.startsWith("http") || pdfUrl.includes("localhost") || pdfUrl.includes("192.168.")) {
+                    if (!isManualPrescription && (!pdfUrl || !pdfUrl.startsWith("http") || pdfUrl.includes("localhost") || pdfUrl.includes("192.168."))) {
                         pdfUrl = await uploadPrescriptionPdfToBlob(String(firstResult.Id), body);
                     }
-                    firstResult.PdfUrl = pdfUrl;
-                    firstResult.pdfUrl = pdfUrl;
+                    firstResult.PdfUrl = pdfUrl || null;
+                    firstResult.pdfUrl = pdfUrl || null;
                 }
 
                 // Trigger Push Notification to Patient
@@ -424,9 +471,22 @@ export class MobilePrescriptionController {
             }
 
             const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
-            const prescription = await prescriptionRepo.findOne({
-                where: { Id: String(id) }
-            });
+            const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(id));
+            let prescription = null;
+            if (isUuid) {
+                prescription = await prescriptionRepo.findOne({
+                    where: { Id: String(id) }
+                });
+            } else {
+                // Support looking up by AppointmentId or PrescriptionNumber
+                prescription = await prescriptionRepo.findOne({
+                    where: [
+                        { AppointmentId: String(id) },
+                        ...(isNaN(Number(id)) ? [] : [{ PrescriptionNumber: Number(id) }])
+                    ],
+                    order: { CreatedAt: "DESC" }
+                });
+            }
 
             if (!prescription) {
                 return res.status(404).json(ApiResponse.error("Prescription not found"));
@@ -438,7 +498,7 @@ export class MobilePrescriptionController {
             }
 
             // Otherwise, generate and upload to Azure Blob Storage now
-            const blobUrl = await uploadPrescriptionPdfToBlob(String(id));
+            const blobUrl = await uploadPrescriptionPdfToBlob(String(prescription.Id));
             return res.redirect(blobUrl);
         } catch (error: any) {
             console.error("Prescription PDF fetch error:", error);

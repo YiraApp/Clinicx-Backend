@@ -72,6 +72,7 @@ import { DefaultOrganization } from "../models/Organizations/default-organizatio
 import { HospitalSetting } from "../models/Organizations/hospital-settings.model.js";
 import { HospitalSettingsHistory } from "../models/Organizations/hospital-settings-history.model.js";
 import { Feedback } from "../models/Feedback/feedback.model.js";
+import { PatientMedicationReminder } from "../models/Appointments/patient-medication-reminder.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -125,7 +126,8 @@ export const AppDataSource = new DataSource({
         OfferBanner,
         PushCampaign,
         PatientFitnessData,
-        Feedback
+        Feedback,
+        PatientMedicationReminder
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,
@@ -392,8 +394,35 @@ export const initializeDatabase = async () => {
                 CREATE NONCLUSTERED INDEX IX_Feedbacks_OrganizationId ON Feedbacks (OrganizationId, CreatedAt DESC);
             END
         `);
+        // Ensure PatientMedicationReminders table exists
+        await AppDataSource.query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientMedicationReminders')
+            BEGIN
+                CREATE TABLE PatientMedicationReminders (
+                    Id VARCHAR(100) PRIMARY KEY,
+                    UserId UNIQUEIDENTIFIER NOT NULL,
+                    PrescriptionId VARCHAR(100) NULL,
+                    MedicineName NVARCHAR(255) NOT NULL,
+                    Dosage NVARCHAR(100) NULL,
+                    Instructions NVARCHAR(MAX) NULL,
+                    MealRelation NVARCHAR(100) NULL,
+                    TimesJson NVARCHAR(MAX) NOT NULL,
+                    StartDate DATE NOT NULL,
+                    EndDate DATE NOT NULL,
+                    DurationDays INT DEFAULT 1 NOT NULL,
+                    IsContinuous BIT DEFAULT 0 NOT NULL,
+                    DoctorName NVARCHAR(255) NULL,
+                    DoctorPhoto NVARCHAR(500) NULL,
+                    Condition NVARCHAR(255) NULL,
+                    IsActive BIT DEFAULT 1 NOT NULL,
+                    CreatedAt DATETIME DEFAULT GETDATE() NOT NULL,
+                    UpdatedAt DATETIME NULL
+                );
+                CREATE NONCLUSTERED INDEX IX_PatientMedicationReminders_UserId_Active ON PatientMedicationReminders (UserId, IsActive, StartDate, EndDate);
+            END
+        `);
 
-        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings, PatientFitnessData, Feedbacks and core tables");
+        console.log("✅ Database schema verified for DefaultOrganizations, AppNotifications, DoctorSuggestions, HospitalSettings, PatientFitnessData, Feedbacks, PatientMedicationReminders and core tables");
     } catch (err) {
         console.error("❌ DB Error:", err);
         throw err;

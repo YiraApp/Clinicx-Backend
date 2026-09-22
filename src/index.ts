@@ -31,6 +31,10 @@ const startServer = async () => {
         const { medicalDocumentService } = await import("./services/Appointments/medical-document.service.js");
         medicalDocumentService.startBookingScheduler(30);
 
+        // Start automated medication reminder pill alarm scheduler (checks every 60s in IST timezone)
+        const { medicationReminderService } = await import("./services/Appointments/medication-reminder.service.js");
+        medicationReminderService.startScheduler(60);
+
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });
