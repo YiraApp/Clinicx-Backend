@@ -58,7 +58,7 @@ export class ConsentController {
 
             if (!templates || templates.length === 0) {
                 res.status(200).json({
-                    status: "warning",
+                    status: "success",
                     message: "No templates found for this hospital",
                     data: []
                 });
@@ -208,22 +208,23 @@ export class ConsentController {
     async getDailyConsentStatus(req: Request, res: Response): Promise<void> {
         try {
             const date = req.query.date as string;
-            const hospitalId = parseInt(req.query.hospitalId as string);
+            const hospitalId = req.query.hospitalId ? parseInt(req.query.hospitalId as string) : undefined;
+            const organizationId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
 
-            if (!date || isNaN(hospitalId)) {
-                res.status(400).json({ error: "Date (YYYY-MM-DD) and hospitalId are required." });
+            if (!date) {
+                res.status(400).json({ error: "Date (YYYY-MM-DD) is required." });
                 return;
             }
 
-            const consents = await consentService.getDailyConsentStatus(date, hospitalId);
+            const consents = await consentService.getDailyConsentStatus(date, hospitalId, organizationId);
             res.status(200).json({ 
                 status: "success",
                 message: "Daily consent status fetched successfully",
-                data: consents 
+                data: consents || [] 
             });
         } catch (error: any) {
             console.error("[Consent Controller] Error fetching daily consent status:", error.message);
-            res.status(500).json({ status: "error", message: "Failed to fetch daily consent status" });
+            res.status(500).json({ status: "error", message: "Failed to fetch daily consent status", data: [] });
         }
     }
 

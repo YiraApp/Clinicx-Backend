@@ -163,13 +163,22 @@ export class PatientRegistrationService {
         if (patientFields.tokenNumber || (!isGuid && token ? token : undefined)) {
             registration.TokenNumber = patientFields.tokenNumber || (!isGuid && token ? token : undefined);
         } else if (!registration.TokenNumber) {
-            const nextTokenData = await this.getNextTokenNumber(effectiveHospitalId);
-            registration.TokenNumber = nextTokenData.tokenNumber;
+            const existingUser = await userRepository.findById(userId);
+            if (existingUser?.TokenNumber) {
+                registration.TokenNumber = existingUser.TokenNumber;
+            } else {
+                const nextTokenData = await this.getNextTokenNumber(effectiveHospitalId);
+                registration.TokenNumber = nextTokenData.tokenNumber;
+            }
         }
 
         registration.Status = true;
         registration.IsDeleted = false;
         await patientRegistrationRepository.save(registration);
+
+        if (registration.TokenNumber) {
+            await userRepository.updateUser(userId, { TokenNumber: registration.TokenNumber });
+        }
 
         // 2. Handle Insurance Details
         if (patientFields.insuranceProvider && patientFields.insuranceNumber) {

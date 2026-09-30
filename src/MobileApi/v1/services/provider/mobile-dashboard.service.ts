@@ -447,20 +447,25 @@ export class MobileDashboardService {
         const medRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
         const clinicalNoteRepo = AppDataSource.getRepository(ClinicalNote);
 
-        // 1. Fetch all appointments for this doctor
+        const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
+        const userRoleRepo = AppDataSource.getRepository(UserRole);
+
+        // 1. Fetch all appointments for this doctor and hospital/org
         const allAppointments = await appointmentRepo.find({
             where: [
                 ...doctorIdCandidates.map(dId => ({ DoctorId: dId, HospitalId: hospId, OrgId: orgId })),
+                ...doctorIdCandidates.map(dId => ({ DoctorId: dId, HospitalId: hospId })),
                 ...doctorIdCandidates.map(dId => ({ DoctorId: dId })),
+                ...(hospId ? [{ HospitalId: hospId }] : []),
             ],
             relations: ["User"],
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         }).catch(() => []);
 
-        // Filter to treated appointments (Completed, CheckedIn, InConsultation, Attended, Treated)
-        const treatedAppointments = allAppointments.filter(a => {
+        // Filter to valid (non-cancelled) appointments
+        const validAppointments = allAppointments.filter(a => {
             const st = (a.Status || "").trim().toLowerCase();
-            return st === "completed" || st === "checkedin" || st === "checked_in" || st === "inconsultation" || st === "attended" || st === "treated";
+            return st !== "cancelled" && st !== "rejected";
         });
 
         // 2. Fetch direct active/approved doctor-patient consents
@@ -478,28 +483,58 @@ export class MobileDashboardService {
             return st === "APPROVED" || st === "ACTIVE" || st === "PENDING";
         });
 
-        // 3. Fetch all medical records authored by / assigned to this doctor (Treated Patients)
+        // 3. Fetch all medical records authored by / assigned to this doctor
         const medRecords = await medRecordRepo.find({
             where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
             relations: ["Patient"],
             order: { Date: "DESC" }
         }).catch(() => []);
 
-        // 4. Fetch all prescriptions authored by this doctor (Treated Patients)
+        // 4. Fetch all prescriptions authored by this doctor
         const prescriptions = await prescriptionRepo.find({
             where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
             order: { CreatedAt: "DESC" }
         }).catch(() => []);
 
-        // 5. Fetch all clinical notes for this doctor (Treated Patients)
+        // 5. Fetch all clinical notes for this doctor
         const notes = await clinicalNoteRepo.find({
             where: doctorIdCandidates.map(dId => ({ DoctorId: dId })),
             order: { CreatedAt: "DESC" }
         }).catch(() => []);
 
-        // Group treated appointments by UserId
+        // 6. Fetch all patients registered to this Hospital and/or Organization
+        const regWhereConditions: any[] = [];
+        if (hospId) {
+            regWhereConditions.push({ HospitalId: hospId, IsDeleted: false });
+        }
+        if (orgId) {
+            regWhereConditions.push({ OrganizationId: orgId, IsDeleted: false });
+        }
+
+        const registeredPatients = await regRepo.find({
+            where: regWhereConditions.length > 0 ? regWhereConditions : [{ IsDeleted: false }],
+            relations: ["User"],
+            order: { CreatedAt: "DESC" }
+        }).catch(() => []);
+
+        // 7. Fetch all patients assigned Patient role in this Hospital and/or Organization
+        const roleWhereConditions: any[] = [];
+        if (hospId) {
+            roleWhereConditions.push({ RoleId: PATIENT_ROLE_ID, HospitalId: hospId, IsDeleted: false, Status: true });
+        }
+        if (orgId) {
+            roleWhereConditions.push({ RoleId: PATIENT_ROLE_ID, OrganizationId: orgId, IsDeleted: false, Status: true });
+        }
+
+        const hospPatientRoles = await userRoleRepo.find({
+            where: roleWhereConditions,
+            relations: ["User"],
+            order: { CreatedAt: "DESC" }
+        }).catch(() => []);
+
+        // Group valid appointments by UserId
         const patientAppointmentsMap = new Map<string, Appointment[]>();
-        treatedAppointments.forEach(appt => {
+        validAppointments.forEach(appt => {
             if (appt.UserId) {
                 const uid = appt.UserId.toUpperCase();
                 if (!patientAppointmentsMap.has(uid)) {
@@ -509,13 +544,60 @@ export class MobileDashboardService {
             }
         });
 
-        // Collect distinct patients EXCLUSIVELY across:
-        // A) Treated patients (Completed Appointments, Prescriptions, Medical Records, Clinical Notes)
-        // B) Consent-connected patients (Active/Approved Consents & QR Scans)
-        const allPatientsMap = new Map<string, { user?: User; source: string; consent?: PatientAccessConsent; reg?: PatientRegistration; latestDate?: Date; condition?: string }>();
+        // Collect distinct patients across:
+        // A) Hospital / Organization Registered Patients (PatientRegistration & UserRole)
+        // B) Appointments (Scheduled, Confirmed, Checked-in, Completed)
+        // C) Consents (Active/Approved Consents & QR Scans)
+        // D) Treated patients (Medical Records, Prescriptions, Clinical Notes)
+        const allPatientsMap = new Map<string, {
+            user?: User;
+            source: string;
+            consent?: PatientAccessConsent;
+            reg?: PatientRegistration;
+            latestDate?: Date;
+            condition?: string;
+        }>();
 
-        // Add users from Treated Appointments
-        treatedAppointments.forEach(appt => {
+        // A1. Add from PatientRegistration
+        registeredPatients.forEach(reg => {
+            if (reg.UserId && isUuid(reg.UserId)) {
+                const uid = reg.UserId.toUpperCase();
+                if (!allPatientsMap.has(uid)) {
+                    allPatientsMap.set(uid, {
+                        user: reg.User,
+                        source: "registration",
+                        reg: reg,
+                        latestDate: reg.CreatedAt ? new Date(reg.CreatedAt) : undefined,
+                        condition: "Registered Patient"
+                    });
+                } else {
+                    const existing = allPatientsMap.get(uid)!;
+                    if (!existing.reg) existing.reg = reg;
+                    if (!existing.user && reg.User) existing.user = reg.User;
+                }
+            }
+        });
+
+        // A2. Add from UserRole (Hospital / Organization Patient Role)
+        hospPatientRoles.forEach(ur => {
+            if (ur.UserId && isUuid(ur.UserId)) {
+                const uid = ur.UserId.toUpperCase();
+                if (!allPatientsMap.has(uid)) {
+                    allPatientsMap.set(uid, {
+                        user: ur.User,
+                        source: "hospital_patient",
+                        latestDate: ur.CreatedAt ? new Date(ur.CreatedAt) : undefined,
+                        condition: "Registered Patient"
+                    });
+                } else {
+                    const existing = allPatientsMap.get(uid)!;
+                    if (!existing.user && ur.User) existing.user = ur.User;
+                }
+            }
+        });
+
+        // B. Add users from Appointments
+        validAppointments.forEach(appt => {
             if (appt.UserId && isUuid(appt.UserId)) {
                 const uid = appt.UserId.toUpperCase();
                 if (!allPatientsMap.has(uid)) {
@@ -525,11 +607,23 @@ export class MobileDashboardService {
                         latestDate: appt.AppointmentDate ? new Date(appt.AppointmentDate) : undefined,
                         condition: appt.Reason || appt.ChiefComplaint || "Consultation Checkup"
                     });
+                } else {
+                    const existing = allPatientsMap.get(uid)!;
+                    if (!existing.user && appt.User) existing.user = appt.User;
+                    if (appt.AppointmentDate) {
+                        const apptDate = new Date(appt.AppointmentDate);
+                        if (!existing.latestDate || apptDate > existing.latestDate) {
+                            existing.latestDate = apptDate;
+                            if (appt.Reason || appt.ChiefComplaint) {
+                                existing.condition = appt.Reason || appt.ChiefComplaint;
+                            }
+                        }
+                    }
                 }
             }
         });
 
-        // Add users from Medical Records (Treated)
+        // C. Add users from Medical Records
         medRecords.forEach(mr => {
             if (mr.PatientId && isUuid(mr.PatientId)) {
                 const uid = mr.PatientId.toUpperCase();
@@ -540,11 +634,14 @@ export class MobileDashboardService {
                         latestDate: mr.Date ? new Date(mr.Date) : undefined,
                         condition: mr.Diagnosis || mr.ChiefComplaint || "Medical Record"
                     });
+                } else {
+                    const existing = allPatientsMap.get(uid)!;
+                    if (!existing.user && mr.Patient) existing.user = mr.Patient;
                 }
             }
         });
 
-        // Add users from Prescriptions (Treated)
+        // D. Add users from Prescriptions
         prescriptions.forEach(p => {
             if (p.PatientId && isUuid(p.PatientId)) {
                 const uid = p.PatientId.toUpperCase();
@@ -558,7 +655,7 @@ export class MobileDashboardService {
             }
         });
 
-        // Add users from Clinical Notes (Treated)
+        // E. Add users from Clinical Notes
         notes.forEach(n => {
             if (n.PatientId && isUuid(n.PatientId)) {
                 const uid = n.PatientId.toUpperCase();
@@ -572,7 +669,7 @@ export class MobileDashboardService {
             }
         });
 
-        // Add users from Consents (Consent Connected Patients / QR Scans)
+        // F. Add users from Consents (Consent Connected Patients / QR Scans)
         activeDoctorConsents.forEach(c => {
             if (c.PatientId && isUuid(c.PatientId)) {
                 const uid = c.PatientId.toUpperCase();
@@ -584,18 +681,55 @@ export class MobileDashboardService {
                         latestDate: c.ApprovedAt || c.RequestedAt || c.CreatedAt ? new Date((c.ApprovedAt || c.RequestedAt || c.CreatedAt)!) : undefined,
                         condition: c.Notes || "Connected via QR Scan"
                     });
+                } else {
+                    const existing = allPatientsMap.get(uid)!;
+                    if (!existing.consent) existing.consent = c;
+                    if (!existing.user && c.Patient) existing.user = c.Patient;
                 }
             }
         });
 
-        // Ensure User record is populated for every patient (with isUuid check)
-        for (const [uid, item] of allPatientsMap.entries()) {
-            if (!item.user || !item.user.FirstName) {
-                if (isUuid(uid)) {
-                    const u = await userRepo.findOne({ where: { Id: uid } }).catch(() => null);
-                    if (u) item.user = u;
+        // Batch load missing User records
+        const missingUserUids = Array.from(allPatientsMap.entries())
+            .filter(([uid, item]) => (!item.user || !item.user.FirstName) && isUuid(uid))
+            .map(([uid]) => uid);
+
+        if (missingUserUids.length > 0) {
+            const batchUsers = await userRepo.createQueryBuilder("u")
+                .where("u.Id IN (:...missingUserUids)", { missingUserUids })
+                .andWhere("u.IsDeleted = 0")
+                .getMany()
+                .catch(() => []);
+
+            batchUsers.forEach(u => {
+                const uid = u.Id.toUpperCase();
+                const item = allPatientsMap.get(uid);
+                if (item) {
+                    item.user = u;
                 }
-            }
+            });
+        }
+
+        // Batch load missing PatientRegistration records
+        const missingRegUids = Array.from(allPatientsMap.entries())
+            .filter(([uid, item]) => !item.reg && isUuid(uid))
+            .map(([uid]) => uid);
+
+        if (missingRegUids.length > 0) {
+            const batchRegs = await regRepo.createQueryBuilder("pr")
+                .where("pr.UserId IN (:...missingRegUids)", { missingRegUids })
+                .andWhere("pr.IsDeleted = 0")
+                .orderBy("pr.CreatedAt", "DESC")
+                .getMany()
+                .catch(() => []);
+
+            batchRegs.forEach(r => {
+                const uid = r.UserId.toUpperCase();
+                const item = allPatientsMap.get(uid);
+                if (item && !item.reg) {
+                    item.reg = r;
+                }
+            });
         }
 
         const favSet = this.getDoctorFavoriteSet(doctorId);
@@ -612,17 +746,11 @@ export class MobileDashboardService {
 
         for (const [uid, item] of allPatientsMap.entries()) {
             const user = item.user;
-            if (!user) continue;
+            if (!user || user.IsDeleted) continue;
 
             const appts = patientAppointmentsMap.get(uid) || [];
             const totalVisits = appts.length;
-
-            // Fetch registration info for status and allergies
-            const reg = item.reg || (isUuid(user.Id) ? await regRepo.findOne({
-                where: { UserId: user.Id, OrganizationId: orgId, HospitalId: hospId, IsDeleted: false }
-            }).catch(() => null) || await regRepo.findOne({
-                where: { UserId: user.Id, IsDeleted: false }
-            }).catch(() => null) : null);
+            const reg = item.reg;
 
             let lastVisitDate = "";
             let condition = "General Checkup";
@@ -634,15 +762,15 @@ export class MobileDashboardService {
             } else if (item.consent) {
                 lastVisitDate = formatDateMMMdd(item.consent.ApprovedAt || item.consent.RequestedAt || item.consent.CreatedAt);
                 condition = item.consent.Notes || "Connected via QR Scan";
-            } else if (item.latestDate) {
+            } else if (item.condition && item.condition !== "Registered Patient" && item.condition !== "Hospital Patient") {
                 lastVisitDate = formatDateMMMdd(item.latestDate);
-                condition = item.condition || "Treated Patient";
+                condition = item.condition;
             } else if (reg) {
                 lastVisitDate = formatDateMMMdd(reg.CreatedAt);
-                condition = "Treated Patient";
+                condition = "Registered Patient";
             } else {
                 lastVisitDate = formatDateMMMdd(user.CreatedAt || new Date());
-                condition = "Connected Patient";
+                condition = "Registered Patient";
             }
 
             const firstLetter = user.FirstName?.charAt(0) || "";
@@ -671,9 +799,9 @@ export class MobileDashboardService {
                 gender_label = "Female";
             }
 
-            // Fallback status/id if not explicitly registered in PatientRegistrations
-            const status_id = reg ? (reg.Status ? "02" : "01") : "02";
-            const status_label = reg ? (reg.Status ? "Active" : "Inactive") : "Active";
+            // Status from registration or user status
+            const status_id = reg ? (reg.Status ? "02" : "01") : (user.Status ? "02" : "01");
+            const status_label = reg ? (reg.Status ? "Active" : "Inactive") : (user.Status ? "Active" : "Inactive");
 
             let allergiesArr: string[] = [];
             if (reg && reg.Allergies) {
@@ -685,28 +813,52 @@ export class MobileDashboardService {
                 }
             }
 
-            const patId = reg ? `YRA${String(reg.Id).padStart(4, "0")}` : `YRA${user.Id.substring(0, 4).toUpperCase()}`;
+            const tokenNumber = reg?.TokenNumber || user.TokenNumber || null;
+            const patId = tokenNumber || (reg ? `YRA${String(reg.Id).padStart(4, "0")}` : `YRA${user.Id.substring(0, 4).toUpperCase()}`);
             const isFav = favSet.has(user.Id) || favSet.has(patId);
 
             patientDataList.push({
                 id: patId,
+                tokenNumber: tokenNumber || patId,
                 userId: user.Id,
+                patientUserId: user.Id,
                 name: `${user.FirstName || ""} ${user.LastName || ""}`.trim() || user.PhoneNumber || "Patient",
+                firstName: user.FirstName || "",
+                lastName: user.LastName || "",
                 phoneNumber: user.PhoneNumber || "",
+                phone: user.PhoneNumber || "",
+                email: user.Email || "",
+                gender: gender_label,
+                gender_id,
+                gender_label,
+                dob: user.DateOfBirth || null,
                 profileImageUrl: user.ImagePath || null,
                 initials,
                 age: isNaN(age) || age < 0 ? 0 : age,
-                gender_id,
-                gender_label,
                 status_id,
                 status_label,
+                status: status_label,
                 condition,
                 total_visits: totalVisits,
-                last_visit_date: lastVisitDate || "Recent",
+                visits: totalVisits,
+                last_visit_date: lastVisitDate || "New",
+                last_visit: lastVisitDate || "New",
+                registeredDate: reg?.CreatedAt || user.CreatedAt,
                 allergies: allergiesArr,
+                allergy: allergiesArr.join(", "),
                 isFavorite: isFav,
+                rawDate: appts.length > 0 && appts[0]!.AppointmentDate
+                    ? new Date(appts[0]!.AppointmentDate)
+                    : (item.latestDate || reg?.CreatedAt || user.CreatedAt || new Date()),
             });
         }
+
+        // Sort newest first by activity or registration date
+        patientDataList.sort((a, b) => {
+            const dateA = a.rawDate ? new Date(a.rawDate).getTime() : 0;
+            const dateB = b.rawDate ? new Date(b.rawDate).getTime() : 0;
+            return dateB - dateA;
+        });
 
         // Apply filters in memory
         let filteredList = patientDataList;
@@ -718,7 +870,10 @@ export class MobileDashboardService {
                 filteredList = filteredList.filter(patient => {
                     const fullName = (patient.name || "").toLowerCase();
                     const phone = (patient.phoneNumber || "").toLowerCase();
-                    return fullName.includes(term) || phone.includes(term);
+                    const patIdStr = (patient.id || "").toLowerCase();
+                    const patToken = (patient.tokenNumber || "").toLowerCase();
+                    const patEmail = (patient.email || "").toLowerCase();
+                    return fullName.includes(term) || phone.includes(term) || patIdStr.includes(term) || patToken.includes(term) || patEmail.includes(term);
                 });
             }
 

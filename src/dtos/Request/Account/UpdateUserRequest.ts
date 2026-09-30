@@ -26,6 +26,8 @@ export interface UpdateUserRequest {
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;
+    HospitalId?: number | undefined;
+    OrganizationId?: number | undefined;
     
     PermanentAddress?: AddressDTO | undefined;
     TemporaryAddress?: AddressDTO | undefined;
