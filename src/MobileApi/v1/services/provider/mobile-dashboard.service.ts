@@ -780,7 +780,8 @@ export class MobileDashboardService {
             let condition = "General Checkup";
 
             if (appts.length > 0) {
-                const latestAppt = appts[0]!;
+                const pastOrTodayAppts = appts.filter(a => a.AppointmentDate && new Date(a.AppointmentDate) <= now);
+                const latestAppt = pastOrTodayAppts.length > 0 ? pastOrTodayAppts[0]! : appts[0]!;
                 lastVisitDate = formatDateMMMdd(latestAppt.AppointmentDate);
                 condition = latestAppt.Reason || latestAppt.ChiefComplaint || "Consultation Checkup";
             } else if (item.consent) {
@@ -871,17 +872,24 @@ export class MobileDashboardService {
                 allergies: allergiesArr,
                 allergy: allergiesArr.join(", "),
                 isFavorite: isFav,
-                rawDate: appts.length > 0 && appts[0]!.AppointmentDate
-                    ? new Date(appts[0]!.AppointmentDate)
-                    : (item.latestDate || reg?.CreatedAt || user.CreatedAt || new Date()),
+                rawDate: reg?.CreatedAt
+                    ? new Date(reg.CreatedAt)
+                    : (user.CreatedAt ? new Date(user.CreatedAt) : (item.latestDate || new Date())),
             });
         }
 
-        // Sort newest first by activity or registration date
+        // Sort newest first by registration / created date, matching Web (pr.CreatedAt / u.CreatedAt DESC)
         patientDataList.sort((a, b) => {
-            const dateA = a.rawDate ? new Date(a.rawDate).getTime() : 0;
-            const dateB = b.rawDate ? new Date(b.rawDate).getTime() : 0;
-            return dateB - dateA;
+            const dateA = a.registeredDate
+                ? new Date(a.registeredDate).getTime()
+                : (a.rawDate ? new Date(a.rawDate).getTime() : 0);
+            const dateB = b.registeredDate
+                ? new Date(b.registeredDate).getTime()
+                : (b.rawDate ? new Date(b.rawDate).getTime() : 0);
+            if (dateB !== dateA) {
+                return dateB - dateA;
+            }
+            return (b.id || '').localeCompare(a.id || '');
         });
 
         // Apply filters in memory
