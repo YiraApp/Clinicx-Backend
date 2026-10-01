@@ -282,7 +282,9 @@ export class UserService implements IUserService {
         // 3. Update basic fields
         user.FirstName = data.FirstName ?? null;
         user.LastName = data.LastName ?? null;
-        user.Email = data.Email ?? null;
+        if (data.Email !== undefined) {
+            user.Email = data.Email && data.Email.trim() !== "" ? data.Email.trim() : null;
+        }
         user.CountryCode = data.CountryCode ?? "91";
         user.Gender = data.Gender ?? null;
         user.DateOfBirth = data.DateOfBirth ?? null;
@@ -294,6 +296,21 @@ export class UserService implements IUserService {
         user.Weight = data.Weight ?? null;
         if (data.TokenNumber !== undefined || (data as any).Token !== undefined) {
             user.TokenNumber = data.TokenNumber || (data as any).Token || null;
+        } else if (!user.TokenNumber) {
+            const isPatient = (data as any).RoleId?.toLowerCase() === "4fc67429-28ae-4106-93ef-436228282ed0" || 
+                              (data.workspaces && data.workspaces.some((w: any) => w.roleId?.toLowerCase() === "4fc67429-28ae-4106-93ef-436228282ed0" || w.roleId?.toLowerCase() === "patient"));
+            if (isPatient || data.HospitalId || (data.workspaces && data.workspaces[0]?.hospitalId)) {
+                try {
+                    const { patientRegistrationService } = await import("../Organizations/patient-registration.service.js");
+                    const targetHospId = data.HospitalId || (data.workspaces && data.workspaces[0]?.hospitalId) || undefined;
+                    const tokenData = await patientRegistrationService.getNextTokenNumber(targetHospId ? Number(targetHospId) : undefined);
+                    if (tokenData?.tokenNumber) {
+                        user.TokenNumber = tokenData.tokenNumber;
+                    }
+                } catch (tokenErr) {
+                    console.warn("[UserService] Could not auto-generate token for patient:", tokenErr);
+                }
+            }
         }
 
         // 4. Update addresses
@@ -442,7 +459,8 @@ export class UserService implements IUserService {
 
         return {
             message: "User updated successfully.",
-            userId: user!.Id
+            userId: user!.Id,
+            tokenNumber: user!.TokenNumber
         };
     }
 

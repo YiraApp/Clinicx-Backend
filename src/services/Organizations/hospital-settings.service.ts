@@ -101,7 +101,9 @@ export class HospitalSettingsService {
                 AdvanceDays: data.AdvanceDays !== undefined ? Number(data.AdvanceDays) : 30,
                 TakeBuffer: data.TakeBuffer !== undefined ? Boolean(data.TakeBuffer) : false,
                 BufferMinutes: data.BufferMinutes !== undefined ? Number(data.BufferMinutes) : 0,
-                AutoSyncDaily: data.AutoSyncDaily !== undefined ? Boolean(data.AutoSyncDaily) : false,
+                AutoSyncDaily: data.AutoSyncDaily !== undefined 
+                    ? Boolean(data.AutoSyncDaily) 
+                    : (data.AutoSlotGeneration !== undefined ? Boolean(data.AutoSlotGeneration) : false),
                 OverwriteExisting: data.OverwriteExisting !== undefined ? Boolean(data.OverwriteExisting) : false,
                 OnlinePayments: data.OnlinePayments !== undefined ? Boolean(data.OnlinePayments) : false,
                 ConsultationFeeForPackages: packageFeeVal !== undefined ? Boolean(packageFeeVal) : false,
@@ -142,6 +144,15 @@ export class HospitalSettingsService {
             });
             await this.historyRepo.save(historyRecord);
 
+            // If auto slot generation is enabled, trigger initial batch immediately
+            if (saved.AutoSlotGeneration) {
+                this.triggerSlotGeneration(hospitalId).then((res) => {
+                    console.log(`[HospitalSettings] Auto-generated ${res.totalSlotsGenerated} slots after creating settings for Hospital #${hospitalId}`);
+                }).catch((err) => {
+                    console.error(`[HospitalSettings] Auto-generation failed on create for Hospital #${hospitalId}:`, err.message);
+                });
+            }
+
             return saved;
         }
 
@@ -171,6 +182,11 @@ export class HospitalSettingsService {
         if (data.AutoSlotGeneration !== undefined && Boolean(data.AutoSlotGeneration) !== setting.AutoSlotGeneration) {
             changedFields.push("AutoSlotGeneration");
             setting.AutoSlotGeneration = Boolean(data.AutoSlotGeneration);
+            // Default AutoSyncDaily to true when AutoSlotGeneration is turned on
+            if (setting.AutoSlotGeneration && data.AutoSyncDaily === undefined && !setting.AutoSyncDaily) {
+                setting.AutoSyncDaily = true;
+                changedFields.push("AutoSyncDaily");
+            }
         }
         if (data.AdvanceDays !== undefined && Number(data.AdvanceDays) !== setting.AdvanceDays) {
             changedFields.push("AdvanceDays");
@@ -296,6 +312,15 @@ export class HospitalSettingsService {
 
         await this.historyRepo.save(historyRecord);
 
+        // If auto slot generation is active, trigger generation immediately so slots are live
+        if (setting.AutoSlotGeneration) {
+            this.triggerSlotGeneration(hospitalId).then((res) => {
+                console.log(`[HospitalSettings] Auto-generated ${res.totalSlotsGenerated} slots after updating settings for Hospital #${hospitalId}`);
+            }).catch((err) => {
+                console.error(`[HospitalSettings] Auto-generation failed on update for Hospital #${hospitalId}:`, err.message);
+            });
+        }
+
         return setting;
     }
 
@@ -334,16 +359,18 @@ export class HospitalSettingsService {
         const startStr = formatDate(today);
         const endStr = formatDate(endDate);
 
-        // Fetch all active doctors in this hospital
+        // Fetch all active doctors in this hospital with their Availability & User relations
         const providers = await this.providerRepo.find({
             where: { HospitalId: hospitalId, IsDeleted: false, Status: true },
-            relations: ["Availability"]
+            relations: ["Availability", "User"]
         });
 
         const effectiveBuffer = setting.TakeBuffer ? Number(setting.BufferMinutes || 0) : 0;
         const results = [];
 
         for (const doctor of providers) {
+            const docName = (doctor as any).Name || (doctor.User ? `${doctor.User.FirstName || ""} ${doctor.User.LastName || ""}`.trim() : `Doctor #${doctor.Id}`);
+            
             if (doctor.Availability && doctor.Availability.length > 0) {
                 let doctorSlotsCount = 0;
                 let dayErrors = 0;
@@ -374,10 +401,20 @@ export class HospitalSettingsService {
 
                 results.push({
                     doctorId: doctor.Id,
-                    doctorName: (doctor as any).Name || (doctor.User ? `${doctor.User.FirstName || ""} ${doctor.User.LastName || ""}`.trim() : `Doctor #${doctor.Id}`),
+                    doctorName: docName,
                     count: doctorSlotsCount,
+                    availabilityDays: doctor.Availability.length,
                     success: true,
                     hadErrors: dayErrors > 0
+                });
+            } else {
+                results.push({
+                    doctorId: doctor.Id,
+                    doctorName: docName,
+                    count: 0,
+                    availabilityDays: 0,
+                    success: false,
+                    reason: "No weekly availability schedule configured for this doctor"
                 });
             }
         }
@@ -423,12 +460,12 @@ export class HospitalSettingsService {
     }
 
     /**
-     * Run slot generation for all hospitals that have AutoSlotGeneration and AutoSyncDaily enabled
+     * Run slot generation for all hospitals that have AutoSlotGeneration enabled
      */
     async runAutoSyncForAllHospitals() {
         try {
             const activeSettings = await this.settingsRepo.find({
-                where: { AutoSlotGeneration: true, AutoSyncDaily: true, IsActive: true, IsDeleted: false }
+                where: { AutoSlotGeneration: true, IsActive: true, IsDeleted: false }
             });
 
             if (activeSettings.length === 0) {
@@ -438,6 +475,11 @@ export class HospitalSettingsService {
             console.log(`[HospitalSettings] Running scheduled auto-slot sync for ${activeSettings.length} active hospital(s)...`);
 
             for (const setting of activeSettings) {
+                if (!setting.AutoSyncDaily) {
+                    setting.AutoSyncDaily = true;
+                    await this.settingsRepo.save(setting);
+                }
+
                 try {
                     const res = await this.triggerSlotGeneration(setting.HospitalId);
                     console.log(`[HospitalSettings] Auto-synced Hospital #${setting.HospitalId}: ${res.totalSlotsGenerated} slots generated across ${res.doctorsProcessed} doctor(s).`);

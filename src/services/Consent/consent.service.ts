@@ -142,15 +142,20 @@ export class ConsentService {
     /**
      * Gets the status of all consents for a specific date and hospital.
      */
-    async getDailyConsentStatus(date: string, hospitalId: number): Promise<any[]> {
+    async getDailyConsentStatus(date: string, hospitalId?: number, organizationId?: number): Promise<any[]> {
         // 1. Fetch all appointments for the date
-        const result = await appointmentRepository.getAppointments({ date, hospitalId });
-        const appointments = result.data;
+        const filters: any = { date };
+        if (hospitalId) filters.hospitalId = hospitalId;
+        if (organizationId) filters.orgId = organizationId;
+
+        const result = await appointmentRepository.getAppointments(filters);
+        const appointments = result?.data || [];
 
         if (!appointments || appointments.length === 0) return [];
 
         // 2. Fetch all consent requests for these appointments
-        const appointmentIds = appointments.map(a => a.Id);
+        const appointmentIds = appointments.map(a => a.Id).filter(Boolean);
+        if (appointmentIds.length === 0) return [];
         const consentRequests = await consentRequestRepository.findByAppointmentIds(appointmentIds);
 
         // 3. Map status
