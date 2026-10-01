@@ -425,6 +425,8 @@ export class MobileDashboardService {
             searchTerm?: string;
             gender?: string;
             status?: string;
+            page?: number;
+            pageSize?: number;
         }
     ): Promise<any> {
         const appointmentRepo = AppDataSource.getRepository(Appointment);
@@ -948,11 +950,22 @@ export class MobileDashboardService {
                 .getCount();
         }
 
+        const totalCount = filteredList.length;
+        const pageNum = Math.max(1, Number(filters?.page) || 1);
+        const pageSizeNum = Math.max(0, Number(filters?.pageSize) || 0);
+        const paginatedList = pageSizeNum > 0
+            ? filteredList.slice((pageNum - 1) * pageSizeNum, pageNum * pageSizeNum)
+            : filteredList;
+
         return {
-            patients: filteredList,
+            patients: paginatedList,
+            total: totalCount,
+            page: pageNum,
+            pageSize: pageSizeNum > 0 ? pageSizeNum : totalCount,
+            hasMore: pageSizeNum > 0 ? (pageNum * pageSizeNum < totalCount) : false,
             metrics: {
                 total_patients: {
-                    value: filteredList.length,
+                    value: totalCount,
                     label: "Total Patients"
                 },
                 active_cases: {

@@ -85,7 +85,7 @@ export const getClinicalData = async (req: Request, res: Response) => {
  */
 export const getPatientsList = async (req: Request, res: Response) => {
     try {
-        const { doctorId, orgId, hospitalId, searchTerm, gender, status } = req.body;
+        const { doctorId, orgId, hospitalId, searchTerm, gender, status, page, pageSize } = req.body;
 
         if (!doctorId || orgId === undefined || hospitalId === undefined) {
             return res.status(400).json({
@@ -108,7 +108,7 @@ export const getPatientsList = async (req: Request, res: Response) => {
             doctorId,
             parsedOrgId,
             parsedHospitalId,
-            { searchTerm, gender, status }
+            { searchTerm, gender, status, page, pageSize }
         );
 
         return res.json(ApiResponse.success(result, "Active patient matching log criteria updated."));
