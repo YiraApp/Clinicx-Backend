@@ -53,6 +53,34 @@ export class PatientRegistrationService {
     }
 
 
+    // In-memory FIFO lock queue and sequence cache to prevent concurrent race conditions
+    private static tokenLockChains = new Map<string, Promise<any>>();
+    private static sequenceCache = new Map<string, number>();
+
+    private static async withTokenLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+        const prev = PatientRegistrationService.tokenLockChains.get(key) || Promise.resolve();
+        let release: () => void;
+        const currentLock = new Promise<void>((resolve) => { release = resolve; });
+
+        PatientRegistrationService.tokenLockChains.set(
+            key,
+            prev.then(() => currentLock).catch(() => currentLock)
+        );
+
+        return prev
+            .catch(() => {})
+            .then(async () => {
+                try {
+                    return await fn();
+                } finally {
+                    release!();
+                    if (PatientRegistrationService.tokenLockChains.get(key) === currentLock) {
+                        PatientRegistrationService.tokenLockChains.delete(key);
+                    }
+                }
+            });
+    }
+
     async getNextTokenNumber(hospitalId?: number): Promise<{ tokenNumber: string; hospitalId: number; hospitalCode: string; currentMaxSequence: number; nextSequence: number }> {
         const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
         const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
@@ -80,48 +108,71 @@ export class PatientRegistrationService {
         }
 
         const year = new Date().getFullYear();
-        const tokenPattern = `${prefix}-${year}-%`;
+        const lockKey = `${prefix}-${year}`;
 
-        // 1. Query PatientRegistration table across the hospital and year prefix
-        const regRepo = AppDataSource.getRepository(PatientRegistration);
-        const regTokens = await regRepo.createQueryBuilder("pr")
-            .select("pr.TokenNumber", "token")
-            .where("pr.TokenNumber LIKE :tokenPattern", { tokenPattern })
-            .getRawMany();
+        return await PatientRegistrationService.withTokenLock(lockKey, async () => {
+            const tokenPattern = `${prefix}-${year}-%`;
 
-        // 2. Query Users table to ensure global uniqueness across all registered users
-        const userRepo = AppDataSource.getRepository(User);
-        const userTokens = await userRepo.createQueryBuilder("u")
-            .select("u.TokenNumber", "token")
-            .where("u.TokenNumber LIKE :tokenPattern", { tokenPattern })
-            .getRawMany();
+            // 1. Query PatientRegistration table across the hospital and year prefix
+            const regRepo = AppDataSource.getRepository(PatientRegistration);
+            const regTokens = await regRepo.createQueryBuilder("pr")
+                .select("pr.TokenNumber", "token")
+                .where("pr.TokenNumber LIKE :tokenPattern", { tokenPattern })
+                .getRawMany();
 
-        // 3. Extract and compute the true maximum sequence number in the database
-        let maxSeq = 0;
-        const allTokens = [...regTokens, ...userTokens];
-        for (const row of allTokens) {
-            if (row.token) {
-                const parts = String(row.token).trim().split("-");
-                const seqStr = parts[parts.length - 1];
-                const num = parseInt(seqStr, 10);
-                if (!isNaN(num) && num > maxSeq) {
-                    maxSeq = num;
+            // 2. Query Users table to ensure global uniqueness across all registered users
+            const userRepo = AppDataSource.getRepository(User);
+            const userTokens = await userRepo.createQueryBuilder("u")
+                .select("u.TokenNumber", "token")
+                .where("u.TokenNumber LIKE :tokenPattern", { tokenPattern })
+                .getRawMany();
+
+            // 3. Extract and compute the true maximum sequence number in the database
+            let maxDbSeq = 0;
+            const allTokens = [...regTokens, ...userTokens];
+            for (const row of allTokens) {
+                if (row.token) {
+                    const parts = String(row.token).trim().split("-");
+                    const seqStr = parts[parts.length - 1];
+                    const num = parseInt(seqStr, 10);
+                    if (!isNaN(num) && num > maxDbSeq) {
+                        maxDbSeq = num;
+                    }
                 }
             }
-        }
 
-        const nextSeq = maxSeq + 1;
-        const tokenNumber = `${prefix}-${year}-${String(nextSeq).padStart(4, "0")}`;
+            // 4. Check in-memory sequence cache (or Redis) to ensure in-flight allocations are respected
+            let inMemorySeq = PatientRegistrationService.sequenceCache.get(lockKey) || 0;
+            try {
+                const { redisService } = await import("../Common/redis.service.js");
+                const redisSeq = await redisService.get<number>(`token_seq:${lockKey}`);
+                if (redisSeq && redisSeq > inMemorySeq) {
+                    inMemorySeq = redisSeq;
+                }
+            } catch { /* Redis fail-safe */ }
 
-        console.log(`[TokenSequence] Hospital: ${prefix} (ID ${targetHospId}) | Year: ${year} | Current Max Sequence: ${maxSeq} | Assigned Next Token: ${tokenNumber}`);
+            const trueCurrentMax = Math.max(maxDbSeq, inMemorySeq);
+            const nextSeq = trueCurrentMax + 1;
 
-        return {
-            tokenNumber,
-            hospitalId: targetHospId,
-            hospitalCode: prefix,
-            currentMaxSequence: maxSeq,
-            nextSequence: nextSeq
-        };
+            // Update in-memory sequence cache and Redis immediately for concurrent requests
+            PatientRegistrationService.sequenceCache.set(lockKey, nextSeq);
+            try {
+                const { redisService } = await import("../Common/redis.service.js");
+                await redisService.set(`token_seq:${lockKey}`, nextSeq, 86400);
+            } catch { /* Redis fail-safe */ }
+
+            const tokenNumber = `${prefix}-${year}-${String(nextSeq).padStart(4, "0")}`;
+
+            console.log(`[TokenSequence] Hospital: ${prefix} (ID ${targetHospId}) | Year: ${year} | Current Max Sequence: ${trueCurrentMax} | Assigned Next Token: ${tokenNumber}`);
+
+            return {
+                tokenNumber,
+                hospitalId: targetHospId,
+                hospitalCode: prefix,
+                currentMaxSequence: trueCurrentMax,
+                nextSequence: nextSeq
+            };
+        });
     }
 
     async registerPatient(data: any): Promise<any> {
