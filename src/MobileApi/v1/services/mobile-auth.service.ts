@@ -774,17 +774,32 @@ export class MobileAuthService {
                     if (matched.HospitalId) effectiveHospitalId = matched.HospitalId;
                     if (matched.OrganizationId) effectiveOrgId = matched.OrganizationId;
                 }
-                try {
-                    await AppDataSource.getRepository(User).update(user.Id, {
-                        LatestRoleId: effectiveRoleId,
-                        LatestHospitalId: effectiveHospitalId,
-                        LatestOrgId: effectiveOrgId
-                    });
-                } catch (_) {}
             }
 
             const isProvider = latestUserRole?.toLowerCase().trim() === "provider" || 
                                effectiveRoleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
+
+            if (isProvider && (!effectiveHospitalId || !effectiveOrgId)) {
+                const hp = await AppDataSource.getRepository(HealthcareProvider).findOne({
+                    where: { UserId: user.Id, IsDeleted: false },
+                    relations: ["Hospital"]
+                }).catch(() => null);
+                if (hp) {
+                    if (!effectiveHospitalId) effectiveHospitalId = hp.HospitalId;
+                    if (!effectiveOrgId && hp.Hospital?.OrganizationId) effectiveOrgId = hp.Hospital.OrganizationId;
+                }
+            }
+
+            if (effectiveRoleId || effectiveHospitalId || effectiveOrgId) {
+                try {
+                    await AppDataSource.getRepository(User).update(user.Id, {
+                        ...(effectiveRoleId && { LatestRoleId: effectiveRoleId }),
+                        ...(effectiveHospitalId && { LatestHospitalId: effectiveHospitalId }),
+                        ...(effectiveOrgId && { LatestOrgId: effectiveOrgId })
+                    });
+                } catch (_) {}
+            }
+
             const navigationId = isProvider ? "2" : "1";
             const userRoleName = isProvider ? "Provider" : "Patient";
 
@@ -1405,17 +1420,31 @@ export class MobileAuthService {
                 if (matched.HospitalId) effectiveHospitalId = matched.HospitalId;
                 if (matched.OrganizationId) effectiveOrgId = matched.OrganizationId;
             }
-            try {
-                await AppDataSource.getRepository(User).update(user.Id, {
-                    LatestRoleId: effectiveRoleId,
-                    LatestHospitalId: effectiveHospitalId,
-                    LatestOrgId: effectiveOrgId
-                });
-            } catch (_) {}
         }
 
         const isProvider = latestUserRole?.toLowerCase().trim() === "provider" || 
                            effectiveRoleId?.toUpperCase() === "FE80173F-9DB3-4703-84A8-5C23E7CC493C";
+
+        if (isProvider && (!effectiveHospitalId || !effectiveOrgId)) {
+            const hp = await AppDataSource.getRepository(HealthcareProvider).findOne({
+                where: { UserId: user.Id, IsDeleted: false },
+                relations: ["Hospital"]
+            }).catch(() => null);
+            if (hp) {
+                if (!effectiveHospitalId) effectiveHospitalId = hp.HospitalId;
+                if (!effectiveOrgId && hp.Hospital?.OrganizationId) effectiveOrgId = hp.Hospital.OrganizationId;
+            }
+        }
+
+        if (effectiveRoleId || effectiveHospitalId || effectiveOrgId) {
+            try {
+                await AppDataSource.getRepository(User).update(user.Id, {
+                    ...(effectiveRoleId && { LatestRoleId: effectiveRoleId }),
+                    ...(effectiveHospitalId && { LatestHospitalId: effectiveHospitalId }),
+                    ...(effectiveOrgId && { LatestOrgId: effectiveOrgId })
+                });
+            } catch (_) {}
+        }
         const navigationId = isProvider ? "2" : "1";
         const userRoleName = isProvider ? "Provider" : "Patient";
 

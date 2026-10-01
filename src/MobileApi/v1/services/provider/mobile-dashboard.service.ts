@@ -76,11 +76,19 @@ export class MobileDashboardService {
             .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("CAST(appointment.AppointmentDate AS DATE) = :todayStr", { todayStr });
 
-        if (hospId && hospId > 0) {
-            todaysQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
+        const doctorProviders = await providerRepo.find({
+            where: { UserId: userId, IsDeleted: false }
+        }).catch(() => []);
+        const affiliatedHospitalIds = Array.from(new Set([
+            ...doctorProviders.map(p => p.HospitalId).filter(Boolean),
+            ...(hospId && hospId > 0 ? [hospId] : [])
+        ]));
+
+        if (affiliatedHospitalIds.length > 0) {
+            todaysQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { doctorId: userId, affiliatedHospitalIds });
         }
         if (orgId && orgId > 0) {
-            todaysQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
+            todaysQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { doctorId: userId, orgId });
         }
 
         const todaysAppointments = await todaysQuery
@@ -128,11 +136,11 @@ export class MobileDashboardService {
             .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("CAST(appointment.AppointmentDate AS DATE) <= :todayStr", { todayStr });
 
-        if (hospId && hospId > 0) {
-            recentQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
+        if (affiliatedHospitalIds.length > 0) {
+            recentQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { doctorId: userId, affiliatedHospitalIds });
         }
         if (orgId && orgId > 0) {
-            recentQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
+            recentQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { doctorId: userId, orgId });
         }
 
         const recentAppointments = await recentQuery
@@ -261,11 +269,11 @@ export class MobileDashboardService {
             .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
             .andWhere("appointment.AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
 
-        if (hospId && hospId > 0) {
-            dailyStatsQuery.andWhere("(appointment.HospitalId = :hospId OR appointment.HospitalId IS NULL)", { hospId });
+        if (affiliatedHospitalIds.length > 0) {
+            dailyStatsQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { doctorId: userId, affiliatedHospitalIds });
         }
         if (orgId && orgId > 0) {
-            dailyStatsQuery.andWhere("(appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { orgId });
+            dailyStatsQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { doctorId: userId, orgId });
         }
 
         const weeklyStatsRaw = await dailyStatsQuery
@@ -308,11 +316,11 @@ export class MobileDashboardService {
             .where("appointment.DoctorId = :doctorId", { doctorId: userId })
             .andWhere("appointment.AppointmentDate >= CAST(DATEADD(month, -5, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
 
-        if (hospId) {
-            monthlyStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        if (affiliatedHospitalIds.length > 0) {
+            monthlyStatsQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { doctorId: userId, affiliatedHospitalIds });
         }
-        if (orgId) {
-            monthlyStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId && orgId > 0) {
+            monthlyStatsQuery.andWhere("(appointment.DoctorId = :doctorId OR appointment.OrgId = :orgId OR appointment.OrgId IS NULL)", { doctorId: userId, orgId });
         }
 
         const monthlyStatsRaw = await monthlyStatsQuery
@@ -457,10 +465,10 @@ export class MobileDashboardService {
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         }).catch(() => []);
 
-        // Filter to treated appointments (Completed, CheckedIn, InConsultation, Attended, Treated)
-        const treatedAppointments = allAppointments.filter(a => {
+        // Filter to all active/valid appointments for this doctor (including Scheduled, Confirmed, Completed, etc.)
+        const validAppointments = allAppointments.filter(a => {
             const st = (a.Status || "").trim().toLowerCase();
-            return st === "completed" || st === "checkedin" || st === "checked_in" || st === "inconsultation" || st === "attended" || st === "treated";
+            return st !== "cancelled" && st !== "rejected" && st !== "noshow" && st !== "no_show";
         });
 
         // 2. Fetch direct active/approved doctor-patient consents
@@ -497,9 +505,9 @@ export class MobileDashboardService {
             order: { CreatedAt: "DESC" }
         }).catch(() => []);
 
-        // Group treated appointments by UserId
+        // Group appointments by UserId
         const patientAppointmentsMap = new Map<string, Appointment[]>();
-        treatedAppointments.forEach(appt => {
+        validAppointments.forEach(appt => {
             if (appt.UserId) {
                 const uid = appt.UserId.toUpperCase();
                 if (!patientAppointmentsMap.has(uid)) {
@@ -509,13 +517,14 @@ export class MobileDashboardService {
             }
         });
 
-        // Collect distinct patients EXCLUSIVELY across:
-        // A) Treated patients (Completed Appointments, Prescriptions, Medical Records, Clinical Notes)
+        // Collect distinct patients across:
+        // A) Booked & treated patients (Appointments, Prescriptions, Medical Records, Clinical Notes)
         // B) Consent-connected patients (Active/Approved Consents & QR Scans)
+        // C) Hospital clinic registered patients (matching Web Portal)
         const allPatientsMap = new Map<string, { user?: User; source: string; consent?: PatientAccessConsent; reg?: PatientRegistration; latestDate?: Date; condition?: string }>();
 
-        // Add users from Treated Appointments
-        treatedAppointments.forEach(appt => {
+        // Add users from Appointments (Scheduled, Confirmed, Completed, etc.)
+        validAppointments.forEach(appt => {
             if (appt.UserId && isUuid(appt.UserId)) {
                 const uid = appt.UserId.toUpperCase();
                 if (!allPatientsMap.has(uid)) {
@@ -587,6 +596,39 @@ export class MobileDashboardService {
                 }
             }
         });
+
+        // Add users registered at the doctor's affiliated hospitals (matching Web Portal)
+        const doctorProvidersForPatients = await providerRepo.find({
+            where: doctorIdCandidates.map(dId => ({ UserId: dId, IsDeleted: false }))
+        }).catch(() => []);
+        const targetHospIds = Array.from(new Set([
+            ...doctorProvidersForPatients.map(p => p.HospitalId).filter(Boolean),
+            ...(hospId && hospId > 0 ? [hospId] : [])
+        ]));
+
+        if (targetHospIds.length > 0) {
+            const hospitalRegistrations = await regRepo.find({
+                where: targetHospIds.map(hId => ({ HospitalId: hId, IsDeleted: false })),
+                relations: ["User"],
+                order: { CreatedAt: "DESC" },
+                take: 100
+            }).catch(() => []);
+
+            hospitalRegistrations.forEach(reg => {
+                if (reg.UserId && isUuid(reg.UserId)) {
+                    const uid = reg.UserId.toUpperCase();
+                    if (!allPatientsMap.has(uid)) {
+                        allPatientsMap.set(uid, {
+                            user: reg.User,
+                            source: "hospital_registration",
+                            reg: reg,
+                            latestDate: reg.CreatedAt ? new Date(reg.CreatedAt) : undefined,
+                            condition: "Registered Clinic Patient"
+                        });
+                    }
+                }
+            });
+        }
 
         // Ensure User record is populated for every patient (with isUuid check)
         for (const [uid, item] of allPatientsMap.entries()) {
@@ -815,18 +857,30 @@ export class MobileDashboardService {
         const regWhere: any = { UserId: patientId, IsDeleted: false };
         if (orgId) regWhere.OrganizationId = orgId;
         if (hospitalId) regWhere.HospitalId = hospitalId;
-        const reg = await regRepo.findOne({
+        let reg = await regRepo.findOne({
             where: regWhere,
             order: { CreatedAt: "DESC" }
         });
+        if (!reg && hospitalId) {
+            reg = await regRepo.findOne({
+                where: { UserId: patientId, IsDeleted: false },
+                order: { CreatedAt: "DESC" }
+            });
+        }
 
         const insWhere: any = { UserId: patientId, IsDeleted: false };
         if (orgId) insWhere.OrganizationId = orgId;
         if (hospitalId) insWhere.HospitalId = hospitalId;
-        const insurance = await insuranceRepo.findOne({
+        let insurance = await insuranceRepo.findOne({
             where: insWhere,
             order: { CreatedAt: "DESC" }
         });
+        if (!insurance && hospitalId) {
+            insurance = await insuranceRepo.findOne({
+                where: { UserId: patientId, IsDeleted: false },
+                order: { CreatedAt: "DESC" }
+            });
+        }
 
         const apptWhere: any = { UserId: patientId };
         if (orgId) apptWhere.OrgId = orgId;
@@ -1231,34 +1285,58 @@ export class MobileDashboardService {
         const regWhere: any = { UserId: patientId, IsDeleted: false };
         if (orgId) regWhere.OrganizationId = orgId;
         if (hospitalId) regWhere.HospitalId = hospitalId;
-        const reg = await regRepo.findOne({
+        let reg = await regRepo.findOne({
             where: regWhere,
             order: { CreatedAt: "DESC" }
         });
+        if (!reg && hospitalId) {
+            reg = await regRepo.findOne({
+                where: { UserId: patientId, IsDeleted: false },
+                order: { CreatedAt: "DESC" }
+            });
+        }
 
         const insWhere: any = { UserId: patientId, IsDeleted: false };
         if (orgId) insWhere.OrganizationId = orgId;
         if (hospitalId) insWhere.HospitalId = hospitalId;
-        const insurance = await insuranceRepo.findOne({
+        let insurance = await insuranceRepo.findOne({
             where: insWhere,
             order: { CreatedAt: "DESC" }
         });
+        if (!insurance && hospitalId) {
+            insurance = await insuranceRepo.findOne({
+                where: { UserId: patientId, IsDeleted: false },
+                order: { CreatedAt: "DESC" }
+            });
+        }
 
         const apptWhere: any = { UserId: patientId };
         if (orgId) apptWhere.OrgId = orgId;
         if (hospitalId) apptWhere.HospitalId = hospitalId;
-        const appointments = await appointmentRepo.find({
+        let appointments = await appointmentRepo.find({
             where: apptWhere,
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
+        if (appointments.length === 0 && hospitalId) {
+            appointments = await appointmentRepo.find({
+                where: { UserId: patientId },
+                order: { AppointmentDate: "DESC", StartTime: "DESC" }
+            });
+        }
 
         const recordWhere: any = { PatientId: patientId };
         if (orgId) recordWhere.OrganizationId = orgId;
         if (hospitalId) recordWhere.HospitalId = hospitalId;
-        const latestRecord = await medicalRecordRepo.findOne({
+        let latestRecord = await medicalRecordRepo.findOne({
             where: recordWhere,
             order: { CreatedAt: "DESC" }
         });
+        if (!latestRecord && hospitalId) {
+            latestRecord = await medicalRecordRepo.findOne({
+                where: { PatientId: patientId },
+                order: { CreatedAt: "DESC" }
+            });
+        }
 
         // Resolve last visit date
         const formatDateSlash = (dateInput: Date | string | null | undefined) => {

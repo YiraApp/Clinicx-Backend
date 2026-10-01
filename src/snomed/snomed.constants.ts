@@ -1,13 +1,13 @@
 export const SNOMED_CT_INDIAN_DRUG_CODES = {
-    MEDICINAL_PRODUCT: "763158003",       // Generic medicinal product
-    MEDICINAL_PRODUCT_FORM: "766939001",   // Medicinal product with a specified form
-    CLINICAL_DRUG: "411116001",            // Drug with specified form and strength
-    PACKAGED_CLINICAL_DRUG: "410942007",   // Packaged drug
-    REAL_CLINICAL_DRUG: "324072007",       // Real-world clinical drug
-    REAL_MEDICINAL_PRODUCT: "763087004",   // Real-world medicinal product
-    REAL_PACKAGED_CLINICAL_DRUG: "441856006", // Real-world packaged drug
-    BRAND_PRODUCT: "787859002",            // Brand-name drug
-    PRODUCT_NAME: "900000000000013009"     // Product name in SNOMED CT
+    MEDICINAL_PRODUCT: "763158003",       
+    MEDICINAL_PRODUCT_FORM: "766939001",   
+    CLINICAL_DRUG: "411116001",            
+    PACKAGED_CLINICAL_DRUG: "410942007",   
+    REAL_CLINICAL_DRUG: "324072007",       
+    REAL_MEDICINAL_PRODUCT: "763087004",   
+    REAL_PACKAGED_CLINICAL_DRUG: "441856006", 
+    BRAND_PRODUCT: "787859002",            
+    PRODUCT_NAME: "900000000000013009"     
 };
 
 export const SNOMED_CT_PARENT_IDS = {

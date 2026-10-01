@@ -33,6 +33,13 @@ export class MobileAppointmentService {
             }
         } catch (_) {}
 
+        const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+        const doctorProviders = await providerRepo.find({
+            where: { UserId: doctorId, IsDeleted: false }
+        }).catch(() => []);
+        const isDoctor = doctorProviders.length > 0;
+        const affiliatedHospitalIds = doctorProviders.map(p => p.HospitalId).filter(Boolean);
+
         // 1. Calculate stats/counts for today (or selected date range)
         const statsQuery = appointmentRepo.createQueryBuilder("apt")
             .select("COUNT(*)", "todayCount")
@@ -41,26 +48,65 @@ export class MobileAppointmentService {
             .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' THEN 1 END)", "completedCount")
             .where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
 
-        if (hospitalId) {
-            statsQuery.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
+        if (hospitalId && hospitalId > 0) {
+            if (isDoctor) {
+                const validHospIds = Array.from(new Set([...affiliatedHospitalIds, hospitalId]));
+                statsQuery.andWhere("(apt.DoctorId = :doctorId OR apt.HospitalId IN (:...validHospIds) OR apt.HospitalId IS NULL)", { doctorId, validHospIds });
+            } else {
+                statsQuery.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
+            }
         }
-        if (orgId) {
-            statsQuery.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
+        if (orgId && orgId > 0) {
+            if (isDoctor) {
+                statsQuery.andWhere("(apt.DoctorId = :doctorId OR apt.OrgId = :orgId OR apt.OrgId IS NULL)", { doctorId, orgId });
+            } else {
+                statsQuery.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
+            }
         }
+        let todayCount = 0;
+        let confirmedCount = 0;
+        let pendingCount = 0;
+        let completedCount = 0;
+
         if (options?.dateFrom && options?.dateTo) {
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) <= :dateTo", { dateTo: options.dateTo });
-        } else if (options?.date) {
+            const statsResult = await statsQuery.getRawOne();
+            todayCount = parseInt(statsResult?.todayCount || "0", 10);
+            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
+            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
+            completedCount = parseInt(statsResult?.completedCount || "0", 10);
+        } else if (options?.dateFrom) {
+            statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
+            const statsResult = await statsQuery.getRawOne();
+            todayCount = parseInt(statsResult?.todayCount || "0", 10);
+            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
+            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
+            completedCount = parseInt(statsResult?.completedCount || "0", 10);
+        } else if (options?.date && options.date !== todayStr) {
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) = :dateStr", { dateStr: options.date });
+            const statsResult = await statsQuery.getRawOne();
+            todayCount = parseInt(statsResult?.todayCount || "0", 10);
+            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
+            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
+            completedCount = parseInt(statsResult?.completedCount || "0", 10);
         } else {
-            statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) = :todayStr", { todayStr });
+            // Default "Today" view (when mobile launches):
+            // todayCount: strictly today's appointments
+            // confirmedCount & pendingCount: active upcoming/today bookings (from today onwards)
+            // completedCount: today's completed appointments
+            const statsResult = await statsQuery
+                .select("COUNT(CASE WHEN CAST(apt.AppointmentDate AS DATE) = :todayStr THEN 1 END)", "todayCount")
+                .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('confirmed', 'scheduled') AND CAST(apt.AppointmentDate AS DATE) >= :todayStr THEN 1 END)", "confirmedCount")
+                .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'requested') AND CAST(apt.AppointmentDate AS DATE) >= :todayStr THEN 1 END)", "pendingCount")
+                .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' AND CAST(apt.AppointmentDate AS DATE) = :todayStr THEN 1 END)", "completedCount")
+                .setParameter("todayStr", todayStr)
+                .getRawOne();
+            todayCount = parseInt(statsResult?.todayCount || "0", 10);
+            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
+            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
+            completedCount = parseInt(statsResult?.completedCount || "0", 10);
         }
-
-        const statsResult = await statsQuery.getRawOne();
-        const todayCount = parseInt(statsResult?.todayCount || "0", 10);
-        const confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
-        const pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
-        const completedCount = parseInt(statsResult?.completedCount || "0", 10);
 
         // 2. Fetch appointments list
         const query = appointmentRepo.createQueryBuilder("apt")
@@ -68,16 +114,27 @@ export class MobileAppointmentService {
             .leftJoinAndSelect("apt.Doctor", "doctor")
             .where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
 
-        if (hospitalId) {
-            query.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
+        if (hospitalId && hospitalId > 0) {
+            if (isDoctor) {
+                const validHospIds = Array.from(new Set([...affiliatedHospitalIds, hospitalId]));
+                query.andWhere("(apt.DoctorId = :doctorId OR apt.HospitalId IN (:...validHospIds) OR apt.HospitalId IS NULL)", { doctorId, validHospIds });
+            } else {
+                query.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
+            }
         }
-        if (orgId) {
-            query.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
+        if (orgId && orgId > 0) {
+            if (isDoctor) {
+                query.andWhere("(apt.DoctorId = :doctorId OR apt.OrgId = :orgId OR apt.OrgId IS NULL)", { doctorId, orgId });
+            } else {
+                query.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
+            }
         }
 
         if (options?.dateFrom && options?.dateTo) {
             query.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
             query.andWhere("CAST(apt.AppointmentDate AS DATE) <= :dateTo", { dateTo: options.dateTo });
+        } else if (options?.dateFrom) {
+            query.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
         } else if (options?.date) {
             query.andWhere("CAST(apt.AppointmentDate AS DATE) = :dateStr", { dateStr: options.date });
         } else {
@@ -138,10 +195,21 @@ export class MobileAppointmentService {
                 patientStatus = "New Patient";
             }
 
+            let displayTime = formattedTime || apt.StartTime;
+            if (apt.AppointmentDate) {
+                const aptDateStr = new Date(apt.AppointmentDate).toISOString().split('T')[0];
+                if (aptDateStr !== todayStr) {
+                    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                    const d = new Date(apt.AppointmentDate);
+                    const dateFormatted = `${d.getDate()} ${months[d.getMonth()]}`;
+                    displayTime = `${dateFormatted} • ${formattedTime || apt.StartTime}`;
+                }
+            }
+
             return {
                 id: String(apt.Id),
                 tokenNumber: `Token #${index + 1}`,
-                time: formattedTime || apt.StartTime,
+                time: displayTime,
                 duration: `${durationMins} MIN`,
                 patientName,
                 doctorName,
