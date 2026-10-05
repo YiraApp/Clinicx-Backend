@@ -23,9 +23,11 @@ export class UserDeviceRepository {
     }
 
     async findAllActiveDevices(): Promise<UserDevice[]> {
-        return await this.deviceRepo.find({
-            where: { IsActive: true }
-        });
+        return await this.deviceRepo.createQueryBuilder("d")
+            .where("d.IsActive = 1")
+            .andWhere("d.FCMToken IS NOT NULL")
+            .andWhere("d.FCMToken != ''")
+            .getMany();
     }
 
     async saveDevice(device: UserDevice): Promise<UserDevice> {

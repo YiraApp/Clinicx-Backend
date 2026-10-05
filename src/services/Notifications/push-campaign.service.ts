@@ -304,7 +304,7 @@ export class PushCampaignService {
         }
 
         // 3. Update campaign stats
-        const newCount = (campaign.TotalSentCount || 0) + (fcmSuccess > 0 ? fcmSuccess : validTokens.length);
+        const newCount = (campaign.TotalSentCount || 0) + fcmSuccess;
         const newStatus = campaign.ScheduleType === "scheduled" ? "COMPLETED" : campaign.Status;
 
         await pushCampaignRepository.update(campaign.Id, {
