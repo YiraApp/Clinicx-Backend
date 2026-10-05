@@ -80,6 +80,7 @@ export async function sendFcmPushToTokens(
 
     for (const token of tokens) {
         if (!token || token.startsWith("ios_sim_") || token === "no_token_available") {
+            failureCount++;
             continue;
         }
 
