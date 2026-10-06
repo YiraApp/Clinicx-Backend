@@ -1423,12 +1423,12 @@ export class AppointmentService {
     }): Promise<void> {
         const { appointment, targetUser, data, assignedToken } = params;
 
-        // Configurable recipient email list (defaults to user requested emails, expandable via .env)
-        const defaultEmails = ["manikanta.n@yira.ai", "neelimanikanta02@gmail.com"];
+        // Configurable recipient email list (defaults to operations@yira.ai, contact@yira.ai, expandable via .env)
+        const defaultEmails = ["operations@yira.ai", "contact@yira.ai"];
         const envEmails = process.env.BOOKING_NOTIFICATION_EMAILS
             ? process.env.BOOKING_NOTIFICATION_EMAILS.split(",").map((e: string) => e.trim()).filter(Boolean)
             : [];
-        const recipients = Array.from(new Set([...defaultEmails, ...envEmails]));
+        const recipients = envEmails.length > 0 ? envEmails : defaultEmails;
 
         if (recipients.length === 0) {
             console.warn("[Public Booking Notification] No recipient emails configured.");
