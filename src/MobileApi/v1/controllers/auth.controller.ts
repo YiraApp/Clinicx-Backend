@@ -641,11 +641,12 @@ export const getUserData = async (req: Request, res: Response) => {
         const userData = await mobileAuthService.getUserData(userId, deviceId);
         return res.json(ApiResponse.success(userData, "User details fetched successfully"));
     } catch (error: any) {
-        return res.status(400).json({
+        const isUserNotFound = error.message === "User not found";
+        return res.status(isUserNotFound ? 401 : 400).json({
             status: false,
             message: error.message,
-            code: "GET_USER_DATA_FAILED",
-            data: { code: "GET_USER_DATA_FAILED" }
+            code: isUserNotFound ? "UNAUTHORIZED" : "GET_USER_DATA_FAILED",
+            data: { code: isUserNotFound ? "UNAUTHORIZED" : "GET_USER_DATA_FAILED" }
         });
     }
 };

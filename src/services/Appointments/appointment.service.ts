@@ -441,6 +441,20 @@ export class AppointmentService {
             (appointment as any).appointmentNumber = appointment.AppointmentNumber;
         }
 
+        // Email Notification: Send booking alert ONLY for appointments booked via the public page (/book-appointment)
+        if (data.createdBy === "DefaultOrgPublicBooking") {
+            try {
+                await this.sendPublicBookingNotificationEmail({
+                    appointment,
+                    targetUser,
+                    data,
+                    assignedToken
+                });
+            } catch (notifyErr: any) {
+                console.error("[Public Booking Notification] Failed to send email notification:", notifyErr?.message || notifyErr);
+            }
+        }
+
         return {
             patient: {
                 userId: targetUser.Id,
@@ -1395,6 +1409,251 @@ export class AppointmentService {
 
     async createInstantMeeting(topic: string = "Instant Consultation") {
         return await zoomService.createMeeting(topic);
+    }
+
+    /**
+     * Sends an email notification to designated administrators/staff whenever
+     * an appointment is successfully booked via the public booking portal (/book-appointment).
+     */
+    private async sendPublicBookingNotificationEmail(params: {
+        appointment: Appointment;
+        targetUser: any;
+        data: any;
+        assignedToken: string | null;
+    }): Promise<void> {
+        const { appointment, targetUser, data, assignedToken } = params;
+
+        // Configurable recipient email list (defaults to user requested emails, expandable via .env)
+        const defaultEmails = ["manikanta.n@yira.ai", "neelimanikanta02@gmail.com"];
+        const envEmails = process.env.BOOKING_NOTIFICATION_EMAILS
+            ? process.env.BOOKING_NOTIFICATION_EMAILS.split(",").map((e: string) => e.trim()).filter(Boolean)
+            : [];
+        const recipients = Array.from(new Set([...defaultEmails, ...envEmails]));
+
+        if (recipients.length === 0) {
+            console.warn("[Public Booking Notification] No recipient emails configured.");
+            return;
+        }
+
+        // Fetch related appointment details for rich email content
+        let doctorName = "Assigned Doctor";
+        let doctorSpecialty = "";
+        let hospitalName = "Clinic";
+        let hospitalAddress = "";
+
+        try {
+            const fullAppointment = await appointmentRepository.findById(appointment.Id);
+            if (fullAppointment?.Doctor) {
+                const docFirst = fullAppointment.Doctor.FirstName || "";
+                const docLast = fullAppointment.Doctor.LastName || "";
+                doctorName = `Dr. ${docFirst} ${docLast}`.trim();
+            }
+            if (fullAppointment?.Hospital) {
+                hospitalName = fullAppointment.Hospital.Name || hospitalName;
+                hospitalAddress = fullAppointment.Hospital.Address || "";
+            }
+        } catch (fetchErr) {
+            console.warn("[Public Booking Notification] Warning loading appointment relations:", fetchErr);
+        }
+
+        // If specialty is missing, look up HealthcareProvider
+        try {
+            const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+            const providerRepo = AppDataSource.getRepository(HealthcareProvider);
+            const provider = await providerRepo.findOne({
+                where: { UserId: data.doctorId }
+            });
+            if (provider) {
+                doctorSpecialty = provider.Specialty || provider.Department || "";
+            }
+        } catch (provErr) {
+            // ignore
+        }
+
+        const patientFullName = `${targetUser?.FirstName || ""} ${targetUser?.LastName || ""}`.trim() || data.patientName || "N/A";
+        const patientPhone = targetUser?.PhoneNumber || data.patientPhone || "N/A";
+        const patientEmail = targetUser?.Email && !targetUser.Email.includes("@yira.ai") ? targetUser.Email : (data.patientEmail || "Not provided");
+        const patientGender = targetUser?.Gender || data.gender || "Not specified";
+        const patientDob = targetUser?.DateOfBirth || data.dob || "Not specified";
+        let patientRelation = targetUser?.Relation || (data as any)?.relation;
+        if (!patientRelation || patientRelation.toLowerCase() === "admin") {
+            patientRelation = targetUser?.IsPrimary ? "Self" : "Dependent";
+        }
+        const tokenNumber = assignedToken || (appointment as any)?.tokenNumber || "N/A";
+        const appointmentNumber = appointment?.AppointmentNumber || `#${appointment?.Id}`;
+        const consultationType = data.appointmentType || (data.isTeleConsultation ? "Video Consultation" : "In-Clinic");
+        const reason = data.reason || "General Consultation";
+        const videoMeetingUrl = appointment?.MeetingUrl || (appointment as any)?.videoCallUrl || null;
+
+        // Format Date
+        let formattedDate = data.appointmentDate || "N/A";
+        try {
+            const d = new Date(data.appointmentDate);
+            if (!isNaN(d.getTime())) {
+                formattedDate = d.toLocaleDateString("en-IN", {
+                    weekday: "short",
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric"
+                });
+            }
+        } catch (e) {
+            // fallback
+        }
+
+        // Format Time
+        const formatTime12h = (timeStr?: string) => {
+            if (!timeStr) return "";
+            const parts = timeStr.split(":");
+            if (parts.length >= 2) {
+                let hour = parseInt(parts[0], 10);
+                const minute = parts[1];
+                const ampm = hour >= 12 ? "PM" : "AM";
+                hour = hour % 12 || 12;
+                return `${hour}:${minute} ${ampm}`;
+            }
+            return timeStr;
+        };
+
+        const formattedTime = (data.startTime && data.endTime)
+            ? `${formatTime12h(data.startTime)} - ${formatTime12h(data.endTime)}`
+            : (data.startTime || "N/A");
+
+        const subject = `New Appointment: ${patientFullName} | Token: ${tokenNumber} | ${appointmentNumber}`;
+
+        const htmlBody = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>New Appointment Confirmation</title>
+<style>
+body { margin:0; padding:0; background:#f4f6fb; font-family: 'Segoe UI', Arial, sans-serif; }
+table { border-collapse:collapse; width:100%; }
+.container { max-width:520px; margin:30px auto; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.08); }
+.header { background: #1a23d8; background: linear-gradient(120deg, #1a23d8 0%, #3f5bff 40%, #6f8dff 100%); padding:22px 20px; text-align:center; color:#ffffff; }
+.logo-3d { display:inline-block; padding:4px; border-radius:20px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); }
+.logo-3d img { width:70px; display:block; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); }
+.header h2 { margin:10px 0 0; font-size:20px; font-weight:600; color:#ffffff; }
+.content { padding:25px; color:#333333; font-size:14px; line-height:1.6; }
+.content h1 { text-align:center; font-size:20px; color:#1920d9; margin: 0 0 10px 0; }
+.highlight { background:#f1f3ff; border-left:4px solid #1920d9; padding:12px 16px; border-radius:6px; margin:15px 0; font-size:13px; color:#1e293b; }
+.token-card { background:#f1f3ff; border:2px dashed #1920d9; border-radius:8px; padding:14px 18px; text-align:center; margin:15px 0; }
+.details { background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px; }
+.details-title { font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px; }
+.details p { margin:6px 0; font-size:13px; }
+.btn { display:inline-block; margin-top:10px; padding:10px 22px; background:#1920d9; color:#ffffff !important; text-decoration:none; border-radius:6px; font-weight:600; font-size:13px; }
+.footer { background:#f4f6fb; text-align:center; padding:16px 20px; font-size:11px; color:#777; border-top:1px solid #eeeeee; }
+</style>
+</head>
+<body style="margin:0; padding:0; background:#f4f6fb; font-family: 'Segoe UI', Arial, sans-serif;">
+<table class="container" style="max-width:520px; margin:30px auto; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.08); border-collapse:collapse; width:100%;">
+    <tr>
+        <td class="header" bgcolor="#1a23d8" style="background:#1a23d8; background: linear-gradient(120deg, #1a23d8 0%, #3f5bff 40%, #6f8dff 100%); padding:22px 20px; text-align:center; color:#ffffff;">
+            <div class="logo-3d" style="display:inline-block; padding:4px; border-radius:20px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);">
+                <img src="https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" style="width:70px; display:block; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));" alt="Yira" />
+            </div>
+            <h2 style="margin:10px 0 0; font-size:20px; font-weight:600; color:#ffffff;">Yira</h2>
+            <div style="font-size:12px; opacity:0.92; color:#ffffff;">New Appointment Booked</div>
+        </td>
+    </tr>
+    <tr>
+        <td class="content" style="padding:25px; color:#333333; font-size:14px; line-height:1.6;">
+            <h1 style="text-align:center; font-size:20px; color:#1920d9; margin: 0 0 10px 0;">New Appointment Confirmation</h1>
+            
+            <div class="highlight" style="background:#f1f3ff; border-left:4px solid #1920d9; padding:12px 16px; border-radius:6px; margin:15px 0; font-size:13px; color:#1e293b;">
+                A new appointment has been successfully scheduled. Details are summarized below:
+            </div>
+
+            <!-- Token Highlight Card -->
+            <div class="token-card" style="background:#f1f3ff; border:2px dashed #1920d9; border-radius:8px; padding:14px 18px; text-align:center; margin:15px 0;">
+                <div style="font-size:11px; font-weight:700; color:#1920d9; text-transform:uppercase; letter-spacing:0.5px;">Hospital Token Number</div>
+                <div style="font-size:26px; font-weight:800; color:#1920d9; margin:4px 0;">${tokenNumber}</div>
+                <div style="font-size:12px; color:#555555;">Appointment #: <strong>${appointmentNumber}</strong> &bull; Mode: <strong>${consultationType}</strong></div>
+            </div>
+
+            <!-- Patient Details -->
+            <div class="details" style="background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px;">
+                <div class="details-title" style="font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">
+                    Patient Details
+                </div>
+                <p style="margin:6px 0; font-size:13px;"><strong>Patient Name:</strong> ${patientFullName}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Mobile Number:</strong> <a href="tel:${patientPhone}" style="color:#1920d9; text-decoration:none;">${patientPhone}</a></p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Email Address:</strong> ${patientEmail}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Gender & DOB:</strong> ${patientGender} / ${patientDob}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Relationship:</strong> ${patientRelation}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Token Number:</strong> <span style="color:#1920d9; font-weight:700;">${tokenNumber}</span></p>
+            </div>
+
+            <!-- Appointment Schedule -->
+            <div class="details" style="background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px;">
+                <div class="details-title" style="font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">
+                    Appointment Schedule
+                </div>
+                <p style="margin:6px 0; font-size:13px;"><strong>Appointment Number:</strong> ${appointmentNumber}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Date:</strong> ${formattedDate}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Time Slot:</strong> ${formattedTime}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Consultation Mode:</strong> ${consultationType}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Reason for Visit:</strong> ${reason}</p>
+                ${videoMeetingUrl ? `
+                <div style="text-align:center; margin-top:14px;">
+                    <a href="${videoMeetingUrl}" target="_blank" class="btn" style="display:inline-block; padding:10px 22px; background:#1920d9; color:#ffffff !important; text-decoration:none; border-radius:6px; font-weight:600; font-size:13px;">
+                        Join Zoom Meeting
+                    </a>
+                </div>` : ''}
+            </div>
+
+            <!-- Doctor & Hospital Details -->
+            <div class="details" style="background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px;">
+                <div class="details-title" style="font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">
+                    Doctor & Hospital Details
+                </div>
+                <p style="margin:6px 0; font-size:13px;"><strong>Consulting Doctor:</strong> ${doctorName} ${doctorSpecialty ? `(${doctorSpecialty})` : ''}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Hospital / Clinic:</strong> ${hospitalName}</p>
+                ${hospitalAddress ? `<p style="margin:6px 0; font-size:13px;"><strong>Location:</strong> ${hospitalAddress}</p>` : ''}
+            </div>
+
+            <p style="margin-top:25px; font-size:13px; color:#555555;">
+                Regards,<br />
+                <strong style="color:#1920d9;">Yira Health Tech Team</strong>
+            </p>
+        </td>
+    </tr>
+    <tr>
+        <td class="footer" style="background:#f4f6fb; text-align:center; padding:16px 20px; font-size:11px; color:#777; border-top:1px solid #eeeeee;">
+            &copy; 2026 Yira Health Tech Pvt Ltd. <br/>
+            Building the future of digital healthcare with Clinicx.
+        </td>
+    </tr>
+</table>
+</body>
+</html>
+        `.trim();
+
+        // Attempt batch send first, fallback to individual sends if needed
+        try {
+            await mailService.sendMail({
+                to: recipients.join(", "),
+                subject,
+                body: htmlBody
+            });
+            console.log(`[Public Booking Notification] Notification email successfully sent to: [${recipients.join(", ")}] for appointment ${appointmentNumber}`);
+        } catch (batchErr: any) {
+            console.warn(`[Public Booking Notification] Batch sending failed (${batchErr?.message || batchErr}), falling back to individual sends...`);
+            for (const recipient of recipients) {
+                try {
+                    await mailService.sendMail({
+                        to: recipient,
+                        subject,
+                        body: htmlBody
+                    });
+                    console.log(`[Public Booking Notification] Email sent individually to ${recipient}`);
+                } catch (singleErr: any) {
+                    console.error(`[Public Booking Notification] Failed sending email to ${recipient}:`, singleErr?.message || singleErr);
+                }
+            }
+        }
     }
 }
 
