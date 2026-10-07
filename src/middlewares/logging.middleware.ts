@@ -115,8 +115,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
 
     const cleanReqPath = (req.path || "").toLowerCase();
     const isPublic = publicRoutes.some(route => cleanReqPath.startsWith(route.toLowerCase())) ||
-                     cleanReqPath.endsWith("/pdf") ||
-                     (cleanReqPath.includes("/prescriptions/") && cleanReqPath.includes("/pdf"));
+        cleanReqPath.endsWith("/pdf") ||
+        (cleanReqPath.includes("/prescriptions/") && cleanReqPath.includes("/pdf"));
 
     // Capture initial request metadata
     const requestLog = new APILog();
@@ -148,6 +148,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         const bodyStr = JSON.stringify(body);
         requestLog.RequestBody = bodyStr.length > 2000 ? bodyStr.substring(0, 2000) + "... [truncated]" : bodyStr;
     }
+
 
     const timeStr = new Date().toLocaleTimeString();
     console.log(`📥 [${timeStr}] ${req.method} ${req.originalUrl || req.url || req.path} (from ${ip || 'unknown'})`);
@@ -215,7 +216,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
 
         // Async Location Lookup (if IP is valid and not local)
         const isLocal = ip === "::1" || ip === "127.0.0.1" || ip.startsWith("192.168.") || ip.startsWith("10.");
-        
+
         if (isLocal) {
             requestLog.Location = "Local";
         } else if (ip && !requestLog.Location) {
@@ -244,7 +245,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         const originalSend = res.send;
         res.send = function (body: any) {
             const durationMs = Date.now() - startTime;
-            
+
             let responseStr = "";
             if (typeof body === "string") {
                 responseStr = body;
@@ -269,7 +270,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         };
 
         // Step 2: JWT Authentication for protected routes
-        
+
         if (!isPublic) {
             // Check for Mobile User/Device header or body fallback
             const queryUserId = req.body?.userId || req.query.userId || req.headers["x-user-id"];
