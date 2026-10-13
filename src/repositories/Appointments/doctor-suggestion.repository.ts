@@ -25,14 +25,21 @@ export class DoctorSuggestionRepository {
             .where("s.PatientId IN (:...patientIds)", { patientIds: validIds })
             .orderBy("s.Id", "DESC");
 
-        if (orgId) {
-            qb.andWhere("s.OrganizationId = :orgId", { orgId });
-        }
-        if (hospitalId) {
-            qb.andWhere("s.HospitalId = :hospitalId", { hospitalId });
+        const allSuggestions = await qb.getMany();
+
+        // Medical care guidance (diet, hydration, lifestyle, exercise) belongs to the patient.
+        // If hospitalId / orgId is specified, sort matching suggestions to the top, but never hide
+        // care guidance given by doctors from other branches/visits.
+        if (hospitalId || orgId) {
+            allSuggestions.sort((a, b) => {
+                const aMatch = (hospitalId && a.HospitalId === hospitalId) || (orgId && a.OrganizationId === orgId) ? 1 : 0;
+                const bMatch = (hospitalId && b.HospitalId === hospitalId) || (orgId && b.OrganizationId === orgId) ? 1 : 0;
+                if (bMatch !== aMatch) return bMatch - aMatch;
+                return (b.Id || 0) - (a.Id || 0);
+            });
         }
 
-        return await qb.getMany();
+        return allSuggestions;
     }
 
     async findById(id: number): Promise<DoctorSuggestion | null> {

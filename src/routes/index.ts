@@ -38,6 +38,7 @@ import { snomedRouter } from "../snomed/snomed.routes.js";
 import { offerBannerRouter } from "./Offers/offer-banner.routes.js";
 import { pushCampaignRouter } from "./Notifications/push-campaign.routes.js";
 import { feedbackRouter } from "./Feedback/feedback.routes.js";
+import { dietRouter } from "./Diet/diet.routes.js";
 
 const router = Router();
 
@@ -80,6 +81,7 @@ router.use("/redirections", meetingRedirectionRouter);
 router.use("/offers", offerBannerRouter);
 router.use("/push-campaigns", pushCampaignRouter);
 router.use("/feedback", feedbackRouter);
+router.use("/diet", dietRouter);
 
 router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });

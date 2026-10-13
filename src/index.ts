@@ -7,6 +7,7 @@ dotenv.config();
 import app from "./app.js";
 import { initializeDatabase } from "./config/database.js";
 import { MigrationService } from "./services/Common/migration.service.js";
+import { DietMigrationService } from "./services/Diet/diet-migration.service.js";
 
 const port = process.env.PORT || 8080;
 
@@ -14,6 +15,7 @@ const startServer = async () => {
     try {
         await initializeDatabase();
         await MigrationService.ensureLogIndexes();
+        await DietMigrationService.runMigrationsAndSeed();
 
         // Report at startup whether this server can send push notifications
         const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");
