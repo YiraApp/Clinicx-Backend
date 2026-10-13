@@ -40,12 +40,12 @@ export class DoctorSuggestionService {
                 });
             }
 
-            const user = await queryBuilder.getOne().catch(() => null);
+            const users = await queryBuilder.getMany().catch(() => []);
+            for (const user of users) {
+                if (user?.Id && isGuid(user.Id)) set.add(user.Id.trim());
+            }
 
-            if (user?.Id && isGuid(user.Id)) set.add(user.Id.trim());
-
-            const baseGuid = user?.Id || (isGuid(patientId) ? patientId.trim() : null);
-            if (baseGuid) {
+            for (const baseGuid of Array.from(set)) {
                 const regs = await regRepo.find({ where: { UserId: baseGuid } }).catch(() => []);
                 for (const r of regs) {
                     if (r.UserId && isGuid(r.UserId)) set.add(r.UserId.trim());

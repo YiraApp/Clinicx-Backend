@@ -8,7 +8,8 @@
     "cleanup-duplicates": "tsx scratch/cleanup-duplicate-prescriptions.ts",
     "start": "node dist/index.js",
     "build": "node -e \"const fs = require('fs'); if (fs.existsSync('tsconfig.json')) { require('child_process').execSync('node ./node_modules/typescript/bin/tsc -p tsconfig.json', { stdio: 'inherit' }); } else { console.log('Pre-compiled build detected, skipping compilation.'); }\"",
-    "update-prescription-schema": "tsx scratch/update-prescription-refactor.ts"
+    "update-prescription-schema": "tsx scratch/update-prescription-refactor.ts",
+    "import-indb-foods": "tsx scratch/import-indb-foods.ts"
   },
   "keywords": [],
   "author": "",

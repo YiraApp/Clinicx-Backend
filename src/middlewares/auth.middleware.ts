@@ -49,3 +49,31 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
         res.status(401).json({ error: "Authentication failed" });
     }
 }
+
+/**
+ * Optional Auth Middleware: If a valid Bearer token or user header is present,
+ * attaches user to request. Does not block unauthenticated access for public master data.
+ */
+export async function optionalAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+    try {
+        const queryUserId = req.body?.userId || req.query.userId || req.headers["x-user-id"];
+        const queryDeviceId = req.body?.deviceId || req.query.deviceId || req.headers["x-device-id"];
+        if (queryUserId && queryDeviceId) {
+            (req as any).user = { userId: String(queryUserId) };
+            return next();
+        }
+
+        const authHeader = req.headers.authorization;
+        if (authHeader?.startsWith("Bearer ")) {
+            const token = authHeader.split(" ")[1];
+            if (token) {
+                const payload = verifyAccessToken(token);
+                if (payload) {
+                    (req as any).user = payload;
+                }
+            }
+        }
+    } catch (_) {}
+    next();
+}
+

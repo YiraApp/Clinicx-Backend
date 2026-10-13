@@ -73,6 +73,7 @@ import { HospitalSetting } from "../models/Organizations/hospital-settings.model
 import { HospitalSettingsHistory } from "../models/Organizations/hospital-settings-history.model.js";
 import { Feedback } from "../models/Feedback/feedback.model.js";
 import { PatientMedicationReminder } from "../models/Appointments/patient-medication-reminder.model.js";
+import { DietFoodItem, DietTemplate, DietTemplateMeal, PatientDietPlan, PatientDietPlanMeal } from "../models/Diet/index.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -127,7 +128,12 @@ export const AppDataSource = new DataSource({
         PushCampaign,
         PatientFitnessData,
         Feedback,
-        PatientMedicationReminder
+        PatientMedicationReminder,
+        DietFoodItem,
+        DietTemplate,
+        DietTemplateMeal,
+        PatientDietPlan,
+        PatientDietPlanMeal
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,
