@@ -17,6 +17,10 @@ const startServer = async () => {
         await MigrationService.ensureLogIndexes();
         await DietMigrationService.runMigrationsAndSeed();
 
+        // Report at startup whether this server can send push notifications
+        const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");
+        initFirebaseAdmin();
+
         // Start automated background appointment reminder scheduler (checks every 60s for 10-minute reminders)
         const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
         appointmentReminderService.startScheduler(60);
