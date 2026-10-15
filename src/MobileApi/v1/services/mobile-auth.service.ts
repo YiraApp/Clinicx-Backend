@@ -768,7 +768,12 @@ export class MobileAuthService {
             }
 
             if (effectiveRoleId) {
-                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+                let matched = effectiveHospitalId
+                    ? mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase() && ur.HospitalId === Number(effectiveHospitalId))
+                    : null;
+                if (!matched) {
+                    matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+                }
                 if (matched) {
                     latestUserRole = matched.Role?.RoleName ?? null;
                     if (matched.HospitalId) effectiveHospitalId = matched.HospitalId;
@@ -966,7 +971,12 @@ export class MobileAuthService {
             }
 
             if (effectiveRoleId) {
-                const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+                let matched = effectiveHospitalId
+                    ? mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase() && ur.HospitalId === Number(effectiveHospitalId))
+                    : null;
+                if (!matched) {
+                    matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+                }
                 if (matched) {
                     latestUserRole = matched.Role?.RoleName ?? null;
                     if (matched.HospitalId) effectiveHospitalId = matched.HospitalId;
@@ -1414,7 +1424,12 @@ export class MobileAuthService {
         }
 
         if (effectiveRoleId) {
-            const matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+            let matched = effectiveHospitalId
+                ? mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase() && ur.HospitalId === Number(effectiveHospitalId))
+                : null;
+            if (!matched) {
+                matched = mobileRoles.find(ur => ur.RoleId?.toUpperCase() === effectiveRoleId?.toUpperCase());
+            }
             if (matched) {
                 latestUserRole = matched.Role?.RoleName ?? null;
                 if (matched.HospitalId) effectiveHospitalId = matched.HospitalId;

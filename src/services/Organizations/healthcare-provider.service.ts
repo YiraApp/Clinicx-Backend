@@ -8,8 +8,9 @@ import { roleRepository } from "../../repositories/Account/role.repository.js";
 import { userRoleRepository } from "../../repositories/Account/userrole.repository.js";
 import { healthcareProviderScheduleSlotRepository } from "../../repositories/Organizations/healthcare-provider-schedule-slot.repository.js";
 import { HealthcareProviderScheduleSlot } from "../../models/Organizations/healthcare-provider-schedule-slot.model.js";
-
 import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
+import { User } from "../../models/Account/user.model.js";
+import { Not } from "typeorm/index.js";
 
 export class HealthcareProviderService {
     async onboardProvider(data: any): Promise<any> {
@@ -160,10 +161,23 @@ export class HealthcareProviderService {
                     } : provider.User,
                     // First hospital's specialty shown as primary
                     Specialty: provider.Specialty,
+                    specialty: provider.Specialty,
+                    SubSpecialty: provider.SubSpecialty,
+                    subSpecialty: provider.SubSpecialty,
                     Department: provider.Department,
+                    department: provider.Department,
+                    Qualification: provider.Qualification,
+                    qualification: provider.Qualification,
+                    Experience: provider.Experience,
+                    experience: provider.Experience,
+                    RegistrationNumber: provider.RegistrationNumber,
+                    registrationNumber: provider.RegistrationNumber,
+                    Bio: provider.Bio,
+                    bio: provider.Bio,
                     Status: effectiveStatus,
                     status: effectiveStatus,
                     ConsultationFee: provider.ConsultationFee,
+                    consultationFee: provider.ConsultationFee,
                     hospitals: []
                 });
             }
@@ -176,6 +190,10 @@ export class HealthcareProviderService {
                 specialty: provider.Specialty,
                 subSpecialty: provider.SubSpecialty,
                 department: provider.Department,
+                qualification: provider.Qualification,
+                experience: provider.Experience,
+                registrationNumber: provider.RegistrationNumber,
+                bio: provider.Bio,
                 consultationFee: provider.ConsultationFee,
                 status: isProviderActive
             });
@@ -230,8 +248,15 @@ export class HealthcareProviderService {
         };
 
         // 3. Build hospitals array — each entry has provider-level details + availability
+        const user = doctor.User;
+        const isUserActive = user?.Status ?? true;
+        const isUserDeleted = user?.IsDeleted ?? false;
+        const isProviderActive = doctor.Status ?? true;
+        const effectiveStatus = Boolean(isUserActive && isProviderActive && !isUserDeleted && !doctor.IsDeleted);
+
         const hospitals = allProviders.map((p: any) => {
             const { timeSlots, availableDays } = buildTimeSlots(p.Availability || []);
+            const hospProviderStatus = Boolean(p.Status && !p.IsDeleted && isUserActive && !isUserDeleted);
             return {
                 providerId: p.Id,
                 hospitalId: p.HospitalId,
@@ -245,7 +270,7 @@ export class HealthcareProviderService {
                 experience: p.Experience,
                 consultationFee: p.ConsultationFee,
                 bio: p.Bio,
-                status: p.Status,
+                status: hospProviderStatus,
                 timeSlots,
                 availableDays,
                 organizationId: p.Hospital?.OrganizationId,
@@ -254,10 +279,6 @@ export class HealthcareProviderService {
         });
 
         // 4. Return user info once + hospitals array
-        const user = doctor.User;
-        const isUserActive = user?.Status ?? true;
-        const isProviderActive = doctor.Status ?? true;
-        const effectiveStatus = Boolean(isUserActive && isProviderActive);
 
         return {
             userId: doctor.UserId,
@@ -268,6 +289,22 @@ export class HealthcareProviderService {
             countryCode: user?.CountryCode,
             gender: user?.Gender,
             dateOfBirth: user?.DateOfBirth,
+            specialty: doctor.Specialty,
+            Specialty: doctor.Specialty,
+            subSpecialty: doctor.SubSpecialty,
+            SubSpecialty: doctor.SubSpecialty,
+            department: doctor.Department,
+            Department: doctor.Department,
+            qualification: doctor.Qualification,
+            Qualification: doctor.Qualification,
+            experience: doctor.Experience,
+            Experience: doctor.Experience,
+            registrationNumber: doctor.RegistrationNumber,
+            RegistrationNumber: doctor.RegistrationNumber,
+            bio: doctor.Bio,
+            Bio: doctor.Bio,
+            consultationFee: doctor.ConsultationFee,
+            ConsultationFee: doctor.ConsultationFee,
             status: effectiveStatus,
             Status: effectiveStatus,
             User: user ? {
@@ -337,13 +374,21 @@ export class HealthcareProviderService {
                 Department: data.department,
                 RegistrationNumber: data.registrationNumber,
                 Qualification: data.qualification,
-                Experience: data.experience,
+                Experience: data.experience !== undefined ? data.experience : provider.Experience,
                 ConsultationFee: data.consultationFee !== undefined && data.consultationFee !== null && data.consultationFee !== "" ? Number(data.consultationFee) : 0,
                 Bio: data.bio,
                 Status: data.status !== undefined ? data.status : provider.Status
             };
 
             await healthcareProviderRepository.updateDoctor(id, providerUpdateData);
+
+            if (data.status !== undefined && data.status) {
+                await manager.getRepository(User).update(provider.UserId, {
+                    Status: true,
+                    IsDeleted: false,
+                    UpdatedAt: new Date()
+                });
+            }
 
             // 3. Update Availability Slots (if provided)
             if (data.timeSlots) {
@@ -402,6 +447,12 @@ export class HealthcareProviderService {
     async generateSlotsForDateRange(providerId: number, hospitalId: number, startDate: string, endDate: string, slotDuration: number = 15, buffer: number = 0, overwrite: boolean = false): Promise<any> {
         const provider = await healthcareProviderRepository.getDoctorById(providerId);
         if (!provider) throw new Error("Doctor not found.");
+
+        const isUserActive = provider.User?.Status ?? true;
+        const isUserDeleted = provider.User?.IsDeleted ?? false;
+        if (!provider.Status || provider.IsDeleted || !isUserActive || isUserDeleted) {
+            throw new Error("Doctor or associated user account is inactive or not available.");
+        }
 
         // Parse as local midnight to avoid UTC timezone shifting dates by 1 day
         const [sy, sm, sd] = startDate.split("-").map(Number);
@@ -481,14 +532,13 @@ export class HealthcareProviderService {
 
             while (currentDate <= end) {
                 const dayName = DAYS[currentDate.getDay()];
-                const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted);
-                let effectiveTemplates = dayTemplates;
-                if (effectiveTemplates.length === 0) {
-                    effectiveTemplates = [{
-                        StartTime: "09:00",
-                        EndTime: "17:00"
-                    } as any];
+                const dayTemplates = weeklyAvailability.filter(a => a.DayOfWeek === dayName && !a.IsDeleted && a.Status !== false);
+                if (dayTemplates.length === 0) {
+                    // Doctor is not available on this day, skip generating slots
+                    currentDate.setDate(currentDate.getDate() + 1);
+                    continue;
                 }
+                const effectiveTemplates = dayTemplates;
 
                 // Use local date parts to avoid timezone shifting YYYY-MM-DD
                 const y = currentDate.getFullYear();
@@ -504,6 +554,12 @@ export class HealthcareProviderService {
                            String(sd.getDate()).padStart(2, "0") === d;
                 });
 
+                const now = new Date();
+                const isDateToday = currentDate.getFullYear() === now.getFullYear() &&
+                                     currentDate.getMonth() === now.getMonth() &&
+                                     currentDate.getDate() === now.getDate();
+                const currentMinutesNow = now.getHours() * 60 + now.getMinutes();
+
                 effectiveTemplates.forEach(template => {
                     // Use effectiveTemplates instead of dayTemplates
                     const tmpl = effectiveTemplates.find(t => t.StartTime === template.StartTime && t.EndTime === template.EndTime) || template;
@@ -512,6 +568,12 @@ export class HealthcareProviderService {
 
                     // Loop and create slices
                     while (currentSlotMinutes + slotDuration <= endMinutes) {
+                        // Skip past slots if generating for today
+                        if (isDateToday && currentSlotMinutes <= currentMinutesNow) {
+                            currentSlotMinutes += slotDuration + buffer;
+                            continue;
+                        }
+
                         const startTime = minutesToTime(currentSlotMinutes);
                         const endTime = minutesToTime(currentSlotMinutes + slotDuration);
 
@@ -561,14 +623,21 @@ export class HealthcareProviderService {
         const provider = await healthcareProviderRepository.getDoctorById(providerId);
         if (!provider) throw new Error("Doctor not found.");
 
+        const isUserActive = provider.User?.Status ?? true;
+        const isUserDeleted = provider.User?.IsDeleted ?? false;
+        if (!provider.Status || provider.IsDeleted || !isUserActive || isUserDeleted) {
+            throw new Error("Doctor or associated user account is inactive or not available.");
+        }
+
         // Normalize date to avoid timezone shifts (take only YYYY-MM-DD)
         const dateStr = date.split('T')[0];
         console.log(`[Service] Generating manual slots for Date: ${dateStr}, Slots: ${slots.length}, Breaks: ${breakTimes.length}`);
 
         // 1. Prevent editing past dates
-        const targetDate = new Date(dateStr);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const [targetY, targetM, targetD] = dateStr.split('-').map(Number);
+        const targetDate = new Date(targetY, targetM - 1, targetD);
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         if (targetDate < today) {
             throw new Error("Cannot edit slots for previous days.");
         }
@@ -577,7 +646,7 @@ export class HealthcareProviderService {
         const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
         const dayName = DAYS[targetDate.getDay()];
         const weeklyAvailability = provider.Availability || [];
-        const hasAvailability = weeklyAvailability.some((a: any) => a.DayOfWeek === dayName && !a.IsDeleted);
+        const hasAvailability = weeklyAvailability.some((a: any) => a.DayOfWeek === dayName && !a.IsDeleted && a.Status !== false);
         if (!hasAvailability) {
             throw new Error("DOCTOR_NOT_AVAILABLE_ON_DAY");
         }
@@ -636,6 +705,11 @@ export class HealthcareProviderService {
                 return h * 60 + m;
             };
 
+            const isTargetDateToday = targetDate.getFullYear() === now.getFullYear() &&
+                                      targetDate.getMonth() === now.getMonth() &&
+                                      targetDate.getDate() === now.getDate();
+            const currentMinsNow = now.getHours() * 60 + now.getMinutes();
+
             for (const s of slots) {
                 if (!s.startTime || !s.endTime) {
                     console.warn("[Service] Skipping invalid slot:", s);
@@ -645,6 +719,12 @@ export class HealthcareProviderService {
                 const timeKey = `${s.startTime}-${s.endTime}`;
                 const newStart = timeToMins(s.startTime);
                 const newEnd = timeToMins(s.endTime);
+
+                // Skip past slots if target date is today
+                if (isTargetDateToday && newStart <= currentMinsNow) {
+                    console.log(`[Service] Skipping past slot ${timeKey} for today`);
+                    continue;
+                }
 
                 // 1. Break Overlap Check - Exclude any slot that falls within break timings
                 let overlapsBreak = false;
@@ -722,6 +802,54 @@ export class HealthcareProviderService {
     async updateWeeklySchedule(id: number, data: any): Promise<any> {
         return await AppDataSource.transaction(async (manager) => {
             if (data.timeSlots) {
+                const timeToMinutes = (t: string): number => {
+                    if (!t) return -1;
+                    const parts = t.split(':');
+                    if (parts.length < 2) return -1;
+                    const h = parseInt(parts[0], 10);
+                    const m = parseInt(parts[1], 10);
+                    if (isNaN(h) || isNaN(m)) return -1;
+                    return h * 60 + m;
+                };
+
+                // 1. Validate all incoming weekly time slots
+                for (const day in data.timeSlots) {
+                    const slots = data.timeSlots[day];
+                    if (Array.isArray(slots)) {
+                        for (let i = 0; i < slots.length; i++) {
+                            const slot = slots[i];
+                            if (!slot.StartTime || !slot.EndTime) {
+                                throw new Error(`Invalid slot timing on ${day}: Start time and end time are required.`);
+                            }
+                            const start = timeToMinutes(slot.StartTime);
+                            const end = timeToMinutes(slot.EndTime);
+                            if (start === -1 || end === -1) {
+                                throw new Error(`Invalid slot timing format on ${day}: Start (${slot.StartTime}) or End (${slot.EndTime}).`);
+                            }
+                            if (start === end) {
+                                throw new Error(`Invalid slot timing on ${day}: Start time and end time cannot be the same (${slot.StartTime}).`);
+                            }
+                            if (end < start) {
+                                throw new Error(`Invalid slot timing on ${day}: End time (${slot.EndTime}) must be after start time (${slot.StartTime}).`);
+                            }
+                            if (end - start < 15) {
+                                throw new Error(`Invalid slot timing on ${day}: Slot duration must be at least 15 minutes.`);
+                            }
+                            // Overlap validation
+                            for (let j = i + 1; j < slots.length; j++) {
+                                const other = slots[j];
+                                const otherStart = timeToMinutes(other.StartTime);
+                                const otherEnd = timeToMinutes(other.EndTime);
+                                if (otherStart !== -1 && otherEnd !== -1) {
+                                    if (start < otherEnd && end > otherStart) {
+                                        throw new Error(`Overlapping slots on ${day}: (${slot.StartTime}-${slot.EndTime}) and (${other.StartTime}-${other.EndTime}).`);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Soft-delete all existing availability for this provider
                 await manager
                     .getRepository(HealthcareProviderAvailability)
@@ -735,16 +863,12 @@ export class HealthcareProviderService {
                     const slots = data.timeSlots[day];
                     if (Array.isArray(slots)) {
                         slots.forEach((slot: any) => {
-                            const isOvernight = slot.IsOvernight !== undefined 
-                                ? slot.IsOvernight 
-                                : (slot.EndTime < slot.StartTime);
-                            
                             const availability = manager.create(HealthcareProviderAvailability, {
                                 ProviderId: id,
                                 DayOfWeek: day,
                                 StartTime: slot.StartTime,
                                 EndTime: slot.EndTime,
-                                IsOvernight: isOvernight
+                                IsOvernight: false
                             });
                             availabilityRecords.push(availability);
                         });
@@ -816,8 +940,35 @@ export class HealthcareProviderService {
         return await AppDataSource.transaction(async (manager) => {
             await manager.getRepository(HealthcareProvider).update(id, {
                 Status: status,
+                IsDeleted: false,
                 UpdatedAt: new Date()
             });
+
+            // Synchronize User account status and deletion flag
+            if (status) {
+                // When activating doctor, also restore and activate the underlying User account
+                await manager.getRepository(User).update(provider.UserId, {
+                    Status: true,
+                    IsDeleted: false,
+                    UpdatedAt: new Date()
+                });
+            } else {
+                // When deactivating, check if the user has any other active providers in other hospitals
+                const otherActiveCount = await manager.getRepository(HealthcareProvider).count({
+                    where: {
+                        UserId: provider.UserId,
+                        Status: true,
+                        IsDeleted: false,
+                        Id: Not(id)
+                    }
+                });
+                if (otherActiveCount === 0) {
+                    await manager.getRepository(User).update(provider.UserId, {
+                        Status: false,
+                        UpdatedAt: new Date()
+                    });
+                }
+            }
 
             // If deactivated, mark unbooked future schedule slots as unavailable
             if (!status) {
@@ -846,11 +997,13 @@ export class HealthcareProviderService {
             }
 
             // Update matching UserRole for this hospital if exists
-            const userRoles = await userRoleRepository.findByUserId(provider.UserId);
-            const matchingRole = userRoles.find(r => r.HospitalId === provider.HospitalId);
+            const matchingRole = await manager.getRepository(UserRole).findOne({
+                where: { UserId: provider.UserId, HospitalId: provider.HospitalId }
+            });
             if (matchingRole) {
                 await manager.getRepository(UserRole).update(matchingRole.UserRoleId, {
                     Status: status,
+                    IsDeleted: false,
                     UpdatedAt: new Date()
                 });
             }

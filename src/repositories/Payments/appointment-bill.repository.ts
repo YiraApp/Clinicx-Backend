@@ -670,6 +670,8 @@ export class AppointmentBillRepository {
                         unitPrice: Number(item.UnitPrice),
                         quantity: Number(item.Quantity),
                         discountAmount: Number(item.DiscountAmount),
+                        gstPercentage: Number(item.GstPercentage || 0),
+                        gstAmount: Number(item.GstAmount || 0),
                         totalAmount: Number(item.TotalAmount)
                     })),
                     payments: apptPayments.map(p => ({
@@ -858,9 +860,9 @@ export class AppointmentBillRepository {
                     sgstAmount = parseFloat(((customGstAmount * sgstPct) / gstPct).toFixed(2));
                     igstAmount = parseFloat(((customGstAmount * igstPct) / gstPct).toFixed(2));
                 } else {
-                    cgstAmount = parseFloat((customGstAmount / 3).toFixed(2));
-                    sgstAmount = parseFloat((customGstAmount / 3).toFixed(2));
-                    igstAmount = parseFloat((customGstAmount / 3).toFixed(2));
+                    cgstAmount = parseFloat((customGstAmount / 2).toFixed(2));
+                    sgstAmount = parseFloat((customGstAmount - cgstAmount).toFixed(2));
+                    igstAmount = 0;
                 }
             } else {
                 cgstAmount = parseFloat(((finalTaxable * cgstPct) / 100).toFixed(2));

@@ -11,7 +11,7 @@ export class PasswordResetTokenRepository {
 
     async findByToken(token: string): Promise<PasswordResetToken | null> {
         return await this.repo.findOne({
-            where: { Token: token, IsUsed: false },
+            where: { Token: token },
             relations: ["User"]
         });
     }

@@ -4,7 +4,31 @@ import { PushCampaign } from "../../models/Notifications/push-campaign.model.js"
 export class PushCampaignService {
     private schedulerInterval: NodeJS.Timeout | null = null;
 
+    private getISTTime(date: Date = new Date()): string {
+        try {
+            return date.toLocaleTimeString("en-GB", {
+                timeZone: "Asia/Kolkata",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+            });
+        } catch {
+            const hours = String(date.getHours()).padStart(2, "0");
+            const minutes = String(date.getMinutes()).padStart(2, "0");
+            return `${hours}:${minutes}`;
+        }
+    }
+
     private formatCampaign(c: PushCampaign) {
+        let displayScheduledTime = c.ScheduledTime || null;
+        if (c.ScheduleType === "now") {
+            if (c.LastSentAt) {
+                displayScheduledTime = this.getISTTime(new Date(c.LastSentAt));
+            } else if (!c.ScheduledTime || c.ScheduledTime === "10:00") {
+                displayScheduledTime = null;
+            }
+        }
+
         return {
             id: c.Id,
             title: c.Title,
@@ -13,7 +37,7 @@ export class PushCampaignService {
             hasImage: c.HasImage,
             scheduleType: c.ScheduleType,
             scheduledDate: c.ScheduledDate ? new Date(c.ScheduledDate).toISOString().slice(0, 10) : null,
-            scheduledTime: c.ScheduledTime || null,
+            scheduledTime: displayScheduledTime,
             recurringPattern: c.RecurringPattern || null,
             recurringDays: c.RecurringDays || null,
             redirectionType: c.RedirectionType,
@@ -92,6 +116,10 @@ export class PushCampaignService {
 
         const hasImage = Boolean(data.imageUrl && data.imageUrl.trim().length > 0);
         const scheduleType = (data.scheduleType || "now").toLowerCase();
+        let scheduledTime = data.scheduledTime?.trim() || null;
+        if (scheduleType === "now") {
+            scheduledTime = this.getISTTime();
+        }
 
         // A "send now" campaign on a server that cannot send push would be saved as SENT
         // without reaching anyone. Refuse it before anything is stored.
@@ -109,7 +137,7 @@ export class PushCampaignService {
             HasImage: hasImage,
             ScheduleType: scheduleType,
             ScheduledDate: data.scheduledDate ? new Date(data.scheduledDate) : null,
-            ScheduledTime: data.scheduledTime?.trim() || null,
+            ScheduledTime: scheduledTime,
             RecurringPattern: data.recurringPattern?.trim() || null,
             RecurringDays: data.recurringDays?.trim() || null,
             RedirectionType: data.redirectionType?.toLowerCase() === "browser" ? "browser" : "in_app",
@@ -152,7 +180,13 @@ export class PushCampaignService {
         }
         if (data.scheduleType !== undefined) payload.ScheduleType = data.scheduleType.toLowerCase();
         if (data.scheduledDate !== undefined) payload.ScheduledDate = data.scheduledDate ? new Date(data.scheduledDate) : null;
-        if (data.scheduledTime !== undefined) payload.ScheduledTime = data.scheduledTime?.trim() || null;
+        if (data.scheduledTime !== undefined) {
+            if (payload.ScheduleType === "now" || data.scheduleType === "now") {
+                payload.ScheduledTime = data.scheduledTime?.trim() === "10:00" ? null : (data.scheduledTime?.trim() || null);
+            } else {
+                payload.ScheduledTime = data.scheduledTime?.trim() || null;
+            }
+        }
         if (data.recurringPattern !== undefined) payload.RecurringPattern = data.recurringPattern?.trim() || null;
         if (data.recurringDays !== undefined) payload.RecurringDays = data.recurringDays?.trim() || null;
         if (data.redirectionType !== undefined) payload.RedirectionType = data.redirectionType.toLowerCase() === "browser" ? "browser" : "in_app";
@@ -325,10 +359,13 @@ export class PushCampaignService {
         // 3. Update campaign stats
         const newCount = (campaign.TotalSentCount || 0) + fcmSuccess;
         const newStatus = campaign.ScheduleType === "scheduled" ? "COMPLETED" : campaign.Status;
+        const now = new Date();
+        const istTime = this.getISTTime(now);
 
         await pushCampaignRepository.update(campaign.Id, {
             TotalSentCount: newCount,
-            LastSentAt: new Date(),
+            LastSentAt: now,
+            ScheduledTime: campaign.ScheduleType === "now" ? istTime : campaign.ScheduledTime,
             Status: newStatus,
         });
 

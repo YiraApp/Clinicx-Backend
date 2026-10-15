@@ -525,8 +525,18 @@ export class PaymentService {
         const { Payment } = await import("../../models/Payments/payment.model.js");
         const payRepo = AppDataSource.getRepository(Payment);
 
+        const { HospitalPaymentConfiguration } = await import("../../models/Organizations/hospital-payment-configuration.model.js");
+        const { In } = await import("typeorm/index.js");
+        const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
+
+        const hospitalIds = Array.from(new Set(data.map(b => b.HospitalId).filter(Boolean)));
+        const configs = hospitalIds.length > 0 ? await configRepo.find({ where: { HospitalId: In(hospitalIds), IsDeleted: false } }) : [];
+        const configMap = new Map<number, any>(configs.map(c => [c.HospitalId, c]));
+
         const formatted = await Promise.all(data.map(async (b) => {
             const provider = b.Provider || b.Appointment?.Doctor;
+            const config = b.HospitalId ? configMap.get(b.HospitalId) : null;
+            const hospitalGstIn = config?.GstNumber || (b.Hospital as any)?.GstNumber || null;
 
             // Find latest payment record linked to this bill or appointment
             let paymentMethod: string | null = null;
@@ -561,12 +571,20 @@ export class PaymentService {
                 billNumber: b.BillNumber,
                 billType: b.BillType,
                 billStatus: b.BillStatus,
-                subTotal: b.SubTotal,
-                discountAmount: b.DiscountAmount,
-                gstAmount: b.GstAmount,
-                totalAmount: b.TotalAmount,
-                paidAmount: b.PaidAmount,
-                dueAmount: b.DueAmount,
+                subTotal: Number(b.SubTotal || 0),
+                discountAmount: Number(b.DiscountAmount || 0),
+                gstAmount: Number(b.GstAmount || 0),
+                cgstAmount: Number(b.CgstAmount || 0),
+                sgstAmount: Number(b.SgstAmount || 0),
+                igstAmount: Number(b.IgstAmount || 0),
+                gstPercentage: config?.GstPercentage !== undefined ? Number(config.GstPercentage) : 0,
+                cgstPercentage: config?.CgstPercentage !== undefined ? Number(config.CgstPercentage) : 0,
+                sgstPercentage: config?.SgstPercentage !== undefined ? Number(config.SgstPercentage) : 0,
+                igstPercentage: config?.IgstPercentage !== undefined ? Number(config.IgstPercentage) : 0,
+                hospitalGstIn: hospitalGstIn,
+                totalAmount: Number(b.TotalAmount || 0),
+                paidAmount: Number(b.PaidAmount || 0),
+                dueAmount: Number(b.DueAmount || 0),
                 createdAt: b.CreatedAt,
                 appointmentId: b.AppointmentId,
                 appointmentDate: b.Appointment?.AppointmentDate || null,
@@ -586,10 +604,12 @@ export class PaymentService {
                 items: (b.BillItems || []).map(i => ({
                     itemName: i.ItemName,
                     itemType: i.ItemType,
-                    unitPrice: i.UnitPrice,
-                    quantity: i.Quantity,
-                    discountAmount: i.DiscountAmount || 0,
-                    totalAmount: i.TotalAmount,
+                    unitPrice: Number(i.UnitPrice || 0),
+                    quantity: Number(i.Quantity || 1),
+                    discountAmount: Number(i.DiscountAmount || 0),
+                    gstPercentage: Number(i.GstPercentage || 0),
+                    gstAmount: Number(i.GstAmount || 0),
+                    totalAmount: Number(i.TotalAmount || 0),
                     appointmentId: i.AppointmentId || null
                 }))
             };

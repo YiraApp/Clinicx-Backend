@@ -365,10 +365,19 @@ export class HospitalSettingsService {
             relations: ["Availability", "User"]
         });
 
+        // Filter out doctors whose user account is inactive or deleted
+        const activeProviders = providers.filter(p => 
+            p.Status && 
+            !p.IsDeleted && 
+            p.User && 
+            p.User.Status !== false && 
+            !p.User.IsDeleted
+        );
+
         const effectiveBuffer = setting.TakeBuffer ? Number(setting.BufferMinutes || 0) : 0;
         const results = [];
 
-        for (const doctor of providers) {
+        for (const doctor of activeProviders) {
             const docName = (doctor as any).Name || (doctor.User ? `${doctor.User.FirstName || ""} ${doctor.User.LastName || ""}`.trim() : `Doctor #${doctor.Id}`);
             
             if (doctor.Availability && doctor.Availability.length > 0) {

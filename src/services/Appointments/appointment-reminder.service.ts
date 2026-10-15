@@ -85,9 +85,13 @@ export class AppointmentReminderService {
 
             // 2. Format Variables
             const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Patient";
-            const doctorName = appt.Doctor 
-                ? `Dr. ${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim()
-                : "your doctor";
+            let rawDoctorName = appt.Doctor 
+                ? `${appt.Doctor.FirstName || ""} ${appt.Doctor.LastName || ""}`.trim() 
+                : "";
+            while (/^(?:dr\.?|doctor)\s+/i.test(rawDoctorName)) {
+                rawDoctorName = rawDoctorName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+            }
+            const doctorName = rawDoctorName ? `Dr. ${rawDoctorName}` : "your doctor";
             
             const dateObj = new Date(appt.AppointmentDate);
             const dateStr = !isNaN(dateObj.getTime())

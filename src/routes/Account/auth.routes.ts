@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { login, refreshToken, logout, forgotPassword, resetPassword } from "../../controllers/Account/auth.controller.js";
+import { login, refreshToken, logout, forgotPassword, resetPassword, validateResetToken } from "../../controllers/Account/auth.controller.js";
 import { userController } from "../../controllers/Account/user.controller.js";
 
 const authRouter = Router();
@@ -15,5 +15,7 @@ authRouter.post("/register", userController.register.bind(userController));
 authRouter.post("/logout", logout);
 authRouter.post("/forgot-password", forgotPassword);
 authRouter.post("/reset-password", resetPassword);
+authRouter.post("/validate-reset-token", validateResetToken);
+authRouter.get("/validate-reset-token/:token", validateResetToken);
 
 export { authRouter };
