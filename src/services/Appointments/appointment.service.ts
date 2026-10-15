@@ -496,6 +496,7 @@ export class AppointmentService {
         treatmentPlanIds?: string[];
         customTreatmentPlans?: { name: string; amount: number; description?: string }[];
         discountAmount?: number;
+        notes?: string;
     }): Promise<Appointment> {
 
         if (!data.orgId || !data.hospitalId) {
@@ -519,6 +520,41 @@ export class AppointmentService {
             if (!slot) throw new Error("Slot not found.");
             if (slot.IsBooked) throw new Error("Slot is already booked.");
             if (!slot.IsAvailable) throw new Error("Slot is blocked.");
+
+            // 1b. Check if slot date or time is in the past
+            const now = new Date();
+            const slotDateStr = slot.SlotDate instanceof Date 
+                ? slot.SlotDate.toISOString().split('T')[0] 
+                : String(slot.SlotDate).split('T')[0];
+            const [y, m, d] = slotDateStr.split('-').map(Number);
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const slotDay = new Date(y, m - 1, d);
+
+            if (slotDay < today) {
+                throw new Error("Appointment booking is not allowed for past dates.");
+            }
+            if (slotDay.getTime() === today.getTime() && slot.StartTime) {
+                let sh = 0, sm = 0;
+                const match12 = slot.StartTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+                if (match12) {
+                    sh = parseInt(match12[1], 10);
+                    sm = parseInt(match12[2], 10);
+                    const ampm = match12[4].toUpperCase();
+                    if (ampm === "PM" && sh < 12) sh += 12;
+                    if (ampm === "AM" && sh === 12) sh = 0;
+                } else {
+                    const match24 = slot.StartTime.match(/^(\d{1,2}):(\d{2})/);
+                    if (match24) {
+                        sh = parseInt(match24[1], 10);
+                        sm = parseInt(match24[2], 10);
+                    }
+                }
+                const slotMinutes = sh * 60 + sm;
+                const currentMinutes = now.getHours() * 60 + now.getMinutes();
+                if (slotMinutes <= currentMinutes) {
+                    throw new Error("Appointment booking is not allowed for past time slots.");
+                }
+            }
 
             // 2. Generate Meeting URL if teleconsultation
             let meetingUrl: string | undefined = undefined;
@@ -550,6 +586,7 @@ export class AppointmentService {
                 StartTime: data.startTime,
                 EndTime: data.endTime,
                 Reason: data.reason,
+                Notes: data.notes || undefined,
                 AppointmentType: data.appointmentType || "Consultation",
                 Status: data.status || "Scheduled",
                 IsTeleConsultation: isTele,
@@ -744,10 +781,13 @@ export class AppointmentService {
                     }
                 }
 
-                if (!doctorName) doctorName = "Doctor";
-                if (!doctorName.toLowerCase().startsWith("dr.")) {
-                    doctorName = `Dr. ${doctorName}`;
+                // Clean doctor name so "Dr." is not duplicated.
+                // Meta WhatsApp templates (video_call_template, appointment_conformation) already include "Dr. {{2}}" in their template text.
+                let cleanDoctorName = (doctorName || "").replace(/^(?:dr\.?|doctor)\s+/gi, "").trim();
+                while (/^(?:dr\.?|doctor)\s+/i.test(cleanDoctorName)) {
+                    cleanDoctorName = cleanDoctorName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
                 }
+                if (!cleanDoctorName) cleanDoctorName = "Doctor";
 
                 const hospitalName = appt.Hospital?.Name || "Yira Hospitals";
 
@@ -806,7 +846,7 @@ export class AppointmentService {
                                 type: "body",
                                 parameters: [
                                     { type: "text", text: patientName },
-                                    { type: "text", text: doctorName },
+                                    { type: "text", text: cleanDoctorName },
                                     { type: "text", text: hospitalName },
                                     { type: "text", text: dateStr },
                                     { type: "text", text: timeStr }
@@ -852,7 +892,10 @@ export class AppointmentService {
                             : cleanDocDigits;
 
                         let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim();
-                        docDisplayName = docDisplayName.replace(/^dr\.?\s+/i, "").trim() || "Doctor";
+                        while (/^(?:dr\.?|doctor)\s+/i.test(docDisplayName)) {
+                            docDisplayName = docDisplayName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+                        }
+                        if (!docDisplayName) docDisplayName = "Doctor";
 
                         const doctorComponents = [
                             {
@@ -1129,7 +1172,10 @@ export class AppointmentService {
 
             // Parameter 2: Doctor Name (strip leading 'Dr.' since template says 'with Dr. {{2}}')
             let docName = `${appt.Doctor?.FirstName || ""} ${appt.Doctor?.LastName || ""}`.trim() || "Doctor";
-            docName = docName.replace(/^dr\.?\s+/i, "");
+            while (/^(?:dr\.?|doctor)\s+/i.test(docName)) {
+                docName = docName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+            }
+            if (!docName) docName = "Doctor";
 
             // Parameter 3: Hospital Name
             const hospitalName = appt.Hospital?.Name || "Yira Hospitals";
@@ -1204,12 +1250,19 @@ export class AppointmentService {
         }
     }
 
-    async updateAppointmentStatus(appointmentId: number, status: string) {
+    async updateAppointmentStatus(appointmentId: number, status?: string, notes?: string) {
         const result = await AppDataSource.transaction(async (manager) => {
-            // Update appointment status
-            await manager.update(Appointment, appointmentId, { Status: status, UpdatedAt: new Date() });
+            // Update appointment status and notes
+            const updateFields: any = { UpdatedAt: new Date() };
+            if (status) {
+                updateFields.Status = status;
+            }
+            if (notes !== undefined) {
+                updateFields.Notes = notes;
+            }
+            await manager.update(Appointment, appointmentId, updateFields);
 
-            const statusLower = status.toLowerCase();
+            const statusLower = status ? status.toLowerCase() : "";
 
             // If status is "Arrived", add to queue if not already there
             if (statusLower === AppointmentStatus.Arrived.toLowerCase()) {
@@ -1275,7 +1328,7 @@ export class AppointmentService {
             }
         });
 
-        if (status.toLowerCase() === AppointmentStatus.Cancelled.toLowerCase()) {
+        if (status && status.toLowerCase() === AppointmentStatus.Cancelled.toLowerCase()) {
             try {
                 await this.sendAppointmentCancellationWhatsApp(appointmentId);
             } catch (err: any) {
@@ -1347,9 +1400,13 @@ export class AppointmentService {
                 });
 
                 const patientName = `${enriched.User?.FirstName || ""} ${enriched.User?.LastName || ""}`.trim() || "Patient";
-                const doctorName = enriched.Doctor 
-                    ? `Dr. ${enriched.Doctor.FirstName || ""} ${enriched.Doctor.LastName || ""}`.trim()
-                    : "your doctor";
+                let rawDoctorName = enriched.Doctor 
+                    ? `${enriched.Doctor.FirstName || ""} ${enriched.Doctor.LastName || ""}`.trim() 
+                    : "";
+                while (/^(?:dr\.?|doctor)\s+/i.test(rawDoctorName)) {
+                    rawDoctorName = rawDoctorName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+                }
+                const doctorName = rawDoctorName ? `Dr. ${rawDoctorName}` : "your doctor";
 
                 const dateObj = new Date(enriched.AppointmentDate);
                 const dateStr = !isNaN(dateObj.getTime())

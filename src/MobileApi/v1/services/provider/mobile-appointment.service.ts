@@ -45,21 +45,22 @@ export class MobileAppointmentService {
             .select("COUNT(*)", "todayCount")
             .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('confirmed', 'scheduled') THEN 1 END)", "confirmedCount")
             .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'requested') THEN 1 END)", "pendingCount")
-            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' THEN 1 END)", "completedCount")
-            .where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
+            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' THEN 1 END)", "completedCount");
 
-        if (hospitalId && hospitalId > 0) {
-            if (isDoctor) {
-                const validHospIds = Array.from(new Set([...affiliatedHospitalIds, hospitalId]));
-                statsQuery.andWhere("(apt.DoctorId = :doctorId OR apt.HospitalId IN (:...validHospIds) OR apt.HospitalId IS NULL)", { doctorId, validHospIds });
-            } else {
+        if (isDoctor) {
+            statsQuery.where("apt.DoctorId = :doctorId", { doctorId });
+            if (hospitalId && hospitalId > 0) {
+                statsQuery.andWhere("apt.HospitalId = :hospitalId", { hospitalId });
+            }
+            if (orgId && orgId > 0) {
+                statsQuery.andWhere("apt.OrgId = :orgId", { orgId });
+            }
+        } else {
+            statsQuery.where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
+            if (hospitalId && hospitalId > 0) {
                 statsQuery.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
             }
-        }
-        if (orgId && orgId > 0) {
-            if (isDoctor) {
-                statsQuery.andWhere("(apt.DoctorId = :doctorId OR apt.OrgId = :orgId OR apt.OrgId IS NULL)", { doctorId, orgId });
-            } else {
+            if (orgId && orgId > 0) {
                 statsQuery.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
             }
         }
@@ -111,21 +112,22 @@ export class MobileAppointmentService {
         // 2. Fetch appointments list
         const query = appointmentRepo.createQueryBuilder("apt")
             .leftJoinAndSelect("apt.User", "user")
-            .leftJoinAndSelect("apt.Doctor", "doctor")
-            .where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
+            .leftJoinAndSelect("apt.Doctor", "doctor");
 
-        if (hospitalId && hospitalId > 0) {
-            if (isDoctor) {
-                const validHospIds = Array.from(new Set([...affiliatedHospitalIds, hospitalId]));
-                query.andWhere("(apt.DoctorId = :doctorId OR apt.HospitalId IN (:...validHospIds) OR apt.HospitalId IS NULL)", { doctorId, validHospIds });
-            } else {
+        if (isDoctor) {
+            query.where("apt.DoctorId = :doctorId", { doctorId });
+            if (hospitalId && hospitalId > 0) {
+                query.andWhere("apt.HospitalId = :hospitalId", { hospitalId });
+            }
+            if (orgId && orgId > 0) {
+                query.andWhere("apt.OrgId = :orgId", { orgId });
+            }
+        } else {
+            query.where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
+            if (hospitalId && hospitalId > 0) {
                 query.andWhere("(apt.HospitalId = :hospitalId OR apt.HospitalId IS NULL)", { hospitalId });
             }
-        }
-        if (orgId && orgId > 0) {
-            if (isDoctor) {
-                query.andWhere("(apt.DoctorId = :doctorId OR apt.OrgId = :orgId OR apt.OrgId IS NULL)", { doctorId, orgId });
-            } else {
+            if (orgId && orgId > 0) {
                 query.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
             }
         }
@@ -213,6 +215,8 @@ export class MobileAppointmentService {
                 duration: `${durationMins} MIN`,
                 patientName,
                 doctorName,
+                doctorId: apt.DoctorId || null,
+                slotId: apt.SlotId || null,
                 phoneNumber: phone,
                 type: apt.IsTeleConsultation ? "videoCall" : "inClinic",
                 category: apt.AppointmentType || apt.Reason || "Consultation",
@@ -278,11 +282,15 @@ export class MobileAppointmentService {
         }
 
         const last10Digits = cleanPhone.slice(-10);
-
         // 1. Verify Slot Availability & Ensure Time Slot Has Not Passed
         const now = new Date();
         const [appYear, appMonth, appDay] = (data.appointmentDate || "").split("-").map(Number);
         if (appYear && appMonth && appDay) {
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const appDate = new Date(appYear, appMonth - 1, appDay);
+            if (appDate < today) {
+                throw new Error("Appointment booking is not allowed for previous dates.");
+            }
             const isToday = appYear === now.getFullYear() && (appMonth - 1) === now.getMonth() && appDay === now.getDate();
             if (isToday) {
                 const timeParts = (data.startTime || "").split(":");
@@ -291,14 +299,14 @@ export class MobileAppointmentService {
                     const slotMin = parseInt(timeParts[1], 10);
                     const currentMinutes = now.getHours() * 60 + now.getMinutes();
                     const slotMinutes = slotHour * 60 + slotMin;
-                    if (slotMinutes < currentMinutes) {
+                    if (slotMinutes <= currentMinutes) {
                         const reasonLower = (data.reason || "").toLowerCase();
                         if (reasonLower.includes("qr") || reasonLower.includes("scan") || reasonLower.includes("connect")) {
                             const curH = String(now.getHours()).padStart(2, "0");
                             const curM = String(now.getMinutes()).padStart(2, "0");
                             data.startTime = `${curH}:${curM}:00`;
                         } else {
-                            throw new Error("Cannot book an appointment for a time slot that has already passed.");
+                            throw new Error("Appointment booking is not allowed for past time slots.");
                         }
                     }
                 }
@@ -808,7 +816,14 @@ export class MobileAppointmentService {
                     const cleanDigits = patientUser.PhoneNumber.replace(/\D/g, "");
                     const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
 
-                    const formattedDoctorName = doctorName.startsWith("Dr.") || doctorName.startsWith("Dr ") ? doctorName : `Dr. ${doctorName}`;
+                    // Clean doctor name so "Dr." is not duplicated.
+                    // Meta WhatsApp templates (video_call_template, appointment_conformation) already include "Dr. {{2}}" in their template text.
+                    let cleanDoctorName = (doctorName || "").replace(/^(?:dr\.?|doctor)\s+/gi, "").trim();
+                    while (/^(?:dr\.?|doctor)\s+/i.test(cleanDoctorName)) {
+                        cleanDoctorName = cleanDoctorName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+                    }
+                    if (!cleanDoctorName) cleanDoctorName = "Doctor";
+
                     const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
 
                     let redirectionUrlId = "";
@@ -842,7 +857,7 @@ export class MobileAppointmentService {
                             type: "body",
                             parameters: [
                                 { type: "text", text: patientName },
-                                { type: "text", text: formattedDoctorName },
+                                { type: "text", text: cleanDoctorName },
                                 { type: "text", text: hospitalName },
                                 { type: "text", text: dateStr },
                                 { type: "text", text: timeDisplay }
@@ -863,11 +878,11 @@ export class MobileAppointmentService {
 
                     try {
                         await whatsappService.sendTemplateMessage(normalizedPhone, templateName, "en", components);
-                        console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone} for ${patientName}`);
+                        console.log(`[MobileAppointmentService] WhatsApp template '${templateName}' sent to ${normalizedPhone} for ${patientName} with Dr. ${cleanDoctorName}`);
                     } catch (templateErr) {
                         console.warn(`[MobileAppointmentService] WhatsApp template message failed, sending fallback text:`, templateErr);
                         const joinCallInfo = appt.MeetingUrl ? `\nJoin Call: ${appt.MeetingUrl}` : "";
-                        const fallbackMessage = `Hello ${patientName},\n\nYour ${appt.IsTeleConsultation ? 'online consultation ' : ''}appointment with ${formattedDoctorName} at ${hospitalName} is confirmed for ${dateStr} at ${timeDisplay}.${joinCallInfo}\n\nThank you for choosing ${hospitalName}!`;
+                        const fallbackMessage = `Hello ${patientName},\n\nYour ${appt.IsTeleConsultation ? 'online consultation ' : ''}appointment with Dr. ${cleanDoctorName} at ${hospitalName} is confirmed for ${dateStr} at ${timeDisplay}.${joinCallInfo}\n\nThank you for choosing ${hospitalName}!`;
                         await whatsappService.sendTextMessage(normalizedPhone, fallbackMessage);
                         console.log(`[MobileAppointmentService] WhatsApp text message sent to ${normalizedPhone}`);
                     }
@@ -891,7 +906,10 @@ export class MobileAppointmentService {
                         : cleanDocDigits;
 
                     let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() || doctorName;
-                    docDisplayName = docDisplayName.replace(/^dr\.?\s+/i, "").trim() || "Doctor";
+                    while (/^(?:dr\.?|doctor)\s+/i.test(docDisplayName)) {
+                        docDisplayName = docDisplayName.replace(/^(?:dr\.?|doctor)\s+/i, "").trim();
+                    }
+                    if (!docDisplayName) docDisplayName = "Doctor";
 
                     const doctorComponents = [
                         {

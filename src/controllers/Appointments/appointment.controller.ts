@@ -113,10 +113,11 @@ export class AppointmentController {
 
     async updateStatus(req: Request, res: Response) {
         try {
-            const id = String(req.params.id);
-            const status = String(req.body.status);
-            await appointmentService.updateAppointmentStatus(parseInt(id), status);
-            return res.json(ApiResponse.success(null, "Appointment status updated successfully."));
+            const id = String(req.params.id || req.body.appointmentId || req.body.id);
+            const status = req.body.status ? String(req.body.status) : undefined;
+            const notes = req.body.notes !== undefined ? String(req.body.notes ?? "") : undefined;
+            await appointmentService.updateAppointmentStatus(parseInt(id), status, notes);
+            return res.json(ApiResponse.success(null, "Appointment updated successfully."));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));
         }

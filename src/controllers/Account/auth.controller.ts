@@ -60,6 +60,19 @@ export const forgotPassword = async (req: Request, res: Response) => {
     }
 };
 
+export const validateResetToken = async (req: Request, res: Response) => {
+    try {
+        const token = (req.params.token || req.query.token || req.body.token) as string;
+        if (!token) {
+            return res.status(400).json(ApiResponse.error("Token is required"));
+        }
+        const result = await authService.validateResetToken(token);
+        return res.json(ApiResponse.success(result, "Reset token is valid"));
+    } catch (error: any) {
+        return res.status(400).json(ApiResponse.error(error.message));
+    }
+};
+
 /**
  * Handles password reset using a token.
  */

@@ -3,7 +3,7 @@ import { login, sendOTP, verifyLogin, resendOTP, refreshToken, logout, forgotPas
 import { registerDeviceToken } from "../controllers/userdevice.controller.js";
 import { getLatestAppVersion, registerNewAppVersion, getVersionAndTokenStatus } from "../controllers/app-version.controller.js";
 import { getProviderDashboard, getClinicalData, getPatientsList, getPatientsFilters, getPatientOverview, getPatientProfile, getProviderProfile, updateProviderProfile, uploadProviderProfilePhoto, getSidebarMenu, toggleFavoritePatient, getFavoritePatientsList, deactivateUserAccount } from "../controllers/provider/dashboard.controller.js";
-import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone, addDependentPatient, getHospitalDoctors } from "../controllers/provider/appointment.controller.js";
+import { getAppointmentDashboard, bookAppointment, updateAppointmentStatus, rescheduleAppointment, getMobileDoctorSlots, deployMobileDoctorSlots, blockMobileDoctorSlot, getTreatmentPlans, getPatientAppointments, getPatientAccountsByPhone, addDependentPatient, getHospitalDoctors } from "../controllers/provider/appointment.controller.js";
 import { mobileSnomedController } from "../controllers/snomed.controller.js";
 import { mobileClinicalNoteController } from "../controllers/provider/clinical-note.controller.js";
 import { mobileMedicalRecordController } from "../controllers/provider/medical-record.controller.js";
@@ -43,6 +43,7 @@ authRouter.post("/dashboard", authMiddleware, getProviderDashboard);
 authRouter.post("/appointment-dashboard", authMiddleware, getAppointmentDashboard);
 authRouter.post("/book-appointment", authMiddleware, bookAppointment);
 authRouter.post("/update-appointment-status", authMiddleware, updateAppointmentStatus);
+authRouter.post("/reschedule-appointment", authMiddleware, rescheduleAppointment);
 authRouter.post("/doctor-slots", authMiddleware, getMobileDoctorSlots);
 authRouter.post("/doctor-slots/deploy", authMiddleware, deployMobileDoctorSlots);
 authRouter.post("/doctor-slots/block", authMiddleware, blockMobileDoctorSlot);

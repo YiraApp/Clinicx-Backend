@@ -305,6 +305,27 @@ export class AuthService implements IAuthService {
         };
     }
 
+    async validateResetToken(token: string): Promise<{ valid: boolean; email?: string }> {
+        const resetTokenRecord = await passwordResetTokenRepository.findByToken(token);
+
+        if (!resetTokenRecord) {
+            throw new Error("Invalid or expired reset token");
+        }
+
+        if (resetTokenRecord.ExpiryTime < new Date()) {
+            throw new Error("Reset token has expired");
+        }
+
+        if (resetTokenRecord.IsUsed) {
+            throw new Error("Reset token has already been used");
+        }
+
+        return {
+            valid: true,
+            email: resetTokenRecord.User?.Email || undefined
+        };
+    }
+
     async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
         const resetTokenRecord = await passwordResetTokenRepository.findByToken(token);
 

@@ -368,17 +368,16 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             .leftJoinAndSelect("a.Doctor", "d")
             .leftJoinAndSelect("a.Hospital", "h")
             .leftJoinAndSelect("a.Organization", "o")
-            .where("a.Status != :cancelledStatus", { cancelledStatus: "Cancelled" })
             .orderBy("a.AppointmentDate", "DESC")
             .addOrderBy("a.StartTime", "DESC")
             .take(50);
 
         if (userId) {
-            qb.andWhere("a.UserId = :userId", { userId });
+            qb.where("a.UserId = :userId", { userId });
         } else if (patientPhone) {
             const cleanPhone = String(patientPhone).replace(/\D/g, "");
             const last10 = cleanPhone.slice(-10);
-            qb.andWhere("(u.PhoneNumber = :cleanPhone OR u.PhoneNumber LIKE :last10)", { cleanPhone, last10: `%${last10}` });
+            qb.where("(u.PhoneNumber = :cleanPhone OR u.PhoneNumber LIKE :last10)", { cleanPhone, last10: `%${last10}` });
         }
 
         const appts = await qb.getMany();
@@ -400,6 +399,9 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             hospitalName: a.Hospital?.Name || "Healthcare Facility",
             organizationId: a.OrgId ?? a.Organization?.Id ?? null,
             organizationName: a.Organization?.Name || "Organization",
+            doctorId: a.DoctorId ?? a.Doctor?.Id ?? null,
+            slotId: a.SlotId ?? null,
+            patientUserId: a.UserId ?? a.User?.Id ?? null,
             doctorName: a.Doctor ? `Dr. ${a.Doctor.FirstName || ''} ${a.Doctor.LastName || ''}`.trim() : "Doctor",
             patientName: a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : "Patient",
             relation: (a.User?.Relation && a.User?.Relation.toLowerCase() !== "self") ? a.User.Relation : (a.User?.IsPrimary ? "Self" : "Dependent"),
@@ -561,7 +563,7 @@ export const getHospitalDoctors = async (req: Request, res: Response) => {
                     subSpecialty: d.SubSpecialty || d.subSpecialty || null,
                     department: d.Department || d.department || "General",
                     qualification: d.Qualification || d.qualification || "MBBS",
-                    experience: d.Experience || d.experience || "5+ Years Exp.",
+                    experience: d.Experience || d.experience || "",
                     registrationNumber: d.RegistrationNumber || d.registrationNumber || null,
                     bio: d.Bio || d.bio || null,
                     hospitalId: hospitalId,
@@ -581,5 +583,20 @@ export const getHospitalDoctors = async (req: Request, res: Response) => {
             status: false,
             message: error.message || "Failed to fetch doctors for hospital"
         });
+    }
+};
+
+
+export const rescheduleAppointment = async (req: Request, res: Response) => {
+    try {
+        const appointmentId = req.body.appointmentId || req.body.id || req.params.id;
+        if (!appointmentId) {
+            return res.status(400).json({ status: false, message: "appointmentId is required" });
+        }
+        const { appointmentService } = await import("../../../../services/Appointments/appointment.service.js");
+        const result = await appointmentService.rescheduleAppointment(parseInt(String(appointmentId), 10), req.body);
+        return res.json(ApiResponse.success(result, "Appointment rescheduled successfully."));
+    } catch (error: any) {
+        return res.status(400).json({ status: false, message: error.message || "Failed to reschedule appointment" });
     }
 };
