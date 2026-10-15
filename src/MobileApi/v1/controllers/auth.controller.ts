@@ -410,7 +410,7 @@ export const logout = async (req: Request, res: Response) => {
     try {
         const { refreshToken, fcmToken, deviceId, one, logoutAll, allDevices } = req.body;
 
-        let userId: string | null = null;
+        let userId: string | null = (req as any).userId || (req.body && req.body.userId) || (req.headers && (req.headers['x-user-id'] as string)) || null;
         if (refreshToken) {
             // First decode using JWT utility to see if payload is valid
             const payload = verifyRefreshToken(refreshToken);
