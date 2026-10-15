@@ -130,15 +130,6 @@ export class PushCampaignService {
             }
         }
 
-        // A "send now" campaign on a server that cannot send push would be saved as SENT
-        // without reaching anyone. Refuse it before anything is stored.
-        if (scheduleType === "now" || data.sendImmediately) {
-            const { isPushConfigured, PUSH_NOT_CONFIGURED_MESSAGE } = await import("./firebase-admin.service.js");
-            if (!isPushConfigured()) {
-                throw new Error(PUSH_NOT_CONFIGURED_MESSAGE);
-            }
-        }
-
         const campaignData: Partial<PushCampaign> = {
             Title: data.title.trim(),
             Body: data.body.trim(),
