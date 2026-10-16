@@ -117,6 +117,17 @@ export class MedicalDocument {
     @Column({ type: "int", default: 0, nullable: true })
     WhatsAppSentCount?: number;
 
+    /** JSON from the AI report reader (medical-report-ai.service). */
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    AiAnalysis?: string;
+
+    /** normal | attention | critical | unknown, copied out of AiAnalysis for lists. */
+    @Column({ type: "varchar", length: 20, nullable: true })
+    AiStatus?: string;
+
+    @Column({ type: "datetime", nullable: true })
+    AiAnalyzedAt?: Date;
+
     @Column({ type: "bit", default: false })
     IsDeleted: boolean;
 }

@@ -101,4 +101,11 @@ export class PatientDietPlan {
 
     @Column({ type: "datetime", nullable: true })
     UpdatedAt?: Date;
+
+    @Column({ type: "datetime", nullable: true })
+    PatientModifiedAt?: Date;
+
+    /** The patient made this plan for themselves; AssignedByDoctorId is then the patient. */
+    @Column({ type: "bit", default: 0 })
+    CreatedByPatient: boolean;
 }

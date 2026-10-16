@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../config/database.js";
+import { EXTRA_MASTER_FOODS, MASTER_FOOD_TAGS } from "./diet-food-catalog.js";
 
 export class DietMigrationService {
     static async runMigrationsAndSeed() {
@@ -173,10 +174,66 @@ export class DietMigrationService {
                 END;
             `);
 
+            // Portion weight (e.g. "80 g") for each prescribed food, added after the first release
+            await AppDataSource.query(`
+                IF COL_LENGTH('PatientDietPlanMeals', 'WeightAmount') IS NULL
+                BEGIN
+                    ALTER TABLE PatientDietPlanMeals ADD WeightAmount FLOAT NULL, WeightUnit NVARCHAR(10) NULL;
+                END;
+            `);
+
+            // Templates keep portion weights too, so a plan saved as a template loses nothing
+            await AppDataSource.query(`
+                IF COL_LENGTH('DietTemplateMeals', 'WeightAmount') IS NULL
+                BEGIN
+                    ALTER TABLE DietTemplateMeals ADD WeightAmount FLOAT NULL, WeightUnit NVARCHAR(10) NULL;
+                END;
+            `);
+
+            // When the patient last changed their own plan, so the doctor can see it was edited
+            await AppDataSource.query(`
+                IF COL_LENGTH('PatientDietPlans', 'PatientModifiedAt') IS NULL
+                BEGIN
+                    ALTER TABLE PatientDietPlans ADD PatientModifiedAt DATETIME NULL;
+                END;
+            `);
+
+            // Plans a patient creates for themselves, without a prescription
+            await AppDataSource.query(`
+                IF COL_LENGTH('PatientDietPlans', 'CreatedByPatient') IS NULL
+                BEGIN
+                    ALTER TABLE PatientDietPlans ADD CreatedByPatient BIT NOT NULL CONSTRAINT DF_PatientDietPlans_CreatedByPatient DEFAULT 0;
+                END;
+            `);
+
+            // What the patient ate each day (eaten tick and an optional photo)
+            await AppDataSource.query(`
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientDietMealLogs')
+                BEGIN
+                    CREATE TABLE PatientDietMealLogs (
+                        Id INT IDENTITY(1,1) PRIMARY KEY,
+                        PlanId INT NOT NULL,
+                        PlanMealId INT NOT NULL,
+                        PatientId UNIQUEIDENTIFIER NOT NULL,
+                        LogDate DATE NOT NULL,
+                        MealSlot NVARCHAR(50) NOT NULL,
+                        FoodName NVARCHAR(200) NOT NULL,
+                        IsEaten BIT NOT NULL DEFAULT 0,
+                        PhotoUrl NVARCHAR(1000) NULL,
+                        CreatedAt DATETIME DEFAULT GETDATE(),
+                        UpdatedAt DATETIME NULL,
+                        CONSTRAINT FK_PatientDietMealLogs_Plan FOREIGN KEY (PlanId) REFERENCES PatientDietPlans(Id) ON DELETE CASCADE
+                    );
+                    CREATE UNIQUE INDEX UX_PatientDietMealLogs_Meal_Date ON PatientDietMealLogs (PlanMealId, LogDate);
+                    CREATE INDEX IX_PatientDietMealLogs_Plan_Date ON PatientDietMealLogs (PlanId, LogDate);
+                END;
+            `);
+
             console.log("✅ [DietMigration] Tables & indexes verified.");
 
             // 6. Check and Seed Master Foods
             await this.seedMasterFoodData();
+            await this.topUpMasterFoods();
 
             // 7. Check and Seed Starter Templates
             await this.seedStarterTemplates();
@@ -340,6 +397,44 @@ export class DietMigrationService {
             console.log(`✅ [DietMigration] Successfully seeded ${foods.length} master food items.`);
         } catch (error) {
             console.error("❌ [DietMigration] Error seeding master foods:", error);
+        }
+    }
+
+    /**
+     * Adds catalog foods the master list doesn't have yet (matched by name),
+     * and fills in local-name search tags. Safe to run on every start.
+     */
+    private static async topUpMasterFoods() {
+        try {
+            const rows: Array<{ name: string }> = await AppDataSource.query(
+                `SELECT LOWER(Name) AS name FROM DietFoodItems WHERE OrganizationId IS NULL`
+            );
+            const existing = new Set(rows.map(r => String(r.name).trim()));
+            const missing = EXTRA_MASTER_FOODS.filter(([name]) => !existing.has(name.toLowerCase()));
+
+            for (const [name, category, foodType, servingSize, cal100, calServ, p, c, f, fib, tags] of missing) {
+                await AppDataSource.query(`
+                    INSERT INTO DietFoodItems (
+                        Name, Category, FoodType, ServingSize, CaloriesPer100g, CaloriesPerServing,
+                        ProteinG, CarbsG, FatG, FiberG, Tags, IsActive, OrganizationId, CreatedAt
+                    ) VALUES (
+                        @0, @1, @2, @3, @4, @5, @6, @7, @8, @9, @10, 1, NULL, GETDATE()
+                    )
+                `, [name, category, foodType, servingSize, cal100, calServ, p, c, f, fib, tags]);
+            }
+
+            for (const [name, tags] of Object.entries(MASTER_FOOD_TAGS)) {
+                await AppDataSource.query(
+                    `UPDATE DietFoodItems SET Tags = @1 WHERE OrganizationId IS NULL AND Name = @0 AND (Tags IS NULL OR Tags = '')`,
+                    [name, tags]
+                );
+            }
+
+            if (missing.length > 0) {
+                console.log(`✅ [DietMigration] Added ${missing.length} foods to the master list.`);
+            }
+        } catch (error) {
+            console.error("❌ [DietMigration] Error adding catalog foods:", error);
         }
     }
 

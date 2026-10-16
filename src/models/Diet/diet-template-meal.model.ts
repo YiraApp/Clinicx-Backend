@@ -39,6 +39,12 @@ export class DietTemplateMeal {
     @Column({ type: "nvarchar", length: 50, default: "'serving'" })
     Unit: string;                       // "katori", "piece", "cup", "glass", "tbsp", "serving"
 
+    @Column({ type: "float", nullable: true })
+    WeightAmount?: number;
+
+    @Column({ type: "nvarchar", length: 10, nullable: true })
+    WeightUnit?: string;                // "g" or "ml"
+
     @Column({ type: "float", default: 0 })
     Calories: number;
 
