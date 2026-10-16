@@ -41,6 +41,10 @@ export class MedicalDocumentRepository {
         });
     }
 
+    async saveAiAnalysis(id: number, analysisJson: string, status: string): Promise<void> {
+        await this.repo.update(id, { AiAnalysis: analysisJson, AiStatus: status, AiAnalyzedAt: new Date() });
+    }
+
     async softDelete(id: number, updatedBy?: string): Promise<void> {
         await this.repo.update(id, { IsDeleted: true, UpdatedBy: updatedBy, UpdatedAt: new Date() });
     }

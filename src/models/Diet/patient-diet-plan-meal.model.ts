@@ -39,6 +39,12 @@ export class PatientDietPlanMeal {
     @Column({ type: "nvarchar", length: 50, default: "'serving'" })
     Unit: string;                       // "katori", "piece", "cup", "glass", "tbsp", "serving"
 
+    @Column({ type: "float", nullable: true })
+    WeightAmount?: number;              // weight of the whole portion, e.g. 80
+
+    @Column({ type: "nvarchar", length: 10, nullable: true })
+    WeightUnit?: string;                // "g" or "ml"
+
     @Column({ type: "float", default: 0 })
     Calories: number;
 

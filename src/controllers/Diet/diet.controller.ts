@@ -2,6 +2,9 @@ import { Request, Response } from "express";
 import { dietFoodService } from "../../services/Diet/diet-food.service.js";
 import { dietTemplateService } from "../../services/Diet/diet-template.service.js";
 import { patientDietPlanService } from "../../services/Diet/patient-diet-plan.service.js";
+import { patientAccessConsentService } from "../../MobileApi/v1/services/consent/patient-access-consent.service.js";
+import { DietFoodImagesService } from "../../services/Diet/diet-food-images.service.js";
+import { DietValidationError } from "../../services/Diet/diet-validation.js";
 
 function getOrganizationId(req: Request): number | undefined {
     const orgId = req.headers["x-org-id"] 
@@ -19,6 +22,21 @@ function getDoctorId(req: Request): string | undefined {
         || (req as any).user?.Id 
         || req.body?.doctorId 
         || (req.query.doctorId as string);
+}
+
+/** The signed-in user. Ownership checks use only this, never ids sent in the request. */
+function getAuthUserId(req: Request): string | undefined {
+    const user = (req as any).user;
+    const id = user?.userId || user?.Id || user?.id;
+    return id ? String(id) : undefined;
+}
+
+function sendError(res: Response, error: any, fallback: string, context: string) {
+    if (error instanceof DietValidationError) {
+        return res.status(400).json({ error: error.message });
+    }
+    console.error(`Error in ${context}:`, error);
+    return res.status(500).json({ error: fallback });
 }
 
 export class DietController {
@@ -82,7 +100,7 @@ export class DietController {
             const food = await dietFoodService.createCustomFood(req.body, organizationId);
             res.status(201).json(food);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to create food item." });
+            sendError(res, error, "Failed to create food item.", "createCustomFood");
         }
     }
 
@@ -97,7 +115,7 @@ export class DietController {
             const updated = await dietFoodService.updateCustomFood(id, req.body, organizationId);
             res.json(updated);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to update food item." });
+            sendError(res, error, "Failed to update food item.", "updateCustomFood");
         }
     }
 
@@ -112,7 +130,7 @@ export class DietController {
             const result = await dietFoodService.deleteCustomFood(id, organizationId);
             res.json(result);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to delete food item." });
+            sendError(res, error, "Failed to delete food item.", "deleteCustomFood");
         }
     }
 
@@ -122,38 +140,33 @@ export class DietController {
 
     async listTemplates(req: Request, res: Response) {
         try {
-            const organizationId = getOrganizationId(req);
-            const doctorId = getDoctorId(req);
-            const { condition, dietType, search } = req.query;
-
+            const { condition, dietType, search, scope } = req.query;
             const templates = await dietTemplateService.listTemplates({
-                organizationId,
-                doctorId,
+                organizationId: getOrganizationId(req),
+                doctorId: getAuthUserId(req),
                 condition: condition as string,
                 dietType: dietType as string,
-                search: search as string
+                search: search as string,
+                scope: scope as string,
             });
-
             res.json(templates);
         } catch (error: any) {
-            console.error("Error in listTemplates:", error);
-            res.status(500).json({ error: error.message || "Failed to list templates." });
+            sendError(res, error, "Failed to list templates.", "listTemplates");
         }
     }
 
     async getTemplateById(req: Request, res: Response) {
         try {
-            const organizationId = getOrganizationId(req);
             const id = parseInt(String(req.params.id), 10);
-            const template = await dietTemplateService.getTemplateById(id, organizationId);
+            if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid template id." });
 
+            const template = await dietTemplateService.getTemplateById(id, getOrganizationId(req), getAuthUserId(req));
             if (!template) {
                 return res.status(404).json({ error: "Template not found." });
             }
-
             res.json(template);
         } catch (error: any) {
-            res.status(500).json({ error: error.message || "Failed to get template." });
+            sendError(res, error, "Failed to get template.", "getTemplateById");
         }
     }
 
@@ -163,17 +176,15 @@ export class DietController {
             if (!organizationId) {
                 return res.status(400).json({ error: "OrganizationId is required." });
             }
-            const doctorId = getDoctorId(req);
 
             const result = await dietTemplateService.createTemplate({
                 ...req.body,
                 organizationId,
-                doctorId
+                doctorId: getAuthUserId(req)
             });
-
             res.status(201).json(result);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to create template." });
+            sendError(res, error, "Failed to create template.", "createTemplate");
         }
     }
 
@@ -185,25 +196,24 @@ export class DietController {
             }
 
             const id = parseInt(String(req.params.id), 10);
-            const updated = await dietTemplateService.updateTemplate(id, req.body, organizationId);
+            if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid template id." });
+
+            const updated = await dietTemplateService.updateTemplate(id, req.body, organizationId, getAuthUserId(req));
             res.json(updated);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to update template." });
+            sendError(res, error, "Failed to update template.", "updateTemplate");
         }
     }
 
     async deleteTemplate(req: Request, res: Response) {
         try {
-            const organizationId = getOrganizationId(req);
-            if (!organizationId) {
-                return res.status(400).json({ error: "OrganizationId is required." });
-            }
-
             const id = parseInt(String(req.params.id), 10);
-            const result = await dietTemplateService.deleteTemplate(id, organizationId);
+            if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid template id." });
+
+            const result = await dietTemplateService.deleteTemplate(id, getAuthUserId(req));
             res.json(result);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to delete template." });
+            sendError(res, error, "Failed to delete template.", "deleteTemplate");
         }
     }
 
@@ -213,22 +223,18 @@ export class DietController {
             if (!organizationId) {
                 return res.status(400).json({ error: "OrganizationId is required." });
             }
-            const doctorId = getDoctorId(req);
+            const doctorId = getAuthUserId(req);
             if (!doctorId) {
-                return res.status(400).json({ error: "DoctorId is required to duplicate template." });
+                return res.status(401).json({ error: "Sign in as a doctor to copy templates." });
             }
 
             const id = parseInt(String(req.params.id), 10);
-            const duplicated = await dietTemplateService.duplicateTemplate(
-                id,
-                organizationId,
-                doctorId,
-                req.body.name
-            );
+            if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid template id." });
 
+            const duplicated = await dietTemplateService.duplicateTemplate(id, organizationId, doctorId, req.body?.name);
             res.status(201).json(duplicated);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to duplicate template." });
+            sendError(res, error, "Failed to copy template.", "duplicateTemplate");
         }
     }
 
@@ -255,9 +261,18 @@ export class DietController {
 
             res.status(201).json(plan);
         } catch (error: any) {
-            console.error("Error in assignPlan:", error);
-            res.status(400).json({ error: error.message || "Failed to assign diet plan." });
+            sendError(res, error, "Failed to assign diet plan.", "assignPlan");
         }
+    }
+
+    /** The patient themself, or a doctor holding an active access consent. */
+    private async canSeeFullHistory(req: Request, patientId: string): Promise<boolean> {
+        const user = (req as any).user;
+        const requesterId = String(user?.userId || user?.id || "").trim();
+        if (!requesterId) return false;
+        if (requesterId.toLowerCase() === patientId.toLowerCase()) return true;
+        const access = await patientAccessConsentService.checkAccess(patientId, requesterId);
+        return access?.hasAccess === true;
     }
 
     async getPatientPlans(req: Request, res: Response) {
@@ -270,7 +285,11 @@ export class DietController {
             }
 
             const patientId = String(rawPatientId);
-            const plans = await patientDietPlanService.getPatientPlans(patientId, organizationId);
+            const fullHistory = req.query.scope === "all";
+            if (fullHistory && !(await this.canSeeFullHistory(req, patientId))) {
+                return res.status(403).json({ error: "The patient hasn't given you access to their full records.", code: "CONSENT_REQUIRED" });
+            }
+            const plans = await patientDietPlanService.getPatientPlans(patientId, organizationId, { fullHistory });
             res.json(plans);
         } catch (error: any) {
             res.status(500).json({ error: error.message || "Failed to get patient plans." });
@@ -281,9 +300,22 @@ export class DietController {
         try {
             const organizationId = getOrganizationId(req);
             const id = parseInt(String(req.params.id), 10);
+            if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid plan id." });
+            // With the patient's consent a doctor may open any of their plans,
+            // including ones from other organizations or made by the patient.
+            if (req.query.scope === "all") {
+                const plan = await patientDietPlanService.getPlanDetails(id);
+                if (!plan) return res.status(404).json({ error: "Diet plan not found." });
+                if (!(await this.canSeeFullHistory(req, String(plan.PatientId)))) {
+                    return res.status(403).json({ error: "The patient hasn't given you access to their full records.", code: "CONSENT_REQUIRED" });
+                }
+                return res.json(plan);
+            }
+
             const plan = await patientDietPlanService.getPlanDetails(id, organizationId);
 
-            if (!plan) {
+            // Plans a patient made for themselves are private to them.
+            if (!plan || plan.CreatedByPatient) {
                 return res.status(404).json({ error: "Diet plan not found." });
             }
 
@@ -304,27 +336,36 @@ export class DietController {
             const updated = await patientDietPlanService.updatePlan(id, req.body, organizationId);
             res.json(updated);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to update diet plan." });
+            sendError(res, error, "Failed to update diet plan.", "updatePlan");
         }
     }
 
     async updatePlanStatus(req: Request, res: Response) {
         try {
             const organizationId = getOrganizationId(req);
-            if (!organizationId) {
-                return res.status(400).json({ error: "OrganizationId is required." });
-            }
-
             const id = parseInt(String(req.params.id), 10);
-            const { status } = req.body;
-            if (!status) {
-                return res.status(400).json({ error: "Status is required." });
+            if (!id || isNaN(id)) {
+                return res.status(400).json({ error: "Invalid diet plan id." });
             }
 
-            const result = await patientDietPlanService.updatePlanStatus(id, status, organizationId);
+            const result = await patientDietPlanService.updatePlanStatus(id, req.body?.status, organizationId);
             res.json(result);
         } catch (error: any) {
-            res.status(400).json({ error: error.message || "Failed to update plan status." });
+            sendError(res, error, "Failed to update plan status.", "updatePlanStatus");
+        }
+    }
+    // ----------------------------------------------------
+    // FOOD IMAGE POPULATION (Admin only)
+    // ----------------------------------------------------
+
+    async populateFoodImages(_req: Request, res: Response) {
+        try {
+            res.json({ message: "Food image population started. Check server logs for progress." });
+            DietFoodImagesService.populateAllFoodImages().catch(err => {
+                console.error("[DietController] populateFoodImages background error:", err);
+            });
+        } catch (error: any) {
+            res.status(500).json({ error: error.message || "Failed to start image population." });
         }
     }
 }
