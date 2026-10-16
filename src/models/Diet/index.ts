@@ -3,3 +3,4 @@ export { DietTemplate } from "./diet-template.model.js";
 export { DietTemplateMeal } from "./diet-template-meal.model.js";
 export { PatientDietPlan } from "./patient-diet-plan.model.js";
 export { PatientDietPlanMeal } from "./patient-diet-plan-meal.model.js";
+export { PatientDietMealLog } from "./patient-diet-meal-log.model.js";

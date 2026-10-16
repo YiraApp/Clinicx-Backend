@@ -1,5 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { DietFoodItem } from "../../models/Diet/diet-food-item.model.js";
+import { DietValidationError, optionalText, requireText } from "./diet-validation.js";
 
 export class DietFoodService {
     private repo = AppDataSource.getRepository(DietFoodItem);
@@ -99,16 +100,57 @@ export class DietFoodService {
      */
     async createCustomFood(data: Partial<DietFoodItem>, organizationId: number) {
         if (!organizationId) {
-            throw new Error("OrganizationId is required to create a custom food item.");
+            throw new DietValidationError("OrganizationId is required to create a custom food item.");
         }
 
+        const fields = this.validateFoodFields(data);
+        const duplicate = await this.repo.createQueryBuilder("food")
+            .where("food.IsActive = 1 AND food.OrganizationId = :orgId AND LOWER(food.Name) = :name", {
+                orgId: organizationId,
+                name: fields.Name.toLowerCase(),
+            })
+            .getOne();
+        if (duplicate) return duplicate;
+
         const food = this.repo.create({
-            ...data,
+            ...fields,
             OrganizationId: organizationId,
             IsActive: true
         });
 
         return await this.repo.save(food);
+    }
+
+    /** Only these fields can be set by clients; ids and ownership are never taken from the request. */
+    private validateFoodFields(data: Partial<DietFoodItem>, partial = false) {
+        const number = (value: unknown, label: string, max: number) => {
+            if (value === undefined || value === null || value === "") return undefined;
+            const n = Number(value);
+            if (!Number.isFinite(n) || n < 0 || n > max) throw new DietValidationError(`${label} must be between 0 and ${max}.`);
+            return n;
+        };
+        const out: Partial<DietFoodItem> = {};
+        if (!partial || data.Name !== undefined) out.Name = requireText(data.Name, "Food name", 200);
+        if (!partial || data.Category !== undefined) out.Category = optionalText(data.Category, "Category", 100) || "Other";
+        if (!partial || data.FoodType !== undefined) out.FoodType = optionalText(data.FoodType, "Food type", 50) || "Veg";
+        if (data.ServingSize !== undefined) out.ServingSize = optionalText(data.ServingSize, "Serving size", 100);
+        const numeric: Array<[keyof DietFoodItem, string, number]> = [
+            ["CaloriesPer100g", "Calories per 100g", 10000],
+            ["CaloriesPerServing", "Calories", 10000],
+            ["ProteinG", "Protein", 1000],
+            ["CarbsG", "Carbs", 1000],
+            ["FatG", "Fat", 1000],
+            ["FiberG", "Fiber", 1000],
+            ["SugarG", "Sugar", 1000],
+            ["SodiumMg", "Sodium", 100000],
+        ];
+        for (const [key, label, max] of numeric) {
+            const value = number((data as any)[key], label, max);
+            if (value !== undefined) (out as any)[key] = value;
+        }
+        if (data.ImageUrl !== undefined) out.ImageUrl = optionalText(data.ImageUrl, "Image URL", 500);
+        if (data.Tags !== undefined) out.Tags = optionalText(data.Tags, "Tags", 4000);
+        return out as Partial<DietFoodItem> & { Name: string };
     }
 
     /**
@@ -117,19 +159,18 @@ export class DietFoodService {
     async updateCustomFood(id: number, data: Partial<DietFoodItem>, organizationId: number) {
         const existing = await this.repo.findOne({ where: { Id: id, IsActive: true } });
         if (!existing) {
-            throw new Error("Food item not found.");
+            throw new DietValidationError("Food item not found.");
         }
 
         if (existing.OrganizationId === null || existing.OrganizationId === undefined) {
-            throw new Error("Global master food items cannot be modified by organizations.");
+            throw new DietValidationError("Food items from the master database cannot be changed.");
         }
 
         if (existing.OrganizationId !== organizationId) {
-            throw new Error("Access denied: You do not have permission to modify this organization's food item.");
+            throw new DietValidationError("You cannot change another organization's food item.");
         }
 
-        Object.assign(existing, data);
-        existing.OrganizationId = organizationId; // Ensure org ID is maintained
+        Object.assign(existing, this.validateFoodFields(data, true));
         return await this.repo.save(existing);
     }
 
@@ -139,15 +180,15 @@ export class DietFoodService {
     async deleteCustomFood(id: number, organizationId: number) {
         const existing = await this.repo.findOne({ where: { Id: id, IsActive: true } });
         if (!existing) {
-            throw new Error("Food item not found.");
+            throw new DietValidationError("Food item not found.");
         }
 
         if (existing.OrganizationId === null || existing.OrganizationId === undefined) {
-            throw new Error("Global master food items cannot be deleted.");
+            throw new DietValidationError("Food items from the master database cannot be deleted.");
         }
 
         if (existing.OrganizationId !== organizationId) {
-            throw new Error("Access denied: You do not have permission to delete this organization's food item.");
+            throw new DietValidationError("You cannot delete another organization's food item.");
         }
 
         existing.IsActive = false;

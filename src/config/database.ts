@@ -73,7 +73,7 @@ import { HospitalSetting } from "../models/Organizations/hospital-settings.model
 import { HospitalSettingsHistory } from "../models/Organizations/hospital-settings-history.model.js";
 import { Feedback } from "../models/Feedback/feedback.model.js";
 import { PatientMedicationReminder } from "../models/Appointments/patient-medication-reminder.model.js";
-import { DietFoodItem, DietTemplate, DietTemplateMeal, PatientDietPlan, PatientDietPlanMeal } from "../models/Diet/index.js";
+import { DietFoodItem, DietTemplate, DietTemplateMeal, PatientDietPlan, PatientDietPlanMeal, PatientDietMealLog } from "../models/Diet/index.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -133,7 +133,8 @@ export const AppDataSource = new DataSource({
         DietTemplate,
         DietTemplateMeal,
         PatientDietPlan,
-        PatientDietPlanMeal
+        PatientDietPlanMeal,
+        PatientDietMealLog
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,
@@ -330,6 +331,19 @@ export const initializeDatabase = async () => {
                 BEGIN
                     ALTER TABLE [dbo].[HospitalSettings] ADD [BookingAfterDocumentMinutes] int NOT NULL DEFAULT 20;
                 END
+            END
+        `);
+
+        // AI report analysis columns on MedicalDocuments
+        await AppDataSource.query(`
+            IF EXISTS (SELECT * FROM sys.tables WHERE name = 'MedicalDocuments')
+            BEGIN
+                IF COL_LENGTH('dbo.MedicalDocuments', 'AiAnalysis') IS NULL
+                    ALTER TABLE [dbo].[MedicalDocuments] ADD [AiAnalysis] nvarchar(MAX) NULL;
+                IF COL_LENGTH('dbo.MedicalDocuments', 'AiStatus') IS NULL
+                    ALTER TABLE [dbo].[MedicalDocuments] ADD [AiStatus] varchar(20) NULL;
+                IF COL_LENGTH('dbo.MedicalDocuments', 'AiAnalyzedAt') IS NULL
+                    ALTER TABLE [dbo].[MedicalDocuments] ADD [AiAnalyzedAt] datetime NULL;
             END
         `);
 
