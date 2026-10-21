@@ -116,8 +116,12 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/logout",
         "/mobile/api/v1/auth/logout",
         "/api/v1/mobile/auth/logout",
+<<<<<<< HEAD
         "/api/auth/logout",
         "/api/webhooks/medsense"
+=======
+        "/api/auth/logout"
+>>>>>>> 711f4e7 (bugs solved)
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
