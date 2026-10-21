@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { medicalDocumentService } from "../../../../services/Appointments/medical-document.service.js";
 import { medicalReportAiService, ReportAnalysisError } from "../../../../services/Appointments/medical-report-ai.service.js";
+import { ANALYSIS_PENDING_MESSAGE, medSenseService } from "../../../../services/Appointments/medsense.service.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
 
 export class MobileMedicalDocumentController {
@@ -72,8 +73,20 @@ export class MobileMedicalDocumentController {
 
             let analysis: any = null;
             let analysisError: { code: string; message: string } | null = null;
+            let analysisPending = false;
             const wantsAnalysis = String(req.body?.analyze ?? req.query?.analyze ?? "true") !== "false";
-            if (wantsAnalysis) {
+            const category = req.body?.documentCategory ?? req.body?.category;
+            if (wantsAnalysis && document?.Id && medSenseService.handles(category, prepared.buffer.length)) {
+                try {
+                    const pdf = await medicalReportAiService.asPdf(prepared);
+                    await medSenseService.submit(Number(document.Id), pdf, prepared.fileName);
+                    document.AiJobStatus = "processing";
+                    analysisPending = true;
+                } catch (err: any) {
+                    console.error("[MobileMedicalDocument] MedSense submit failed, reading with Gemini:", err?.message);
+                }
+            }
+            if (wantsAnalysis && !analysisPending) {
                 try {
                     analysis = await medicalReportAiService.analyzeBuffer(prepared.buffer, prepared.mimeType, prepared.pageCount);
                     if (document?.Id && document.BlobUrl) {
@@ -91,7 +104,17 @@ export class MobileMedicalDocumentController {
 
             if (document) delete (document as any).AiAnalysis;
             return res.status(201).json(
-                ApiResponse.success({ document, analysis, analysisError, pageCount: prepared.pageCount }, "Report uploaded."),
+                ApiResponse.success(
+                    {
+                        document,
+                        analysis,
+                        analysisError,
+                        analysisPending,
+                        pendingMessage: analysisPending ? ANALYSIS_PENDING_MESSAGE : null,
+                        pageCount: prepared.pageCount,
+                    },
+                    "Report uploaded.",
+                ),
             );
         } catch (error: any) {
             return this.sendError(res, error, "Mobile Medical Report Upload Error");

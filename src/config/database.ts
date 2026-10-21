@@ -344,6 +344,12 @@ export const initializeDatabase = async () => {
                     ALTER TABLE [dbo].[MedicalDocuments] ADD [AiStatus] varchar(20) NULL;
                 IF COL_LENGTH('dbo.MedicalDocuments', 'AiAnalyzedAt') IS NULL
                     ALTER TABLE [dbo].[MedicalDocuments] ADD [AiAnalyzedAt] datetime NULL;
+                IF COL_LENGTH('dbo.MedicalDocuments', 'AiJobStatus') IS NULL
+                    ALTER TABLE [dbo].[MedicalDocuments] ADD [AiJobStatus] varchar(20) NULL;
+                IF COL_LENGTH('dbo.MedicalDocuments', 'AiJobId') IS NULL
+                    ALTER TABLE [dbo].[MedicalDocuments] ADD [AiJobId] varchar(64) NULL;
+                IF COL_LENGTH('dbo.MedicalDocuments', 'AiJobStartedAt') IS NULL
+                    ALTER TABLE [dbo].[MedicalDocuments] ADD [AiJobStartedAt] datetime NULL;
             END
         `);
 

@@ -261,6 +261,13 @@ class MedicalReportAiService {
             const cached = this.parseStored(doc.AiAnalysis);
             if (cached) return cached;
         }
+        if (!force && (doc.AiJobStatus === "processing" || doc.AiJobStatus === "fallback")) {
+            throw new ReportAnalysisError(
+                "Your report is still being analysed. We'll notify you when it's ready.",
+                "ANALYSIS_PENDING",
+                409,
+            );
+        }
         if (!doc.BlobUrl) {
             throw new ReportAnalysisError("The file for this document is not available.", "NO_FILE", 404);
         }
@@ -286,6 +293,14 @@ class MedicalReportAiService {
         const analysis = await this.analyzeBuffer(buffer, mimeType, pageCount);
         await this.saveAnalysis(documentId, analysis);
         return analysis;
+    }
+
+    /** The report as a PDF (a single photo becomes a one-page PDF). */
+    async asPdf(prepared: PreparedReport): Promise<Buffer> {
+        if (prepared.mimeType === "application/pdf") return prepared.buffer;
+        return this.imagesToPdf([
+            { buffer: prepared.buffer, mimetype: prepared.mimeType, originalname: prepared.fileName } as Express.Multer.File,
+        ]);
     }
 
     async getStoredAnalysis(documentId: number): Promise<any | null> {
@@ -320,7 +335,8 @@ class MedicalReportAiService {
         }
     }
 
-    private normalize(raw: any, pageCount?: number): any {
+    /** Cleans up model output into the shape the app reads, whichever service produced it. */
+    normalize(raw: any, pageCount?: number, model: string = this.model): any {
         const str = (v: any, max = 600) => (typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim()).slice(0, max);
         const list = (v: any) => (Array.isArray(v) ? v : []);
         const strList = (v: any, max: number) => list(v).map((x: any) => str(x, 300)).filter(Boolean).slice(0, max);
@@ -420,7 +436,7 @@ class MedicalReportAiService {
             confidence,
             pagesAnalyzed: pageCount ?? null,
             analyzedAt: new Date().toISOString(),
-            model: this.model,
+            model,
             disclaimer: REPORT_DISCLAIMER,
         };
     }
