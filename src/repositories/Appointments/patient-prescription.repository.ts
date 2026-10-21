@@ -249,6 +249,12 @@ export class PatientPrescriptionRepository {
     }
 
     async delete(id: string): Promise<void> {
+        try {
+            await AppDataSource.getRepository(PrescriptionDiagnosis).delete({ PrescriptionId: id } as any);
+            await AppDataSource.getRepository(PrescriptionMedication).delete({ PrescriptionId: id } as any);
+        } catch (e) {
+            console.error("[patientPrescriptionRepository.delete] Error cleaning child records:", e);
+        }
         await this.repo.delete(id);
     }
 }

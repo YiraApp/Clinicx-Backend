@@ -121,6 +121,15 @@ export class PushCampaignService {
             scheduledTime = this.getISTTime();
         }
 
+        // A "send now" campaign on a server that cannot send push would be saved as SENT
+        // without reaching anyone. Refuse it before anything is stored.
+        if (scheduleType === "now" || data.sendImmediately) {
+            const { isPushConfigured, PUSH_NOT_CONFIGURED_MESSAGE } = await import("./firebase-admin.service.js");
+            if (!isPushConfigured()) {
+                throw new Error(PUSH_NOT_CONFIGURED_MESSAGE);
+            }
+        }
+
         const campaignData: Partial<PushCampaign> = {
             Title: data.title.trim(),
             Body: data.body.trim(),
@@ -246,9 +255,15 @@ export class PushCampaignService {
         if (!campaign) throw new Error("Push campaign not found");
 
         const { userDeviceRepository } = await import("../../MobileApi/v1/repositories/userdevice.repository.js");
-        const { sendFcmPushToTokens } = await import("./firebase-admin.service.js");
+        const { sendFcmPushToTokens, isPushConfigured, PUSH_NOT_CONFIGURED_MESSAGE } = await import("./firebase-admin.service.js");
         const { AppDataSource } = await import("../../config/database.js");
         const { AppNotification } = await import("../../models/Common/app-notification.model.js");
+
+        // Without Firebase credentials nothing can be delivered. Stop here, before the campaign
+        // is recorded as sent, so it can still go out once the server is set up.
+        if (!isPushConfigured()) {
+            throw new Error(PUSH_NOT_CONFIGURED_MESSAGE);
+        }
 
         let activeDevices: any[] = [];
 
@@ -318,6 +333,8 @@ export class PushCampaignService {
         // 1. Dispatch Firebase Cloud Messaging push
         let fcmSuccess = 0;
         let fcmFailure = 0;
+        let failureReasons: Record<string, number> = {};
+        let dispatchError: string | null = null;
         if (validTokens.length > 0) {
             try {
                 const res = await sendFcmPushToTokens(validTokens, {
@@ -331,8 +348,10 @@ export class PushCampaignService {
                 });
                 fcmSuccess = res.successCount;
                 fcmFailure = res.failureCount;
+                failureReasons = res.failureReasons || {};
                 console.log(`[PushCampaignService] Dispatched push notification for Campaign #${campaign.Id} "${campaign.Title}": ${res.successCount} delivered, ${res.failureCount} failed/skipped`);
-            } catch (fcmErr) {
+            } catch (fcmErr: any) {
+                dispatchError = fcmErr?.message || String(fcmErr);
                 console.error(`[PushCampaignService] FCM dispatch error for Campaign #${campaign.Id}:`, fcmErr);
             }
         }
@@ -378,9 +397,21 @@ export class PushCampaignService {
             Status: newStatus,
         });
 
-        const statusMsg = fcmSuccess > 0
-            ? `Push notification successfully delivered to ${fcmSuccess} active device(s)${fcmFailure > 0 ? ` (${fcmFailure} offline/unregistered)` : ''}!`
-            : (validTokens.length === 0 ? "No active devices registered to receive notifications." : "Notice: Devices found, but FCM tokens are expired or simulated.");
+        // Say what actually happened. A failed send used to be reported as "tokens are
+        // expired or simulated" whatever the cause, which hid server-side problems.
+        let statusMsg: string;
+        if (fcmSuccess > 0) {
+            statusMsg = `Push notification successfully delivered to ${fcmSuccess} active device(s)${fcmFailure > 0 ? ` (${fcmFailure} offline/unregistered)` : ''}!`;
+        } else if (validTokens.length === 0) {
+            statusMsg = "No active devices registered to receive notifications.";
+        } else if (dispatchError) {
+            statusMsg = `Not sent: the push service returned an error (${dispatchError}).`;
+        } else {
+            const reasons = Object.entries(failureReasons)
+                .map(([reason, count]) => `${reason}: ${count}`)
+                .join(", ");
+            statusMsg = `Not sent: none of the ${validTokens.length} registered device(s) accepted the notification${reasons ? ` (${reasons})` : ""}.`;
+        }
 
         return {
             success: true,
@@ -396,6 +427,11 @@ export class PushCampaignService {
      */
     async checkAndProcessScheduledCampaigns(): Promise<number> {
         try {
+            // On a server without Firebase credentials, leave due campaigns pending rather than
+            // failing every minute. The missing setup is logged once at startup.
+            const { isPushConfigured } = await import("./firebase-admin.service.js");
+            if (!isPushConfigured()) return 0;
+
             const campaigns = await pushCampaignRepository.getActiveScheduledAndRecurring();
             if (!campaigns || campaigns.length === 0) return 0;
 

@@ -84,14 +84,16 @@ export class MedicationReminderService {
                     times = [];
                 }
 
-                // Check if any scheduled time matches the current IST hour and minute
-                const matchesTime = times.some(t => {
-                    const parsed = parseTo24Hour(t);
-                    return parsed !== null && parsed.hour === istHour && parsed.minute === istMinute;
-                });
+                // A dose is due if its time fell within the last 3 minutes. The check
+                // runs about once a minute and can drift, so an exact-minute match
+                // could skip a dose; the dedupe key stops it being sent twice.
+                const nowMinutes = istHour * 60 + istMinute;
+                const dueTime = times
+                    .map(t => parseTo24Hour(t))
+                    .find(p => p !== null && nowMinutes - (p.hour * 60 + p.minute) >= 0 && nowMinutes - (p.hour * 60 + p.minute) < 3);
 
-                if (matchesTime) {
-                    const dedupeKey = `${reminder.Id}_${todayIstStr}_${istHour}_${istMinute}`;
+                if (dueTime) {
+                    const dedupeKey = `${reminder.Id}_${todayIstStr}_${dueTime.hour}_${dueTime.minute}`;
                     if (!this.sentPillReminders.has(dedupeKey)) {
                         this.sentPillReminders.add(dedupeKey);
 

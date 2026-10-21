@@ -19,6 +19,7 @@ import { patientFitnessController } from "../controllers/patient-fitness.control
 import { patientMedicationReminderController } from "../controllers/patient-medication-reminder.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
+import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
 
 const authRouter = Router();
@@ -84,27 +85,30 @@ authRouter.post("/app-version", authMiddleware, registerNewAppVersion);
 authRouter.get("/snomed/search", authMiddleware, (req, res) => mobileSnomedController.search(req, res));
 
 // Clinical Notes
-authRouter.get("/clinical-notes/patient/:patientId", authMiddleware, (req, res) => mobileClinicalNoteController.getPatientNotes(req, res));
+authRouter.get("/clinical-notes/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobileClinicalNoteController.getPatientNotes(req, res));
 authRouter.post("/clinical-notes", authMiddleware, (req, res) => mobileClinicalNoteController.addNote(req, res));
 authRouter.put("/clinical-notes/:id", authMiddleware, (req, res) => mobileClinicalNoteController.updateNote(req, res));
 authRouter.delete("/clinical-notes/:id", authMiddleware, (req, res) => mobileClinicalNoteController.deleteNote(req, res));
 
 // Medical Records
-authRouter.get("/medical-records/patient/:patientId", authMiddleware, (req, res) => mobileMedicalRecordController.getPatientRecords(req, res));
+authRouter.get("/medical-records/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobileMedicalRecordController.getPatientRecords(req, res));
 authRouter.post("/medical-records", authMiddleware, (req, res) => mobileMedicalRecordController.addRecord(req, res));
 authRouter.put("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.updateRecord(req, res));
 authRouter.delete("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.deleteRecord(req, res));
 
 // Prescriptions
-authRouter.get("/prescriptions/patient/:patientId", authMiddleware, (req, res) => mobilePrescriptionController.getPatientPrescriptions(req, res));
+authRouter.get("/prescriptions/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobilePrescriptionController.getPatientPrescriptions(req, res));
 authRouter.post("/prescriptions", authMiddleware, (req, res) => mobilePrescriptionController.addPrescription(req, res));
 authRouter.get("/prescriptions/:id/pdf", (req, res) => mobilePrescriptionController.getPrescriptionPdf(req, res));
 authRouter.put("/prescriptions/:id", authMiddleware, (req, res) => mobilePrescriptionController.updatePrescription(req, res));
 authRouter.delete("/prescriptions/:id", authMiddleware, (req, res) => mobilePrescriptionController.deletePrescription(req, res));
 
 // Medical Documents
-authRouter.get("/medical-documents/patient/:patientId", authMiddleware, (req, res) => mobileMedicalDocumentController.getPatientDocuments(req, res));
+authRouter.get("/medical-documents/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobileMedicalDocumentController.getPatientDocuments(req, res));
 authRouter.post("/medical-documents", authMiddleware, upload.array("files"), (req, res) => mobileMedicalDocumentController.uploadDocuments(req, res));
+authRouter.post("/medical-documents/report", authMiddleware, upload.array("files", 10), (req, res) => mobileMedicalDocumentController.uploadReport(req, res));
+authRouter.post("/medical-documents/:id/analyze", authMiddleware, (req, res) => mobileMedicalDocumentController.analyzeDocument(req, res));
+authRouter.get("/medical-documents/:id/analysis", authMiddleware, (req, res) => mobileMedicalDocumentController.getAnalysis(req, res));
 authRouter.delete("/medical-documents/:id", authMiddleware, (req, res) => mobileMedicalDocumentController.deleteDocument(req, res));
 
 // Patient Medical Record Access Consents & Doctor QR Linking
@@ -125,7 +129,7 @@ authRouter.post("/notifications/:id/read", authMiddleware, notificationControlle
 authRouter.delete("/notifications/:id", authMiddleware, notificationController.deleteNotification);
 
 // Doctor Suggestions
-authRouter.get("/doctor-suggestions/patient/:patientId", authMiddleware, (req, res) => mobileDoctorSuggestionController.getPatientSuggestions(req, res));
+authRouter.get("/doctor-suggestions/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobileDoctorSuggestionController.getPatientSuggestions(req, res));
 authRouter.post("/doctor-suggestions", authMiddleware, upload.any(), (req, res) => mobileDoctorSuggestionController.addSuggestion(req, res));
 authRouter.delete("/doctor-suggestions/:id", authMiddleware, (req, res) => mobileDoctorSuggestionController.deleteSuggestion(req, res));
 

@@ -8,7 +8,44 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let isInitialized = false;
+let missingCredentialsLogged = false;
 
+export const PUSH_NOT_CONFIGURED_MESSAGE =
+    "Push notifications are not set up on this server. Add the Firebase service account " +
+    "(FIREBASE_SERVICE_ACCOUNT setting, or a serviceAccountKey.json file) and restart the server.";
+
+/**
+ * Reads a Firebase service account from a key file's contents or an environment value.
+ * Hosting dashboards alter pasted JSON in different ways, so this accepts raw JSON,
+ * base64-encoded JSON and values wrapped in quotes, and repairs a private key whose
+ * line breaks arrived as the two characters "\n".
+ */
+export function parseServiceAccount(raw: string): Record<string, any> {
+    let text = (raw || "").trim();
+    if (text.length > 1 && (text[0] === "'" || text[0] === '"') && text.endsWith(text[0])) {
+        text = text.slice(1, -1).trim();
+    }
+    if (!text.startsWith("{")) {
+        text = Buffer.from(text, "base64").toString("utf8").trim();
+    }
+
+    const account = JSON.parse(text);
+    if (typeof account.private_key === "string") {
+        account.private_key = account.private_key.replace(/\\n/g, "\n");
+    }
+    for (const field of ["project_id", "client_email", "private_key"]) {
+        if (!account[field]) {
+            throw new Error(`Firebase service account is missing "${field}".`);
+        }
+    }
+    return account;
+}
+
+/**
+ * Starts Firebase Admin if credentials are available. Returns false, and logs why once,
+ * when they are not, so callers can report that push is unavailable instead of
+ * treating every device as unreachable.
+ */
 export function initFirebaseAdmin(): boolean {
     if (isInitialized) return true;
 
@@ -19,40 +56,50 @@ export function initFirebaseAdmin(): boolean {
         }
 
         // Check common locations for service account key
-        const potentialPaths = [
+        const keyPath = [
             process.env.GOOGLE_APPLICATION_CREDENTIALS,
             process.env.FIREBASE_SERVICE_ACCOUNT_PATH,
             path.resolve(process.cwd(), "firebase-service-account.json"),
             path.resolve(process.cwd(), "serviceAccountKey.json"),
             path.resolve(__dirname, "../../../firebase-service-account.json"),
             path.resolve(__dirname, "../../../serviceAccountKey.json")
-        ].filter((p): p is string => !!p && fs.existsSync(p));
+        ].find((p): p is string => !!p && fs.existsSync(p));
 
-        if (potentialPaths.length > 0) {
-            const keyPath = potentialPaths[0];
-            const serviceAccount = JSON.parse(fs.readFileSync(keyPath, "utf8"));
-            initializeApp({
-                credential: cert(serviceAccount)
-            });
-            console.log(`[FirebaseAdmin] Initialized successfully with credentials from: ${keyPath}`);
-            isInitialized = true;
-            return true;
+        let serviceAccount: Record<string, any>;
+        let source: string;
+
+        if (keyPath) {
+            serviceAccount = parseServiceAccount(fs.readFileSync(keyPath, "utf8"));
+            source = keyPath;
         } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-            initializeApp({
-                credential: cert(serviceAccount)
-            });
-            console.log("[FirebaseAdmin] Initialized successfully from FIREBASE_SERVICE_ACCOUNT env variable.");
-            isInitialized = true;
-            return true;
+            serviceAccount = parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT);
+            source = "FIREBASE_SERVICE_ACCOUNT env variable";
         } else {
-            console.log("[FirebaseAdmin] Notice: No serviceAccountKey.json file found yet. Drop your Firebase Admin private key JSON into Clinicx-Backend to enable live remote push dispatch.");
+            if (!missingCredentialsLogged) {
+                missingCredentialsLogged = true;
+                console.error(`[FirebaseAdmin] PUSH NOTIFICATIONS ARE DISABLED. ${PUSH_NOT_CONFIGURED_MESSAGE}`);
+            }
             return false;
         }
+
+        initializeApp({
+            credential: cert(serviceAccount as any)
+        });
+        console.log(`[FirebaseAdmin] Initialized successfully with credentials from: ${source} (project ${serviceAccount.project_id})`);
+        isInitialized = true;
+        return true;
     } catch (error) {
-        console.error("[FirebaseAdmin] Initialization error:", error);
+        if (!missingCredentialsLogged) {
+            missingCredentialsLogged = true;
+            console.error("[FirebaseAdmin] PUSH NOTIFICATIONS ARE DISABLED. The Firebase service account could not be loaded:", error);
+        }
         return false;
     }
+}
+
+/** Whether this server is able to send push notifications. */
+export function isPushConfigured(): boolean {
+    return initFirebaseAdmin();
 }
 
 export async function sendFcmPushToTokens(
@@ -66,21 +113,33 @@ export async function sendFcmPushToTokens(
         referenceId?: string;
         additionalData?: Record<string, any>;
     }
-): Promise<{ successCount: number; failureCount: number }> {
+): Promise<{
+    successCount: number;
+    failureCount: number;
+    /** True when nothing was attempted because this server has no Firebase credentials. */
+    notConfigured?: boolean;
+    /** Why sends failed, as reason -> number of devices. */
+    failureReasons?: Record<string, number>;
+}> {
     const initialized = initFirebaseAdmin();
     if (!initialized) {
-        return { successCount: 0, failureCount: tokens.length };
+        return { successCount: 0, failureCount: tokens.length, notConfigured: true };
     }
 
     const messaging = getMessaging();
     let successCount = 0;
     let failureCount = 0;
+    const failureReasons: Record<string, number> = {};
+    const countFailure = (reason: string) => {
+        failureCount++;
+        failureReasons[reason] = (failureReasons[reason] || 0) + 1;
+    };
 
     const imageUrl = payload.imageUrl?.trim() || payload.additionalData?.imageUrl?.trim() || undefined;
 
     for (const token of tokens) {
         if (!token || token.startsWith("ios_sim_") || token === "no_token_available") {
-            failureCount++;
+            countFailure("simulator or placeholder token");
             continue;
         }
 
@@ -141,10 +200,10 @@ export async function sendFcmPushToTokens(
             successCount++;
         } catch (err: any) {
             console.error(`[FirebaseAdmin] Failed to send to token ${token.substring(0, 15)}...:`, err?.message || err);
-            failureCount++;
 
             const msg = (err?.message || "").toLowerCase();
             const code = err?.code || "";
+            countFailure(String(code || err?.message || "unknown error").replace(/^messaging\//, ""));
             if (
                 code === "messaging/registration-token-not-registered" ||
                 code === "messaging/invalid-registration-token" ||
@@ -161,5 +220,5 @@ export async function sendFcmPushToTokens(
         }
     }
 
-    return { successCount, failureCount };
+    return { successCount, failureCount, failureReasons };
 }
