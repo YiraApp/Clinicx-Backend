@@ -41,6 +41,10 @@ const startServer = async () => {
         const { medicationReminderService } = await import("./services/Appointments/medication-reminder.service.js");
         medicationReminderService.startScheduler(60);
 
+        // Start MedSense timeout checker (reads a report with Gemini if MedSense hasn't answered in time)
+        const { medSenseService } = await import("./services/Appointments/medsense.service.js");
+        medSenseService.startScheduler(60);
+
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });
