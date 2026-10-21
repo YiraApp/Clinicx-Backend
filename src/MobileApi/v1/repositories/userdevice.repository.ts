@@ -75,6 +75,59 @@ export class UserDeviceRepository {
             );
         }
     }
+
+    async deleteDevices(
+        userId?: string | null,
+        fcmToken?: string | null,
+        deviceId?: string | null,
+        logoutAll?: boolean
+    ): Promise<number> {
+        let totalDeleted = 0;
+
+        // 1. Purge by physical device identifier or FCM push token so this device receives zero notifications
+        const tokenClauses: string[] = [];
+        const tokenParams: any = {};
+
+        if (deviceId && deviceId.trim() && deviceId !== "unknown_id") {
+            tokenClauses.push("PhysicalDeviceId = :deviceId");
+            tokenParams.deviceId = deviceId.trim();
+        }
+
+        if (fcmToken && fcmToken.trim() && fcmToken !== "no_token_available") {
+            tokenClauses.push("FCMToken = :fcmToken");
+            tokenParams.fcmToken = fcmToken.trim();
+        }
+
+        if (tokenClauses.length > 0) {
+            try {
+                const res = await this.deviceRepo.createQueryBuilder()
+                    .delete()
+                    .from(UserDevice)
+                    .where(tokenClauses.join(" OR "), tokenParams)
+                    .execute();
+                totalDeleted += (res.affected || 0);
+            } catch (err) {
+                console.error("[UserDeviceRepository] Error deleting device by token/id:", err);
+            }
+        }
+
+        // 2. Unconditionally purge or deactivate devices for this userId so no notifications are routed to logged-out user
+        if (userId && userId.trim()) {
+            try {
+                const res = await this.deviceRepo.createQueryBuilder()
+                    .delete()
+                    .from(UserDevice)
+                    .where("UserId = :userId", { userId: userId.trim() })
+                    .execute();
+                totalDeleted += (res.affected || 0);
+            } catch (err) {
+                console.error("[UserDeviceRepository] Error deleting device by userId:", err);
+            }
+        }
+
+        console.log(`[UserDeviceRepository] Deleted ${totalDeleted} device record(s) from UserDevices for logout. Criteria:`, { userId, deviceId, fcmToken, logoutAll });
+        return totalDeleted;
+    }
 }
 
 export const userDeviceRepository = new UserDeviceRepository();

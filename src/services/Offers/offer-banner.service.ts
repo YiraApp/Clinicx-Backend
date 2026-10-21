@@ -238,6 +238,7 @@ export class OfferBannerService {
                 notif.Type = "OFFER_PROMOTION";
                 notif.ReferenceId = String(banner.Id);
                 notif.Route = route || null;
+                notif.ImageUrl = banner.ImageUrl || null;
                 notif.IsRead = false;
                 notif.CreatedAt = new Date();
                 await notifRepo.save(notif).catch(() => null);

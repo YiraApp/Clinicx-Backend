@@ -36,8 +36,19 @@ export const refreshToken = async (req: Request, res: Response) => {
  */
 export const logout = async (req: Request, res: Response) => {
     try {
-        const { refreshToken } = req.body;
-        await authService.logout(refreshToken);
+        const { refreshToken, fcmToken, deviceId } = req.body || {};
+        if (refreshToken) {
+            try {
+                await authService.logout(refreshToken);
+            } catch (_) {}
+        }
+        // Also clean up any user device records if device/token is provided
+        if (fcmToken || deviceId) {
+            try {
+                const { userDeviceRepository } = await import("../../MobileApi/v1/repositories/userdevice.repository.js");
+                await userDeviceRepository.deleteDevices(null, fcmToken, deviceId, true);
+            } catch (_) {}
+        }
         return res.status(200).json(ApiResponse.success(null, "Logged out successfully"));
     } catch (error: any) {
         return res.status(400).json(ApiResponse.error(error.message));
