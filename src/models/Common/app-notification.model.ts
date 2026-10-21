@@ -27,6 +27,9 @@ export class AppNotification {
     @Column({ type: "varchar", length: 255, nullable: true })
     Route: string | null;
 
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    ImageUrl: string | null;
+
     @Column({ type: "bit", default: false })
     IsRead: boolean;
 

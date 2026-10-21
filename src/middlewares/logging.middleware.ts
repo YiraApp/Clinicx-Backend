@@ -108,7 +108,11 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/feedback",
         "/v1/api/auth/device-token",
         "/mobile/api/v1/auth/device-token",
-        "/api/v1/mobile/auth/device-token"
+        "/api/v1/mobile/auth/device-token",
+        "/v1/api/auth/logout",
+        "/mobile/api/v1/auth/logout",
+        "/api/v1/mobile/auth/logout",
+        "/api/auth/logout"
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();

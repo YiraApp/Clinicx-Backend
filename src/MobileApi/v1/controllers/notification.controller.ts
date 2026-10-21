@@ -31,9 +31,8 @@ export class NotificationController {
             const familyMembers = await userRepo.createQueryBuilder('u')
                 .where('u.IsDeleted = 0')
                 .andWhere(
-                    '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
-                    (cleanPhone && cleanPhone.length === 10 ? ' OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone' : '') + ')',
-                    { userId: user.Id, parentId, cleanPhone }
+                    '(u.Id = :userId OR (u.Id = :parentId AND :parentId IS NOT NULL) OR u.ParentUserId = :parentId OR u.ParentUserId = :userId)',
+                    { userId: user.Id, parentId: user.ParentUserId || null }
                 )
                 .getMany()
                 .catch(() => []);
@@ -76,6 +75,18 @@ export class NotificationController {
 
             const [notifications, total] = await queryBuilder.getManyAndCount();
 
+            // Lookup missing images from PushCampaigns
+            const missingRefIds = notifications.filter(n => (!n.ImageUrl || n.ImageUrl.trim() === '') && n.ReferenceId).map(n => n.ReferenceId);
+            let campaignMap: Record<string, string> = {};
+            if (missingRefIds.length > 0) {
+                try {
+                    const campaigns = await AppDataSource.query(`SELECT Id, ImageUrl FROM PushCampaigns WHERE Id IN (${missingRefIds.map(id => Number(id)).filter(id => !isNaN(id)).join(',') || '0'})`);
+                    for (const c of campaigns) {
+                        if (c.ImageUrl) campaignMap[String(c.Id)] = c.ImageUrl;
+                    }
+                } catch (_) {}
+            }
+
             const unreadCount = await this.notificationRepo.createQueryBuilder("n")
                 .where("n.UserId IN (:...linkedUserIds)", { linkedUserIds })
                 .andWhere("n.IsRead = 0")
@@ -93,6 +104,7 @@ export class NotificationController {
                     type: n.Type,
                     referenceId: n.ReferenceId,
                     route: n.Route,
+                    imageUrl: n.ImageUrl || (n.ReferenceId ? campaignMap[n.ReferenceId] : null) || null,
                     isRead: n.IsRead,
                     createdAt: n.CreatedAt,
                 })),

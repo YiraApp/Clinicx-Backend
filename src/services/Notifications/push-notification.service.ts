@@ -90,9 +90,8 @@ export class PushNotificationService {
                 const familyMembers = await userRepo.createQueryBuilder('u')
                     .where('u.IsDeleted = 0')
                     .andWhere(
-                        '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
-                        (cleanPhone && cleanPhone.length === 10 ? ' OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone' : '') + ')',
-                        { userId: user.Id, parentId, cleanPhone }
+                        '(u.Id = :userId OR (u.Id = :parentId AND :parentId IS NOT NULL) OR u.ParentUserId = :parentId OR u.ParentUserId = :userId)',
+                        { userId: user.Id, parentId: user.ParentUserId || null }
                     )
                     .getMany()
                     .catch(() => []);

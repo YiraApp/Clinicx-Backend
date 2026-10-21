@@ -191,11 +191,35 @@ export class PushCampaignService {
                 : String(data.targetOrganizationIds);
         }
         if (data.notificationCategory !== undefined) payload.NotificationCategory = data.notificationCategory.toUpperCase();
-        if (data.status !== undefined) payload.Status = data.status.toUpperCase();
+
+        // Properly update Status when campaign is scheduled, recurring, or instant
+        const effectiveScheduleType = (payload.ScheduleType || data.scheduleType || "").toLowerCase();
+        if (data.status !== undefined) {
+            payload.Status = data.status.toUpperCase();
+        } else if (effectiveScheduleType === "scheduled" || (data.scheduledDate && data.scheduledTime)) {
+            // Re-arm campaign into SCHEDULED state so background scheduler picks it up
+            payload.Status = "SCHEDULED";
+        } else if (effectiveScheduleType === "recurring") {
+            payload.Status = "ACTIVE";
+        } else if (effectiveScheduleType === "now" && (data.sendImmediately || data.sendImmediately === undefined)) {
+            payload.Status = "SENT";
+        }
+
         if (data.isActive !== undefined) payload.IsActive = Boolean(data.isActive);
 
-        const updated = await pushCampaignRepository.update(id, payload);
-        return updated ? this.formatCampaign(updated) : null;
+        await pushCampaignRepository.update(id, payload);
+
+        // If sendImmediately is true or instant send requested
+        if (data.sendImmediately || (effectiveScheduleType === "now" && data.sendImmediately !== false)) {
+            try {
+                await this.dispatchCampaign(id);
+            } catch (dispatchErr) {
+                console.error("[PushCampaignService] Error auto-dispatching campaign on update:", dispatchErr);
+            }
+        }
+
+        const refetched = await pushCampaignRepository.findById(id);
+        return refetched ? this.formatCampaign(refetched) : null;
     }
 
     async toggleActive(id: number): Promise<any | null> {
@@ -275,13 +299,16 @@ export class PushCampaignService {
             )
         );
 
-        const route = campaign.RedirectionType === "in_app" ? campaign.InAppRoute : undefined;
+        const isBrowser = campaign.RedirectionType === "browser";
+        const route = isBrowser ? undefined : (campaign.InAppRoute || undefined);
+        const externalUrl = isBrowser ? (campaign.RedirectionUrl || undefined) : undefined;
         const additionalData: Record<string, any> = {
             campaignId: String(campaign.Id),
             category: campaign.NotificationCategory,
             redirectionType: campaign.RedirectionType,
-            url: campaign.RedirectionUrl || undefined,
-            route: campaign.InAppRoute || undefined,
+            url: externalUrl,
+            redirectionUrl: externalUrl,
+            route: route,
         };
 
         if (campaign.HasImage && campaign.ImageUrl) {
@@ -321,7 +348,8 @@ export class PushCampaignService {
                 n.Body = campaign.Body;
                 n.Type = campaign.NotificationCategory || "BROADCAST";
                 n.ReferenceId = String(campaign.Id);
-                n.Route = route || null;
+                n.Route = isBrowser ? (campaign.RedirectionUrl || null) : (route || null);
+                n.ImageUrl = (campaign.HasImage && campaign.ImageUrl) ? campaign.ImageUrl : (campaign.ImageUrl || null);
                 n.IsRead = false;
                 n.CreatedAt = new Date();
                 return n;
@@ -385,7 +413,16 @@ export class PushCampaignService {
                 if (campaign.ScheduleType === "scheduled") {
                     if (!campaign.ScheduledDate || !campaign.ScheduledTime) continue;
 
-                    const campaignDateStr = new Date(campaign.ScheduledDate).toISOString().slice(0, 10);
+                    let campaignDateStr = "";
+                    const rawDate = campaign.ScheduledDate as any;
+                    if (typeof rawDate === "string") {
+                        campaignDateStr = rawDate.trim().slice(0, 10);
+                    } else if (rawDate instanceof Date) {
+                        campaignDateStr = rawDate.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+                    } else {
+                        campaignDateStr = new Date(rawDate).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+                    }
+
                     const campaignTimeStr = campaign.ScheduledTime.trim();
 
                     // Trigger if date matches and time matches current minute, or overdue

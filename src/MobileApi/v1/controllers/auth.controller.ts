@@ -408,37 +408,39 @@ export const refreshToken = async (req: Request, res: Response) => {
  */
 export const logout = async (req: Request, res: Response) => {
     try {
-        const { refreshToken, fcmToken, deviceId, one, logoutAll, allDevices } = req.body;
+        const { refreshToken, fcmToken, deviceId, one, logoutAll, allDevices } = req.body || {};
 
         let userId: string | null = (req as any).userId || (req.body && req.body.userId) || (req.headers && (req.headers['x-user-id'] as string)) || null;
         if (refreshToken) {
-            // First decode using JWT utility to see if payload is valid
-            const payload = verifyRefreshToken(refreshToken);
-            if (payload && payload.userId) {
-                userId = payload.userId;
-            } else {
-                // If JWT verify fails (e.g. expired token), look up in DB to find associated UserId
-                const tokenRecord = await tokenRepository.findByRefreshToken(refreshToken);
-                if (tokenRecord) {
-                    userId = tokenRecord.UserId;
+            try {
+                // First decode using JWT utility to see if payload is valid
+                const payload = verifyRefreshToken(refreshToken);
+                if (payload && payload.userId) {
+                    userId = payload.userId;
+                } else {
+                    // If JWT verify fails (e.g. expired token), look up in DB to find associated UserId
+                    const tokenRecord = await tokenRepository.findByRefreshToken(refreshToken);
+                    if (tokenRecord) {
+                        userId = tokenRecord.UserId;
+                    }
                 }
-            }
+            } catch (_) {}
         }
 
         // Call the standard authService logout logic to revoke the session
         if (refreshToken) {
-            await authService.logout(refreshToken);
+            try {
+                await authService.logout(refreshToken);
+            } catch (_) {}
         }
 
-        // Deactivate push notification devices if we identified the user
-        if (userId) {
-            // Dual-mode logic:
-            // Single device logout: active only when 'one' is explicitly true.
-            // All devices logout: active when 'one' is not true, OR if logoutAll/allDevices is true.
-            const isSingleDeviceLogout = (one === true);
+        // Delete device info from UserDevices table on logout so user receives zero push notifications after logout
+        const isSingleDeviceLogout = (one === true);
+        const isAll = (logoutAll === true || allDevices === true || !isSingleDeviceLogout);
+        const headerDeviceId = (req.headers && (req.headers['x-device-id'] as string)) || null;
+        const targetDeviceId = deviceId || headerDeviceId || null;
 
-            await userDeviceService.deactivateDevices(userId, isSingleDeviceLogout, fcmToken, deviceId);
-        }
+        await userDeviceService.deleteDevices(userId, fcmToken, targetDeviceId, isAll);
 
         return res.status(200).json(ApiResponse.success(null, "Logged out successfully"));
     } catch (error: any) {

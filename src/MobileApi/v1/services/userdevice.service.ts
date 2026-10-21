@@ -33,7 +33,13 @@ export class UserDeviceService {
             return null;
         }
 
-        let device = await userDeviceRepository.findByPhysicalDeviceId(deviceId);
+        let device: UserDevice | null = null;
+        if (deviceId && deviceId.trim() && deviceId !== "unknown_id") {
+            device = await userDeviceRepository.findByPhysicalDeviceId(deviceId.trim());
+        }
+        if (!device && fcmToken && fcmToken.trim() && fcmToken !== "no_token_available") {
+            device = await userDeviceRepository.findByToken(fcmToken.trim());
+        }
 
         if (device) {
             // Transfer ownership to current user or update details
@@ -41,6 +47,7 @@ export class UserDeviceService {
             device.FCMToken = fcmToken;
             if (platform) device.Platform = platform;
             if (currentVersion) device.CurrentVersion = currentVersion;
+            if (deviceId && deviceId !== "unknown_id") device.PhysicalDeviceId = deviceId;
             device.IsActive = true;
             device.UpdatedAt = new Date();
         } else {
@@ -54,7 +61,23 @@ export class UserDeviceService {
             device.CreatedAt = new Date();
         }
 
-        return await userDeviceRepository.saveDevice(device);
+        const saved = await userDeviceRepository.saveDevice(device);
+        // Clean up any other stale records for this physical device or FCM token belonging to any other user
+        try {
+            const cleanResult = await AppDataSource.createQueryBuilder()
+                .delete()
+                .from(UserDevice)
+                .where("((PhysicalDeviceId = :deviceId AND PhysicalDeviceId != 'unknown_id') OR FCMToken = :fcmToken) AND Id != :savedId", {
+                    deviceId: deviceId ? deviceId.trim() : "",
+                    fcmToken: fcmToken ? fcmToken.trim() : "",
+                    savedId: saved.Id
+                })
+                .execute();
+            console.log(`[UserDeviceService] Purged ${cleanResult.affected || 0} older device record(s) for token/deviceId`);
+        } catch (cleanupErr: any) {
+            console.error("[UserDeviceService] Error cleaning up stale device records:", cleanupErr && cleanupErr.message ? cleanupErr.message : cleanupErr);
+        }
+        return saved;
     }
 
     async deactivateDeviceToken(fcmToken: string): Promise<void> {
@@ -75,6 +98,15 @@ export class UserDeviceService {
         } else {
             await userDeviceRepository.deactivateAllDevices(userId);
         }
+    }
+
+    async deleteDevices(
+        userId?: string | null,
+        fcmToken?: string | null,
+        deviceId?: string | null,
+        logoutAll?: boolean
+    ): Promise<number> {
+        return await userDeviceRepository.deleteDevices(userId, fcmToken, deviceId, logoutAll);
     }
 }
 
