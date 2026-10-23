@@ -23,7 +23,7 @@ class MedSenseService {
     }
 
     private get baseUrl(): string {
-        return (this.env("MEDSENSE_BASE_URL") || "https://api.yira.ai/api/v1").replace(/\/+$/, "");
+        return (this.env("MEDSENSE_BASE_URL") || "https://api.yira.ai/v1").replace(/\/+$/, "");
     }
 
     private get timeoutMinutes(): number {
