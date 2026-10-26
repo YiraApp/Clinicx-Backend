@@ -19,6 +19,14 @@ test("ABDM request bodies lose the Aadhaar number, OTPs and mobiles, at any dept
     });
 });
 
+test("a verify-by-Aadhaar body never logs the Aadhaar it carries as the identifier", () => {
+    assert.deepEqual(maskRequestBodyForLog("/api/abdm/login/otp", { method: "aadhaar", identifier: "123412341234", otpSystem: "aadhaar" }), {
+        method: "aadhaar",
+        identifier: "********",
+        otpSystem: "aadhaar",
+    });
+});
+
 test("other routes keep their bodies, with passwords masked as before", () => {
     assert.deepEqual(maskRequestBodyForLog("/api/auth/login", { email: "a@b.c", password: "pw", mobile: "9876543210" }), {
         email: "a@b.c",

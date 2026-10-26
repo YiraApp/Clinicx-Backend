@@ -15,6 +15,7 @@ const startServer = async () => {
     try {
         await initializeDatabase();
         await MigrationService.ensureLogIndexes();
+        await MigrationService.ensureAbdmSchema();
         await DietMigrationService.runMigrationsAndSeed();
 
         // Report at startup whether this server can send push notifications

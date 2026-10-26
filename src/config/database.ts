@@ -75,6 +75,7 @@ import { Feedback } from "../models/Feedback/feedback.model.js";
 import { PatientMedicationReminder } from "../models/Appointments/patient-medication-reminder.model.js";
 import { DietFoodItem, DietTemplate, DietTemplateMeal, PatientDietPlan, PatientDietPlanMeal, PatientDietMealLog } from "../models/Diet/index.js";
 import { AbhaConsent } from "../models/Abdm/abha-consent.model.js";
+import { AbhaProfileShare } from "../models/Abdm/abha-profile-share.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -136,7 +137,8 @@ export const AppDataSource = new DataSource({
         PatientDietPlan,
         PatientDietPlanMeal,
         PatientDietMealLog,
-        AbhaConsent
+        AbhaConsent,
+        AbhaProfileShare
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,

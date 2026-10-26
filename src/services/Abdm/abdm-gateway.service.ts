@@ -58,9 +58,10 @@ export const abdmTimestamp = (date: Date = new Date()): string => date.toISOStri
 
 /**
  * Reads the error shapes ABDM answers with:
- *   { error: { code, message } }          business and UIDAI refusals
+ *   { error: { code, message } }          business and UIDAI refusals (also wrapped in an array)
  *   { code, message, description }        gateway authentication
  *   { message, timestamp }                generic
+ *   { txnId, description }                a wrong OTP on enrollment/auth/byAbdm
  *   { <field>: "<message>", timestamp }   request validation, naming the field
  *   an empty body
  */
@@ -72,15 +73,19 @@ export const parseAbdmError = (status: number, body: unknown): { code: string | 
         return { code: null, message: text ? text.slice(0, 300) : fallback, field: null };
     }
 
-    const b = body as Record<string, any>;
+    const b = (Array.isArray(body) ? body[0] ?? {} : body) as Record<string, any>;
     if (b.error && typeof b.error === "object") {
         return { code: normalizeAbdmCode(b.error.code), message: String(b.error.message || fallback), field: null };
     }
     if (typeof b.message === "string" || b.code !== undefined) {
         return { code: normalizeAbdmCode(b.code), message: String(b.message || b.description || fallback), field: null };
     }
+    if (typeof b.description === "string" && b.description.trim()) {
+        return { code: null, message: b.description.trim(), field: null };
+    }
 
-    const field = Object.keys(b).find((key) => key !== "timestamp" && typeof b[key] === "string");
+    // A transaction id is an identifier, never the message naming what was refused.
+    const field = Object.keys(b).find((key) => key !== "timestamp" && key !== "txnId" && typeof b[key] === "string");
     if (field) {
         return { code: null, message: String(b[field]), field };
     }
@@ -90,6 +95,8 @@ export const parseAbdmError = (status: number, body: unknown): { code: string | 
 const kindFor = (status: number, code: string | null, message: string): AbdmErrorKind => {
     // 9009xx come from ABDM's API manager: the client or its token was refused.
     if (code && /^9009\d\d$/.test(code)) return "credentials";
+    // An ABDM business code (such as ABDM-1017, Invalid Transaction Id) refuses the journey, not the clinic.
+    if (code && /^ABDM-\d+$/i.test(code)) return status >= 500 ? "unavailable" : "rejected";
     if (status === 401 || status === 403) {
         // An expired or wrong user token is the journey's problem, not the clinic's credentials.
         return /[xtr]-token/i.test(message) ? "rejected" : "credentials";
@@ -113,8 +120,10 @@ export const abdmNotConfiguredError = (operation: string): AbdmApiError =>
 export interface AbdmCall {
     /** Short name for logs, such as "enrollment/request/otp". */
     operation: string;
-    method: "GET" | "POST";
-    /** Path on the ABHA service, starting with /abha/api/v3. */
+    method: "GET" | "POST" | "PATCH";
+    /** The ABHA service (M1, default) or the HIE-CM gateway (Scan and Share, bridge, certs). */
+    host?: "abha" | "gateway";
+    /** Path on that host, such as /abha/api/v3/... or /api/hiecm/... */
     path: string;
     body?: unknown;
     headers?: Record<string, string>;
@@ -130,7 +139,7 @@ export interface AbdmFile {
 interface SendRequest {
     operation: string;
     url: string;
-    method: "GET" | "POST";
+    method: "GET" | "POST" | "PATCH";
     headers: Record<string, string>;
     body?: unknown;
     binary?: boolean;
@@ -163,18 +172,19 @@ export class AbdmGatewayService {
     }
 
     /**
-     * One call to the ABHA service with the gateway token. A credentials refusal clears the
-     * cached token so the next call starts a new session; it is never retried here, because
-     * a credential check must not loop.
+     * One call to the ABHA service, or to the gateway, with the gateway token. A credentials
+     * refusal clears the cached token so the next call starts a new session; it is never retried
+     * here, because a credential check must not loop.
      */
     async call<T = any>(call: AbdmCall): Promise<T> {
         const token = await this.getAccessToken();
+        const toGateway = call.host === "gateway";
         try {
             return await this.send({
                 operation: call.operation,
-                url: `${abdmConfig.abhaBaseUrl}${call.path}`,
+                url: `${toGateway ? abdmConfig.gatewayBaseUrl : abdmConfig.abhaBaseUrl}${call.path}`,
                 method: call.method,
-                headers: { Authorization: `Bearer ${token}`, ...call.headers },
+                headers: { Authorization: `Bearer ${token}`, ...(toGateway ? { "X-CM-ID": abdmConfig.cmId } : {}), ...call.headers },
                 body: call.body,
                 binary: call.binary,
             });

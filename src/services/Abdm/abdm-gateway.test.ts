@@ -113,6 +113,16 @@ test("an expired user token is the journey's problem, not the clinic's credentia
     );
 });
 
+test("an ABDM business code on a 401 refuses the journey and keeps the gateway token", async () => {
+    stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 401, body: { error: { code: "ABDM-1017", message: "Invalid Transaction Id" } } }));
+    const gateway = new AbdmGatewayService();
+    const call = () => gateway.call({ operation: "test", method: "GET", path: "/abha/api/v3/enrollment/enrol/suggestion" });
+
+    await assert.rejects(call(), (error: unknown) => error instanceof AbdmApiError && error.kind === "rejected" && error.code === "ABDM-1017");
+    await assert.rejects(call());
+    assert.equal(calls.filter(isSessionCall).length, 1, "the gateway token was not thrown away");
+});
+
 test("a refusal without a body still becomes a readable error", async () => {
     stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 500 }));
     const gateway = new AbdmGatewayService();
@@ -164,6 +174,17 @@ test("ABDM's error shapes all parse", () => {
         code: null,
         message: "Invalid LoginId",
         field: "loginId",
+    });
+    // A wrong mobile OTP on enrollment/auth/byAbdm names no field: the description is the message, not the txnId.
+    assert.deepEqual(parseAbdmError(400, { txnId: "30839193-9788-4c0d-9459-7cd70a", description: "Invalid OTP value" }), {
+        code: null,
+        message: "Invalid OTP value",
+        field: null,
+    });
+    assert.deepEqual(parseAbdmError(400, [{ error: { code: "ABDM-1002: ", message: "Invalid HIP ID" } }]), {
+        code: "ABDM-1002",
+        message: "Invalid HIP ID",
+        field: null,
     });
     assert.equal(parseAbdmError(400, null).message, "ABDM answered with HTTP 400 and no message.");
     assert.equal(normalizeAbdmCode("ABDM-1114: "), "ABDM-1114");

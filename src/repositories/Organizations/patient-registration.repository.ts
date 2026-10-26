@@ -66,7 +66,7 @@ export class PatientRegistrationRepository {
             query.andWhere("(u.TokenNumber LIKE :tokenFilter OR pr.TokenNumber LIKE :tokenFilter)", { tokenFilter: `%${tokenVal}%` });
         }
 
-        const abhaCondition = abhaPatientCondition(parseAbhaPatientFilter(filters.abha), "u");
+        const abhaCondition = abhaPatientCondition(parseAbhaPatientFilter(filters.abha), "pr");
         if (abhaCondition) {
             query.andWhere(abhaCondition);
         }
@@ -199,7 +199,7 @@ export class PatientRegistrationRepository {
         const stats = await statsQuery
             .select("COUNT(pr.Id)", "total")
             .addSelect("SUM(CASE WHEN u.Status = 1 THEN 1 ELSE 0 END)", "active")
-            .addSelect("SUM(CASE WHEN u.RegisteredViaAbha = 1 THEN 1 ELSE 0 END)", "abha")
+            .addSelect("SUM(CASE WHEN pr.RegisteredViaAbha = 1 THEN 1 ELSE 0 END)", "abha")
             .getRawOne();
 
 
@@ -228,9 +228,10 @@ export class PatientRegistrationRepository {
                 allergies: pr.Allergies,
                 medicalHistory: pr.MedicalHistory,
                 tokenNumber: pr.TokenNumber || pr.User?.TokenNumber || null,
-                registeredViaAbha: !!pr.User?.RegisteredViaAbha,
-                abhaNumber: pr.User?.AbhaNumber ?? null,
-                abhaAddress: pr.User?.AbhaAddress ?? null,
+                // Registered through ABHA at this hospital. The ABHA number goes out masked and the
+                // address not at all: this list is also served to callers without a login.
+                registeredViaAbha: !!pr.RegisteredViaAbha,
+                abhaNumber: pr.User?.AbhaNumber ? `xx-xxxx-xxxx-${pr.User.AbhaNumber.slice(-4)}` : null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,
                 insuranceStatus: ins?.Status ?? null,

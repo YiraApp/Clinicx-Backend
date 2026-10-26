@@ -10,8 +10,8 @@ test("only the two known values become a filter", () => {
     }
 });
 
-test("each filter is a fixed condition on the users alias", () => {
-    assert.equal(abhaPatientCondition("registered", "u"), "u.RegisteredViaAbha = 1");
-    assert.equal(abhaPatientCondition("not-registered", "u"), "u.RegisteredViaAbha = 0");
-    assert.equal(abhaPatientCondition(undefined, "u"), null);
+test("each filter is a fixed condition on the registration alias", () => {
+    assert.equal(abhaPatientCondition("registered", "pr"), "pr.RegisteredViaAbha = 1");
+    assert.equal(abhaPatientCondition("not-registered", "pr"), "pr.RegisteredViaAbha = 0");
+    assert.equal(abhaPatientCondition(undefined, "pr"), null);
 });

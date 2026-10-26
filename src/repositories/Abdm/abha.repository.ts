@@ -1,6 +1,7 @@
 import { AppDataSource } from "../../config/database.js";
 import { AbhaConsent } from "../../models/Abdm/abha-consent.model.js";
 import { User } from "../../models/Account/user.model.js";
+import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import type { AbhaEnrolmentStore, LinkedPatient, NewAbhaConsent } from "../../services/Abdm/abha-enrolment.service.js";
 
 /** The ABHA journey's reads and writes in the clinic database: consents, and ABHA on the Users row. */
@@ -57,12 +58,22 @@ export class AbhaRepository implements AbhaEnrolmentStore {
         };
     }
 
-    async patientExists(userId: string): Promise<boolean> {
-        return (await this.users.count({ where: { Id: userId, IsDeleted: false } })) > 0;
+    async getPatient(userId: string): Promise<{ abhaNumber: string | null; isPatient: boolean } | null> {
+        const user = await this.users.findOne({ where: { Id: userId, IsDeleted: false }, select: { Id: true, AbhaNumber: true } });
+        if (!user) return null;
+        const registrations = await AppDataSource.getRepository(PatientRegistration).count({ where: { UserId: userId, IsDeleted: false } });
+        return { abhaNumber: user.AbhaNumber ?? null, isPatient: registrations > 0 };
     }
 
-    async linkAbha(userId: string, abhaNumber: string, abhaAddress: string | null): Promise<void> {
+    async linkAbha(userId: string, abhaNumber: string, abhaAddress: string | null, hospitalId: number | null): Promise<void> {
         await this.users.update(userId, { AbhaNumber: abhaNumber, AbhaAddress: abhaAddress, AbhaLinkedAt: new Date(), RegisteredViaAbha: true });
+        if (hospitalId) {
+            // What this hospital's "From ABHA" filter reads.
+            await AppDataSource.getRepository(PatientRegistration).update(
+                { UserId: userId, HospitalId: hospitalId, IsDeleted: false },
+                { RegisteredViaAbha: true },
+            );
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 import { abdmConfig } from "../../config/abdm.config.js";
 import { AbdmApiError, abdmGatewayService, abdmNotConfiguredError, type AbdmFile, type AbdmGatewayService } from "./abdm-gateway.service.js";
 import { abdmCryptoService, type AbdmCryptoService } from "./abdm-crypto.service.js";
-import { AbhaSessionStore, type AbhaEnrolmentSession, type AbhaProfileSummary, type OtpState } from "./abha-session.store.js";
+import { AbhaSessionStore, type AbhaSession, type AbhaProfileSummary, type OtpState } from "./abha-session.store.js";
 
 /**
  * ABDM M1, Create ABHA by Aadhaar OTP, for the front desk:
@@ -10,6 +10,9 @@ import { AbhaSessionStore, type AbhaEnrolmentSession, type AbhaProfileSummary, t
  *
  * An Aadhaar that already holds an ABHA comes back from enrol/byAadhaar with isNew false and
  * that account: the journey carries on with it and nothing new is created.
+ *
+ * The ABHA card and the link to a patient record serve every journey that ends verified
+ * (create here, verify and find in abha-login.service), so they live here too.
  */
 
 export const CONSENT_CODE = "abha-enrollment";
@@ -19,8 +22,10 @@ export const OTP_MAX_RESENDS = 2;
 export const RESEND_LIMIT_MESSAGE = "Maximum OTP resend attempts reached. Please try again after 30 mins";
 export const AADHAAR_INVALID_MESSAGE = "Aadhaar Number is not valid";
 
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Encrypted request fields: when ABDM refuses one, the cached certificate may be stale. */
-const ENCRYPTED_FIELDS = new Set(["loginId", "otpValue"]);
+const ENCRYPTED_FIELDS = new Set(["loginId", "otpValue", "mobile"]);
 
 export class AbhaJourneyError extends Error {
     readonly status: number;
@@ -75,8 +80,10 @@ export interface AbhaEnrolmentStore {
     updateConsent(consentId: number, changes: { txnId?: string; abhaNumber?: string; patientUserId?: string }): Promise<void>;
     staffName(userId: string): Promise<string | null>;
     findPatientByAbhaNumber(abhaNumber: string): Promise<LinkedPatient | null>;
-    patientExists(userId: string): Promise<boolean>;
-    linkAbha(userId: string, abhaNumber: string, abhaAddress: string | null): Promise<void>;
+    /** A live user record: the ABHA number it holds, and whether it is registered as a patient anywhere. */
+    getPatient(userId: string): Promise<{ abhaNumber: string | null; isPatient: boolean } | null>;
+    /** Records the ABHA on the user, and on their registration at [hospitalId] when one is given. */
+    linkAbha(userId: string, abhaNumber: string, abhaAddress: string | null, hospitalId: number | null): Promise<void>;
 }
 
 export interface VerifyOtpResult {
@@ -95,12 +102,37 @@ const lastFourDigits = (text: string | null | undefined): string | null => {
     return match ? match[1]! : null;
 };
 
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
-const textOrNull = (value: unknown): string | null => text(value) || null;
+export const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+export const textOrNull = (value: unknown): string | null => text(value) || null;
 
-/** DD-MM-YYYY from ABDM's dob, or from its day/month/year fields. */
+/** One rule for every OTP in M1: resend after 60 seconds, at most twice. */
+export const assertCanResend = (otp: OtpState, now: number): void => {
+    if (otp.resends >= OTP_MAX_RESENDS) {
+        throw new AbhaJourneyError(429, "resend-limit", RESEND_LIMIT_MESSAGE);
+    }
+    const waitMs = otp.sentAt + OTP_RESEND_COOLDOWN_MS - now;
+    if (waitMs > 0) {
+        throw new AbhaJourneyError(429, "resend-wait", `You can resend the OTP in ${Math.ceil(waitMs / 1000)} seconds.`, {
+            retryAfterSeconds: Math.ceil(waitMs / 1000),
+        });
+    }
+};
+
+/** A refused encrypted field usually means a stale certificate: drop it so the next try fetches a fresh one. */
+export const withCertificateCheck = async <T>(crypto: Pick<AbdmCryptoService, "invalidate">, call: () => Promise<T>): Promise<T> => {
+    try {
+        return await call();
+    } catch (error) {
+        if (error instanceof AbdmApiError && error.field && ENCRYPTED_FIELDS.has(error.field)) {
+            crypto.invalidate();
+        }
+        throw error;
+    }
+};
+
+/** DD-MM-YYYY from ABDM's dob or dateOfBirth, or from its day/month/year fields. */
 const toDisplayDate = (profile: Record<string, any>): string | null => {
-    const dob = text(profile.dob);
+    const dob = text(profile.dob) || text(profile.dateOfBirth);
     let match = dob.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
     if (match) return `${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}-${match[3]}`;
     match = dob.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -115,18 +147,30 @@ const toDisplayDate = (profile: Record<string, any>): string | null => {
     return null;
 };
 
-/** enrol/byAadhaar answers in one of two shapes; both become one summary. */
+/**
+ * One summary from the profile shapes ABDM answers with: enrol/byAadhaar (ABHAProfile, or the
+ * older healthIdNumber shape), GET profile/account, and the PHR abha-profile of an address login.
+ */
 export const toProfileSummary = (response: Record<string, any>): AbhaProfileSummary => {
     const profile: Record<string, any> = response.ABHAProfile && typeof response.ABHAProfile === "object" ? response.ABHAProfile : response;
-    const addresses = Array.isArray(profile.phrAddress)
-        ? profile.phrAddress.filter((address: unknown): address is string => typeof address === "string")
-        : textOrNull(profile.healthId) ? [text(profile.healthId)] : [];
+    const addresses: string[] = [];
+    const addAddress = (value: unknown) => {
+        const address = text(value);
+        if (address && !addresses.includes(address)) addresses.push(address);
+    };
+    // The preferred address first: it is the one the record keeps.
+    addAddress(profile.preferredAbhaAddress);
+    addAddress(profile.abhaAddress);
+    if (Array.isArray(profile.phrAddress)) profile.phrAddress.forEach(addAddress);
+    addAddress(profile.healthId);
 
+    const kycStatus = text(profile.kycStatus) || text(profile.verificationStatus);
     return {
-        abhaNumber: textOrNull(profile.ABHANumber) ?? textOrNull(profile.healthIdNumber),
+        abhaNumber: textOrNull(profile.ABHANumber) ?? textOrNull(profile.healthIdNumber) ?? textOrNull(profile.abhaNumber),
         firstName: text(profile.firstName),
         middleName: text(profile.middleName),
         lastName: text(profile.lastName),
+        fullName: text(profile.name) || text(profile.fullName),
         dateOfBirth: toDisplayDate(profile),
         gender: textOrNull(profile.gender),
         mobile: textOrNull(profile.mobile),
@@ -137,6 +181,9 @@ export const toProfileSummary = (response: Record<string, any>): AbhaProfileSumm
         abhaAddresses: addresses,
         photo: textOrNull(profile.photo) ?? textOrNull(profile.profilePhoto),
         abhaStatus: textOrNull(profile.abhaStatus) ?? textOrNull(profile.status),
+        kycVerified: typeof profile.kycVerified === "boolean" ? profile.kycVerified
+            : profile.kycVerified === "true" ? true
+            : kycStatus ? kycStatus.toUpperCase() === "VERIFIED" : null,
     };
 };
 
@@ -186,12 +233,13 @@ export class AbhaEnrolmentService {
         gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService,
         crypto: Pick<AbdmCryptoService, "encrypt" | "invalidate"> = abdmCryptoService,
         clock: () => number = Date.now,
+        sessions: AbhaSessionStore = new AbhaSessionStore(clock),
     ) {
         this.store = store;
         this.gateway = gateway;
         this.crypto = crypto;
         this.clock = clock;
-        this.sessions = new AbhaSessionStore(clock);
+        this.sessions = sessions;
     }
 
     /** Records the consent, then sends the Aadhaar OTP. Nothing reaches ABDM before the consent is stored. */
@@ -213,12 +261,17 @@ export class AbhaEnrolmentService {
         const consentId = await this.store.saveConsent({
             consentCode: CONSENT_CODE,
             consentVersion: CONSENT_VERSION,
+            // Only the known declarations, as booleans: nothing else from the request reaches the record.
             declarations: JSON.stringify({
                 termsAccepted: true,
-                ...input.consent.declarations,
+                aadhaarSharing: input.consent.declarations.aadhaarSharing === true,
+                otherDocument: input.consent.declarations.otherDocument === true,
+                linkRecords: input.consent.declarations.linkRecords === true,
+                shareWithProviders: input.consent.declarations.shareWithProviders === true,
+                anonymisedUse: input.consent.declarations.anonymisedUse === true,
                 staffConfirmed: true,
                 beneficiaryConfirmed: true,
-                language: input.consent.language || "en",
+                language: /^[a-z]{2}$/.test(String(input.consent.language ?? "")) ? input.consent.language : "en",
             }),
             staffUserId: input.staffUserId,
             staffName: await this.store.staffName(input.staffUserId),
@@ -228,7 +281,7 @@ export class AbhaEnrolmentService {
             agreedAt: new Date(this.clock()),
         });
 
-        const response = await this.withCertificateCheck(() => this.gateway.call<{ txnId?: string; message?: string }>({
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
             operation: "enrollment/request/otp (aadhaar)",
             method: "POST",
             path: "/abha/api/v3/enrollment/request/otp",
@@ -238,23 +291,19 @@ export class AbhaEnrolmentService {
         if (!txnId) {
             throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "enrollment/request/otp", message: "ABDM sent no transaction id with the OTP." });
         }
-        await this.store.updateConsent(consentId, { txnId });
+        // The OTP is on its way: the consent row already says who agreed and when, the txnId is a convenience.
+        await this.store.updateConsent(consentId, { txnId }).catch((error: any) =>
+            console.error("[ABDM] Could not record the transaction on the consent:", error?.message));
 
         const message = text(response.message) || "OTP sent to the Aadhaar-linked mobile number.";
         const session = this.sessions.create({
             staffUserId: input.staffUserId,
+            flow: "create",
             consentId,
             txnId,
             encryptedAadhaar,
             aadhaarMobileLast4: lastFourDigits(message),
             aadhaarOtp: { sentAt: this.clock(), resends: 0 },
-            isNew: null,
-            xToken: null,
-            xTokenExpiresAt: null,
-            profile: null,
-            abhaNumber: null,
-            abhaAddress: null,
-            communicationMobile: null,
         });
 
         return { sessionId: session.id, message, resendsLeft: OTP_MAX_RESENDS, resendAvailableInSeconds: OTP_RESEND_COOLDOWN_MS / 1000 };
@@ -263,19 +312,20 @@ export class AbhaEnrolmentService {
     /** Resends the Aadhaar OTP on the same transaction. */
     async resendAadhaarOtp(sessionId: string, staffUserId: string): Promise<{ message: string; resendsLeft: number; resendAvailableInSeconds: number }> {
         const session = this.session(sessionId, staffUserId);
-        if (session.isNew !== null || !session.encryptedAadhaar) {
+        const aadhaarOtp = session.aadhaarOtp;
+        if (session.flow !== "create" || session.verified || !session.encryptedAadhaar || !aadhaarOtp) {
             throw new AbhaJourneyError(409, "state", "The Aadhaar OTP is already verified.");
         }
-        this.assertCanResend(session.aadhaarOtp);
+        assertCanResend(aadhaarOtp, this.clock());
 
-        const response = await this.withCertificateCheck(() => this.gateway.call<{ txnId?: string; message?: string }>({
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
             operation: "enrollment/request/otp (aadhaar, resend)",
             method: "POST",
             path: "/abha/api/v3/enrollment/request/otp",
             body: { txnId: session.txnId, scope: ["abha-enrol"], loginHint: "aadhaar", loginId: session.encryptedAadhaar, otpSystem: "aadhaar" },
         }));
         session.txnId = text(response.txnId) || session.txnId;
-        session.aadhaarOtp = { sentAt: this.clock(), resends: session.aadhaarOtp.resends + 1 };
+        session.aadhaarOtp = { sentAt: this.clock(), resends: aadhaarOtp.resends + 1 };
         const message = text(response.message) || "OTP sent again to the Aadhaar-linked mobile number.";
         session.aadhaarMobileLast4 = lastFourDigits(message) ?? session.aadhaarMobileLast4;
 
@@ -296,12 +346,12 @@ export class AbhaEnrolmentService {
         if (!/^\d{10}$/.test(mobile)) {
             throw new AbhaJourneyError(400, "validation", "Enter a valid 10-digit mobile number for ABHA communication.", { field: "mobile" });
         }
-        if (session.isNew !== null) {
+        if (session.flow !== "create" || session.verified) {
             throw new AbhaJourneyError(409, "state", "The Aadhaar OTP is already verified.");
         }
 
         const encryptedOtp = await this.crypto.encrypt(otp);
-        const response = await this.withCertificateCheck(() => this.gateway.call<Record<string, any>>({
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<Record<string, any>>({
             operation: "enrollment/enrol/byAadhaar",
             method: "POST",
             path: "/abha/api/v3/enrollment/enrol/byAadhaar",
@@ -321,7 +371,22 @@ export class AbhaEnrolmentService {
         const newFlag = response.isNew ?? response.new;
         const isNew = newFlag === undefined ? /created/i.test(text(response.message)) : newFlag === true || newFlag === "true";
 
+        // A new ABHA whose communication mobile is not the Aadhaar-linked one verifies it next.
+        // Everything that can still fail runs before ABDM's answer is committed to the session,
+        // so a failure here can be retried instead of stranding an ABHA that now exists.
+        const linkedLast4 = session.aadhaarMobileLast4 ?? lastFourDigits(profile.mobile);
+        const mobileVerificationNeeded = isNew && linkedLast4 !== mobile.slice(-4);
+        const encryptedMobile = mobileVerificationNeeded ? await this.crypto.encrypt(mobile) : null;
+        const linkedPatient = profile.abhaNumber
+            ? await this.store.findPatientByAbhaNumber(profile.abhaNumber).catch((error: any) => {
+                console.error("[ABDM] Could not check for a patient already holding this ABHA:", error?.message);
+                return null;
+            })
+            : null;
+
         session.isNew = isNew;
+        session.verified = true;
+        session.tokenKind = "abha";
         session.txnId = text(response.txnId) || session.txnId;
         session.encryptedAadhaar = null;
         session.xToken = textOrNull(tokens?.token);
@@ -330,16 +395,14 @@ export class AbhaEnrolmentService {
         session.profile = profile;
         session.abhaNumber = profile.abhaNumber;
         session.abhaAddress = textOrNull(response.preferredAbhaAddress) ?? profile.abhaAddresses[0] ?? null;
-
-        // A new ABHA whose communication mobile is not the Aadhaar-linked one verifies it next.
-        const linkedLast4 = session.aadhaarMobileLast4 ?? lastFourDigits(profile.mobile);
-        const mobileVerificationNeeded = isNew && linkedLast4 !== mobile.slice(-4);
-        if (mobileVerificationNeeded) {
-            session.communicationMobile = { encrypted: await this.crypto.encrypt(mobile), last4: mobile.slice(-4), otp: null, verified: false };
+        if (encryptedMobile) {
+            session.communicationMobile = { encrypted: encryptedMobile, last4: mobile.slice(-4), otp: null, verified: false };
         }
 
-        if (profile.abhaNumber) {
-            await this.store.updateConsent(session.consentId, { abhaNumber: profile.abhaNumber });
+        if (profile.abhaNumber && session.consentId !== null) {
+            // The consent row already holds who agreed and when; the ABHA number on it is a convenience.
+            await this.store.updateConsent(session.consentId, { abhaNumber: profile.abhaNumber }).catch((error: any) =>
+                console.error("[ABDM] Could not record the ABHA number on the consent:", error?.message));
         }
 
         return {
@@ -350,7 +413,7 @@ export class AbhaEnrolmentService {
             profile,
             mobileVerificationNeeded,
             communicationMobileLast4: session.communicationMobile?.last4 ?? null,
-            linkedPatient: profile.abhaNumber ? await this.store.findPatientByAbhaNumber(profile.abhaNumber) : null,
+            linkedPatient,
         };
     }
 
@@ -360,9 +423,9 @@ export class AbhaEnrolmentService {
         const mobile = session.communicationMobile;
         if (!mobile) throw new AbhaJourneyError(409, "state", "This ABHA does not need its mobile number verified.");
         if (mobile.verified) throw new AbhaJourneyError(409, "state", "The mobile number is already verified.");
-        if (mobile.otp) this.assertCanResend(mobile.otp);
+        if (mobile.otp) assertCanResend(mobile.otp, this.clock());
 
-        const response = await this.withCertificateCheck(() => this.gateway.call<{ txnId?: string; message?: string }>({
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
             operation: "enrollment/request/otp (mobile-verify)",
             method: "POST",
             path: "/abha/api/v3/enrollment/request/otp",
@@ -387,7 +450,7 @@ export class AbhaEnrolmentService {
         }
 
         const encryptedOtp = await this.crypto.encrypt(String(input.otp));
-        const response = await this.withCertificateCheck(() => this.gateway.call<{ txnId?: string; authResult?: string; message?: string }>({
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; authResult?: string; message?: string }>({
             operation: "enrollment/auth/byAbdm (mobile-verify)",
             method: "POST",
             path: "/abha/api/v3/enrollment/auth/byAbdm",
@@ -446,10 +509,12 @@ export class AbhaEnrolmentService {
             // Worded without "expired": the frontend's HTTP client reads that word as its own login lapsing.
             throw new AbhaJourneyError(410, "session-ended", "The ABHA session for this card has timed out. Verify the patient again to view the card.");
         }
+        // An ABHA-address login holds a PHR token, which reads the PHR card instead.
+        const phr = session.tokenKind === "phr";
         const file = await this.gateway.call<AbdmFile>({
-            operation: "profile/account/abha-card",
+            operation: phr ? "phr/web/login/profile/abha/phr-card" : "profile/account/abha-card",
             method: "GET",
-            path: "/abha/api/v3/profile/account/abha-card",
+            path: phr ? "/abha/api/v3/phr/web/login/profile/abha/phr-card" : "/abha/api/v3/profile/account/abha-card",
             headers: { "X-token": `Bearer ${session.xToken}` },
             binary: true,
         });
@@ -460,14 +525,25 @@ export class AbhaEnrolmentService {
      * Stores the ABHA number and preferred address on the clinic's patient record. The values
      * come from the verified session, never from the browser. One ABHA number, one patient.
      */
-    async linkToPatient(input: { sessionId: string; staffUserId: string; userId: string }): Promise<{ abhaNumber: string; abhaAddress: string | null }> {
+    async linkToPatient(input: { sessionId: string; staffUserId: string; userId: string; hospitalId?: number | null }): Promise<{ abhaNumber: string; abhaAddress: string | null }> {
         const session = this.verifiedSession(input.sessionId, input.staffUserId);
         const abhaNumber = session.abhaNumber;
         if (!abhaNumber) {
             throw new AbhaJourneyError(409, "state", "ABDM has not returned an ABHA number for this session yet.");
         }
-        if (!(await this.store.patientExists(input.userId))) {
+        if (!GUID.test(input.userId)) {
             throw new AbhaJourneyError(404, "not-found", "Patient record not found.");
+        }
+        const patient = await this.store.getPatient(input.userId);
+        if (!patient) {
+            throw new AbhaJourneyError(404, "not-found", "Patient record not found.");
+        }
+        if (!patient.isPatient) {
+            throw new AbhaJourneyError(409, "not-a-patient", "This record is not registered as a patient, so an ABHA can't be linked to it.");
+        }
+        // Never overwrite one ABHA with another: that is a different person, or a decision for ABDM.
+        if (patient.abhaNumber && patient.abhaNumber !== abhaNumber) {
+            throw new AbhaJourneyError(409, "different-abha", "This patient record already holds a different ABHA number. Check you have the right patient; the ABHA was not linked.");
         }
 
         const holder = await this.store.findPatientByAbhaNumber(abhaNumber);
@@ -476,7 +552,7 @@ export class AbhaEnrolmentService {
         }
 
         try {
-            await this.store.linkAbha(input.userId, abhaNumber, session.abhaAddress);
+            await this.store.linkAbha(input.userId, abhaNumber, session.abhaAddress, input.hospitalId ?? null);
         } catch (error: any) {
             // The unique index caught a link made a moment ago by another desk.
             if (/UX_Users_AbhaNumber|duplicate key/i.test(String(error?.message))) {
@@ -485,7 +561,9 @@ export class AbhaEnrolmentService {
             }
             throw error;
         }
-        await this.store.updateConsent(session.consentId, { abhaNumber, patientUserId: input.userId });
+        if (session.consentId !== null) {
+            await this.store.updateConsent(session.consentId, { abhaNumber, patientUserId: input.userId });
+        }
         return { abhaNumber, abhaAddress: session.abhaAddress };
     }
 
@@ -495,43 +573,25 @@ export class AbhaEnrolmentService {
         });
     }
 
-    private session(sessionId: string, staffUserId: string): AbhaEnrolmentSession {
-        const session = this.sessions.get(String(sessionId ?? ""), staffUserId);
-        if (!session) {
-            throw new AbhaJourneyError(410, "session-ended", "This ABHA session has timed out or was started by another login. Start again.");
-        }
-        return session;
+    private session(sessionId: string, staffUserId: string): AbhaSession {
+        return requireSession(this.sessions, sessionId, staffUserId);
     }
 
-    private verifiedSession(sessionId: string, staffUserId: string): AbhaEnrolmentSession {
+    private verifiedSession(sessionId: string, staffUserId: string): AbhaSession {
         const session = this.session(sessionId, staffUserId);
-        if (session.isNew === null) {
-            throw new AbhaJourneyError(409, "state", "Verify the Aadhaar OTP first.");
+        if (!session.verified) {
+            throw new AbhaJourneyError(409, "state", "Verify the patient's OTP first.");
         }
         return session;
-    }
-
-    private assertCanResend(otp: OtpState): void {
-        if (otp.resends >= OTP_MAX_RESENDS) {
-            throw new AbhaJourneyError(429, "resend-limit", RESEND_LIMIT_MESSAGE);
-        }
-        const waitMs = otp.sentAt + OTP_RESEND_COOLDOWN_MS - this.clock();
-        if (waitMs > 0) {
-            throw new AbhaJourneyError(429, "resend-wait", `You can resend the OTP in ${Math.ceil(waitMs / 1000)} seconds.`, {
-                retryAfterSeconds: Math.ceil(waitMs / 1000),
-            });
-        }
-    }
-
-    /** A refused encrypted field usually means a stale certificate: drop it so the next try fetches a fresh one. */
-    private async withCertificateCheck<T>(call: () => Promise<T>): Promise<T> {
-        try {
-            return await call();
-        } catch (error) {
-            if (error instanceof AbdmApiError && error.field && ENCRYPTED_FIELDS.has(error.field)) {
-                this.crypto.invalidate();
-            }
-            throw error;
-        }
     }
 }
+
+/** The journey [sessionId] names, if it is still open and was started by [staffUserId]. */
+export const requireSession = (sessions: AbhaSessionStore, sessionId: string, staffUserId: string): AbhaSession => {
+    const session = sessions.get(String(sessionId ?? ""), staffUserId);
+    if (!session) {
+        // Worded without "expired": the frontend's HTTP client reads that word as its own login lapsing.
+        throw new AbhaJourneyError(410, "session-ended", "This ABHA session has timed out or was started by another login. Start again.");
+    }
+    return session;
+};

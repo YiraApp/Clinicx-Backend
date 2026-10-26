@@ -5,6 +5,7 @@ import { loggingMiddleware } from './middlewares/logging.middleware.js';
 import router from './routes/index.js';
 import { mobileRouterV1 } from './MobileApi/v1/routes/index.js';
 import { medSenseService } from './services/Appointments/medsense.service.js';
+import { abdmCallbackRouter } from './routes/Abdm/abdm.routes.js';
 
 import path from 'path';
 
@@ -16,6 +17,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/public', express.static(path.resolve(process.cwd(), 'public')));
+
+// ABDM gateway callbacks (Scan and Share). Authenticated by ABDM's signed token, not a user JWT,
+// so they sit before the login middleware, at the path ABDM appends to the registered bridge URL.
+app.use('/api/v3/hip', abdmCallbackRouter);
 
 // Global Logging + Auth Middleware
 app.use(loggingMiddleware);

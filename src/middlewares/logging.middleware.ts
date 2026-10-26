@@ -13,6 +13,9 @@ const apiLogRepository = AppDataSource.getRepository(APILog);
  */
 export const loggingMiddleware = async (req: Request, res: Response, next: NextFunction) => {
     const startTime = Date.now();
+    // The full path, read now: inside a mounted router req.path is relative (/abdm/..., not /api/abdm/...),
+    // and the response is logged from there.
+    const fullPath = req.path;
     const requestedOn = new Date();
 
     // Whitelist for public endpoints that skip JWT validation
@@ -150,7 +153,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
 
     // Truncate and mask RequestBody
     if (req.body) {
-        const bodyStr = JSON.stringify(maskRequestBodyForLog(req.path, req.body));
+        const bodyStr = JSON.stringify(maskRequestBodyForLog(fullPath, req.body));
         requestLog.RequestBody = bodyStr.length > 2000 ? bodyStr.substring(0, 2000) + "... [truncated]" : bodyStr;
     }
 
@@ -262,7 +265,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
                 }
             }
 
-            responseStr = maskResponseForLog(req.path, responseStr);
+            responseStr = maskResponseForLog(fullPath, responseStr);
             requestLog.Response = responseStr.length > 2000 ? responseStr.substring(0, 2000) + "... [truncated]" : responseStr;
             requestLog.ResponseStatusCode = res.statusCode;
             requestLog.ResponseTimeMs = durationMs;

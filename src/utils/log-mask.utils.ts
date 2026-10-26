@@ -7,7 +7,8 @@
 
 const MASK = "********";
 const ALWAYS_MASKED = ["password", "Password"];
-const ABDM_MASKED = ["aadhaar", "otp", "mobile"];
+// "identifier" carries the Aadhaar number (or ABHA number/address) on the verify routes.
+const ABDM_MASKED = ["aadhaar", "otp", "mobile", "identifier", "abhaAddress", "abhaNumber"];
 
 export const isAbdmPath = (path: string): boolean => (path || "").toLowerCase().startsWith("/api/abdm");
 

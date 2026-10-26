@@ -47,7 +47,7 @@ let calls: AbdmCall[];
 let answer: Answer;
 let now: number;
 let consents: Map<number, NewAbhaConsent & { txnId?: string; abhaNumber?: string; patientUserId?: string }>;
-let patients: Map<string, { name: string; abhaNumber: string | null; abhaAddress: string | null }>;
+let patients: Map<string, { name: string; abhaNumber: string | null; abhaAddress: string | null; isPatient?: boolean; linkedAtHospital?: number | null }>;
 let service: AbhaEnrolmentService;
 
 const store: AbhaEnrolmentStore = {
@@ -69,11 +69,12 @@ const store: AbhaEnrolmentStore = {
         }
         return null;
     },
-    async patientExists(userId) {
-        return patients.has(userId);
+    async getPatient(userId) {
+        const patient = patients.get(userId);
+        return patient ? { abhaNumber: patient.abhaNumber, isPatient: patient.isPatient !== false } : null;
     },
-    async linkAbha(userId, abhaNumber, abhaAddress) {
-        Object.assign(patients.get(userId)!, { abhaNumber, abhaAddress });
+    async linkAbha(userId, abhaNumber, abhaAddress, hospitalId) {
+        Object.assign(patients.get(userId)!, { abhaNumber, abhaAddress, linkedAtHospital: hospitalId });
     },
 };
 
@@ -312,9 +313,10 @@ test("the ABHA is linked from the verified session, once per patient", async () 
     const { sessionId } = await startJourney();
     await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
 
-    await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT });
+    await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT, hospitalId: 19 });
     assert.equal(patients.get(PATIENT)!.abhaNumber, ABHA_NUMBER);
     assert.equal(patients.get(PATIENT)!.abhaAddress, "asha.kumari@sbx");
+    assert.equal(patients.get(PATIENT)!.linkedAtHospital, 19, "the hospital's registration is flagged");
     assert.equal(consents.get(1)!.patientUserId, PATIENT);
 
     await assert.rejects(
@@ -322,6 +324,39 @@ test("the ABHA is linked from the verified session, once per patient", async () 
         (error: unknown) => error instanceof AbhaJourneyError && error.status === 409 && (error.details.linkedPatient as LinkedPatient).userId === PATIENT,
     );
     assert.equal(patients.get(OTHER_PATIENT)!.abhaNumber, null);
+});
+
+test("linking refuses a record that holds another ABHA, a non-patient, and a malformed id", async () => {
+    const { sessionId } = await startJourney();
+    await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
+
+    patients.get(PATIENT)!.abhaNumber = "91-9999-8888-7777";
+    await assert.rejects(
+        service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.kind === "different-abha",
+    );
+    assert.equal(patients.get(PATIENT)!.abhaNumber, "91-9999-8888-7777", "the other ABHA is not overwritten");
+
+    patients.get(OTHER_PATIENT)!.isPatient = false;
+    await assert.rejects(
+        service.linkToPatient({ sessionId, staffUserId: STAFF, userId: OTHER_PATIENT }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.kind === "not-a-patient",
+    );
+    await assert.rejects(
+        service.linkToPatient({ sessionId, staffUserId: STAFF, userId: "not-a-guid" }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.status === 404,
+    );
+});
+
+test("a database hiccup after ABDM created the ABHA does not strand the journey", async () => {
+    const failing = { ...store, findPatientByAbhaNumber: async () => { throw new Error("connection reset"); }, updateConsent: async () => { throw new Error("connection reset"); } };
+    service = new AbhaEnrolmentService(failing, gateway, fakeCrypto, () => now);
+    const { sessionId } = await service.requestAadhaarOtp({ aadhaar: AADHAAR, consent, staffUserId: STAFF });
+
+    const result = await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9000011111" });
+    assert.equal(result.abhaNumber, ABHA_NUMBER);
+    assert.equal(result.mobileVerificationNeeded, true);
+    assert.equal(result.linkedPatient, null);
 });
 
 test("verification reports a patient that already holds this ABHA", async () => {

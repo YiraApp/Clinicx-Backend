@@ -38,6 +38,10 @@ export class PatientRegistration {
     @Column({ type: "nvarchar", length: 100, nullable: true })
     TokenNumber?: string;
 
+    /** Registered at this hospital through ABHA: a verified ABHA at the desk, or Scan and Share. */
+    @Column({ type: "bit", default: false })
+    RegisteredViaAbha: boolean;
+
     @Column({ type: "bit", default: true })
     Status: boolean;
 
