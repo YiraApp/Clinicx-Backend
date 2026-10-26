@@ -90,6 +90,25 @@ export const abdmConfig = {
         return env("ABDM_CALLBACK_CLIENT_IDS").split(",").map((id) => id.trim()).filter(Boolean);
     },
 
+    /**
+     * HFR facility id M2 acts for as HIP, sent as X-HIP-ID. Separate from ABDM_HIP_ID, which
+     * Scan and Share uses: M2 needs a facility id from the HFR (12 characters, starting IN).
+     */
+    get m2HipId(): string {
+        return env("ABDM_M2_HIP_ID");
+    },
+
+    /** ClinicX hospital whose patients and records M2 shares. */
+    get m2HipHospitalId(): number | null {
+        const id = Number(env("ABDM_M2_HIP_HOSPITAL_ID"));
+        return Number.isInteger(id) && id > 0 ? id : null;
+    },
+
+    /** Public base URL ABDM should call back on (the bridge URL), such as the deployed API's origin. */
+    get bridgeUrl(): string {
+        return withoutTrailingSlash(env("ABDM_BRIDGE_URL"));
+    },
+
     get certificateCacheMs(): number {
         const minutes = Number(env("ABDM_CERT_CACHE_MINUTES"));
         return (Number.isFinite(minutes) && minutes > 0 ? minutes : 60) * 60_000;

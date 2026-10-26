@@ -74,6 +74,106 @@ test("the session call carries REQUEST-ID, TIMESTAMP and X-CM-ID, and no Authori
     assert.notEqual(call.headers["REQUEST-ID"], session.headers["REQUEST-ID"], "every call gets a fresh REQUEST-ID");
 });
 
+test("an HIE-CM call goes to the gateway host with X-CM-ID, and keeps the caller's X-HIP-ID", async () => {
+    stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 202 }));
+    const gateway = new AbdmGatewayService();
+
+    await gateway.call({
+        operation: "test",
+        host: "gateway",
+        method: "PATCH",
+        path: "/api/hiecm/gateway/v3/bridge/url",
+        headers: { "X-HIP-ID": "IN0000000001" },
+        body: { url: "https://example.test" },
+    });
+
+    const call = calls[1]!;
+    assert.equal(call.url, "https://dev.abdm.gov.in/api/hiecm/gateway/v3/bridge/url");
+    assert.equal(call.method, "PATCH");
+    assert.equal(call.headers["X-CM-ID"], "sbx");
+    assert.equal(call.headers["X-HIP-ID"], "IN0000000001");
+    assert.equal(call.headers.Authorization, `Bearer ${GATEWAY_TOKEN}`);
+    assert.match(call.headers["REQUEST-ID"]!, UUID);
+});
+
+test("an ABHA call does not carry X-CM-ID", async () => {
+    stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 200, body: {} }));
+    const gateway = new AbdmGatewayService();
+
+    await gateway.call({ operation: "test", method: "GET", path: "/abha/api/v3/x" });
+
+    assert.equal(calls[1]!.headers["X-CM-ID"], undefined);
+});
+
+/** Records what the gateway tells it, and what had been sent to ABDM at that moment. */
+const recorder = () => {
+    const events: Array<{ event: string; requestId: string; detail: any; callsSoFar: number }> = [];
+    return {
+        events,
+        async sent(exchange: { requestId: string; operation: string; hipId: string | null }) {
+            events.push({ event: "sent", requestId: exchange.requestId, detail: exchange, callsSoFar: calls.length });
+        },
+        async settled(requestId: string, outcome: any) {
+            events.push({ event: "settled", requestId, detail: outcome, callsSoFar: calls.length });
+        },
+    };
+};
+
+const linkTokenCall = {
+    operation: "test",
+    host: "gateway" as const,
+    method: "POST" as const,
+    path: "/api/hiecm/v3/token/generate-token",
+    headers: { "X-HIP-ID": "IN0000000001" },
+    body: { abhaAddress: "someone@sbx" },
+    awaitsCallback: true,
+};
+
+test("a call answered on a callback is recorded before it is sent, under the REQUEST-ID it carries", async () => {
+    stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 202 }));
+    const exchanges = recorder();
+    const gateway = new AbdmGatewayService(Date.now, exchanges);
+
+    await gateway.call(linkTokenCall);
+
+    const [sent, settled] = exchanges.events;
+    assert.equal(sent!.event, "sent");
+    assert.equal(sent!.callsSoFar, 1, "only the session call had gone out when the exchange was recorded");
+    assert.deepEqual(sent!.detail, { requestId: sent!.requestId, operation: "/api/hiecm/v3/token/generate-token", hipId: "IN0000000001" });
+    assert.equal(calls[1]!.headers["REQUEST-ID"], sent!.requestId);
+    assert.deepEqual(settled, { event: "settled", requestId: sent!.requestId, detail: { state: "accepted", httpStatus: 202 }, callsSoFar: 2 });
+});
+
+test("a synchronous refusal settles the exchange as refused, with ABDM's code", async () => {
+    stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 400, body: { error: { code: "ABDM-9999: ", message: "User not found" } } }));
+    const exchanges = recorder();
+    const gateway = new AbdmGatewayService(Date.now, exchanges);
+
+    await assert.rejects(gateway.call(linkTokenCall));
+
+    assert.deepEqual(exchanges.events[1]!.detail, { state: "refused", httpStatus: 400, errorCode: "ABDM-9999", errorMessage: "User not found" });
+});
+
+test("a call that never got an answer stays sent, so a late callback can still close it", async () => {
+    stubFetch((request) => {
+        if (isSessionCall(request)) return sessionAnswer;
+        throw new TypeError("fetch failed");
+    });
+    const exchanges = recorder();
+    const gateway = new AbdmGatewayService(Date.now, exchanges);
+
+    await assert.rejects(gateway.call(linkTokenCall), (error: unknown) => error instanceof AbdmApiError && error.kind === "unavailable");
+    assert.deepEqual(exchanges.events.map((e) => e.event), ["sent"]);
+});
+
+test("without an exchange store, a call answered on a callback is not sent", async () => {
+    stubFetch(() => sessionAnswer);
+    const gateway = new AbdmGatewayService();
+
+    await assert.rejects(gateway.call(linkTokenCall), (error: unknown) => error instanceof AbdmApiError && error.kind === "integration");
+    assert.ok(!calls.some((c) => c.url.includes("generate-token")));
+});
+
 test("the gateway token is reused until a minute before it expires", async () => {
     let now = 1_000_000;
     stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 200, body: {} }));
@@ -205,11 +305,13 @@ test("ABDM's error shapes all parse", () => {
         message: "Invalid OTP value",
         field: null,
     });
-    assert.deepEqual(parseAbdmError(400, [{ error: { code: "ABDM-1002: ", message: "Invalid HIP ID" } }]), {
+    // The HIE-CM gateway's shape, as the sandbox answered it on 2026-10-26
+    assert.deepEqual(parseAbdmError(400, [{ error: { code: "ABDM-1002: ", message: "Invalid HIP ID, it must be in Alpha numeric and _ in middle" } }]), {
         code: "ABDM-1002",
-        message: "Invalid HIP ID",
+        message: "Invalid HIP ID, it must be in Alpha numeric and _ in middle",
         field: null,
     });
+    assert.equal(parseAbdmError(400, []).message, "ABDM answered with HTTP 400 and no message.");
     assert.equal(parseAbdmError(400, null).message, "ABDM answered with HTTP 400 and no message.");
     assert.equal(normalizeAbdmCode("ABDM-1114: "), "ABDM-1114");
     assert.equal(normalizeAbdmCode("ABDM-1114"), "ABDM-1114");

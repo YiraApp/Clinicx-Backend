@@ -70,3 +70,35 @@ export const createStaffJwtMiddleware = (checks: StaffJwtChecks = databaseChecks
     };
 
 export const staffJwtMiddleware = createStaffJwtMiddleware();
+
+const hasAnyRole = async (userId: string, roleNames: string[]): Promise<boolean> => {
+    const { AppDataSource } = await import("../config/database.js");
+    const placeholders = roleNames.map((_, i) => `@${i + 1}`).join(", ");
+    const rows = await AppDataSource.query(
+        `SELECT TOP 1 1 AS HasRole
+         FROM UserRoles ur
+         INNER JOIN Roles r ON r.Id = ur.RoleId
+         WHERE ur.UserId = @0 AND ur.IsDeleted = 0 AND ur.Status = 1 AND r.RoleName IN (${placeholders})`,
+        [userId, ...roleNames]
+    );
+    return Array.isArray(rows) && rows.length > 0;
+};
+
+/** After staffJwtMiddleware: the signed-in user must hold one of these roles. */
+export const createRoleMiddleware = (roleNames: string[], check: (userId: string, roleNames: string[]) => Promise<boolean> = hasAnyRole) =>
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const userId = (req as any).userId;
+            if (!userId || !(await check(String(userId), roleNames))) {
+                res.status(403).json({ error: `Only ${roleNames.join(" or ")} can do this.` });
+                return;
+            }
+            next();
+        } catch (error: any) {
+            console.error("[ABDM] Role check failed:", error?.message);
+            res.status(403).json({ error: "Your role could not be checked." });
+        }
+    };
+
+/** Settings that apply to every facility on the bridge, such as its callback URL. */
+export const systemAdminOnly = createRoleMiddleware(["Yira System Admin"]);

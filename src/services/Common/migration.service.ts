@@ -142,6 +142,28 @@ export class MigrationService {
             CREATE UNIQUE INDEX UX_AbhaProfileShares_RequestId ON AbhaProfileShares (RequestId);`,
             `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AbhaProfileShares_Queue' AND object_id = OBJECT_ID('AbhaProfileShares'))
             CREATE INDEX IX_AbhaProfileShares_Queue ON AbhaProfileShares (HospitalId, CounterId, CreatedAt DESC);`,
+
+            // ABDM M2: each call ABDM answers on a callback, and each request ABDM makes of the HIP
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmExchanges')
+            CREATE TABLE AbdmExchanges (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                Direction VARCHAR(10) NOT NULL,
+                RequestId VARCHAR(64) NOT NULL,
+                Operation VARCHAR(200) NOT NULL,
+                HipId VARCHAR(50) NULL,
+                State VARCHAR(20) NOT NULL,
+                HttpStatus INT NULL,
+                ErrorCode VARCHAR(30) NULL,
+                ErrorMessage NVARCHAR(500) NULL,
+                CallbackPath VARCHAR(200) NULL,
+                CallbackRequestId VARCHAR(64) NULL,
+                CallbackHeaders NVARCHAR(1000) NULL,
+                CallbackBody NVARCHAR(MAX) NULL,
+                CallbackAt DATETIME NULL,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                UpdatedAt DATETIME NULL,
+                CONSTRAINT UX_AbdmExchanges_Direction_RequestId UNIQUE (Direction, RequestId)
+            );`,
         ];
 
         for (const statement of statements) {

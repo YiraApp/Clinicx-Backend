@@ -40,6 +40,7 @@ import { pushCampaignRouter } from "./Notifications/push-campaign.routes.js";
 import { feedbackRouter } from "./Feedback/feedback.routes.js";
 import { dietRouter } from "./Diet/diet.routes.js";
 import { abdmRouter } from "./Abdm/abdm.routes.js";
+import { m2CallbackRouter } from "./Abdm/abdm-callback.routes.js";
 
 const router = Router();
 
@@ -84,6 +85,8 @@ router.use("/push-campaigns", pushCampaignRouter);
 router.use("/feedback", feedbackRouter);
 router.use("/diet", dietRouter);
 router.use("/abdm", abdmRouter);
+// ABDM calls the bridge URL + /api/v3/...: public, checked per callback
+router.use("/v3", m2CallbackRouter);
 
 router.get("/status", (req: any, res: any) => {
     res.json({ message: "API is working properly" });

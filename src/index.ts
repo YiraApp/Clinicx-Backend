@@ -19,6 +19,11 @@ const startServer = async () => {
         await MigrationService.ensureAbdmHiuSchema();
         await DietMigrationService.runMigrationsAndSeed();
 
+        // ABDM calls answered on a callback are recorded before they are sent
+        const { abdmGatewayService } = await import("./services/Abdm/abdm-gateway.service.js");
+        const { abdmExchangeRepository } = await import("./repositories/Abdm/abdm-exchange.repository.js");
+        abdmGatewayService.setExchangeRecorder(abdmExchangeRepository);
+
         // Report at startup whether this server can send push notifications
         const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");
         initFirebaseAdmin();

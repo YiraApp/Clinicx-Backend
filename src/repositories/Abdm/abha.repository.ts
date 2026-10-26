@@ -2,16 +2,23 @@ import { AppDataSource } from "../../config/database.js";
 import { AbhaConsent } from "../../models/Abdm/abha-consent.model.js";
 import { User } from "../../models/Account/user.model.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
+import { Hospital } from "../../models/Organizations/hospital.model.js";
+import type { HipHospitalLookup } from "../../services/Abdm/abdm-bridge.service.js";
 import type { AbhaEnrolmentStore, LinkedPatient, NewAbhaConsent } from "../../services/Abdm/abha-enrolment.service.js";
 
 /** The ABHA journey's reads and writes in the clinic database: consents, ABHA on the Users row, and staff roles. */
-export class AbhaRepository implements AbhaEnrolmentStore {
+export class AbhaRepository implements AbhaEnrolmentStore, HipHospitalLookup {
     private get consents() {
         return AppDataSource.getRepository(AbhaConsent);
     }
 
     private get users() {
         return AppDataSource.getRepository(User);
+    }
+
+    async findHospitalName(hospitalId: number): Promise<string | null> {
+        const hospital = await AppDataSource.getRepository(Hospital).findOne({ where: { Id: hospitalId }, select: { Id: true, Name: true } });
+        return hospital?.Name ?? null;
     }
 
     async saveConsent(consent: NewAbhaConsent): Promise<number> {

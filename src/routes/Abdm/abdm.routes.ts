@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { abhaEnrolmentController, abhaShareCallback } from "../../controllers/Abdm/abha-enrolment.controller.js";
-import { staffJwtMiddleware } from "../../middlewares/staff-jwt.middleware.js";
+import { staffJwtMiddleware, systemAdminOnly } from "../../middlewares/staff-jwt.middleware.js";
 import { abdmHiuAccess } from "../../middlewares/abdm-hiu-access.middleware.js";
 import { hiuRouter } from "./hiu.routes.js";
 
@@ -11,6 +11,10 @@ const c = abhaEnrolmentController;
 abdmRouter.use(staffJwtMiddleware);
 
 abdmRouter.get("/status", c.status.bind(c));
+// M2: is the bridge, its callback URL and the HIP id ready, as ABDM reports them
+abdmRouter.get("/bridge", c.bridge.bind(c));
+// Moves every facility's callbacks on this client id: system admins only
+abdmRouter.patch("/bridge/url", systemAdminOnly, c.updateBridgeUrl.bind(c));
 
 // M1: create or retrieve an ABHA with an Aadhaar OTP
 abdmRouter.post("/enrolment/otp", c.requestOtp.bind(c));

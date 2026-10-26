@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headersForLog, maskRequestBodyForLog, maskResponseForLog } from "./log-mask.utils.js";
+import { headersForLog, maskCredentials, maskHeadersForLog, maskRequestBodyForLog, maskResponseForLog } from "./log-mask.utils.js";
 
 test("ABDM request bodies lose the Aadhaar number, OTPs and mobiles, at any depth", () => {
     const masked = maskRequestBodyForLog("/api/abdm/enrolment/verify", {
@@ -97,4 +97,27 @@ test("a decrypted record in an HIU response is never logged", () => {
 test("the API log keeps every request header except Authorization", () => {
     assert.deepEqual(headersForLog({ authorization: "Bearer jwt", "x-hospital-id": "3", "user-agent": "ua" }), { "x-hospital-id": "3", "user-agent": "ua" });
     assert.deepEqual(headersForLog({ Authorization: "Bearer jwt" }), {});
+});
+
+test("ABDM callback bodies are not logged; they are stored in AbdmExchanges", () => {
+    const logged = JSON.stringify(maskRequestBodyForLog("/api/v3/hip/patient/care-context/discover", {
+        patient: { name: "Test Patient", verifiedIdentifiers: [{ type: "MOBILE", value: "+919800000000" }] },
+    }));
+    assert.ok(!logged.includes("Test Patient"));
+    assert.ok(!logged.includes("+919800000000"));
+});
+
+test("credential headers are masked on ABDM routes, and other routes are unchanged", () => {
+    const headers = { authorization: "Bearer abc", "x-link-token": "xyz", "x-hip-id": "IN0000000001" };
+    assert.deepEqual(maskHeadersForLog("/api/v3/link/on_carecontext", headers), { authorization: "********", "x-link-token": "********", "x-hip-id": "IN0000000001" });
+    assert.deepEqual(maskHeadersForLog("/api/abdm/bridge", headers).authorization, "********");
+    assert.deepEqual(maskHeadersForLog("/api/patients", headers), headers);
+});
+
+test("stored ABDM bodies lose credentials but keep their shape", () => {
+    assert.deepEqual(maskCredentials({ abhaAddress: "a@sbx", linkToken: "secret", response: { requestId: "r1" } }), {
+        abhaAddress: "a@sbx",
+        linkToken: "********",
+        response: { requestId: "r1" },
+    });
 });

@@ -11,12 +11,14 @@ import { abdmCallbackAuth } from "../../services/Abdm/abdm-callback-auth.service
 import { abhaRepository } from "../../repositories/Abdm/abha.repository.js";
 import { abhaShareRepository } from "../../repositories/Abdm/abha-share.repository.js";
 import { shareQueueHospital } from "./share-queue-access.js";
+import { AbdmBridgeService, BridgeUrlError } from "../../services/Abdm/abdm-bridge.service.js";
 
 // One session store: a journey verified by create, verify or find can then show its card and link a patient.
 const abhaSessions = new AbhaSessionStore();
 const abhaEnrolmentService = new AbhaEnrolmentService(abhaRepository, undefined, undefined, undefined, abhaSessions);
 const abhaLoginService = new AbhaLoginService(abhaRepository, abhaSessions);
 const abhaShareService = new AbhaShareService(abhaShareRepository);
+const abdmBridgeService = new AbdmBridgeService(abhaRepository);
 
 /** What the desk is told beside ABDM's own message, which is always passed on unchanged. */
 const HINTS: Record<AbdmErrorKind, string | null> = {
@@ -88,6 +90,37 @@ export class AbhaEnrolmentController {
 
     status(_req: Request, res: Response) {
         return res.json(ApiResponse.success({ configured: abdmConfig.isConfigured, abhaAddressSuffix: abdmConfig.abhaAddressSuffix }));
+    }
+
+    /** M2 readiness: the bridge, its callback URL and the HIP id, as ABDM's registry reports them. */
+    async bridge(_req: Request, res: Response) {
+        try {
+            const readiness = await abdmBridgeService.checkReadiness();
+            return res.json(ApiResponse.success(readiness, readiness.ready ? "ABDM can reach this HIP." : readiness.problems[0]));
+        } catch (error) {
+            return sendError(res, error);
+        }
+    }
+
+    /**
+     * Points the bridge at body.url, or at ABDM_BRIDGE_URL when none is given. Moves every
+     * facility's callbacks on this client id, so it is for system admins only (see the route).
+     */
+    async updateBridgeUrl(req: Request, res: Response) {
+        const url = req.body?.url ?? abdmConfig.bridgeUrl;
+        if (!url) {
+            return res.status(400).json(ApiResponse.error("Give the bridge URL, or set ABDM_BRIDGE_URL.", { kind: "invalid" }));
+        }
+        try {
+            const readiness = await abdmBridgeService.updateBridgeUrl(url);
+            console.log(`[ABDM] bridge URL set to ${readiness.bridge.url} by user ${staffUserId(req)}`);
+            return res.json(ApiResponse.success(readiness, `ABDM now calls back on ${readiness.bridge.url}.`));
+        } catch (error) {
+            if (error instanceof BridgeUrlError) {
+                return res.status(400).json(ApiResponse.error(error.message, { kind: "invalid" }));
+            }
+            return sendError(res, error);
+        }
     }
 
     async requestOtp(req: Request, res: Response) {

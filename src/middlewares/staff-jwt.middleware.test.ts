@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createStaffJwtMiddleware, type StaffJwtChecks } from "./staff-jwt.middleware.js";
+import { createRoleMiddleware, createStaffJwtMiddleware, type StaffJwtChecks } from "./staff-jwt.middleware.js";
 
 const STAFF = "11111111-1111-1111-1111-111111111111";
 
@@ -52,4 +52,21 @@ test("signed-in staff pass, identified by the token", async () => {
     const { req, nextCalled } = await run({ authorization: "Bearer good-token", "x-user-id": "someone-else" });
     assert.equal(nextCalled, true);
     assert.equal(req.userId, STAFF);
+});
+
+test("a role-restricted route lets through only the named roles, and fails closed", async () => {
+    const attempt = async (check: (userId: string, roles: string[]) => Promise<boolean>, userId: string | null = STAFF) => {
+        const req: any = { userId };
+        const res: any = { statusCode: 200, status(code: number) { this.statusCode = code; return this; }, json() { return this; } };
+        let nextCalled = false;
+        await createRoleMiddleware(["Yira System Admin"], check)(req, res, () => { nextCalled = true; });
+        return { status: res.statusCode, nextCalled };
+    };
+
+    let asked: string[] = [];
+    assert.deepEqual(await attempt(async (_id, roles) => { asked = roles; return true; }), { status: 200, nextCalled: true });
+    assert.deepEqual(asked, ["Yira System Admin"]);
+    assert.deepEqual(await attempt(async () => false), { status: 403, nextCalled: false });
+    assert.deepEqual(await attempt(async () => { throw new Error("db down"); }), { status: 403, nextCalled: false });
+    assert.deepEqual(await attempt(async () => true, null), { status: 403, nextCalled: false }, "no signed-in user");
 });

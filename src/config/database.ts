@@ -81,6 +81,7 @@ import { HiuConsentArtefact } from "../models/Abdm/hiu-consent-artefact.model.js
 import { HiuDataRequest } from "../models/Abdm/hiu-data-request.model.js";
 import { HiuRecord } from "../models/Abdm/hiu-record.model.js";
 import { HiuAuditEvent } from "../models/Abdm/hiu-audit-event.model.js";
+import { AbdmExchange } from "../models/Abdm/abdm-exchange.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -148,7 +149,8 @@ export const AppDataSource = new DataSource({
         HiuConsentArtefact,
         HiuDataRequest,
         HiuRecord,
-        HiuAuditEvent
+        HiuAuditEvent,
+        AbdmExchange
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,

@@ -129,7 +129,10 @@ export interface AbdmCall {
     /** Short name for logs, such as "enrollment/request/otp". */
     operation: string;
     method: "GET" | "POST" | "PATCH";
-    /** The ABHA service (M1, default) or the HIE-CM gateway (Scan and Share, bridge, certs). */
+    /**
+     * The ABHA service (M1, default) or the HIE-CM gateway (Scan and Share, bridge, certs, M2),
+     * which also gets X-CM-ID.
+     */
     host?: "abha" | "gateway";
     /** Path on that host, such as /abha/api/v3/... or /api/hiecm/... */
     path: string;
@@ -139,9 +142,21 @@ export interface AbdmCall {
     binary?: boolean;
     /**
      * The REQUEST-ID to send, when the caller must store it before the call because the answering
-     * callback quotes it (HIU consent and data-flow calls). A fresh UUID otherwise.
+     * callback quotes it (HIU consent and data-flow calls, M2 linking). A fresh UUID otherwise.
      */
     requestId?: string;
+    /**
+     * ABDM answers this call later on a callback (M2's link token, linking and notify calls).
+     * The exchange is recorded before the call is sent, so a callback can never arrive first.
+     */
+    awaitsCallback?: boolean;
+}
+
+/** Where calls that ABDM answers on a callback are recorded; see AbdmExchange. */
+export interface ExchangeRecorder {
+    sent(exchange: { requestId: string; operation: string; hipId: string | null }): Promise<void>;
+    /** The synchronous outcome: accepted (2xx), or refused with ABDM's status and error. */
+    settled(requestId: string, outcome: { state: "accepted" | "refused"; httpStatus: number; errorCode?: string | null; errorMessage?: string | null }): Promise<void>;
 }
 
 export interface AbdmFile {
@@ -156,16 +171,26 @@ interface SendRequest {
     headers: Record<string, string>;
     body?: unknown;
     binary?: boolean;
+    /** Use this REQUEST-ID instead of a fresh one: the exchange was recorded under it. */
     requestId?: string;
+    /** Told the HTTP status as soon as ABDM answers. */
+    onStatus?: (status: number) => void;
 }
 
 export class AbdmGatewayService {
     private session: { token: string; expiresAt: number } | null = null;
     private pendingSession: Promise<string> | null = null;
     private readonly clock: () => number;
+    private recorder: ExchangeRecorder | null;
 
-    constructor(clock: () => number = Date.now) {
+    constructor(clock: () => number = Date.now, recorder: ExchangeRecorder | null = null) {
         this.clock = clock;
+        this.recorder = recorder;
+    }
+
+    /** Set at startup, once the database is up. */
+    setExchangeRecorder(recorder: ExchangeRecorder): void {
+        this.recorder = recorder;
     }
 
     /** The gateway access token, renewed a minute before ABDM says it expires. */
@@ -193,21 +218,50 @@ export class AbdmGatewayService {
     async call<T = any>(call: AbdmCall): Promise<T> {
         const token = await this.getAccessToken();
         const toGateway = call.host === "gateway";
+        const requestId = call.awaitsCallback ? await this.recordBeforeSending(call) : call.requestId;
+        let httpStatus = 0;
         try {
-            return await this.send({
+            const result = await this.send({
                 operation: call.operation,
                 url: `${toGateway ? abdmConfig.gatewayBaseUrl : abdmConfig.abhaBaseUrl}${call.path}`,
                 method: call.method,
                 headers: { Authorization: `Bearer ${token}`, ...(toGateway ? { "X-CM-ID": abdmConfig.cmId } : {}), ...call.headers },
                 body: call.body,
                 binary: call.binary,
-                requestId: call.requestId,
+                requestId,
+                onStatus: (status) => { httpStatus = status; },
             });
+            if (requestId && call.awaitsCallback) await this.settle(requestId, { state: "accepted", httpStatus });
+            return result;
         } catch (error) {
             if (error instanceof AbdmApiError && error.kind === "credentials") {
                 this.clearAccessToken();
             }
+            // A refusal ABDM answered means nothing is pending. A timeout or a lost connection
+            // may still have been accepted, so its exchange stays "sent" and a callback can close it.
+            if (requestId && call.awaitsCallback && error instanceof AbdmApiError && error.status > 0) {
+                await this.settle(requestId, { state: "refused", httpStatus: error.status, errorCode: error.code, errorMessage: error.message });
+            }
             throw error;
+        }
+    }
+
+    /** Fails closed: a call whose answer could not be matched is never sent. */
+    private async recordBeforeSending(call: AbdmCall): Promise<string> {
+        if (!this.recorder) {
+            throw new AbdmApiError({ status: 0, kind: "integration", operation: call.operation, message: "ABDM exchanges can't be recorded, so a call answered on a callback was not sent." });
+        }
+        const requestId = call.requestId ?? randomUUID();
+        await this.recorder.sent({ requestId, operation: call.path, hipId: call.headers?.["X-HIP-ID"] ?? null });
+        return requestId;
+    }
+
+    private async settle(requestId: string, outcome: Parameters<ExchangeRecorder["settled"]>[1]): Promise<void> {
+        try {
+            await this.recorder?.settled(requestId, outcome);
+        } catch (error: any) {
+            // The call itself happened; its row stays "sent" and the callback still closes it.
+            console.error(`[ABDM] exchange REQUEST-ID=${requestId} could not be marked ${outcome.state}:`, error?.message);
         }
     }
 
@@ -287,6 +341,7 @@ export class AbdmGatewayService {
         }
 
         console.log(`[ABDM] ${request.method} ${path} REQUEST-ID=${requestId} -> ${status} (${Date.now() - started}ms)`);
+        request.onStatus?.(status);
 
         if (ok) {
             if (request.binary) {

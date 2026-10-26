@@ -3,7 +3,7 @@ import { AppDataSource } from "../config/database.js";
 import { APILog } from "../models/Logs/apilog.model.js";
 import { verifyAccessToken } from "../utils/jwt.utils.js";
 import { findByAccessToken } from "../repositories/Account/token.repository.js";
-import { headersForLog, maskRequestBodyForLog, maskResponseForLog } from "../utils/log-mask.utils.js";
+import { headersForLog, maskHeadersForLog, maskRequestBodyForLog, maskResponseForLog } from "../utils/log-mask.utils.js";
 
 const apiLogRepository = AppDataSource.getRepository(APILog);
 
@@ -121,7 +121,9 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/mobile/api/v1/auth/logout",
         "/api/v1/mobile/auth/logout",
         "/api/auth/logout",
-        "/api/webhooks/medsense"
+        "/api/webhooks/medsense",
+        // ABDM callbacks carry ABDM's token, not ours: abdm-callback.service checks them
+        "/api/v3/"
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
@@ -164,8 +166,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         console.log(`   Body: ${requestLog.RequestBody}`);
     }
 
-    // Every header but Authorization: it carries the caller's JWT, which must not sit in APILogs.
-    requestLog.RequestHeaders = JSON.stringify(headersForLog(req.headers)).substring(0, 2000);
+    // Every header but Authorization (the caller's JWT), and ABDM's own token headers masked
+    requestLog.RequestHeaders = JSON.stringify(maskHeadersForLog(req.path, headersForLog(req.headers))).substring(0, 2000);
 
     // Capture Audit Tracking (Action, EntityId, EntityType)
     const pathParts = req.path.split("/").filter((p: string) => p && p !== "api");

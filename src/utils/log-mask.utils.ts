@@ -3,7 +3,8 @@
  * Passwords are always masked. On the ABDM routes the Aadhaar number, OTPs, mobile numbers, ABHA
  * addresses and the M3 record-request fields (care contexts, content, key material) are masked
  * too, and a response keeps only its status, message and error details: never the ABHA profile,
- * photo or card, nor a decrypted record.
+ * photo or card, nor a decrypted record. ABDM's callbacks (/api/v3) keep no body here at all:
+ * they are stored in AbdmExchanges, and their credential headers are masked.
  */
 
 const MASK = "********";
@@ -16,8 +17,14 @@ const ABDM_MASKED = [
     "patientReference", "careContextReference", "careContexts", "content", "keyValue", "nonce",
     "privateKey", "patientName", "dataPushUrl",
 ];
+/** Credentials ABDM bodies carry: never stored or logged in clear. */
+const CREDENTIAL_KEYS = ["linkToken", "accessToken", "refreshToken", "token", "otp", "otpValue", "password", "aadhaar"];
+const CREDENTIAL_HEADERS = ["authorization", "x-link-token", "x-token", "t-token", "r-token"];
 
-export const isAbdmPath = (path: string): boolean => (path || "").toLowerCase().startsWith("/api/abdm");
+export const isAbdmCallbackPath = (path: string): boolean => (path || "").toLowerCase().startsWith("/api/v3/");
+
+export const isAbdmPath = (path: string): boolean =>
+    (path || "").toLowerCase().startsWith("/api/abdm") || isAbdmCallbackPath(path);
 
 const maskDeep = (value: unknown, keys: Set<string>, depth: number): unknown => {
     if (depth > 5 || value === null || typeof value !== "object") return value;
@@ -31,8 +38,24 @@ const maskDeep = (value: unknown, keys: Set<string>, depth: number): unknown => 
     return masked;
 };
 
+/** An ABDM body with every credential masked and everything else, including its shape, kept. */
+export const maskCredentials = (body: unknown): unknown => maskDeep(body, new Set(CREDENTIAL_KEYS), 0);
+
+/** Request headers for the log: on ABDM routes, credential headers are masked. */
+export const maskHeadersForLog = (path: string, headers: Record<string, unknown>): Record<string, unknown> => {
+    if (!isAbdmPath(path)) return headers;
+    const masked: Record<string, unknown> = { ...headers };
+    for (const name of CREDENTIAL_HEADERS) {
+        if (masked[name] !== undefined) masked[name] = MASK;
+    }
+    return masked;
+};
+
 export const maskRequestBodyForLog = (path: string, body: unknown): unknown => {
     if (body === null || typeof body !== "object") return body;
+    if (isAbdmCallbackPath(path)) {
+        return { body: "not logged: ABDM callbacks are stored in AbdmExchanges" };
+    }
     if (isAbdmPath(path)) {
         return maskDeep(body, new Set([...ALWAYS_MASKED, ...ABDM_MASKED]), 0);
     }
