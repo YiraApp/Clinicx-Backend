@@ -128,6 +128,17 @@ export class MedicalDocument {
     @Column({ type: "datetime", nullable: true })
     AiAnalyzedAt?: Date;
 
+    /** processing | fallback | done | failed while MedSense reads the report in the background. */
+    @Column({ type: "varchar", length: 20, nullable: true })
+    AiJobStatus?: string;
+
+    /** MedSense job_id, used to match its webhook to this document. */
+    @Column({ type: "varchar", length: 64, nullable: true })
+    AiJobId?: string;
+
+    @Column({ type: "datetime", nullable: true })
+    AiJobStartedAt?: Date;
+
     @Column({ type: "bit", default: false })
     IsDeleted: boolean;
 }

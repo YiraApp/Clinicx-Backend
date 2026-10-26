@@ -116,7 +116,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/logout",
         "/mobile/api/v1/auth/logout",
         "/api/v1/mobile/auth/logout",
-        "/api/auth/logout"
+        "/api/auth/logout",
+        "/api/webhooks/medsense"
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
@@ -128,7 +129,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     const requestLog = new APILog();
     requestLog.Method = req.method;
     requestLog.Path = req.path;
-    requestLog.QueryString = JSON.stringify(req.query);
+    requestLog.QueryString = JSON.stringify(req.query?.token ? { ...req.query, token: "********" } : req.query);
     requestLog.RequestedOn = requestedOn;
 
     // Capture Network & Device Info
