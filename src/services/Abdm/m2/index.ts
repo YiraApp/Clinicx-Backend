@@ -1,7 +1,8 @@
-import { abdmM2Repository } from "../../../repositories/Abdm/abdm-m2.repository.js";
+import { abdmM2Repository, abdmRecordOwners } from "../../../repositories/Abdm/abdm-m2.repository.js";
 import { smsService } from "../../Common/sms.service.js";
 import type { CallbackHandler } from "../abdm-callback.service.js";
 import { abdmFacilities } from "../abdm-facilities.service.js";
+import { AutoLinker } from "./auto-link.js";
 import { CareContextCatalog } from "./care-contexts.js";
 import { DataFlowService } from "./data-flow.js";
 import { HipLinkingService } from "./hip-linking.js";
@@ -13,6 +14,7 @@ export const careContextCatalog = new CareContextCatalog(abdmM2Repository);
 export const hipLinkingService = new HipLinkingService(abdmM2Repository, careContextCatalog);
 export const patientLinkingService = new PatientLinkingService(abdmM2Repository, careContextCatalog, smsService);
 export const dataFlowService = new DataFlowService(abdmM2Repository);
+export const autoLinker = new AutoLinker(abdmRecordOwners, abdmFacilities, hipLinkingService);
 
 /** The facility a callback is for. The callback service let it through only for a known X-HIP-ID. */
 const facility = async (headers: Record<string, string>) => {

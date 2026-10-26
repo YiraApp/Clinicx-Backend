@@ -13,6 +13,7 @@ import { abhaShareRepository } from "../../repositories/Abdm/abha-share.reposito
 import { shareQueueHospital } from "./share-queue-access.js";
 import { AbdmBridgeService, BridgeUrlError } from "../../services/Abdm/abdm-bridge.service.js";
 import { abdmFacilities, FacilityError, scanShareHipIdOf } from "../../services/Abdm/abdm-facilities.service.js";
+import { autoLinker } from "../../services/Abdm/m2/index.js";
 
 // One session store: a journey verified by create, verify or find can then show its card and link a patient.
 const abhaSessions = new AbhaSessionStore();
@@ -264,6 +265,8 @@ export class AbhaEnrolmentController {
                 userId: String(req.params.userId ?? ""),
                 hospitalId: headerNumber(req, "x-hospital-id"),
             });
+            // The patient's records here link to the ABHA now too, where the hospital has AutoLink on
+            autoLinker.recordSaved({ patientId: String(req.params.userId ?? ""), hospitalId: headerNumber(req, "x-hospital-id") });
             return res.json(ApiResponse.success(result, "ABHA linked to the patient record."));
         } catch (error) {
             return sendError(res, error);

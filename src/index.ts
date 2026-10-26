@@ -24,6 +24,13 @@ const startServer = async () => {
         const { abdmExchangeRepository } = await import("./repositories/Abdm/abdm-exchange.repository.js");
         abdmGatewayService.setExchangeRecorder(abdmExchangeRepository);
 
+        // ABDM M2: a saved record links to the patient's ABHA within seconds, at hospitals whose
+        // facility has AutoLink on. Every save through TypeORM is seen, from any screen or API.
+        const { AppDataSource } = await import("./config/database.js");
+        const { autoLinker } = await import("./services/Abdm/m2/index.js");
+        const { AbdmRecordSubscriber } = await import("./services/Abdm/m2/record-subscriber.js");
+        AppDataSource.subscribers.push(new AbdmRecordSubscriber((ref) => autoLinker.recordSaved(ref)));
+
         // ABDM M2: link new care contexts and announce new records on a schedule, for each hospital
         // whose facility has AutoLink on. Opt in per deployment too (ABDM_AUTO_LINK=true), so every
         // developer's server sharing a database doesn't do it at once.

@@ -179,6 +179,51 @@ test("a valid stored token is reused: no second generate-token", async () => {
     assert.equal(gateway.last("/link/carecontext").headers["X-LINK-TOKEN"], "kept");
 });
 
+test("a record saved while the token is on its way waits for it and is linked with it: one token asked for", async () => {
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.deepEqual(await linking.link(hip, PATIENT), { queued: 2, status: "awaiting-token" });
+    store.appointments = [101, 102];
+    assert.deepEqual(await linking.link(hip, PATIENT), { queued: 1, status: "awaiting-token" });
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("generate-token")).length, 1);
+
+    const tokenCall = gateway.last("/token/generate-token");
+    const exp = Math.floor(NOW.getTime() / 1000) + 180 * 86400;
+    await linking.onLinkToken(hip, tokenCall.requestId!, { abhaAddress: "asha.test@sbx", linkToken: jwt(exp), response: { requestId: tokenCall.requestId } });
+    const sent = gateway.last("/link/carecontext").body.patient.flatMap((p: any) => p.careContexts.map((c: any) => c.referenceNumber));
+    assert.deepEqual([...new Set(sent)].sort(), ["IP-3", "OP-101", "OP-102"]);
+});
+
+test("two links for one patient at once, a click and an auto-link, ask for one token", async () => {
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    const results = await Promise.all([linking.link(hip, PATIENT), linking.link(hip, PATIENT)]);
+    assert.deepEqual(results, [{ queued: 2, status: "awaiting-token" }, { queued: 0, status: "nothing to link" }]);
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("generate-token")).length, 1);
+});
+
+test("a token request unanswered for ten minutes is asked again", async () => {
+    let now = NOW;
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => now);
+    await linking.link(hip, PATIENT);
+    now = new Date(NOW.getTime() + 11 * 60_000);
+    store.appointments = [101, 102];
+    await linking.link(hip, PATIENT);
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("generate-token")).length, 2);
+});
+
+test("after a restart, care contexts waiting on an answer are failed so they can be linked again, and a late token still links them", async () => {
+    await new HipLinkingService(store, catalog, gateway as any, () => NOW).link(hip, PATIENT);
+    const lost = gateway.last("/token/generate-token");
+
+    const restarted = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    const shown = await restarted.expireStale(await catalog.refresh(hip, PATIENT));
+    assert.ok(shown.every((c) => c.linkStatus === "failed" && c.lastError === "ABDM did not answer in time. Link again."));
+    assert.ok(store.contexts.every((c) => c.linkStatus === "failed"), "kept, so the Link button offers them again");
+
+    const exp = Math.floor(NOW.getTime() / 1000) + 180 * 86400;
+    await restarted.onLinkToken(hip, lost.requestId!, { abhaAddress: "asha.test@sbx", linkToken: jwt(exp), response: { requestId: lost.requestId } });
+    assert.ok(store.contexts.every((c) => c.linkStatus === "linking"));
+});
+
 test("a token ABDM refuses is dropped and a new one asked for", async () => {
     store.tokens.push({ patientUserId: PATIENT, hipId: HIP, abhaAddress: "asha.test@sbx", token: "stale", expiresAt: new Date(NOW.getTime() + 30 * 86400_000), requestId: "r" });
     gateway.refuse["/api/hiecm/hip/v3/link/carecontext"] = new AbdmApiError({ status: 400, kind: "rejected", operation: "x", code: "ABDM-1026", message: "Invalid Link Token" });
@@ -410,6 +455,17 @@ test("a health information request on a granted consent is acknowledged, encrypt
 
     await flow.onHealthInformationRequest(hip, "hi-2", hiRequest(hiu));
     assert.equal(pushes.length, 1, "the same transaction delivered again is not served twice");
+});
+
+test("a request for exactly the consented range is served though the stored dates lost a millisecond to rounding", async () => {
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async () => ({ ok: true, status: 202 }));
+    const range = { from: "1926-10-26T12:25:48.061Z", to: "2026-10-26T12:25:48.061Z" };
+    await flow.onConsentNotify(hip, "cn", consentNotification("GRANTED", { permission: { dateRange: range, dataEraseAt: "2126-10-26T12:25:48.061Z" } }));
+    // As SQL Server datetime keeps them
+    Object.assign(store.consents[0]!, { dateFrom: new Date("1926-10-26T12:25:48.060Z"), dateTo: new Date("2026-10-26T12:25:48.060Z") });
+
+    await flow.onHealthInformationRequest(hip, "r-1", hiRequest(generateKeyMaterial(), range));
+    assert.equal(gateway.last("/on-request").body.hiRequest.sessionStatus, "ACKNOWLEDGED");
 });
 
 test("expired, revoked, unknown or out-of-range consent is refused on on-request and nothing is pushed", async () => {

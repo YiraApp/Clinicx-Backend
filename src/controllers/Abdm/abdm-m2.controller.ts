@@ -46,7 +46,7 @@ export class AbdmM2Controller {
             const patient = await abdmM2Repository.patient(userId(req));
             if (!patient) return res.status(404).json(ApiResponse.error("Patient not found."));
             const hip = await abdmFacilities.hip(hospitalId(req));
-            const contexts = hip ? await careContextCatalog.refresh(hip, patient.userId) : [];
+            const contexts = hip ? await hipLinkingService.expireStale(await careContextCatalog.refresh(hip, patient.userId)) : [];
             return res.json(ApiResponse.success({
                 patient: { hasAbha: Boolean(patient.abhaAddress), abhaAddress: patient.abhaAddress, abhaNumber: patient.abhaNumber, phone: patient.phone },
                 hip: hip ? { id: hip.id, name: hip.name, hospitalId: hip.hospitalId } : null,

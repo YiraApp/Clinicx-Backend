@@ -42,7 +42,7 @@ export class AbdmExchangeRepository implements ExchangeRecorder, CallbackStore {
                  CallbackBody = @3, CallbackAt = @4, UpdatedAt = GETDATE()
              OUTPUT inserted.Id
              WHERE Direction = 'outbound' AND RequestId = @5 AND HipId = @6 AND State IN ('sent', 'accepted')`,
-            [callback.path, callback.requestId, callback.headers.slice(0, 1000), callback.body, callback.receivedAt, answeredRequestId, callback.hipId]
+            [callback.path, callback.requestId || null, callback.headers.slice(0, 1000), callback.body, callback.receivedAt, answeredRequestId, callback.hipId]
         );
         if (Array.isArray(updated) && updated.length > 0) return "answered";
 

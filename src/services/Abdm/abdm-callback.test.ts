@@ -190,7 +190,16 @@ test("a path this HIP does not serve is not stored", async () => {
     assert.equal(store.inbound.size, 0);
 });
 
-test("a missing REQUEST-ID or body is refused", async () => {
+test("an answer without its own REQUEST-ID is still matched on response.requestId, as ABDM's sandbox sends sms/on-notify", async () => {
+    const smsAnswer = { acknowledgement: { status: "SUCCESS" }, response: { requestId: SENT } };
+    const outcome = await service.receive({ path: "/api/v3/patients/sms/on-notify", headers: headers({ "request-id": undefined }), body: smsAnswer });
+
+    assert.equal(outcome.status, 202);
+    assert.equal(store.outbound.get(SENT)!.state, "answered");
+    assert.equal(store.outbound.get(SENT)!.callback!.requestId, "", "no REQUEST-ID of its own to keep");
+});
+
+test("a request ABDM makes without a REQUEST-ID, or anything without a body, is refused", async () => {
     assert.equal((await service.receive({ path: "/api/v3/consent/request/hip/notify", headers: headers({ "request-id": undefined }), body: { notification: {} } })).status, 400);
     assert.equal((await service.receive({ path: "/api/v3/consent/request/hip/notify", headers: headers(), body: undefined })).status, 400);
     assert.equal(store.inbound.size, 0);

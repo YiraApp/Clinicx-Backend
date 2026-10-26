@@ -3,6 +3,7 @@ import type { HiType } from "../../services/Abdm/fhir/fhir-common.js";
 import type {
     CareContextRow, CareContextSeed, ConsentRow, LinkRequestRow, LinkStatePatch, M2Store, PatientProfile, TransferRow,
 } from "../../services/Abdm/m2/m2-store.js";
+import type { RecordOwners, RecordRef } from "../../services/Abdm/m2/auto-link.js";
 
 /** M2's state on SQL Server: the AbdmCareContexts, AbdmLinkTokens, AbdmLinkRequests, AbdmConsents and AbdmDataTransfers tables. */
 
@@ -236,3 +237,21 @@ export class AbdmM2Repository implements M2Store {
 }
 
 export const abdmM2Repository = new AbdmM2Repository();
+
+/** Whose a saved record is: a prescription line by its prescription, a visit record by its appointment's patient and hospital. */
+export const abdmRecordOwners: RecordOwners = {
+    async owner(ref: RecordRef) {
+        let { patientId, hospitalId, appointmentId } = ref;
+        if (ref.prescriptionId) {
+            const rx = (await q(`SELECT PatientId, HospitalId, AppointmentId FROM PatientPrescription WHERE Id = @0`, [ref.prescriptionId]))[0];
+            if (!rx) return null;
+            ({ PatientId: patientId, HospitalId: hospitalId } = rx);
+            appointmentId = Number(rx.AppointmentId) || null;
+        }
+        if (appointmentId) {
+            const appointment = (await q(`SELECT UserId, HospitalId FROM Appointments WHERE Id = @0`, [appointmentId]))[0];
+            if (appointment?.UserId && appointment.HospitalId) return { patientId: String(appointment.UserId).toLowerCase(), hospitalId: Number(appointment.HospitalId) };
+        }
+        return patientId && hospitalId ? { patientId: String(patientId).toLowerCase(), hospitalId: Number(hospitalId) } : null;
+    },
+};

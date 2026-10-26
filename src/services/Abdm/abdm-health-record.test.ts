@@ -5,7 +5,7 @@ import type { VisitRecords } from "../../repositories/Abdm/abdm-health-record.re
 import { documentContentType, visitStart } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import { fixtureParties } from "./fhir/fhir-fixtures.js";
 import { immunizationColumns } from "../Appointments/immunization.service.js";
-import { codedList, dischargeSummaryColumns } from "../Appointments/discharge-summary.service.js";
+import { checkDates, codedList, dischargeSummaryColumns } from "../Appointments/discharge-summary.service.js";
 
 const pdf = Buffer.from("%PDF-1.4\n");
 const day = new Date("2026-10-20T10:00:00+05:30");
@@ -124,4 +124,14 @@ test("discharge summary lists are { text, conceptId } and Final or Draft only", 
     const base = { patientId: "p", doctorId: "d", hospitalId: 12, admittedAt: "2026-10-10T09:00:00+05:30", dischargedAt: "2026-10-12T09:00:00+05:30" };
     assert.equal(dischargeSummaryColumns(base).Status, "Draft");
     assert.throws(() => dischargeSummaryColumns({ ...base, status: "Done" as any }), /Draft or Final/);
+});
+
+test("a Final discharge summary can't be dated in the future; a Draft can", () => {
+    const now = new Date("2026-10-26T12:30:00Z");
+    const stay = (dischargedAt: string, Status: string) => ({ AdmittedAt: new Date("2026-10-26T06:00:00Z"), DischargedAt: new Date(dischargedAt), Status });
+    assert.throws(() => checkDates(stay("2026-10-28T11:58:00Z", "Final"), now), /can't have a discharge date in the future/);
+    assert.doesNotThrow(() => checkDates(stay("2026-10-28T11:58:00Z", "Draft"), now), "a planned discharge can wait as a Draft");
+    assert.doesNotThrow(() => checkDates(stay("2026-10-26T12:00:00Z", "Final"), now));
+    assert.doesNotThrow(() => checkDates(stay("2026-10-26T12:33:00Z", "Final"), now), "a desk clock a few minutes ahead");
+    assert.throws(() => checkDates(stay("2026-10-26T05:00:00Z", "Draft"), now), /before admittedAt/);
 });

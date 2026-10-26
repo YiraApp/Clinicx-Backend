@@ -34,7 +34,7 @@ export const REQUEST_PATHS = [
 
 export interface StoredCallback {
     path: string;
-    /** The callback's own REQUEST-ID header. */
+    /** The callback's own REQUEST-ID header; empty on an answer that came without one. */
     requestId: string;
     hipId: string;
     /** JSON: header name to value length. */
@@ -104,7 +104,7 @@ export class AbdmCallbackService {
             handler({ path, requestId, answers, headers: flat, body })
                 .then(() => this.store.handled?.(direction, key, null))
                 .catch(async (error: any) => {
-                    console.error(`[ABDM] callback ${path} REQUEST-ID=${requestId} could not be handled: ${error?.message}`);
+                    console.error(`[ABDM] callback ${path} REQUEST-ID=${requestId || "(none)"} could not be handled: ${error?.message}`);
                     await this.store.handled?.(direction, key, String(error?.message ?? "failed")).catch(() => undefined);
                 });
         });
@@ -133,8 +133,11 @@ export class AbdmCallbackService {
             return this.refuse(path, 403, `X-HIP-ID ${hipId || "(none)"} is not a facility of this deployment`);
         }
 
+        // A request ABDM makes is keyed by its REQUEST-ID, and our reply names it. An answer is matched
+        // on response.requestId instead, so it needs none: ABDM's sandbox sent patients/sms/on-notify
+        // without one (seen 2026-10-26), and refusing it left the SMS request waiting for good.
         const requestId = header(input.headers, "request-id");
-        if (!requestId) {
+        if (!requestId && !isAnswer) {
             return this.refuse(path, 400, "no REQUEST-ID header");
         }
         if (!input.body || typeof input.body !== "object" || Array.isArray(input.body)) {
@@ -168,7 +171,7 @@ export class AbdmCallbackService {
     }
 
     private accept(path: string, requestId: string, reason: string): CallbackOutcome {
-        console.log(`[ABDM] callback ${path} REQUEST-ID=${requestId} -> 202 (${reason})`);
+        console.log(`[ABDM] callback ${path} REQUEST-ID=${requestId || "(none)"} -> 202 (${reason})`);
         return { status: 202, reason };
     }
 

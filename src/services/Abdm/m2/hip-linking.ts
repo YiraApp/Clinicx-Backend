@@ -17,6 +17,9 @@ type Gateway = Pick<AbdmGatewayService, "call">;
 /** Token refusals that mean the stored token is no good: drop it and ask again. */
 const BAD_TOKEN = new Set(["ABDM-1026", "ABDM-1038", "ABDM-1062", "ABDM-1063", "ABDM-1065", "ABDM-1066"]);
 const TOKEN_MARGIN_MS = 60 * 60_000;
+/** How long an answer from ABDM is waited on before the care contexts may be linked again: it may never come. */
+const ANSWER_WAIT_MS = 10 * 60_000;
+const NO_ANSWER = "ABDM did not answer in time. Link again.";
 const SIX_MONTHS_MS = 182 * 24 * 60 * 60_000;
 
 const GENDER: Record<string, string> = { male: "M", m: "M", female: "F", f: "F", other: "O", o: "O" };
@@ -28,6 +31,8 @@ export class LinkingError extends Error {
     }
 }
 
+const linkKey = (hip: Hip, userId: string): string => `${hip.id}|${patientReference(userId)}`;
+
 /** When a link token runs out: its exp claim, read without verifying (it is ABDM's to verify). */
 export const tokenExpiry = (token: string, now: Date): Date => {
     try {
@@ -38,6 +43,11 @@ export const tokenExpiry = (token: string, now: Date): Date => {
 };
 
 export class HipLinkingService {
+    /** Requests (token or link) this server sent and is waiting on an answer for, by REQUEST-ID: when each went. */
+    private readonly inFlight = new Map<string, number>();
+    /** One link at a time per facility and patient: a click and an auto-link at once would ask for two tokens. */
+    private readonly queues = new Map<string, Promise<unknown>>();
+
     constructor(
         private readonly store: M2Store,
         private readonly catalog: CareContextCatalog,
@@ -56,10 +66,21 @@ export class HipLinkingService {
      * outcome arrives on callbacks and shows in the care contexts' link status.
      */
     async link(hip: Hip, userId: string): Promise<{ queued: number; status: string }> {
+        const key = linkKey(hip, userId);
+        const run = (this.queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => this.linkNow(hip, userId));
+        this.queues.set(key, run);
+        try {
+            return await run;
+        } finally {
+            if (this.queues.get(key) === run) this.queues.delete(key);
+        }
+    }
+
+    private async linkNow(hip: Hip, userId: string): Promise<{ queued: number; status: string }> {
         const patient = await this.patient(userId);
         if (!patient.abhaAddress) throw new LinkingError("The patient has no ABHA address yet: verify or create their ABHA first.");
 
-        const contexts = await this.catalog.refresh(hip, userId);
+        const contexts = await this.expireStale(await this.catalog.refresh(hip, userId));
         const pending = contexts.filter((c) => c.hiTypes.length && (c.linkStatus === "not-linked" || c.linkStatus === "failed"));
         if (!pending.length) return { queued: 0, status: "nothing to link" };
 
@@ -67,6 +88,13 @@ export class HipLinkingService {
         if (token && token.abhaAddress.toLowerCase() === patient.abhaAddress.toLowerCase()) {
             await this.sendLink(hip, patient, token.token, pending);
             return { queued: pending.length, status: "linking" };
+        }
+        const asked = contexts.find((c) => c.linkStatus === "awaiting-token" && c.linkRequestId)?.linkRequestId;
+        if (asked) {
+            // A token asked for moments ago is still on its way: these wait for it too. Asking again
+            // for the same patient is refused as a duplicate (ABDM-1092).
+            await this.store.setLinkState(pending.map((c) => c.id), { linkStatus: "awaiting-token", linkRequestId: asked, lastError: null });
+            return { queued: pending.length, status: "awaiting-token" };
         }
         const requestId = await this.requestToken(hip, patient, pending);
         return { queued: pending.length, status: requestId ? "awaiting-token" : "failed" };
@@ -99,6 +127,7 @@ export class HipLinkingService {
                     yearOfBirth,
                 },
             });
+            this.inFlight.set(requestId, this.now().getTime());
             return requestId;
         } catch (error) {
             const message = error instanceof AbdmApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "ABDM could not be reached.";
@@ -106,6 +135,7 @@ export class HipLinkingService {
             const stillWaiting = error instanceof AbdmApiError && error.status === 0;
             await this.store.setLinkState(waiting.map((c) => c.id), stillWaiting ? { lastError: message } : { linkStatus: "failed", lastError: message });
             if (!stillWaiting) return null;
+            this.inFlight.set(requestId, this.now().getTime());
             return requestId;
         }
     }
@@ -128,6 +158,7 @@ export class HipLinkingService {
                     patient: byHiType(patientReference(patient.userId), patient.name, contexts),
                 },
             });
+            this.inFlight.set(requestId, this.now().getTime());
         } catch (error) {
             if (error instanceof AbdmApiError && error.code && BAD_TOKEN.has(error.code) && !retried) {
                 await this.store.dropLinkTokens(patientReference(patient.userId), hip.id);
@@ -137,7 +168,23 @@ export class HipLinkingService {
             const stillWaiting = error instanceof AbdmApiError && error.status === 0;
             const message = error instanceof AbdmApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "ABDM could not be reached.";
             await this.store.setLinkState(contexts.map((c) => c.id), stillWaiting ? { lastError: message } : { linkStatus: "failed", lastError: message });
+            if (stillWaiting) this.inFlight.set(requestId, this.now().getTime());
         }
+    }
+
+    /**
+     * Care contexts waiting on an answer from ABDM that has not come: asked more than ten minutes
+     * ago, or before this server started (it no longer knows when). They are marked failed with the
+     * reason, so the desk can link them again and the next save retries them. An answer that still
+     * arrives is applied all the same.
+     */
+    async expireStale(contexts: CareContextRow[]): Promise<CareContextRow[]> {
+        const now = this.now().getTime();
+        const stale = contexts.filter((c) => (c.linkStatus === "awaiting-token" || c.linkStatus === "linking")
+            && !(c.linkRequestId && now - (this.inFlight.get(c.linkRequestId) ?? -Infinity) < ANSWER_WAIT_MS));
+        if (!stale.length) return contexts;
+        await this.store.setLinkState(stale.map((c) => c.id), { linkStatus: "failed", lastError: NO_ANSWER });
+        return contexts.map((c) => (stale.includes(c) ? { ...c, linkStatus: "failed" as const, lastError: NO_ANSWER } : c));
     }
 
     /** on-generate-token: keep the token and link what was waiting for it, or record why not. */
@@ -145,6 +192,7 @@ export class HipLinkingService {
         const waiting = await this.store.careContextsByLinkRequest(answeredRequestId);
         if (!waiting.length) return;
         const patient = await this.patient(waiting[0]!.patientUserId);
+        this.inFlight.delete(answeredRequestId);
         if (typeof body?.linkToken !== "string" || !body.linkToken) {
             const reason = body?.error?.message ? `${body.error.message}${body.error.code ? ` (${String(body.error.code).replace(/:\s*$/, "")})` : ""}` : "ABDM gave no link token.";
             await this.store.setLinkState(waiting.map((c) => c.id), { linkStatus: "failed", lastError: reason });
@@ -158,11 +206,14 @@ export class HipLinkingService {
             expiresAt: tokenExpiry(body.linkToken, this.now()),
             requestId: answeredRequestId,
         });
-        await this.sendLink(hip, patient, body.linkToken, waiting.filter((c) => c.linkStatus === "awaiting-token"));
+        // Those given up on as unanswered are linked too: the token they waited for is here after all.
+        const toLink = waiting.filter((c) => c.linkStatus === "awaiting-token" || (c.linkStatus === "failed" && c.lastError === NO_ANSWER));
+        if (toLink.length) await this.sendLink(hip, patient, body.linkToken, toLink);
     }
 
     /** on_carecontext: the care contexts sent under that request are linked, or why not. */
     async onLinkResult(answeredRequestId: string, body: any): Promise<void> {
+        this.inFlight.delete(answeredRequestId);
         const contexts = await this.store.careContextsByLinkRequest(answeredRequestId);
         if (!contexts.length) return;
         const linked = typeof body?.status === "string" && /success/i.test(body.status) && !body?.error;

@@ -18,6 +18,12 @@ type Records = Pick<AbdmHealthRecordService, "forAppointment" | "forDischargeSum
 type Push = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{ ok: boolean; status: number }>;
 
 const PUSH_TIMEOUT_MS = 60_000;
+/**
+ * AbdmConsents keeps the consented dates as SQL Server datetime, which rounds milliseconds to
+ * .000, .003 or .007: a request for exactly the consented range (…48.061Z) reads as 1 ms past
+ * the stored end (…48.060Z). Seen 2026-10-26 on PHR app fetches, which ask for exactly that.
+ */
+const STORED_DATE_SLACK_MS = 4;
 
 export interface StatusResponse {
     careContextReference: string;
@@ -80,7 +86,8 @@ export class DataFlowService {
         if (consent.dataEraseAt && consent.dataEraseAt <= this.now()) return { code: "ABDM-1061", message: "Consent artefact expired." };
         const from = date(hi.dateRange?.from), to = date(hi.dateRange?.to);
         if (!from || !to || from > to) return { code: "ABDM-9999", message: "The requested date range is invalid." };
-        if ((consent.dateFrom && from < consent.dateFrom) || (consent.dateTo && to > consent.dateTo)) {
+        if ((consent.dateFrom && from.getTime() < consent.dateFrom.getTime() - STORED_DATE_SLACK_MS)
+            || (consent.dateTo && to.getTime() > consent.dateTo.getTime() + STORED_DATE_SLACK_MS)) {
             return { code: "ABDM-9999", message: "The requested date range is outside the consented range." };
         }
         if (!hi.dataPushUrl || !/^https?:\/\//i.test(String(hi.dataPushUrl))) return { code: "ABDM-9999", message: "No valid dataPushUrl." };

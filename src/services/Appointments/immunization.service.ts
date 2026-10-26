@@ -104,7 +104,8 @@ export class ImmunizationService {
         const cols = immunizationColumns(input, true);
         const next = { ...existing, ...cols };
         if (next.NextDueDate && next.NextDueDate < next.AdministeredOn) throw new Error("nextDueDate can't be before administeredOn.");
-        await this.repository.update(id, { ...cols, UpdatedAt: new Date(), UpdatedBy: updatedBy ?? null });
+        // The row's own patient, hospital and visit ride along so the ABDM auto-linker sees whose record changed
+        await this.repository.update(id, { PatientId: existing.PatientId, HospitalId: existing.HospitalId, AppointmentId: existing.AppointmentId ?? null, ...cols, UpdatedAt: new Date(), UpdatedBy: updatedBy ?? null });
         return (await this.repository.findOne({ where: { Id: id } }))!;
     }
 

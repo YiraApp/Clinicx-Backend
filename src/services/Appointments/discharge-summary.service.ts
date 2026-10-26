@@ -117,18 +117,31 @@ export const toView = (row: DischargeSummary): DischargeSummaryView => ({
     Procedures: parseCoded(row.Procedures),
 });
 
-const checkDates = (s: Pick<DischargeSummary, "AdmittedAt" | "DischargedAt">) => {
+/** Room for a desk clock running a little ahead of the server's. */
+const FUTURE_SLACK_MS = 5 * 60_000;
+
+/**
+ * Admission comes before discharge, and a Final summary records a discharge that has happened, so
+ * it is not dated in the future: ABDM shares a record only inside the consented date range, which
+ * ends when the patient consents, so a future-dated one would never reach them.
+ */
+export const checkDates = (s: Pick<DischargeSummary, "AdmittedAt" | "DischargedAt" | "Status">, now: Date) => {
     if (s.DischargedAt < s.AdmittedAt) throw new Error("dischargedAt can't be before admittedAt.");
+    if (s.Status === "Final" && s.DischargedAt.getTime() > now.getTime() + FUTURE_SLACK_MS) {
+        throw new Error("A Final discharge summary can't have a discharge date in the future. Correct the date, or keep it as a Draft until the patient is discharged.");
+    }
 };
 
 export class DischargeSummaryService {
+    constructor(private readonly now: () => Date = () => new Date()) {}
+
     private get repository() {
         return AppDataSource.getRepository(DischargeSummary);
     }
 
     async create(input: DischargeSummaryInput, createdBy?: string): Promise<DischargeSummaryView> {
         const cols = dischargeSummaryColumns(input);
-        checkDates(cols as DischargeSummary);
+        checkDates(cols as DischargeSummary, this.now());
         return toView(await this.repository.save(this.repository.create({ ...cols, CreatedBy: createdBy ?? null })));
     }
 
@@ -153,8 +166,9 @@ export class DischargeSummaryService {
         const existing = await this.row(id);
         if (!existing) throw new Error("Discharge summary not found.");
         const cols = dischargeSummaryColumns(input, true);
-        checkDates({ ...existing, ...cols });
-        await this.repository.update(id, { ...cols, UpdatedAt: new Date(), UpdatedBy: updatedBy ?? null });
+        checkDates({ ...existing, ...cols }, this.now());
+        // The row's own patient and hospital ride along so the ABDM auto-linker sees whose summary changed (a Draft made Final)
+        await this.repository.update(id, { PatientId: existing.PatientId, HospitalId: existing.HospitalId, ...cols, UpdatedAt: new Date(), UpdatedBy: updatedBy ?? null });
         return (await this.get(id))!;
     }
 
