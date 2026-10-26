@@ -76,6 +76,11 @@ import { PatientMedicationReminder } from "../models/Appointments/patient-medica
 import { DietFoodItem, DietTemplate, DietTemplateMeal, PatientDietPlan, PatientDietPlanMeal, PatientDietMealLog } from "../models/Diet/index.js";
 import { AbhaConsent } from "../models/Abdm/abha-consent.model.js";
 import { AbhaProfileShare } from "../models/Abdm/abha-profile-share.model.js";
+import { HiuConsentRequest } from "../models/Abdm/hiu-consent-request.model.js";
+import { HiuConsentArtefact } from "../models/Abdm/hiu-consent-artefact.model.js";
+import { HiuDataRequest } from "../models/Abdm/hiu-data-request.model.js";
+import { HiuRecord } from "../models/Abdm/hiu-record.model.js";
+import { HiuAuditEvent } from "../models/Abdm/hiu-audit-event.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -138,7 +143,12 @@ export const AppDataSource = new DataSource({
         PatientDietPlanMeal,
         PatientDietMealLog,
         AbhaConsent,
-        AbhaProfileShare
+        AbhaProfileShare,
+        HiuConsentRequest,
+        HiuConsentArtefact,
+        HiuDataRequest,
+        HiuRecord,
+        HiuAuditEvent
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,

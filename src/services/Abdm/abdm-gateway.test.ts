@@ -159,6 +159,30 @@ test("logs never carry the client secret or a token", async () => {
     assert.match(everything, /REQUEST-ID=/);
 });
 
+test("a caller's REQUEST-ID is sent and logged; without one each call gets a fresh UUID", async () => {
+    const ours = "6f1c2a3b-0d4e-4f5a-8b9c-0123456789ab";
+    stubFetch((request) => (isSessionCall(request) ? sessionAnswer : { status: 422, body: { error: { code: "ABDM-1040", message: "Invalid HIU ID" } } }));
+    const gateway = new AbdmGatewayService();
+
+    await assert.rejects(
+        gateway.call({ operation: "consent/request/init", method: "POST", host: "gateway", path: "/api/hiecm/consent/v3/request/init", body: {}, requestId: ours }),
+        (error: unknown) => error instanceof AbdmApiError && error.requestId === ours && error.code === "ABDM-1040",
+    );
+    const [session, call] = calls;
+    assert.ok(session && call);
+    assert.equal(call.headers["REQUEST-ID"], ours);
+    assert.equal(call.headers["X-CM-ID"], "sbx");
+    assert.match(call.headers.TIMESTAMP!, TIMESTAMP);
+    assert.notEqual(session.headers["REQUEST-ID"], ours, "the session call keeps its own REQUEST-ID");
+    assert.ok(logged.some((line) => line.includes(`REQUEST-ID=${ours} -> 422`)));
+    assert.ok(logged.some((line) => line.includes(`REQUEST-ID=${ours} refused`)));
+
+    calls = [];
+    await assert.rejects(gateway.call({ operation: "test", method: "POST", host: "gateway", path: "/api/hiecm/x", body: {} }));
+    assert.match(calls[0]!.headers["REQUEST-ID"]!, UUID);
+    assert.notEqual(calls[0]!.headers["REQUEST-ID"], ours);
+});
+
 test("ABDM's error shapes all parse", () => {
     assert.deepEqual(parseAbdmError(422, { error: { code: "ABDM-1204: ", message: "UIDAI Error code : 400 : Invalid Aadhaar OTP value." } }), {
         code: "ABDM-1204",

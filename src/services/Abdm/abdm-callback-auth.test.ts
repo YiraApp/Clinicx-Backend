@@ -72,3 +72,21 @@ test("only the pinned ABDM client may call, and with no pin nobody may (fail clo
     delete process.env.ABDM_CALLBACK_CLIENT_IDS;
     await assert.rejects(auth.verify(`Bearer ${sign(valid())}`), /This call came from ABDM client "gateway"/);
 });
+
+test("without the client pin (a HIP's data push) any ABDM client's token passes, but the signature and expiry still count", async () => {
+    delete process.env.ABDM_CALLBACK_CLIENT_IDS;
+    const claims = await auth.verify(`Bearer ${sign({ ...valid(), clientId: "SBX_SOME_HIP" })}`, { pinClient: false });
+    assert.equal(claims.clientId, "SBX_SOME_HIP");
+
+    await assert.rejects(auth.verify(undefined, { pinClient: false }), CallbackAuthError);
+    await assert.rejects(auth.verify(`Bearer ${sign({ clientId: "SBX_SOME_HIP", exp: Math.floor(now / 1000) - 120 })}`, { pinClient: false }), CallbackAuthError);
+    const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const head = `${b64({ alg: "RS256", kid: "gateway-key-1" })}.${b64(valid())}`;
+    const forged = createSign("RSA-SHA256").update(head).sign(other.privateKey).toString("base64url");
+    await assert.rejects(auth.verify(`Bearer ${head}.${forged}`, { pinClient: false }), CallbackAuthError);
+
+    // The default is unchanged: the pin applies, and an empty pin list refuses everyone.
+    await assert.rejects(auth.verify(`Bearer ${sign({ ...valid(), clientId: "SBX_SOME_HIP" })}`), CallbackAuthError);
+    process.env.ABDM_CALLBACK_CLIENT_IDS = "gateway";
+    await assert.rejects(auth.verify(`Bearer ${sign({ ...valid(), clientId: "SBX_SOME_HIP" })}`), /not allowed/);
+});

@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../config/database.js";
+import { abdmConfig } from "../../config/abdm.config.js";
 
 export class MigrationService {
     static async ensureLogIndexes() {
@@ -152,4 +153,220 @@ export class MigrationService {
         }
         console.log("ABDM schema guaranteed.");
     }
+
+    /**
+     * ABDM Milestone 3 (ClinicX as a Health Information User): the five AbdmHiu* tables, their
+     * indexes, and the "ABDM Record Request" menu for the roles in ABDM_HIU_ROLE_NAMES (plan
+     * section 5, decision D9). Idempotent: a table is created when missing, then every column is
+     * added behind its own COL_LENGTH guard, so a table created by an earlier version gains later
+     * columns. Fails startup on error, like ensureAbdmSchema(). Never drops or alters an existing column.
+     */
+    static async ensureAbdmHiuSchema() {
+        const run = async (statement: string, params: unknown[] = []) => {
+            try {
+                return await AppDataSource.query(statement, params);
+            } catch (error: any) {
+                throw new Error(`ABDM HIU schema migration failed (${statement.trim().split("\n")[0]!.slice(0, 120)}): ${error?.message}`);
+            }
+        };
+
+        for (const table of ABDM_HIU_TABLES) {
+            const columns = table.columns.map(([name, definition]) => `${name} ${definition}`).join(",\n                ");
+            await run(`IF OBJECT_ID(N'dbo.${table.name}', N'U') IS NULL
+            CREATE TABLE dbo.${table.name} (
+                Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_${table.name} PRIMARY KEY,
+                ${columns}
+            );`);
+            // One batch of column guards, then (once those columns exist) one batch of index guards,
+            // so startup makes a handful of round trips rather than one per column.
+            await run(table.columns
+                .map(([name, definition]) => `IF COL_LENGTH('dbo.${table.name}', '${name}') IS NULL ALTER TABLE dbo.${table.name} ADD ${name} ${definition};`)
+                .join("\n"));
+            await run(table.indexes
+                .map((index) => `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${index.name}' AND object_id = OBJECT_ID('dbo.${table.name}'))
+            CREATE ${index.unique ? "UNIQUE " : ""}NONCLUSTERED INDEX ${index.name} ON dbo.${table.name} (${index.on})${index.where ? ` WHERE ${index.where}` : ""};`)
+                .join("\n"));
+        }
+
+        // The sidebar item (D9). A high OrderNo keeps it last, so it never becomes a landing page.
+        // Inserted only when no row has its route, so an admin's later edit or deactivation stands.
+        await run(`IF NOT EXISTS (SELECT 1 FROM SidebarMenus WHERE Route = @0)
+            INSERT INTO SidebarMenus (MenuName, Route, Icon, ImagePath, UseImage, ParentMenuId, OrderNo, Status, CreatedAt)
+            VALUES (@1, @0, @2, NULL, 0, NULL, @3, 1, GETDATE());`,
+            [ABDM_HIU_MENU.route, ABDM_HIU_MENU.name, ABDM_HIU_MENU.icon, ABDM_HIU_MENU.orderNo]);
+
+        // A global (no organization, no hospital) assignment per allowed role, only where none exists,
+        // active or not: an admin who switched it off is not overridden.
+        for (const roleName of abdmConfig.hiuRoleNames) {
+            const matched = await run(`SELECT COUNT(*) AS Matches FROM Roles WHERE UPPER(LTRIM(RTRIM(RoleName))) = UPPER(@0) OR UPPER(NormalizedName) = UPPER(@0);`, [roleName]);
+            if (!Number(matched?.[0]?.Matches)) {
+                console.warn(`ABDM HIU menu: no role is named "${roleName.slice(0, 60)}" (ABDM_HIU_ROLE_NAMES); nothing assigned for it.`);
+                continue;
+            }
+            await run(`INSERT INTO RoleSidebarMenus (RoleId, MenuId, OrganizationId, HospitalId, Status, CreatedAt)
+            SELECT r.Id, m.MenuId, NULL, NULL, 1, GETDATE()
+            FROM Roles r
+            CROSS JOIN (SELECT TOP 1 MenuId FROM SidebarMenus WHERE Route = @1 ORDER BY MenuId) m
+            WHERE (UPPER(LTRIM(RTRIM(r.RoleName))) = UPPER(@0) OR UPPER(r.NormalizedName) = UPPER(@0))
+              AND NOT EXISTS (
+                SELECT 1 FROM RoleSidebarMenus x
+                WHERE x.RoleId = r.Id AND x.MenuId = m.MenuId AND x.OrganizationId IS NULL AND x.HospitalId IS NULL
+              );`, [roleName, ABDM_HIU_MENU.route]);
+        }
+        console.log("ABDM HIU schema guaranteed.");
+    }
 }
+
+/** The staff page's sidebar item (D9). */
+export const ABDM_HIU_MENU = { name: "ABDM Record Request", route: "/abdm/record-request", icon: "FileSearch", orderNo: 900 } as const;
+
+interface HiuTableSpec {
+    name: string;
+    /** [column, definition]. Every column, so CREATE and the per-column guards never drift apart. */
+    columns: [string, string][];
+    indexes: { name: string; on: string; unique?: boolean; where?: string }[];
+}
+
+/** The M3 tables (plan section 5). Names are prefixed AbdmHiu, apart from ClinicX's other consent tables. */
+const ABDM_HIU_TABLES: HiuTableSpec[] = [
+    {
+        name: "AbdmHiuConsentRequests",
+        columns: [
+            ["InitRequestId", "VARCHAR(64) NOT NULL"],
+            ["ConsentRequestId", "VARCHAR(64) NULL"],
+            ["StatusRequestId", "VARCHAR(64) NULL"],
+            ["HospitalId", "INT NOT NULL"],
+            ["OrganizationId", "INT NULL"],
+            ["StaffUserId", "UNIQUEIDENTIFIER NOT NULL"],
+            ["StaffName", "NVARCHAR(200) NULL"],
+            ["PatientUserId", "UNIQUEIDENTIFIER NOT NULL"],
+            ["AbhaAddress", "VARCHAR(100) NOT NULL"],
+            ["PurposeCode", "VARCHAR(10) NOT NULL"],
+            ["HiTypes", "NVARCHAR(400) NOT NULL"],
+            ["DateFrom", "DATETIME2(3) NOT NULL"],
+            ["DateTo", "DATETIME2(3) NOT NULL"],
+            ["DataEraseAt", "DATETIME2(3) NOT NULL"],
+            ["AccessMode", "VARCHAR(10) NOT NULL"],
+            ["Status", "VARCHAR(20) NOT NULL"],
+            ["StatusAt", "DATETIME2(3) NOT NULL"],
+            ["AbdmErrorCode", "VARCHAR(20) NULL"],
+            ["AbdmError", "NVARCHAR(500) NULL"],
+            ["CreatedAt", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuConsentRequests_CreatedAt DEFAULT GETDATE()"],
+            ["UpdatedAt", "DATETIME2(3) NULL"],
+        ],
+        indexes: [
+            { name: "UX_AbdmHiuConsentRequests_InitRequestId", on: "InitRequestId", unique: true },
+            { name: "UX_AbdmHiuConsentRequests_ConsentRequestId", on: "ConsentRequestId", unique: true, where: "ConsentRequestId IS NOT NULL" },
+            { name: "IX_AbdmHiuConsentRequests_StatusRequestId", on: "StatusRequestId", where: "StatusRequestId IS NOT NULL" },
+            { name: "IX_AbdmHiuConsentRequests_Hospital", on: "HospitalId, CreatedAt DESC" },
+            { name: "IX_AbdmHiuConsentRequests_Patient", on: "HospitalId, PatientUserId, Status" },
+        ],
+    },
+    {
+        name: "AbdmHiuConsentArtefacts",
+        columns: [
+            ["ConsentArtefactId", "VARCHAR(64) NOT NULL"],
+            ["ConsentRequestFk", "INT NOT NULL"],
+            ["HospitalId", "INT NOT NULL"],
+            ["HipId", "VARCHAR(50) NULL"],
+            ["HipName", "NVARCHAR(200) NULL"],
+            ["Status", "VARCHAR(20) NOT NULL"],
+            ["StatusAt", "DATETIME2(3) NOT NULL"],
+            ["HiTypes", "NVARCHAR(400) NULL"],
+            ["DateFrom", "DATETIME2(3) NULL"],
+            ["DateTo", "DATETIME2(3) NULL"],
+            ["DataEraseAt", "DATETIME2(3) NULL"],
+            ["AccessMode", "VARCHAR(10) NULL"],
+            ["Frequency", "NVARCHAR(200) NULL"],
+            ["CareContexts", "VARCHAR(MAX) NULL"],
+            ["Signature", "VARCHAR(MAX) NULL"],
+            ["FetchRequestId", "VARCHAR(64) NULL"],
+            ["FetchedAt", "DATETIME2(3) NULL"],
+            ["FetchAttempts", "INT NOT NULL CONSTRAINT DF_AbdmHiuConsentArtefacts_FetchAttempts DEFAULT 0"],
+            ["RecordsPurgedAt", "DATETIME2(3) NULL"],
+            ["CreatedAt", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuConsentArtefacts_CreatedAt DEFAULT GETDATE()"],
+            ["UpdatedAt", "DATETIME2(3) NULL"],
+        ],
+        indexes: [
+            { name: "UX_AbdmHiuConsentArtefacts_ConsentArtefactId", on: "ConsentArtefactId", unique: true },
+            { name: "IX_AbdmHiuConsentArtefacts_ConsentRequestFk", on: "ConsentRequestFk" },
+            { name: "IX_AbdmHiuConsentArtefacts_FetchRequestId", on: "FetchRequestId", where: "FetchRequestId IS NOT NULL" },
+            { name: "IX_AbdmHiuConsentArtefacts_Status_DataEraseAt", on: "Status, DataEraseAt" },
+        ],
+    },
+    {
+        name: "AbdmHiuDataRequests",
+        columns: [
+            ["HiRequestId", "VARCHAR(64) NOT NULL"],
+            ["TransactionId", "VARCHAR(64) NULL"],
+            ["ArtefactFk", "INT NOT NULL"],
+            ["HospitalId", "INT NOT NULL"],
+            ["DateFrom", "DATETIME2(3) NOT NULL"],
+            ["DateTo", "DATETIME2(3) NOT NULL"],
+            ["PushTokenHash", "CHAR(64) NOT NULL"],
+            ["PrivateKey", "VARCHAR(2000) NULL"],
+            ["Nonce", "VARCHAR(100) NULL"],
+            ["KeyExpiresAt", "DATETIME2(3) NOT NULL"],
+            ["TransferDeadline", "DATETIME2(3) NULL"],
+            ["SessionStatus", "VARCHAR(20) NOT NULL"],
+            ["PageCount", "INT NULL"],
+            ["PagesReceived", "INT NOT NULL CONSTRAINT DF_AbdmHiuDataRequests_PagesReceived DEFAULT 0"],
+            ["BytesReceived", "BIGINT NOT NULL CONSTRAINT DF_AbdmHiuDataRequests_BytesReceived DEFAULT 0"],
+            ["CareContextStatus", "VARCHAR(MAX) NULL"],
+            ["NotifiedAt", "DATETIME2(3) NULL"],
+            ["NotifyRequestId", "VARCHAR(64) NULL"],
+            ["Error", "NVARCHAR(500) NULL"],
+            ["CreatedAt", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuDataRequests_CreatedAt DEFAULT GETDATE()"],
+            ["CompletedAt", "DATETIME2(3) NULL"],
+        ],
+        indexes: [
+            { name: "UX_AbdmHiuDataRequests_HiRequestId", on: "HiRequestId", unique: true },
+            { name: "UX_AbdmHiuDataRequests_TransactionId", on: "TransactionId", unique: true, where: "TransactionId IS NOT NULL" },
+            { name: "UX_AbdmHiuDataRequests_PushTokenHash", on: "PushTokenHash", unique: true },
+            { name: "IX_AbdmHiuDataRequests_ArtefactFk", on: "ArtefactFk" },
+            // At most one open transfer per artefact, even when two requests race past the open check.
+            { name: "UX_AbdmHiuDataRequests_OpenArtefact", on: "ArtefactFk", unique: true, where: "SessionStatus IN ('REQUESTED', 'RECEIVING')" },
+            { name: "IX_AbdmHiuDataRequests_SessionStatus_KeyExpiresAt", on: "SessionStatus, KeyExpiresAt" },
+        ],
+    },
+    {
+        name: "AbdmHiuRecords",
+        columns: [
+            ["DataRequestFk", "INT NOT NULL"],
+            ["ArtefactFk", "INT NOT NULL"],
+            ["HospitalId", "INT NOT NULL"],
+            ["PageNumber", "INT NOT NULL"],
+            ["EntryIndex", "INT NOT NULL"],
+            ["CareContextReference", "VARCHAR(1000) NULL"],
+            ["Media", "VARCHAR(100) NULL"],
+            ["ChecksumOk", "BIT NOT NULL CONSTRAINT DF_AbdmHiuRecords_ChecksumOk DEFAULT 0"],
+            ["Content", "NVARCHAR(MAX) NULL"],
+            ["DeleteAt", "DATETIME2(3) NULL"],
+            ["ReceivedAt", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuRecords_ReceivedAt DEFAULT GETDATE()"],
+        ],
+        indexes: [
+            { name: "UX_AbdmHiuRecords_Page_Entry", on: "DataRequestFk, PageNumber, EntryIndex", unique: true },
+            { name: "IX_AbdmHiuRecords_ArtefactFk", on: "ArtefactFk" },
+            { name: "IX_AbdmHiuRecords_DeleteAt", on: "DeleteAt" },
+        ],
+    },
+    {
+        name: "AbdmHiuAuditEvents",
+        columns: [
+            ["At", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuAuditEvents_At DEFAULT GETDATE()"],
+            ["HospitalId", "INT NULL"],
+            ["StaffUserId", "UNIQUEIDENTIFIER NULL"],
+            ["Event", "VARCHAR(50) NOT NULL"],
+            ["ConsentRequestId", "VARCHAR(64) NULL"],
+            ["ArtefactId", "VARCHAR(64) NULL"],
+            ["TransactionId", "VARCHAR(64) NULL"],
+            ["RequestId", "VARCHAR(64) NULL"],
+            ["Outcome", "VARCHAR(50) NOT NULL"],
+            ["Detail", "NVARCHAR(500) NULL"],
+        ],
+        indexes: [
+            { name: "IX_AbdmHiuAuditEvents_ConsentRequestId", on: "ConsentRequestId, At", where: "ConsentRequestId IS NOT NULL" },
+            { name: "IX_AbdmHiuAuditEvents_Hospital", on: "HospitalId, At DESC" },
+        ],
+    },
+];

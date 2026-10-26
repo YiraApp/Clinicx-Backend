@@ -1,0 +1,89 @@
+{
+ "generator": "ParseOurs.java on BouncyCastle bcprov-jdk18on 1.79: BouncyCastle parsed hiuPublicKey (our publicKeyValueOf output) with X509EncodedKeySpec and ran ECDH from a fresh HIP key; ySign is our published y versus k*G. Synthetic keys only.",
+ "vectors": [
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "0K6mIIHAHageTdhU9juCoGrtFmAo7QjfJ68f5A02vEA=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAQVCthZAFN/nHixSmeHD0OlUF8q+Q6WezJOR8eKUxT9bSAUk0ICJKrWt3KyH0QmwAUbRDVUkVYvCs/l4RTFcPqK",
+   "hipPublicKey": "BHHzu/g8/34i6PegQrbSZin88bRmgDjR1H6/+uEdq6QDf/P076Dw8PfyQ9hxDi8JekfL5vAeORqSY5uMu6UdcFU=",
+   "sharedSecretX": "6eee8fc1c0d912ee2adec3af6ce65f4064ffd436a3d077451e5efec687841bab"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "wLqFMAmPPbpsbNyQZocTc/ezFuVi76uwFgJ2dnMdDn4=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAARM/3+4+rQDk4OtXfte6aWM13vI5Bx1Imeh84t3VAi3i241DNYAjtsOK1Z+4KUJduel5eikSc5uWYqWEIxutrq8",
+   "hipPublicKey": "BFDcIwU0Eq1dJOCWyarPkq8QUqwm/+3F4qKEEMZUS7tvd49Zg6pDDrcdoxJ3M0JlR9YKdq3Zz52XXpWpsylqFgA=",
+   "sharedSecretX": "28430a76fbf9941aac54608c8d8238ebb5dd55a24018a988f7e70c77c1b7e4c1"
+  },
+  {
+   "ySign": "negated",
+   "hiuPrivateKey": "CPBT9rjZ+9BvJyQzvIdPiZOqSmhBIat0044VukPJR2I=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAARE1cITPZJPbzIENHL4KdQ7YHelPlHE0GPXXW1AoEYEyWfsi3m3nuEbHAcyZM2VBxGVgWeK+BFAvytk9czSLPzQ",
+   "hipPublicKey": "BG+8avjXCnFDkbeR+0smHEj/0laeVDgh9ZL/D4hHF5nJLIWYO6DjUjASIYvPoOzj1lxQiiuXq8WlDGyv9/j7jSk=",
+   "sharedSecretX": "01e0ed04c9ee62e903d275d2976c7e6681dad339aaf9d5a0d8a0bff67f702d5a"
+  },
+  {
+   "ySign": "negated",
+   "hiuPrivateKey": "iNy6JleLhc7f8Y3N2lI9/hzR1d9PT+lwV0CVwW0Tjlc=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAQkONPZqTuoq/k762tAD8+YFIl3svoDP/STtIgixCaypFThojPYLVmWz7euIlq54Ml2PcXrQGvMBeTfvg0O0OXs",
+   "hipPublicKey": "BGos7aam656k8nbQ8z7fyDCzAMRVRRzky8uOOfDCgvBLSpIkIDTw0jlgaFt/iuabNSReKn4hkRXjhquL7Bc7rFg=",
+   "sharedSecretX": "1f3b3a632b97ecbc7cd412c2436216acaff9a28d5158dfc9871cc503c4e9a189"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "4FZ66oaSsBwBYm3PFZwr0jkGx4ryD14RCUCaeHWs5Hc=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAARcGlJJVbuAo2ifBMikeK2FE3SVuqgw3zUO/MgJnEgG0GLr4oSNidRwzfllL1f5dzrdbvpzLUwznruz9eJo1Xjk",
+   "hipPublicKey": "BGAURRoXlLhpXreU2UC/S49OV2GgZq2cpcvvURDeLHKfAULPSLIyZxFDLwB8ngC24AUJtWUi9lZZM8iMgCx55rA=",
+   "sharedSecretX": "060d4df4ec9b4e2dd345d01e6290c208db9f50787cd46213f55370c37a2ad641"
+  },
+  {
+   "ySign": "negated",
+   "hiuPrivateKey": "mOwP5tkclVN17f6IoySj33hmF2lklqmudQq3EScrWGI=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAR1iBKoz1h/iPZmkVxfYZmJsT2IL6BYTiv5ODgnPofeG01wkBSbYjZb6In2CTypF4Pr4gGuQitiiizXUiqxOpIS",
+   "hipPublicKey": "BBTz7ecXZQx60j+zOIuICcp7phoGpSJojHkUzVoo8FigVnQfaRrRFPybUvUXxslujRp+mdXxtFDVXQ87rDB+UkI=",
+   "sharedSecretX": "33552b7e3fd374a4921c74a8f5bfc58dac03af5f565686b4c7ab86f0d5ab8c3e"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "UE/t+ddWmYNICKkigv+R1LATMsTE2peYVaOXpk4PGGQ=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAQYnygNKawAEAzEXw2UIg3S1JoKAaIzk2J1Z9dv82cDGUr2t7jCy5QBgmq+osttHqFn1DQRQJk6WfuNEJ0H7OGO",
+   "hipPublicKey": "BGWLMlU3txY/Wqn+EG2gI9a4K0/69PbxkRLmAOcKWMSxAlcO/hfTOTy1tFAJcbjGSDHnVmJk5mm/qzOVigpr0pI=",
+   "sharedSecretX": "620878eadfa7763ac5a0aba4b89d6fbd8479e2a4dad66875a9f51c32a2bed330"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "WNty3SIPtcCMR4VmBCbpsi5m6KPmE99d60j4ENcht3Y=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAARcmv5JTCJH504X1vt+F+hn4PHZsZNo31TmHE0NvVYPhCfJ4IijvjHh/oRMoxsM8ZLdimI8HIykYax/8s9rXf7A",
+   "hipPublicKey": "BCUNos6XtDD1QwBLWC5muRAM3EFdImvcdALMuE5a+EgmMpcValPdRO1bcuOWlxxeu0gbj7OhR2YTyiBcg1CgJjo=",
+   "sharedSecretX": "74d64af4b624481a890b11fcb9885c1f07b2a0fffce06a20573203aa844a7216"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "2HTZM+k/Ox8AQjfwvnBfX0qJOU9y4KOXBo5snnzZ0HQ=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAQ8qRv1s7u3NV9sLDEbfdHhEEa+DRGD9uwbq2e6cEzcsFcmE5f/Bdu7Imoe+bb/ZNZm2KrM+2yPzZmp8Zl1Y/aU",
+   "hipPublicKey": "BBqEqG2kuopTdDn3luiD0Pp++r+kOTkQnHd1Kl6FKUYdW4aBZ4hrXTODmKoHxZCe3LSlgmzazYAIadddilr6ZdI=",
+   "sharedSecretX": "28b33debe5c406ab47a4be45a9a8fa45f6094b506616a943d8a13202bf5fd500"
+  },
+  {
+   "ySign": "negated",
+   "hiuPrivateKey": "AF1N3E3GR9Ba5JPsCF3sDKKv/GsZu9ojHDjIB/Qle24=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAQ0rNuYJoWFIJvlvFhwHpy4Lvp/c8tRMkEr7Zff93n75lPHcm+bu77sHyc8utCxziMMAS1GPGmJ92K7dugCOrvy",
+   "hipPublicKey": "BBVUy1M6AszAVQmupNu3O7L7o6H83WUNUxJ1AlI4Td21dQUFTWS1kpOYUL3My+IoD/q6Y0p4nDldCBMefbpfi4Y=",
+   "sharedSecretX": "447bef7b4697473c16e19e1f8f2480b00cd57cd1770cd5d817a4899296968e7d"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "kO3fwMG86vLCaCiBBySP66Gs79EtuQnvQC/1qIEjOF4=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAARX/NB1k133a5L7ziaU6ul8j0hy2e8HQDxNA5/zSVDmtTJFMdjGRrpr8GbeJ+jiNpq72FYYNGTCLIx2BaPI3sYO",
+   "hipPublicKey": "BFFO/LTICEiB5lQ+XWqTE8kaSjigjxv71O0BmOlRGoUJHQdcV6L4jC++o5a4q5SwZKsuVdZk24GzZy07ewlOV1c=",
+   "sharedSecretX": "0c5120652f499687734e751cdd0ba92e036eb3fb3db5bdc736599ba8ba50828f"
+  },
+  {
+   "ySign": "same",
+   "hiuPrivateKey": "cGNUBBjPj6tq+pyiJE6uhpz/FhpwkDSo1Ak7HzFySm4=",
+   "hiuPublicKey": "MFswFQYHKoZIzj0CAQYKKwYBBAGXVQEFAQNCAAR/QpoxN0N4UlmXl91vTP5EochqGVGeznXnPr2giz+TdFEk/QrWK6A4ygkLjRC9hgZubG75nmToS2T2JhPk9+/a",
+   "hipPublicKey": "BHvI9W0ZtbtXGCW2j1mIP9s00oXqhsZw+p3NrSQxGv/hNUKb30woa+cRrT4YTMbwikFXSogFN6dcFxFLefcUDjY=",
+   "sharedSecretX": "26ae186e18af4ee3ce41b2a32b07e8c3794de223de7f3a3bf30586ece790e91b"
+  }
+ ]
+}

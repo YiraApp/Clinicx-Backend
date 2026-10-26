@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { abhaEnrolmentController, abhaShareCallback } from "../../controllers/Abdm/abha-enrolment.controller.js";
 import { staffJwtMiddleware } from "../../middlewares/staff-jwt.middleware.js";
+import { abdmHiuAccess } from "../../middlewares/abdm-hiu-access.middleware.js";
+import { hiuRouter } from "./hiu.routes.js";
 
 const abdmRouter = Router();
 const c = abhaEnrolmentController;
@@ -41,6 +43,9 @@ abdmRouter.get("/share/queue", c.shareQueue.bind(c));
 
 // Store the verified ABHA on the clinic's patient record
 abdmRouter.post("/patients/:userId/abha", c.linkToPatient.bind(c));
+
+// M3: ABDM record requests (HIU), for the roles in ABDM_HIU_ROLE_NAMES at the verified hospital
+abdmRouter.use("/hiu", abdmHiuAccess, hiuRouter);
 
 /** ABDM's callbacks to this HIP, mounted at /api/v3/hip before the user-login middleware. */
 const abdmCallbackRouter = Router();

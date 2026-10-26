@@ -41,8 +41,12 @@ export class AbdmCallbackAuth {
         this.clock = clock;
     }
 
-    /** The token's claims, or a CallbackAuthError saying why it was refused. */
-    async verify(authorization: string | undefined): Promise<Record<string, any>> {
+    /**
+     * The token's claims, or a CallbackAuthError saying why it was refused. The signature, expiry and
+     * not-before are always checked. The ABDM client pin applies unless [options.pinClient] is false:
+     * only a HIP's data push turns it off, because a HIP signs with its own client's gateway token.
+     */
+    async verify(authorization: string | undefined, options: { pinClient?: boolean } = {}): Promise<Record<string, any>> {
         const token = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
         const parts = token.split(".");
         if (parts.length !== 3) throw new CallbackAuthError("The callback carries no bearer token.");
@@ -67,6 +71,7 @@ export class AbdmCallbackAuth {
         if (typeof claims.nbf === "number" && claims.nbf * 1000 - CLOCK_LEEWAY_MS > now) {
             throw new CallbackAuthError("The callback token is not valid yet.");
         }
+        if (options.pinClient === false) return claims;
         const allowed = abdmConfig.callbackClientIds;
         const caller = String(claims.clientId ?? claims.azp ?? "");
         if (allowed.length === 0) {

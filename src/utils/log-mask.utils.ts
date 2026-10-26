@@ -1,14 +1,21 @@
 /**
  * What the API log may keep of a request or a response.
- * Passwords are always masked. On the ABDM routes the Aadhaar number, OTPs and mobile numbers
- * are masked too, and a response keeps only its status, message and error details: never the
- * ABHA profile, photo or card.
+ * Passwords are always masked. On the ABDM routes the Aadhaar number, OTPs, mobile numbers, ABHA
+ * addresses and the M3 record-request fields (care contexts, content, key material) are masked
+ * too, and a response keeps only its status, message and error details: never the ABHA profile,
+ * photo or card, nor a decrypted record.
  */
 
 const MASK = "********";
 const ALWAYS_MASKED = ["password", "Password"];
 // "identifier" carries the Aadhaar number (or ABHA number/address) on the verify routes.
-const ABDM_MASKED = ["aadhaar", "otp", "mobile", "identifier", "abhaAddress", "abhaNumber"];
+// The rest are M3 (HIU) record-request fields: care-context references, record content, key
+// material, the patient name and the per-transfer push address (it carries the push token).
+const ABDM_MASKED = [
+    "aadhaar", "otp", "mobile", "identifier", "abhaAddress", "abhaNumber",
+    "patientReference", "careContextReference", "careContexts", "content", "keyValue", "nonce",
+    "privateKey", "patientName", "dataPushUrl",
+];
 
 export const isAbdmPath = (path: string): boolean => (path || "").toLowerCase().startsWith("/api/abdm");
 
@@ -49,4 +56,13 @@ export const maskResponseForLog = (path: string, responseText: string): string =
     } catch {
         return "[ABDM response not logged]";
     }
+};
+
+/** The request headers the API log keeps: all of them except Authorization (the caller's JWT). */
+export const headersForLog = (headers: Record<string, unknown>): Record<string, unknown> => {
+    const kept: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(headers || {})) {
+        if (name.toLowerCase() !== "authorization") kept[name] = value;
+    }
+    return kept;
 };

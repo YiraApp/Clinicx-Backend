@@ -16,6 +16,7 @@ const startServer = async () => {
         await initializeDatabase();
         await MigrationService.ensureLogIndexes();
         await MigrationService.ensureAbdmSchema();
+        await MigrationService.ensureAbdmHiuSchema();
         await DietMigrationService.runMigrationsAndSeed();
 
         // Report at startup whether this server can send push notifications
@@ -45,6 +46,10 @@ const startServer = async () => {
         // Start MedSense timeout checker (reads a report with Gemini if MedSense hasn't answered in time)
         const { medSenseService } = await import("./services/Appointments/medsense.service.js");
         medSenseService.startScheduler(60);
+
+        // Start the ABDM HIU housekeeping sweep (every 60s: purge records past dataEraseAt, fail timed-out transfers, delete private keys)
+        const { startHiuMaintenance } = await import("./controllers/Abdm/hiu.controller.js");
+        await startHiuMaintenance();
 
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);

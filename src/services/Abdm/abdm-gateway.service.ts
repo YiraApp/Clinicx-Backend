@@ -46,6 +46,14 @@ export class AbdmApiError extends Error {
     }
 }
 
+/**
+ * True when a call failed without any answer from ABDM (our timeout, or the connection dropped), so
+ * ABDM may still have accepted it and its callback may still come. Every other failure is a definite
+ * answer: the call was refused or never sent.
+ */
+export const isOutcomeUnknown = (error: unknown): boolean =>
+    error instanceof AbdmApiError && (error.kind === "timeout" || (error.kind === "unavailable" && error.status === 0));
+
 /** ABDM codes come back bare ("ABDM-1204") or with a trailing ": " ("ABDM-1204: "). */
 export const normalizeAbdmCode = (code: unknown): string | null => {
     if (code === undefined || code === null) return null;
@@ -129,6 +137,11 @@ export interface AbdmCall {
     headers?: Record<string, string>;
     /** The answer is a file (the ABHA card), not JSON. */
     binary?: boolean;
+    /**
+     * The REQUEST-ID to send, when the caller must store it before the call because the answering
+     * callback quotes it (HIU consent and data-flow calls). A fresh UUID otherwise.
+     */
+    requestId?: string;
 }
 
 export interface AbdmFile {
@@ -143,6 +156,7 @@ interface SendRequest {
     headers: Record<string, string>;
     body?: unknown;
     binary?: boolean;
+    requestId?: string;
 }
 
 export class AbdmGatewayService {
@@ -187,6 +201,7 @@ export class AbdmGatewayService {
                 headers: { Authorization: `Bearer ${token}`, ...(toGateway ? { "X-CM-ID": abdmConfig.cmId } : {}), ...call.headers },
                 body: call.body,
                 binary: call.binary,
+                requestId: call.requestId,
             });
         } catch (error) {
             if (error instanceof AbdmApiError && error.kind === "credentials") {
@@ -225,7 +240,7 @@ export class AbdmGatewayService {
     }
 
     private async send(request: SendRequest): Promise<any> {
-        const requestId = randomUUID();
+        const requestId = request.requestId || randomUUID();
         const headers: Record<string, string> = {
             "REQUEST-ID": requestId,
             TIMESTAMP: abdmTimestamp(),

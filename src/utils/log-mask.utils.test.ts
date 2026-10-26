@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { maskRequestBodyForLog, maskResponseForLog } from "./log-mask.utils.js";
+import { headersForLog, maskRequestBodyForLog, maskResponseForLog } from "./log-mask.utils.js";
 
 test("ABDM request bodies lose the Aadhaar number, OTPs and mobiles, at any depth", () => {
     const masked = maskRequestBodyForLog("/api/abdm/enrolment/verify", {
@@ -52,4 +52,49 @@ test("ABDM responses keep status, message and error details only", () => {
 
     assert.equal(maskResponseForLog("/api/abdm/enrolment/card", "not json"), "[ABDM response not logged]");
     assert.equal(maskResponseForLog("/api/patients", success), success);
+});
+
+test("M3 record-request fields are masked on the ABDM routes, at any depth, arrays included", () => {
+    const masked = maskRequestBodyForLog("/api/abdm/hiu/consent-requests", {
+        patientUserId: "11111111-1111-1111-1111-111111111111",
+        abhaAddress: "someone@sbx",
+        patientName: "A Patient",
+        purposeCode: "CAREMGT",
+        hiTypes: ["Prescription"],
+        nested: {
+            patientReference: "PR-1",
+            careContextReference: "CC-1",
+            careContexts: [{ careContextReference: "CC-2" }],
+            entries: [{ content: "cipher", checksum: "abc" }],
+            keyMaterial: { dhPublicKey: { keyValue: "MIIB..." }, nonce: "n0nce" },
+            privateKey: "secret",
+            dataPushUrl: "https://host/api/v3/hiu/data-push/token",
+        },
+    });
+    assert.deepEqual(masked, {
+        patientUserId: "11111111-1111-1111-1111-111111111111",
+        abhaAddress: "********",
+        patientName: "********",
+        purposeCode: "CAREMGT",
+        hiTypes: ["Prescription"],
+        nested: {
+            patientReference: "********",
+            careContextReference: "********",
+            careContexts: "********",
+            entries: [{ content: "********", checksum: "abc" }],
+            keyMaterial: { dhPublicKey: { keyValue: "********" }, nonce: "********" },
+            privateKey: "********",
+            dataPushUrl: "********",
+        },
+    });
+});
+
+test("a decrypted record in an HIU response is never logged", () => {
+    const records = JSON.stringify({ status: true, message: "Success", data: { available: true, records: [{ bundle: { resourceType: "Bundle" }, raw: null }] } });
+    assert.equal(maskResponseForLog("/api/abdm/hiu/artefacts/7/records", records), JSON.stringify({ status: true, message: "Success" }));
+});
+
+test("the API log keeps every request header except Authorization", () => {
+    assert.deepEqual(headersForLog({ authorization: "Bearer jwt", "x-hospital-id": "3", "user-agent": "ua" }), { "x-hospital-id": "3", "user-agent": "ua" });
+    assert.deepEqual(headersForLog({ Authorization: "Bearer jwt" }), {});
 });

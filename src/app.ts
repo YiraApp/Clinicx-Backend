@@ -6,6 +6,7 @@ import router from './routes/index.js';
 import { mobileRouterV1 } from './MobileApi/v1/routes/index.js';
 import { medSenseService } from './services/Appointments/medsense.service.js';
 import { abdmCallbackRouter } from './routes/Abdm/abdm.routes.js';
+import { hiuCallbackRouter, hiuDataPushRouter } from './routes/Abdm/hiu-callback.routes.js';
 
 import path from 'path';
 
@@ -14,13 +15,21 @@ const app: Application = express();
 
 
 app.use(cors());
+
+// ABDM M3 data push from HIPs (encrypted records). It has its own JSON parser with the
+// ABDM_DATA_PUSH_MAX_MB limit and a JSON 413, so it is mounted before the global 100 KB parser,
+// and before the login middleware: it is authenticated by the HIP's signed token and the push token.
+app.use('/api/v3/hiu/data-push', hiuDataPushRouter);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/public', express.static(path.resolve(process.cwd(), 'public')));
 
-// ABDM gateway callbacks (Scan and Share). Authenticated by ABDM's signed token, not a user JWT,
-// so they sit before the login middleware, at the path ABDM appends to the registered bridge URL.
+// ABDM gateway callbacks (Scan and Share; M3 consent and data flow). Authenticated by ABDM's signed
+// token, not a user JWT, so they sit before the login middleware, at the paths ABDM appends to the
+// registered bridge URL.
 app.use('/api/v3/hip', abdmCallbackRouter);
+app.use('/api/v3/hiu', hiuCallbackRouter);
 
 // Global Logging + Auth Middleware
 app.use(loggingMiddleware);
