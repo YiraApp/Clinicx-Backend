@@ -53,6 +53,16 @@ export class AbdmExchangeRepository implements ExchangeRecorder, CallbackStore {
         return existing?.State === "answered" ? "duplicate" : "unknown";
     }
 
+    async handled(direction: "inbound" | "outbound", requestId: string, error: string | null): Promise<void> {
+        await AppDataSource.query(
+            `UPDATE AbdmExchanges
+             SET State = CASE WHEN @1 = 'inbound' THEN (CASE WHEN @2 IS NULL THEN 'replied' ELSE 'failed' END) ELSE State END,
+                 ErrorMessage = COALESCE(@2, ErrorMessage), UpdatedAt = GETDATE()
+             WHERE Direction = @1 AND RequestId = @0`,
+            [requestId, direction, error ? error.slice(0, 500) : null]
+        );
+    }
+
     async receive(callback: StoredCallback): Promise<"stored" | "duplicate"> {
         try {
             await this.exchanges.insert({

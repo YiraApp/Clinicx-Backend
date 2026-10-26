@@ -247,7 +247,7 @@ export class AbhaShareRepository implements AbhaShareStore {
 
     private async organizationOf(hospitalId: number): Promise<number | null> {
         const hospital = await AppDataSource.getRepository(Hospital).findOne({ where: { Id: hospitalId }, select: { Id: true, OrganizationId: true } });
-        if (!hospital) throw new Error(`Hospital ${hospitalId} (ABDM_HIP_HOSPITAL_ID) does not exist.`);
+        if (!hospital) throw new Error(`Hospital ${hospitalId}, set up for Scan and Share in AbdmFacilities, does not exist.`);
         return hospital.OrganizationId ?? null;
     }
 

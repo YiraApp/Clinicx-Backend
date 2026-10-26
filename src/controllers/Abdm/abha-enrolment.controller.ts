@@ -12,6 +12,7 @@ import { abhaRepository } from "../../repositories/Abdm/abha.repository.js";
 import { abhaShareRepository } from "../../repositories/Abdm/abha-share.repository.js";
 import { shareQueueHospital } from "./share-queue-access.js";
 import { AbdmBridgeService, BridgeUrlError } from "../../services/Abdm/abdm-bridge.service.js";
+import { abdmFacilities, FacilityError, scanShareHipIdOf } from "../../services/Abdm/abdm-facilities.service.js";
 
 // One session store: a journey verified by create, verify or find can then show its card and link a patient.
 const abhaSessions = new AbhaSessionStore();
@@ -103,13 +104,13 @@ export class AbhaEnrolmentController {
     }
 
     /**
-     * Points the bridge at body.url, or at ABDM_BRIDGE_URL when none is given. Moves every
-     * facility's callbacks on this client id, so it is for system admins only (see the route).
+     * Points the bridge at body.url and saves it as this deployment's. Moves every facility's
+     * callbacks on this client id, so it is for system admins only (see the route).
      */
     async updateBridgeUrl(req: Request, res: Response) {
-        const url = req.body?.url ?? abdmConfig.bridgeUrl;
+        const url = req.body?.url;
         if (!url) {
-            return res.status(400).json(ApiResponse.error("Give the bridge URL, or set ABDM_BRIDGE_URL.", { kind: "invalid" }));
+            return res.status(400).json(ApiResponse.error("Give the bridge URL.", { kind: "invalid" }));
         }
         try {
             const readiness = await abdmBridgeService.updateBridgeUrl(url);
@@ -118,6 +119,51 @@ export class AbhaEnrolmentController {
         } catch (error) {
             if (error instanceof BridgeUrlError) {
                 return res.status(400).json(ApiResponse.error(error.message, { kind: "invalid" }));
+            }
+            return sendError(res, error);
+        }
+    }
+
+    /** Every hospital set up as an ABDM facility (system admins only, see the route). */
+    async facilities(_req: Request, res: Response) {
+        try {
+            return res.json(ApiResponse.success(await abdmFacilities.all()));
+        } catch (error) {
+            return sendError(res, error);
+        }
+    }
+
+    /**
+     * Sets up a hospital as an ABDM facility: body.hipId is its HFR facility id, linked to this
+     * deployment's bridge as HIP, and body.scanShareHipId the HIP id its Scan and Share counters
+     * use when that is not the HFR id (one of the two is needed); hipName, autoLink and isActive
+     * are optional.
+     */
+    async saveFacility(req: Request, res: Response) {
+        const hospitalId = Number(req.params.hospitalId);
+        if (!Number.isInteger(hospitalId) || hospitalId <= 0) {
+            return res.status(400).json(ApiResponse.error("Give a hospital id.", { kind: "invalid" }));
+        }
+        try {
+            if (!(await abhaRepository.findHospitalName(hospitalId))) {
+                return res.status(404).json(ApiResponse.error(`Hospital ${hospitalId} does not exist.`, { kind: "invalid" }));
+            }
+            const body = req.body ?? {};
+            const saved = await abdmFacilities.save(hospitalId, {
+                hipId: body.hipId,
+                hipName: body.hipName,
+                scanShareHipId: body.scanShareHipId,
+                autoLink: body.autoLink === true,
+                isActive: body.isActive !== false,
+            }, (req as any).userId ? staffUserId(req) : null);
+            console.log(`[ABDM] facility for hospital ${hospitalId} set to ${body.hipId} by user ${staffUserId(req)}`);
+            return res.json(ApiResponse.success(saved, saved ? `Hospital ${hospitalId} acts as ABDM facility ${saved.hipId ?? saved.scanShareHipId}.` : `Hospital ${hospitalId} no longer acts as an ABDM facility.`));
+        } catch (error) {
+            if (error instanceof FacilityError) {
+                return res.status(400).json(ApiResponse.error(error.message, { kind: "invalid" }));
+            }
+            if ([2627, 2601].includes((error as any)?.number ?? (error as any)?.driverError?.number)) {
+                return res.status(409).json(ApiResponse.error("That HIP id is already saved for another hospital.", { kind: "invalid" }));
             }
             return sendError(res, error);
         }
@@ -316,9 +362,10 @@ export class AbhaEnrolmentController {
 
     async counterQr(req: Request, res: Response) {
         try {
-            const hipId = abdmConfig.hipIds[0];
+            const facility = await abdmFacilities.byHospital(headerNumber(req, "x-hospital-id"));
+            const hipId = facility ? scanShareHipIdOf(facility) : null;
             if (!hipId) {
-                throw new AbhaJourneyError(503, "not-configured", "Scan and Share isn't set up: no HIP id (ABDM_HIP_ID) is configured.");
+                throw new AbhaJourneyError(503, "not-configured", "Scan and Share isn't set up for this hospital: it has no ABDM facility yet.");
             }
             const counterId = assertCounterId(req.query.counterId);
             const url = counterShareUrl(hipId, counterId);
@@ -378,7 +425,7 @@ export const abhaShareCallback = async (req: Request, res: Response) => {
 
     let share;
     try {
-        share = abhaShareService.parse(req.headers["x-hip-id"], req.body);
+        share = await abhaShareService.parse(req.headers["x-hip-id"], req.body);
     } catch (error: any) {
         console.warn(`[ABDM] Share REQUEST-ID=${requestId} refused: ${error?.message}`);
         const status = error instanceof AbhaJourneyError ? error.status : 400;

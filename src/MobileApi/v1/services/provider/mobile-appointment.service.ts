@@ -274,6 +274,10 @@ export class MobileAppointmentService {
         discountAmount?: number;
         includeConsultationFee?: boolean;
         consultationFee?: number;
+        /** The patient agrees to the doctor seeing their records for 7 days (default true). */
+        shareRecords?: boolean;
+        /** Older name for shareRecords. */
+        grantRecordAccess?: boolean;
     }): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const userRoleRepo = AppDataSource.getRepository(UserRole);

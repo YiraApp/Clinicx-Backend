@@ -1,4 +1,4 @@
-import { abdmConfig } from "../../config/abdm.config.js";
+import { abdmFacilities, type AbdmFacilityDirectory } from "./abdm-facilities.service.js";
 import { maskCredentials } from "../../utils/log-mask.utils.js";
 import { abdmCallbackAuth, CallbackAuthError, type AbdmCallbackAuth } from "./abdm-callback-auth.service.js";
 
@@ -8,8 +8,8 @@ import { abdmCallbackAuth, CallbackAuthError, type AbdmCallbackAuth } from "./ab
  * /docs/hiecm/v3/concepts/callback-authenticity):
  *   1. the bearer token is ABDM's: AbdmCallbackAuth, shared with Scan and Share, verifies its
  *      signature against the gateway's published keys, its expiry, and that it was issued to a
- *      client in ABDM_CALLBACK_CLIENT_IDS;
- *   2. X-HIP-ID names this HIP;
+ *      client allowed in AbdmSettings (CallbackClientIds);
+ *   2. X-HIP-ID names one of this deployment's facilities (AbdmFacilities);
  *   3. an answer's response.requestId matches a REQUEST-ID this system sent and has not had answered.
  * A callback that passes is stored whole (credentials masked) before anything parses it, then
  * acknowledged with 202; handling it is the next steps' work.
@@ -49,7 +49,22 @@ export interface CallbackStore {
     answer(answeredRequestId: string, callback: StoredCallback): Promise<"answered" | "duplicate" | "unknown">;
     /** Stores a request ABDM made; a redelivery of one already stored is a duplicate. */
     receive(callback: StoredCallback): Promise<"stored" | "duplicate">;
+    /** Records how handling a stored callback ended: replied (a request) or the error. */
+    handled?(direction: "inbound" | "outbound", requestId: string, error: string | null): Promise<void>;
 }
+
+/**
+ * Work a callback starts once it is stored and acknowledged: replying to an ABDM request, or
+ * acting on an answer. [answers] is the REQUEST-ID of our call it answers, for answers; [body] is
+ * the callback as received, credentials included, and never stored or logged by a handler.
+ */
+export type CallbackHandler = (callback: {
+    path: string;
+    requestId: string;
+    answers: string | null;
+    headers: Record<string, string>;
+    body: any;
+}) => Promise<void>;
 
 export interface CallbackOutcome {
     status: number;
@@ -74,7 +89,26 @@ export class AbdmCallbackService {
         private readonly store: CallbackStore,
         private readonly auth: Pick<AbdmCallbackAuth, "verify"> = abdmCallbackAuth,
         private readonly now: () => Date = () => new Date(),
+        private readonly handlers: Partial<Record<string, CallbackHandler>> = {},
+        private readonly facilities: Pick<AbdmFacilityDirectory, "hipById"> = abdmFacilities,
     ) {}
+
+    /** Runs the path's handler after the 202 has gone: ABDM waits on the acknowledgement, not on the work. */
+    private dispatch(path: string, requestId: string, answers: string | null, headers: Headers, body: any): void {
+        const handler = this.handlers[path];
+        if (!handler) return;
+        const flat = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, Array.isArray(v) ? v[0] ?? "" : v ?? ""]));
+        const direction = answers ? "outbound" : "inbound";
+        const key = answers ?? requestId;
+        setImmediate(() => {
+            handler({ path, requestId, answers, headers: flat, body })
+                .then(() => this.store.handled?.(direction, key, null))
+                .catch(async (error: any) => {
+                    console.error(`[ABDM] callback ${path} REQUEST-ID=${requestId} could not be handled: ${error?.message}`);
+                    await this.store.handled?.(direction, key, String(error?.message ?? "failed")).catch(() => undefined);
+                });
+        });
+    }
 
     async receive(input: { path: string; headers: Headers; body: unknown }): Promise<CallbackOutcome> {
         const path = input.path.split("?")[0]!.replace(/\/+$/, "");
@@ -94,10 +128,9 @@ export class AbdmCallbackService {
         }
 
         const hipId = header(input.headers, "x-hip-id");
-        const ourHip = abdmConfig.m2HipId;
-        if (!ourHip || hipId !== ourHip) {
+        if (!(await this.facilities.hipById(hipId))) {
             // On a shared bridge another facility's callbacks can arrive here: never store or act on them.
-            return this.refuse(path, 403, `X-HIP-ID ${hipId || "(none)"} is not this HIP`);
+            return this.refuse(path, 403, `X-HIP-ID ${hipId || "(none)"} is not a facility of this deployment`);
         }
 
         const requestId = header(input.headers, "request-id");
@@ -125,10 +158,12 @@ export class AbdmCallbackService {
             const result = await this.store.answer(answered.trim(), callback);
             if (result === "unknown") return this.refuse(path, 400, `answers ${answered}, which this system did not send or is not waiting on`);
             if (result === "duplicate") return this.refuse(path, 409, `${answered} was already answered`);
+            this.dispatch(path, requestId, answered.trim(), input.headers, input.body);
             return this.accept(path, requestId, `answers ${answered}`);
         }
 
         const result = await this.store.receive(callback);
+        if (result === "stored") this.dispatch(path, requestId, null, input.headers, input.body);
         return this.accept(path, requestId, result === "duplicate" ? "redelivery, already stored" : "stored");
     }
 

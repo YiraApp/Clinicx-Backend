@@ -1,10 +1,11 @@
-import { abdmConfig } from "../../config/abdm.config.js";
+import { abdmFacilities, abdmSettings, type AbdmFacilityDirectory, type Hip, type AbdmSettings } from "./abdm-facilities.service.js";
 import { AbdmApiError, abdmGatewayService, type AbdmGatewayService } from "./abdm-gateway.service.js";
 
 /**
  * Whether ABDM can reach this deployment as an HIP, read from the bridge registry rather than
- * assumed: the bridge is active and calls back on this deployment's URL, and the configured
- * HIP id is a service on it that ABDM itself accepts. Every M2 journey depends on all three.
+ * assumed: the bridge is active and calls back on this deployment's URL (AbdmSettings), and each
+ * hospital's facility (AbdmFacilities) is a service on it that ABDM itself accepts. Every M2
+ * journey depends on all three.
  */
 
 export interface BridgeService {
@@ -17,7 +18,7 @@ export interface BridgeService {
 export interface HipReadiness {
     hipId: string;
     /** ClinicX hospital the HIP shares records for, and its name in the clinic database. */
-    hospitalId: number | null;
+    hospitalId: number;
     hospitalName: string | null;
     onBridge: boolean;
     isHip: boolean;
@@ -32,7 +33,8 @@ export interface BridgeReadiness {
     problems: string[];
     bridge: { id: string | null; name: string | null; url: string | null; active: boolean; blocklisted: boolean };
     expectedUrl: string | null;
-    hip: HipReadiness | null;
+    /** One per hospital set up as an ABDM facility. */
+    hips: HipReadiness[];
     services: BridgeService[];
 }
 
@@ -81,6 +83,8 @@ export class AbdmBridgeService {
     constructor(
         private readonly hospitals: HipHospitalLookup,
         private readonly gateway: AbdmGatewayService = abdmGatewayService,
+        private readonly facilities: Pick<AbdmFacilityDirectory, "hips"> = abdmFacilities,
+        private readonly settings: Pick<AbdmSettings, "bridgeUrl" | "setBridgeUrl"> = abdmSettings,
     ) {}
 
     async checkReadiness(): Promise<BridgeReadiness> {
@@ -105,15 +109,18 @@ export class AbdmBridgeService {
         if (!bridge.active) problems.push("ABDM reports this bridge as inactive.");
         if (bridge.blocklisted) problems.push("ABDM reports this bridge as blocklisted.");
 
-        const expectedUrl = abdmConfig.bridgeUrl || null;
+        const expectedUrl = (await this.settings.bridgeUrl()) || null;
         if (!expectedUrl) {
-            problems.push(`ABDM_BRIDGE_URL is not set, so it can't be confirmed that ABDM calls back on this deployment. ABDM currently calls ${bridge.url ?? "no URL"}.`);
+            problems.push(`No bridge URL is saved for this deployment, so it can't be confirmed that ABDM calls back here. ABDM currently calls ${bridge.url ?? "no URL"}.`);
         } else if (!bridge.url || !sameUrl(bridge.url, expectedUrl)) {
             problems.push(`ABDM calls back on ${bridge.url ?? "no URL"}, not on this deployment (${expectedUrl}). Update the bridge URL.`);
         }
 
-        const hip = await this.checkHip(services, problems);
-        return { ready: problems.length === 0, problems, bridge, expectedUrl, hip, services };
+        const facilities = await this.facilities.hips();
+        if (!facilities.length) problems.push("No hospital is set up as an ABDM facility yet: save its HFR facility id first.");
+        const hips: HipReadiness[] = [];
+        for (const facility of facilities) hips.push(await this.checkHip(facility, services, problems));
+        return { ready: problems.length === 0, problems, bridge, expectedUrl, hips, services };
     }
 
     /**
@@ -130,6 +137,7 @@ export class AbdmBridgeService {
             path: "/api/hiecm/gateway/v3/bridge/url",
             body: { url: origin },
         });
+        await this.settings.setBridgeUrl(origin);
         const readiness = await this.checkReadiness();
         if (!readiness.bridge.url || !sameUrl(readiness.bridge.url, origin)) {
             readiness.problems.unshift(`ABDM accepted the update but still reports ${readiness.bridge.url ?? "no URL"} instead of ${origin}. Check again in a minute.`);
@@ -138,19 +146,11 @@ export class AbdmBridgeService {
         return readiness;
     }
 
-    private async checkHip(services: BridgeService[], problems: string[]): Promise<HipReadiness | null> {
-        const hipId = abdmConfig.m2HipId;
-        if (!hipId) {
-            problems.push("ABDM_M2_HIP_ID is not set: M2 calls need the HFR facility id as X-HIP-ID.");
-            return null;
-        }
-
-        const hospitalId = abdmConfig.m2HipHospitalId;
-        const hospitalName = hospitalId ? await this.hospitals.findHospitalName(hospitalId) : null;
-        if (!hospitalId) {
-            problems.push("ABDM_M2_HIP_HOSPITAL_ID is not set: it names the ClinicX hospital whose records the HIP shares.");
-        } else if (!hospitalName) {
-            problems.push(`ABDM_M2_HIP_HOSPITAL_ID is ${hospitalId}, but no such hospital exists in the clinic database.`);
+    private async checkHip(facility: Hip, services: BridgeService[], problems: string[]): Promise<HipReadiness> {
+        const { id: hipId, hospitalId } = facility;
+        const hospitalName = await this.hospitals.findHospitalName(hospitalId);
+        if (!hospitalName) {
+            problems.push(`${hipId} is saved for hospital ${hospitalId}, but no such hospital exists in the clinic database.`);
         }
 
         const listed = services.find((s) => s.id === hipId);

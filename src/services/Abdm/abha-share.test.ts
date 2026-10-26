@@ -38,6 +38,7 @@ let demographicMatches: string[];
 let createShareFault: ((row: Omit<ShareRow, "id" | "createdAt">) => void) | null;
 let failNextOnShare: boolean;
 let service: AbhaShareService;
+let createFails: boolean;
 
 /** Counter ids compare without case, as the database's collation does. */
 const sameCounter = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
@@ -68,6 +69,7 @@ const store: AbhaShareStore = {
     async findPatientIdsByAbhaAddress(patient) { return byAddress.get(patient.abhaAddress) ?? []; },
     async findPatientIdsByDemographics() { return demographicMatches; },
     async createPatient(patient) {
+        if (createFails) throw new Error("the database refused the new patient");
         created.push(patient);
         const id = `new-${created.length}`;
         if (patient.abhaNumber) byAbha.set(patient.abhaNumber, id);
@@ -91,10 +93,9 @@ const gateway = {
 };
 
 beforeEach(() => {
-    process.env.ABDM_HIP_ID = "Yira-HIP";
-    process.env.ABDM_HIP_HOSPITAL_ID = "19";
     process.env.ABDM_SHARE_TOKEN_EXPIRY = "60";
     delete process.env.ABDM_SHARE_EXPIRY_UNIT;
+    createFails = false;
     now = new Date(2026, 9, 26, 10, 0, 0).getTime();
     rows = [];
     onShares = [];
@@ -105,17 +106,21 @@ beforeEach(() => {
     demographicMatches = [];
     createShareFault = null;
     failNextOnShare = false;
-    service = new AbhaShareService(store, gateway, () => now);
+    // Yira Hospitals (19) runs Scan and Share as Yira-HIP
+    service = new AbhaShareService(store, gateway, () => now, {
+        byScanShareHipId: async (id) => (id === "Yira-HIP" ? { hospitalId: 19, hipId: null, name: "Yira.ai", scanShareHipId: "Yira-HIP", autoLink: false } : null),
+    });
 });
 
 const share = async (requestId: string, overrides: Record<string, any> = {}, context = "OPD1") => {
     const body = shareBody(overrides);
     body.metaData.context = context;
-    await service.process(requestId, service.parse("Yira-HIP", body));
+    await service.process(requestId, await service.parse("Yira-HIP", body));
 };
 
-test("the share is read into the clinic's own shapes", () => {
-    const parsed = service.parse("Yira-HIP", shareBody());
+test("the share is read into the clinic's own shapes", async () => {
+    const parsed = await service.parse("Yira-HIP", shareBody());
+    assert.equal(parsed.hospitalId, 19, "the hospital whose counter QR carries that HIP id");
     assert.equal(parsed.counterId, "OPD1");
     assert.deepEqual(parsed.patient, {
         abhaNumber: ABHA_NUMBER,
@@ -131,25 +136,25 @@ test("the share is read into the clinic's own shapes", () => {
     });
 });
 
-test("the shared ABHA number is kept in the dashed form, and one that is not 14 digits is dropped", () => {
-    const abhaNumberOf = (abhaNumber: unknown) => service.parse("Yira-HIP", shareBody({ abhaNumber })).patient.abhaNumber;
-    assert.equal(abhaNumberOf("91111122223333"), ABHA_NUMBER);
-    assert.equal(abhaNumberOf("91 1111 2222 3333"), ABHA_NUMBER);
-    assert.equal(abhaNumberOf(ABHA_NUMBER), ABHA_NUMBER);
-    assert.equal(abhaNumberOf("9111112222333"), null);
-    assert.equal(abhaNumberOf(null), null);
+test("the shared ABHA number is kept in the dashed form, and one that is not 14 digits is dropped", async () => {
+    const abhaNumberOf = async (abhaNumber: unknown) => (await service.parse("Yira-HIP", shareBody({ abhaNumber }))).patient.abhaNumber;
+    assert.equal(await abhaNumberOf("91111122223333"), ABHA_NUMBER);
+    assert.equal(await abhaNumberOf("91 1111 2222 3333"), ABHA_NUMBER);
+    assert.equal(await abhaNumberOf(ABHA_NUMBER), ABHA_NUMBER);
+    assert.equal(await abhaNumberOf("9111112222333"), null);
+    assert.equal(await abhaNumberOf(null), null);
 });
 
-test("a share for another HIP, without a counter, or without a name is refused before it is answered", () => {
+test("a share for another HIP, without a counter, or without a name is refused before it is answered", async () => {
     const refuse = (hip: string, body: any, status: number) =>
-        assert.throws(() => service.parse(hip, body), (error: unknown) => error instanceof AbhaJourneyError && error.status === status);
-    refuse("Other-HIP", { ...shareBody(), metaData: { hipId: "Other-HIP", context: "OPD1" } }, 403);
-    refuse("Other-HIP", shareBody(), 403);
-    refuse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP" } }, 400);
-    refuse("Yira-HIP", shareBody({ name: "" }), 400);
-    refuse("Yira-HIP", { ...shareBody(), intent: "RECORD_SHARE" }, 400);
-    refuse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP", context: "C".repeat(21) } }, 400);
-    assert.equal(service.parse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP", context: "C".repeat(20) } }).counterId, "C".repeat(20));
+        assert.rejects(service.parse(hip, body), (error: unknown) => error instanceof AbhaJourneyError && error.status === status);
+    await refuse("Other-HIP", { ...shareBody(), metaData: { hipId: "Other-HIP", context: "OPD1" } }, 403);
+    await refuse("Other-HIP", shareBody(), 403);
+    await refuse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP" } }, 400);
+    await refuse("Yira-HIP", shareBody({ name: "" }), 400);
+    await refuse("Yira-HIP", { ...shareBody(), intent: "RECORD_SHARE" }, 400);
+    await refuse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP", context: "C".repeat(21) } }, 400);
+    assert.equal((await service.parse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP", context: "C".repeat(20) } })).counterId, "C".repeat(20));
 });
 
 test("a first scan registers a new patient with nothing typed and answers with token 1 (701)", async () => {
@@ -268,7 +273,7 @@ test("an uncertain demographic match registers nobody and is left for the desk",
 });
 
 test("a share the facility cannot register is answered with the error alone, not left waiting", async () => {
-    delete process.env.ABDM_HIP_HOSPITAL_ID;
+    createFails = true;
     await share("req-1");
     assert.equal(rows[0]!.status, "FAILED");
     assert.deepEqual(onShares[0], {

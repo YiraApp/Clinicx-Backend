@@ -1,11 +1,11 @@
 import { createPublicKey, createVerify, type KeyObject } from "crypto";
-import { abdmConfig } from "../../config/abdm.config.js";
 import { abdmGatewayService, type AbdmGatewayService } from "./abdm-gateway.service.js";
+import { abdmSettings, type AbdmSettings } from "./abdm-facilities.service.js";
 
 /**
  * Proves an inbound callback came from ABDM's gateway: its bearer token must be an RS256 JWT signed
  * by a key the gateway publishes at /api/hiecm/gateway/v3/certs, still valid, and issued to an ABDM
- * client named in ABDM_CALLBACK_CLIENT_IDS (the token's clientId or azp claim). Every ABDM client's
+ * client allowed in AbdmSettings, CallbackClientIds (the token's clientId or azp claim). Every ABDM client's
  * token is signed with the same keys, so without that pin any integrator could post shares here:
  * it fails closed, and a refusal names the caller so the gateway's client id can be added.
  */
@@ -35,10 +35,16 @@ export class AbdmCallbackAuth {
     private pending: Promise<Map<string, KeyObject>> | null = null;
     private readonly gateway: Pick<AbdmGatewayService, "call">;
     private readonly clock: () => number;
+    private readonly settings: Pick<AbdmSettings, "callbackClientIds">;
 
-    constructor(gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService, clock: () => number = Date.now) {
+    constructor(
+        gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService,
+        clock: () => number = Date.now,
+        settings: Pick<AbdmSettings, "callbackClientIds"> = abdmSettings,
+    ) {
         this.gateway = gateway;
         this.clock = clock;
+        this.settings = settings;
     }
 
     /**
@@ -72,10 +78,10 @@ export class AbdmCallbackAuth {
             throw new CallbackAuthError("The callback token is not valid yet.");
         }
         if (options.pinClient === false) return claims;
-        const allowed = abdmConfig.callbackClientIds;
+        const allowed = await this.settings.callbackClientIds();
         const caller = String(claims.clientId ?? claims.azp ?? "");
         if (allowed.length === 0) {
-            throw new CallbackAuthError(`No ABDM caller is allowed yet (ABDM_CALLBACK_CLIENT_IDS is empty). This call came from ABDM client "${caller}" (iss ${claims.iss ?? "?"}): if that is ABDM's gateway, add it.`);
+            throw new CallbackAuthError(`No ABDM caller is allowed yet (AbdmSettings CallbackClientIds is empty). This call came from ABDM client "${caller}" (iss ${claims.iss ?? "?"}): if that is ABDM's gateway, add it.`);
         }
         if (!allowed.includes(caller)) {
             throw new CallbackAuthError(`The callback came from ABDM client "${caller}", which is not allowed.`);

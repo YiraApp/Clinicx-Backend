@@ -24,6 +24,21 @@ const startServer = async () => {
         const { abdmExchangeRepository } = await import("./repositories/Abdm/abdm-exchange.repository.js");
         abdmGatewayService.setExchangeRecorder(abdmExchangeRepository);
 
+        // ABDM M2: link new care contexts and announce new records on a schedule, for each hospital
+        // whose facility has AutoLink on. Opt in per deployment too (ABDM_AUTO_LINK=true), so every
+        // developer's server sharing a database doesn't do it at once.
+        if (process.env.ABDM_AUTO_LINK === "true") {
+            const { hipLinkingService } = await import("./services/Abdm/m2/index.js");
+            const { abdmFacilities } = await import("./services/Abdm/abdm-facilities.service.js");
+            const minutes = Number(process.env.ABDM_AUTO_LINK_MINUTES) > 0 ? Number(process.env.ABDM_AUTO_LINK_MINUTES) : 15;
+            setInterval(() => {
+                abdmFacilities.hips({ autoLink: true })
+                    .then((hips) => hipLinkingService.sweep(hips))
+                    .then((r) => console.log(`[ABDM] linking sweep: ${r.patients} patients, ${r.queued} care contexts queued, ${r.notified} notified`))
+                    .catch((error) => console.error("[ABDM] linking sweep failed:", error?.message));
+            }, minutes * 60_000);
+        }
+
         // Report at startup whether this server can send push notifications
         const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");
         initFirebaseAdmin();

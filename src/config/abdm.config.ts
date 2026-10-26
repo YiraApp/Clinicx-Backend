@@ -1,6 +1,8 @@
 /**
  * ABDM (Ayushman Bharat Digital Mission) settings.
- * Values come from .env locally and from Azure Application Settings when deployed.
+ * Values come from .env locally and from Azure Application Settings when deployed. Only the
+ * client credentials and hosts live here: which hospital acts as which ABDM facility, the bridge
+ * URL and the callers allowed on callbacks are in the database (AbdmFacilities, AbdmSettings).
  * Read on every access so a changed setting (or a test) takes effect without a restart.
  */
 const env = (name: string): string => (process.env[name] || "").trim();
@@ -46,20 +48,6 @@ export const abdmConfig = {
         return this.cmId === "sbx" ? "@sbx" : "@abdm";
     },
 
-    /**
-     * HIP ids this deployment answers Scan and Share for (comma separated). The first one goes on
-     * the counter QR code.
-     */
-    get hipIds(): string[] {
-        return env("ABDM_HIP_ID").split(",").map((id) => id.trim()).filter(Boolean);
-    },
-
-    /** The ClinicX hospital a Scan and Share patient is registered at. */
-    get hipHospitalId(): number | null {
-        const id = Number(env("ABDM_HIP_HOSPITAL_ID"));
-        return Number.isInteger(id) && id > 0 ? id : null;
-    },
-
     /** PHR app host the counter QR code opens: phrsbx.abdm.gov.in in the sandbox. */
     get phrBaseUrl(): string {
         return withoutTrailingSlash(env("ABDM_PHR_BASE_URL") || "https://phrsbx.abdm.gov.in");
@@ -80,33 +68,6 @@ export const abdmConfig = {
      */
     get shareExpiryUnit(): "minutes" | "seconds" {
         return env("ABDM_SHARE_EXPIRY_UNIT").toLowerCase() === "seconds" ? "seconds" : "minutes";
-    },
-
-    /**
-     * Client ids allowed to call our callbacks (comma separated). Empty refuses every callback:
-     * the check fails closed rather than accepting any ABDM-signed token.
-     */
-    get callbackClientIds(): string[] {
-        return env("ABDM_CALLBACK_CLIENT_IDS").split(",").map((id) => id.trim()).filter(Boolean);
-    },
-
-    /**
-     * HFR facility id M2 acts for as HIP, sent as X-HIP-ID. Separate from ABDM_HIP_ID, which
-     * Scan and Share uses: M2 needs a facility id from the HFR (12 characters, starting IN).
-     */
-    get m2HipId(): string {
-        return env("ABDM_M2_HIP_ID");
-    },
-
-    /** ClinicX hospital whose patients and records M2 shares. */
-    get m2HipHospitalId(): number | null {
-        const id = Number(env("ABDM_M2_HIP_HOSPITAL_ID"));
-        return Number.isInteger(id) && id > 0 ? id : null;
-    },
-
-    /** Public base URL ABDM should call back on (the bridge URL), such as the deployed API's origin. */
-    get bridgeUrl(): string {
-        return withoutTrailingSlash(env("ABDM_BRIDGE_URL"));
     },
 
     get certificateCacheMs(): number {

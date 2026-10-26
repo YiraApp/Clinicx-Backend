@@ -3,6 +3,8 @@ import { abhaEnrolmentController, abhaShareCallback } from "../../controllers/Ab
 import { staffJwtMiddleware, systemAdminOnly } from "../../middlewares/staff-jwt.middleware.js";
 import { abdmHiuAccess } from "../../middlewares/abdm-hiu-access.middleware.js";
 import { hiuRouter } from "./hiu.routes.js";
+import { abdmHealthRecordController } from "../../controllers/Abdm/abdm-health-record.controller.js";
+import { abdmM2Controller } from "../../controllers/Abdm/abdm-m2.controller.js";
 
 const abdmRouter = Router();
 const c = abhaEnrolmentController;
@@ -15,6 +17,22 @@ abdmRouter.get("/status", c.status.bind(c));
 abdmRouter.get("/bridge", c.bridge.bind(c));
 // Moves every facility's callbacks on this client id: system admins only
 abdmRouter.patch("/bridge/url", systemAdminOnly, c.updateBridgeUrl.bind(c));
+// Which hospital acts as which HFR facility on that bridge: system admins only
+abdmRouter.get("/facilities", systemAdminOnly, c.facilities.bind(c));
+abdmRouter.put("/facilities/:hospitalId", systemAdminOnly, c.saveFacility.bind(c));
+
+// M2: the health records (FHIR bundles, by HI type) a care context would share
+const hr = abdmHealthRecordController;
+abdmRouter.get("/health-records/appointments/:id", hr.appointment.bind(hr));
+abdmRouter.get("/health-records/discharge-summaries/:id", hr.dischargeSummary.bind(hr));
+abdmRouter.get("/health-records/immunizations/:id", hr.immunization.bind(hr));
+abdmRouter.get("/health-records/vitals/:id", hr.vitals.bind(hr));
+
+// M2: a patient's care contexts and their link state; linking and the deep-link SMS
+const m2 = abdmM2Controller;
+abdmRouter.get("/patients/:userId/care-contexts", m2.careContexts.bind(m2));
+abdmRouter.post("/patients/:userId/link", m2.link.bind(m2));
+abdmRouter.post("/patients/:userId/sms-notify", m2.smsNotify.bind(m2));
 
 // M1: create or retrieve an ABHA with an Aadhaar OTP
 abdmRouter.post("/enrolment/otp", c.requestOtp.bind(c));

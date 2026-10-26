@@ -107,11 +107,11 @@ test("ABDM callback bodies are not logged; they are stored in AbdmExchanges", ()
     assert.ok(!logged.includes("+919800000000"));
 });
 
-test("credential headers are masked on ABDM routes, and other routes are unchanged", () => {
+test("credential headers are masked on every route, and other headers are kept", () => {
     const headers = { authorization: "Bearer abc", "x-link-token": "xyz", "x-hip-id": "IN0000000001" };
     assert.deepEqual(maskHeadersForLog("/api/v3/link/on_carecontext", headers), { authorization: "********", "x-link-token": "********", "x-hip-id": "IN0000000001" });
     assert.deepEqual(maskHeadersForLog("/api/abdm/bridge", headers).authorization, "********");
-    assert.deepEqual(maskHeadersForLog("/api/patients", headers), headers);
+    assert.deepEqual(maskHeadersForLog("/api/patients", headers), { authorization: "********", "x-link-token": "********", "x-hip-id": "IN0000000001" });
 });
 
 test("stored ABDM bodies lose credentials but keep their shape", () => {
@@ -120,4 +120,9 @@ test("stored ABDM bodies lose credentials but keep their shape", () => {
         linkToken: "********",
         response: { requestId: "r1" },
     });
+});
+
+test("a refused ABDM callback keeps our own refusal message in the log", () => {
+    const logged = maskResponseForLog("/api/v3/hip/token/on-generate-token", JSON.stringify({ error: { message: 'This call came from ABDM client "gateway"' } }));
+    assert.deepEqual(JSON.parse(logged).error, { message: 'This call came from ABDM client "gateway"' });
 });

@@ -4,7 +4,7 @@
  * addresses and the M3 record-request fields (care contexts, content, key material) are masked
  * too, and a response keeps only its status, message and error details: never the ABHA profile,
  * photo or card, nor a decrypted record. ABDM's callbacks (/api/v3) keep no body here at all:
- * they are stored in AbdmExchanges, and their credential headers are masked.
+ * they are stored in AbdmExchanges. Credential headers are masked on every route.
  */
 
 const MASK = "********";
@@ -41,9 +41,8 @@ const maskDeep = (value: unknown, keys: Set<string>, depth: number): unknown => 
 /** An ABDM body with every credential masked and everything else, including its shape, kept. */
 export const maskCredentials = (body: unknown): unknown => maskDeep(body, new Set(CREDENTIAL_KEYS), 0);
 
-/** Request headers for the log: on ABDM routes, credential headers are masked. */
-export const maskHeadersForLog = (path: string, headers: Record<string, unknown>): Record<string, unknown> => {
-    if (!isAbdmPath(path)) return headers;
+/** Request headers for the log, with credential headers (a login token, ABDM's tokens) masked on every route. */
+export const maskHeadersForLog = (_path: string, headers: Record<string, unknown>): Record<string, unknown> => {
     const masked: Record<string, unknown> = { ...headers };
     for (const name of CREDENTIAL_HEADERS) {
         if (masked[name] !== undefined) masked[name] = MASK;
@@ -75,7 +74,10 @@ export const maskResponseForLog = (path: string, responseText: string): string =
         const errorDetails = data?.kind
             ? { kind: data.kind, abdmCode: data.abdmCode ?? null, abdmMessage: data.abdmMessage ?? null, field: data.field ?? null, requestId: data.requestId ?? null }
             : undefined;
-        return JSON.stringify({ status: body?.status, message: body?.message, ...(errorDetails ? { data: errorDetails } : {}) });
+        // A refused ABDM callback answers { error: { message } } in our own words (why, and which caller):
+        // kept, so a refusal is visible in the log rather than an empty line.
+        const callbackRefusal = isAbdmCallbackPath(path) && typeof body?.error?.message === "string" ? { error: { message: body.error.message } } : {};
+        return JSON.stringify({ status: body?.status, message: body?.message, ...(errorDetails ? { data: errorDetails } : {}), ...callbackRefusal });
     } catch {
         return "[ABDM response not logged]";
     }

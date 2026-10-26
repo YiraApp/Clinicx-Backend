@@ -1,8 +1,10 @@
 import type { Request, Response } from "express";
 import { AbdmCallbackService } from "../../services/Abdm/abdm-callback.service.js";
 import { abdmExchangeRepository } from "../../repositories/Abdm/abdm-exchange.repository.js";
+import { abdmCallbackAuth } from "../../services/Abdm/abdm-callback-auth.service.js";
+import { m2CallbackHandlers } from "../../services/Abdm/m2/index.js";
 
-const abdmCallbackService = new AbdmCallbackService(abdmExchangeRepository);
+const abdmCallbackService = new AbdmCallbackService(abdmExchangeRepository, abdmCallbackAuth, () => new Date(), m2CallbackHandlers);
 
 /** ABDM's posts to the bridge: answered with a status at once, and with no body on success. */
 export class AbdmCallbackController {

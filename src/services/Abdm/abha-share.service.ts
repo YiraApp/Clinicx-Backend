@@ -1,5 +1,6 @@
 import { abdmConfig } from "../../config/abdm.config.js";
 import { abdmGatewayService, type AbdmGatewayService } from "./abdm-gateway.service.js";
+import { abdmFacilities, type AbdmFacilityDirectory } from "./abdm-facilities.service.js";
 import { AbhaJourneyError, text, textOrNull } from "./abha-enrolment.service.js";
 import { normalizeAbhaNumber } from "./abha-login.service.js";
 
@@ -34,6 +35,8 @@ export interface SharedPatient {
 
 export interface ParsedShare {
     hipId: string;
+    /** The hospital whose counter QR code carries that HIP id (AbdmFacilities). */
+    hospitalId: number;
     counterId: string;
     patient: SharedPatient;
 }
@@ -114,22 +117,30 @@ export class AbhaShareService {
     private readonly store: AbhaShareStore;
     private readonly gateway: Pick<AbdmGatewayService, "call">;
     private readonly clock: () => number;
+    private readonly facilities: Pick<AbdmFacilityDirectory, "byScanShareHipId">;
     /** The tail of each (hospital, counter) token allocation chain. */
     private readonly tokenLocks = new Map<string, Promise<void>>();
 
-    constructor(store: AbhaShareStore, gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService, clock: () => number = Date.now) {
+    constructor(
+        store: AbhaShareStore,
+        gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService,
+        clock: () => number = Date.now,
+        facilities: Pick<AbdmFacilityDirectory, "byScanShareHipId"> = abdmFacilities,
+    ) {
         this.store = store;
         this.gateway = gateway;
         this.clock = clock;
+        this.facilities = facilities;
     }
 
     /** Validates ABDM's share body before we answer it. Throws an AbhaJourneyError for a share we must refuse. */
-    parse(hipIdHeader: unknown, body: any): ParsedShare {
+    async parse(hipIdHeader: unknown, body: any): Promise<ParsedShare> {
         if (body?.intent !== "PROFILE_SHARE") {
             throw new AbhaJourneyError(400, "validation", "Only PROFILE_SHARE is handled here.");
         }
         const hipId = text(body?.metaData?.hipId) || text(hipIdHeader);
-        if (!hipId || !abdmConfig.hipIds.includes(hipId) || (text(hipIdHeader) && text(hipIdHeader) !== hipId)) {
+        const facility = hipId && !(text(hipIdHeader) && text(hipIdHeader) !== hipId) ? await this.facilities.byScanShareHipId(hipId) : null;
+        if (!facility) {
             throw new AbhaJourneyError(403, "validation", "This share is not for a HIP this system serves.");
         }
         const counterId = text(body?.metaData?.context);
@@ -155,6 +166,7 @@ export class AbhaShareService {
 
         return {
             hipId,
+            hospitalId: facility.hospitalId,
             counterId,
             patient: {
                 // Stored and matched in the dashed form, whichever form ABDM sends; anything else is dropped.
@@ -183,8 +195,7 @@ export class AbhaShareService {
      * other share is answered, with an error if anything here fails.
      */
     async process(requestId: string, share: ParsedShare): Promise<void> {
-        const { patient, counterId } = share;
-        const hospitalId = abdmConfig.hipHospitalId;
+        const { patient, counterId, hospitalId } = share;
         let shareId: number | null = null;
         let repeated = false;
 
@@ -199,9 +210,6 @@ export class AbhaShareService {
                 return;
             }
             shareId = id;
-            if (!hospitalId) {
-                throw new Error("ABDM_HIP_HOSPITAL_ID is not set, so the share has no hospital to register the patient at.");
-            }
 
             let userId: string | null = null;
             let matchType: ShareMatch;

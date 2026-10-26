@@ -9,6 +9,8 @@ const HFR_ID = "IN3610000001";
 const realFetch = globalThis.fetch;
 const realConsole = { log: console.log, warn: console.warn, error: console.error };
 let requested: string[];
+let savedUrl: string;
+let facility: { id: string; hospitalId: number } | null;
 
 /** The registry as the sandbox answered it on 2026-10-26, with test ids. */
 const registry = (overrides: { url?: string; services?: unknown[]; active?: boolean } = {}) => ({
@@ -42,37 +44,37 @@ const hospitals = (names: Record<number, string> = { 12: "Test Hospital" }): Hip
     findHospitalName: async (id) => names[id] ?? null,
 });
 
-const check = (lookup = hospitals()) => new AbdmBridgeService(lookup, new AbdmGatewayService()).checkReadiness();
+const service = (lookup = hospitals()) => new AbdmBridgeService(lookup, new AbdmGatewayService(),
+    { hips: async () => (facility ? [{ ...facility, name: "Test Hospital" }] : []) },
+    { bridgeUrl: async () => savedUrl.replace(/\/+$/, ""), setBridgeUrl: async (url) => { savedUrl = url; } });
+
+const check = (lookup = hospitals()) => service(lookup).checkReadiness();
 
 beforeEach(() => {
     requested = [];
     process.env.ABDM_CLIENT_ID = "SBX_TEST";
     process.env.ABDM_CLIENT_SECRET = "secret";
-    process.env.ABDM_BRIDGE_URL = `${DEPLOYMENT}/`;
-    process.env.ABDM_M2_HIP_ID = HFR_ID;
-    process.env.ABDM_M2_HIP_HOSPITAL_ID = "12";
+    savedUrl = `${DEPLOYMENT}/`;
+    facility = { id: HFR_ID, hospitalId: 12 };
     for (const level of ["log", "warn", "error"] as const) console[level] = () => {};
 });
 
 afterEach(() => {
     globalThis.fetch = realFetch;
     Object.assign(console, realConsole);
-    for (const name of ["ABDM_BRIDGE_URL", "ABDM_M2_HIP_ID", "ABDM_M2_HIP_HOSPITAL_ID"]) delete process.env[name];
 });
 
 test("ready when the bridge calls back here and ABDM accepts the HIP id", async () => {
-    process.env.ABDM_HIP_ID = "Test-HIP"; // Scan and Share's id, which M2 must not use
     stub({});
     const result = await check();
-    delete process.env.ABDM_HIP_ID;
 
-    assert.equal(result.hip?.hipId, HFR_ID);
+    assert.equal(result.hips[0]?.hipId, HFR_ID);
     assert.ok(!requested.some((p) => p.includes("Test-HIP")), "M2 never looks up Scan and Share's id");
 
     assert.equal(result.ready, true, result.problems.join("; "));
     assert.deepEqual(result.problems, []);
-    assert.equal(result.hip?.hospitalName, "Test Hospital");
-    assert.equal(result.hip?.isHip, true);
+    assert.equal(result.hips[0]?.hospitalName, "Test Hospital");
+    assert.equal(result.hips[0]?.isHip, true);
     assert.equal(result.services.length, 2, "the whole service list is kept");
     assert.ok(requested.some((p) => p.endsWith(`/serviceId/${HFR_ID}`)), "ABDM is asked about the HIP id itself");
 });
@@ -86,29 +88,29 @@ test("a bridge calling back somewhere else is not ready, and names both URLs", a
     assert.match(result.problems[0]!, /clinicx-api\.example\.test/);
 });
 
-test("without ABDM_BRIDGE_URL the callback target can't be confirmed", async () => {
-    delete process.env.ABDM_BRIDGE_URL;
+test("without a saved bridge URL the callback target can't be confirmed", async () => {
+    savedUrl = "";
     stub({});
     const result = await check();
 
     assert.equal(result.ready, false);
-    assert.match(result.problems[0]!, /ABDM_BRIDGE_URL is not set/);
+    assert.match(result.problems[0]!, /No bridge URL is saved/);
 });
 
 test("ABDM's refusal of the HIP id is passed on with its code and request id", async () => {
-    process.env.ABDM_M2_HIP_ID = "Test-HIP";
+    facility = { id: "Test-HIP", hospitalId: 12 };
     stub({ service: { status: 400, body: hyphenRefusal } });
     const result = await check();
 
     assert.equal(result.ready, false);
-    assert.equal(result.hip?.onBridge, true, "listed on the bridge, yet refused");
-    assert.equal(result.hip?.refusal?.code, "ABDM-1002");
-    assert.ok(result.hip?.refusal?.requestId);
+    assert.equal(result.hips[0]?.onBridge, true, "listed on the bridge, yet refused");
+    assert.equal(result.hips[0]?.refusal?.code, "ABDM-1002");
+    assert.ok(result.hips[0]?.refusal?.requestId);
     assert.ok(result.problems.some((p) => p.includes("Invalid HIP ID")));
 });
 
 test("an HIP id that is not on the bridge is a problem", async () => {
-    process.env.ABDM_M2_HIP_ID = "IN3610009999";
+    facility = { id: "IN3610009999", hospitalId: 12 };
     stub({ service: { status: 200, body: { ...serviceDetails, serviceId: "IN3610009999" } } });
     const result = await check();
 
@@ -117,7 +119,7 @@ test("an HIP id that is not on the bridge is a problem", async () => {
 });
 
 test("a hospital id that the clinic database does not have is a problem", async () => {
-    process.env.ABDM_M2_HIP_HOSPITAL_ID = "999";
+    facility = { id: HFR_ID, hospitalId: 999 };
     stub({});
     const result = await check();
 
@@ -150,11 +152,12 @@ test("updating the bridge URL sends the origin, then reads the registry back", a
         return json(200, serviceDetails);
     }) as typeof fetch;
 
-    const result = await new AbdmBridgeService(hospitals(), new AbdmGatewayService()).updateBridgeUrl(`${DEPLOYMENT}/`);
+    const result = await service().updateBridgeUrl(`${DEPLOYMENT}/`);
 
     assert.deepEqual(patched, [{ url: DEPLOYMENT }]);
     assert.ok(requested.indexOf("PATCH /api/hiecm/gateway/v3/bridge/url") < requested.indexOf("GET /api/hiecm/gateway/v3/bridge-services"), "read back after the update");
     assert.equal(result.bridge.url, DEPLOYMENT);
+    assert.equal(savedUrl, DEPLOYMENT, "saved as this deployment's bridge URL");
     assert.equal(result.ready, true, result.problems.join("; "));
 });
 
@@ -164,7 +167,7 @@ test("an update ABDM accepts but does not apply is reported", async () => {
     globalThis.fetch = (async (url: any, init: any) =>
         String(url).endsWith("/bridge/url") ? new Response("", { status: 202 }) : realStub(url, init)) as typeof fetch;
 
-    const result = await new AbdmBridgeService(hospitals(), new AbdmGatewayService()).updateBridgeUrl(DEPLOYMENT);
+    const result = await service().updateBridgeUrl(DEPLOYMENT);
 
     assert.equal(result.ready, false);
     assert.match(result.problems[0]!, /still reports https:\/\/someone\.ngrok-free\.dev/);
@@ -172,8 +175,17 @@ test("an update ABDM accepts but does not apply is reported", async () => {
 
 test("an invalid bridge URL is never sent", async () => {
     stub({});
-    await assert.rejects(new AbdmBridgeService(hospitals(), new AbdmGatewayService()).updateBridgeUrl("https://x.example.test/api"), BridgeUrlError);
+    await assert.rejects(service().updateBridgeUrl("https://x.example.test/api"), BridgeUrlError);
     assert.ok(!requested.some((p) => p.includes("bridge/url")));
+});
+
+test("with no hospital set up as a facility, M2 is not ready", async () => {
+    facility = null;
+    stub({});
+    const result = await check();
+
+    assert.equal(result.ready, false);
+    assert.ok(result.problems.some((p) => p.includes("No hospital is set up")));
 });
 
 test("an inactive bridge is a problem", async () => {

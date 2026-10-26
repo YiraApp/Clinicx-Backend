@@ -67,26 +67,27 @@ const discovery = {
     patient: { id: "someone@sbx", name: "Test Patient", gender: "M", yearOfBirth: 1990, verifiedIdentifiers: [{ type: "MOBILE", value: "+919800000000" }] },
 };
 
+let facilities: string[];
+
 beforeEach(() => {
-    process.env.ABDM_M2_HIP_ID = HIP;
+    facilities = [HIP];
     store = new MemoryStore();
-    process.env.ABDM_CALLBACK_CLIENT_IDS = "gateway";
     keysAvailable = true;
     const auth = new AbdmCallbackAuth({
         async call<T>(): Promise<T> {
             if (!keysAvailable) throw new Error("gateway unreachable");
             return published as T;
         },
-    }, () => NOW);
-    service = new AbdmCallbackService(store, auth, () => new Date(NOW));
+    }, () => NOW, { callbackClientIds: async () => ["gateway"] });
+    service = new AbdmCallbackService(store, auth, () => new Date(NOW), {}, {
+        hipById: async (id) => (id && facilities.includes(id) ? { id, hospitalId: 12, name: "Ocimum Dental Clinic" } : null),
+    });
     console.log = () => {};
     console.warn = () => {};
 });
 
 afterEach(() => {
     Object.assign(console, realConsole);
-    delete process.env.ABDM_M2_HIP_ID;
-    delete process.env.ABDM_CALLBACK_CLIENT_IDS;
 });
 
 test("a valid answer without Authorization is refused before anything is stored", async () => {
@@ -128,8 +129,8 @@ test("a callback for another facility is refused and not stored", async () => {
     assert.equal(store.inbound.size, 0);
 });
 
-test("with no M2 HIP configured, nothing is accepted", async () => {
-    delete process.env.ABDM_M2_HIP_ID;
+test("with no facility set up, nothing is accepted", async () => {
+    facilities = [];
     const outcome = await service.receive({ path: "/api/v3/hip/patient/care-context/discover", headers: headers({ "x-hip-id": "" }), body: discovery });
 
     assert.equal(outcome.status, 403);

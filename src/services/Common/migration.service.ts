@@ -164,6 +164,196 @@ export class MigrationService {
                 UpdatedAt DATETIME NULL,
                 CONSTRAINT UX_AbdmExchanges_Direction_RequestId UNIQUE (Direction, RequestId)
             );`,
+
+            // ABDM ImmunizationRecord: vaccines given to a patient
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientImmunizations')
+            CREATE TABLE PatientImmunizations (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                PatientId UNIQUEIDENTIFIER NOT NULL,
+                HospitalId INT NOT NULL,
+                OrganizationId INT NULL,
+                AppointmentId INT NULL,
+                DoctorId UNIQUEIDENTIFIER NULL,
+                VaccineName NVARCHAR(200) NOT NULL,
+                VaccineConceptId VARCHAR(30) NULL,
+                DoseNumber INT NULL,
+                AdministeredOn DATE NOT NULL,
+                LotNumber NVARCHAR(50) NULL,
+                Manufacturer NVARCHAR(200) NULL,
+                Route NVARCHAR(50) NULL,
+                Site NVARCHAR(50) NULL,
+                NextDueDate DATE NULL,
+                Notes NVARCHAR(1000) NULL,
+                CertificateDocumentId INT NULL,
+                IsDeleted BIT NOT NULL DEFAULT 0,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                CreatedBy NVARCHAR(100) NULL,
+                UpdatedAt DATETIME NULL,
+                UpdatedBy NVARCHAR(100) NULL
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_PatientImmunizations_Patient' AND object_id = OBJECT_ID('PatientImmunizations'))
+            CREATE INDEX IX_PatientImmunizations_Patient ON PatientImmunizations (PatientId, HospitalId);`,
+
+            // ABDM DischargeSummary: a hospital stay written up at discharge
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DischargeSummaries')
+            CREATE TABLE DischargeSummaries (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                PatientId UNIQUEIDENTIFIER NOT NULL,
+                HospitalId INT NOT NULL,
+                OrganizationId INT NULL,
+                DoctorId UNIQUEIDENTIFIER NOT NULL,
+                AdmittedAt DATETIME NOT NULL,
+                DischargedAt DATETIME NOT NULL,
+                ChiefComplaints NVARCHAR(MAX) NULL,
+                Diagnoses NVARCHAR(MAX) NULL,
+                MedicalHistory NVARCHAR(MAX) NULL,
+                ExaminationFindings NVARCHAR(MAX) NULL,
+                Procedures NVARCHAR(MAX) NULL,
+                Allergies NVARCHAR(1000) NULL,
+                Investigations NVARCHAR(MAX) NULL,
+                PrescriptionId UNIQUEIDENTIFIER NULL,
+                CarePlan NVARCHAR(MAX) NULL,
+                FollowUpDate DATETIME NULL,
+                Disposition NVARCHAR(200) NULL,
+                DocumentId INT NULL,
+                Status VARCHAR(20) NOT NULL DEFAULT 'Draft',
+                IsDeleted BIT NOT NULL DEFAULT 0,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                CreatedBy NVARCHAR(100) NULL,
+                UpdatedAt DATETIME NULL,
+                UpdatedBy NVARCHAR(100) NULL
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_DischargeSummaries_Patient' AND object_id = OBJECT_ID('DischargeSummaries'))
+            CREATE INDEX IX_DischargeSummaries_Patient ON DischargeSummaries (PatientId, HospitalId);`,
+
+            // ABDM M2: a patient's link token at this HIP, reused for its validity (about six months)
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmLinkTokens')
+            CREATE TABLE AbdmLinkTokens (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                PatientUserId UNIQUEIDENTIFIER NOT NULL,
+                HipId VARCHAR(50) NOT NULL,
+                AbhaAddress VARCHAR(100) NOT NULL,
+                LinkToken NVARCHAR(MAX) NOT NULL,
+                ExpiresAt DATETIME NOT NULL,
+                RequestId VARCHAR(64) NULL,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE()
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AbdmLinkTokens_Patient' AND object_id = OBJECT_ID('AbdmLinkTokens'))
+            CREATE INDEX IX_AbdmLinkTokens_Patient ON AbdmLinkTokens (PatientUserId, HipId, ExpiresAt DESC);`,
+
+            // ABDM M2: care contexts (a visit, a discharge, an immunization or a vitals check) and their link state
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmCareContexts')
+            CREATE TABLE AbdmCareContexts (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                HipId VARCHAR(50) NOT NULL,
+                ReferenceNumber VARCHAR(100) NOT NULL,
+                PatientUserId UNIQUEIDENTIFIER NOT NULL,
+                HospitalId INT NOT NULL,
+                Kind VARCHAR(20) NOT NULL,
+                SourceId VARCHAR(64) NOT NULL,
+                RecordDate DATETIME NOT NULL,
+                Display NVARCHAR(200) NOT NULL,
+                HiTypes VARCHAR(400) NOT NULL,
+                LinkStatus VARCHAR(20) NOT NULL DEFAULT 'not-linked',
+                LinkedVia VARCHAR(10) NULL,
+                LinkedAbhaAddress VARCHAR(100) NULL,
+                LinkRequestId VARCHAR(64) NULL,
+                LinkedAt DATETIME NULL,
+                NotifiedHiTypes VARCHAR(400) NULL,
+                LastError NVARCHAR(500) NULL,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                UpdatedAt DATETIME NULL,
+                CONSTRAINT UX_AbdmCareContexts_Reference UNIQUE (HipId, ReferenceNumber)
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AbdmCareContexts_Patient' AND object_id = OBJECT_ID('AbdmCareContexts'))
+            CREATE INDEX IX_AbdmCareContexts_Patient ON AbdmCareContexts (PatientUserId, HipId);`,
+
+            // ABDM M2: a link the patient started from their PHR app, waiting on the OTP we sent
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmLinkRequests')
+            CREATE TABLE AbdmLinkRequests (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                LinkRefNumber VARCHAR(64) NOT NULL,
+                TransactionId VARCHAR(64) NOT NULL,
+                HipId VARCHAR(50) NOT NULL,
+                PatientUserId UNIQUEIDENTIFIER NOT NULL,
+                AbhaAddress VARCHAR(100) NOT NULL,
+                CareContextRefs NVARCHAR(MAX) NOT NULL,
+                OtpHash VARCHAR(128) NOT NULL,
+                OtpExpiresAt DATETIME NOT NULL,
+                Attempts INT NOT NULL DEFAULT 0,
+                Status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                UpdatedAt DATETIME NULL,
+                CONSTRAINT UX_AbdmLinkRequests_Ref UNIQUE (LinkRefNumber)
+            );`,
+
+            // ABDM M2: consent artefacts this HIP was notified of
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmConsents')
+            CREATE TABLE AbdmConsents (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                ConsentId VARCHAR(64) NOT NULL,
+                HipId VARCHAR(50) NOT NULL,
+                Status VARCHAR(20) NOT NULL,
+                PatientAbhaAddress VARCHAR(100) NULL,
+                HiuId VARCHAR(100) NULL,
+                HiTypes NVARCHAR(400) NULL,
+                CareContexts NVARCHAR(MAX) NULL,
+                DateFrom DATETIME NULL,
+                DateTo DATETIME NULL,
+                DataEraseAt DATETIME NULL,
+                Purpose VARCHAR(20) NULL,
+                Artefact NVARCHAR(MAX) NULL,
+                Signature NVARCHAR(MAX) NULL,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                UpdatedAt DATETIME NULL,
+                CONSTRAINT UX_AbdmConsents_ConsentId UNIQUE (ConsentId)
+            );`,
+
+            // ABDM M2: each health information request and what was pushed for it
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmDataTransfers')
+            CREATE TABLE AbdmDataTransfers (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                TransactionId VARCHAR(64) NOT NULL,
+                ConsentId VARCHAR(64) NOT NULL,
+                HipId VARCHAR(50) NOT NULL,
+                RequestId VARCHAR(64) NOT NULL,
+                DataPushUrl NVARCHAR(500) NULL,
+                Status VARCHAR(20) NOT NULL,
+                Results NVARCHAR(MAX) NULL,
+                Error NVARCHAR(500) NULL,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                CompletedAt DATETIME NULL,
+                CONSTRAINT UX_AbdmDataTransfers_Transaction UNIQUE (TransactionId)
+            );`,
+
+            // ABDM per tenant: the HFR facility each hospital acts as (HIP id), its name as patients
+            // see it, and the HIP id its Scan and Share counters use when that is not the HFR id (a
+            // hospital with no HFR id yet can still run Scan and Share)
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmFacilities')
+            CREATE TABLE AbdmFacilities (
+                HospitalId INT NOT NULL PRIMARY KEY,
+                HipId VARCHAR(50) NULL,
+                HipName NVARCHAR(100) NULL,
+                ScanShareHipId VARCHAR(50) NULL,
+                AutoLink BIT NOT NULL DEFAULT 0,
+                IsActive BIT NOT NULL DEFAULT 1,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                UpdatedAt DATETIME NULL,
+                UpdatedBy UNIQUEIDENTIFIER NULL
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_AbdmFacilities_HipId' AND object_id = OBJECT_ID('AbdmFacilities'))
+            EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_AbdmFacilities_HipId ON AbdmFacilities (HipId) WHERE HipId IS NOT NULL');`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_AbdmFacilities_ScanShareHipId' AND object_id = OBJECT_ID('AbdmFacilities'))
+            EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_AbdmFacilities_ScanShareHipId ON AbdmFacilities (ScanShareHipId) WHERE ScanShareHipId IS NOT NULL');`,
+
+            // ABDM for the whole deployment (one client id, one bridge): the bridge URL ABDM should
+            // call back on, and the ABDM client ids allowed to call our callbacks
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmSettings')
+            CREATE TABLE AbdmSettings (
+                Name VARCHAR(50) NOT NULL PRIMARY KEY,
+                Value NVARCHAR(500) NOT NULL,
+                UpdatedAt DATETIME NOT NULL DEFAULT GETDATE()
+            );`,
         ];
 
         for (const statement of statements) {

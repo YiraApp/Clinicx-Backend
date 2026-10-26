@@ -18,9 +18,10 @@ let now: number;
 let fetches: number;
 let published: object[];
 let auth: AbdmCallbackAuth;
+let allowedCallers: string[];
 
 beforeEach(() => {
-    process.env.ABDM_CALLBACK_CLIENT_IDS = "gateway";
+    allowedCallers = ["gateway"];
     now = 1_700_000_000_000;
     fetches = 0;
     published = [jwk];
@@ -29,7 +30,7 @@ beforeEach(() => {
             fetches += 1;
             return { keys: published } as T;
         },
-    }, () => now);
+    }, () => now, { callbackClientIds: async () => allowedCallers });
 });
 
 const valid = () => ({ clientId: "gateway", exp: Math.floor(now / 1000) + 300 });
@@ -69,7 +70,7 @@ test("an unknown key id refreshes the keys for a rotation, but not on every made
 
 test("only the pinned ABDM client may call, and with no pin nobody may (fail closed)", async () => {
     await assert.rejects(auth.verify(`Bearer ${sign({ ...valid(), clientId: "SBX_OTHER" })}`), CallbackAuthError);
-    delete process.env.ABDM_CALLBACK_CLIENT_IDS;
+    allowedCallers = [];
     await assert.rejects(auth.verify(`Bearer ${sign(valid())}`), /This call came from ABDM client "gateway"/);
 });
 
