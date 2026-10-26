@@ -12,6 +12,9 @@ import type { AbhaShareStore, SharedPatient, ShareRow } from "../../services/Abd
 const PATIENT_ROLE_FALLBACK_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 const CREATED_BY = "ABDM Scan and Share";
 
+/** An ABHA number as 14 bare digits: how a stored number is compared, whether it was saved dashed or not. */
+const abhaDigits = (abhaNumber: string | null): string => (abhaNumber ?? "").replace(/\D/g, "");
+
 const toRow = (share: AbhaProfileShare): ShareRow => ({
     id: share.Id,
     requestId: share.RequestId,
@@ -93,6 +96,8 @@ export class AbhaShareRepository implements AbhaShareStore {
     async listShares(input: { hospitalId: number; since: Date; counterId?: string }): Promise<ShareRow[]> {
         const query = this.shares.createQueryBuilder("s")
             .where("s.HospitalId = :hospitalId AND s.CreatedAt >= :since", input)
+            // A repeat scan holds the token of the entry it repeats; it is not an entry of its own.
+            .andWhere("s.Status <> :repeat", { repeat: "REPEAT" })
             .orderBy("s.CreatedAt", "DESC")
             .take(200);
         if (input.counterId) query.andWhere("s.CounterId = :counterId", { counterId: input.counterId });
@@ -100,8 +105,22 @@ export class AbhaShareRepository implements AbhaShareStore {
     }
 
     async findPatientIdByAbhaNumber(abhaNumber: string): Promise<string | null> {
-        const user = await this.users.findOne({ where: { AbhaNumber: abhaNumber, IsDeleted: false }, select: { Id: true } });
+        const user = await this.users.createQueryBuilder("u")
+            .select(["u.Id"])
+            .where("u.IsDeleted = 0 AND u.AbhaNumber IN (:...forms)", { forms: [abhaNumber, abhaDigits(abhaNumber)] })
+            .getOne();
         return user?.Id ?? null;
+    }
+
+    async findPatientIdsByAbhaAddress(patient: SharedPatient): Promise<string[]> {
+        const query = this.users.createQueryBuilder("u")
+            .select("u.Id", "id")
+            .where("u.IsDeleted = 0")
+            .andWhere("LOWER(u.AbhaAddress) = LOWER(:abhaAddress)", { abhaAddress: patient.abhaAddress });
+        if (patient.abhaNumber) {
+            query.andWhere("(u.AbhaNumber IS NULL OR REPLACE(u.AbhaNumber, '-', '') = :abhaDigits)", { abhaDigits: abhaDigits(patient.abhaNumber) });
+        }
+        return (await query.getRawMany()).map((row: any) => String(row.id));
     }
 
     async findPatientIdsByDemographics(patient: SharedPatient): Promise<string[]> {
@@ -112,7 +131,7 @@ export class AbhaShareRepository implements AbhaShareStore {
             .andWhere("RIGHT(REPLACE(u.PhoneNumber, ' ', ''), 10) = :phone", { phone: patient.phone })
             .andWhere("LOWER(LTRIM(RTRIM(CONCAT(u.FirstName, ' ', u.LastName)))) = LOWER(:name)", { name: patient.name })
             .andWhere("LOWER(u.Gender) = LOWER(:gender)", { gender: patient.gender })
-            .andWhere("(u.AbhaNumber IS NULL OR u.AbhaNumber = :abhaNumber)", { abhaNumber: patient.abhaNumber ?? "" });
+            .andWhere("(u.AbhaNumber IS NULL OR REPLACE(u.AbhaNumber, '-', '') = :abhaDigits)", { abhaDigits: abhaDigits(patient.abhaNumber) });
         if (patient.yearOfBirth) {
             query.andWhere("(u.DateOfBirth IS NULL OR YEAR(u.DateOfBirth) = :year)", { year: Number(patient.yearOfBirth) });
         }

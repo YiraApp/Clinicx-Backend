@@ -72,6 +72,9 @@ export const normalizeAbhaAddress = (input: unknown, suffix: string): string | n
     return raw.includes("@") ? raw : `${raw}${suffix}`;
 };
 
+/** The one ABDM answer that means nobody holds an ABHA for the identifier. */
+const NO_ABHA_CODE = "ABDM-1114";
+
 /** ABDM names auth methods MOBILE_OTP / AADHAAR_OTP on the PHR search; the OTP system behind each. */
 const OTP_SYSTEM_FOR_METHOD: Record<string, LoginOtpSystem> = { MOBILE_OTP: "abdm", AADHAAR_OTP: "aadhaar" };
 
@@ -207,24 +210,29 @@ export class AbhaLoginService {
                 body: { scope: ["search-abha"], mobile: encryptedMobile },
             }));
         } catch (error) {
-            // A mobile no ABHA is linked to comes back as a not-found refusal: that is an answer, not a failure.
-            if (error instanceof AbdmApiError && error.kind === "rejected" && (error.status === 404 || /not found|no abha|does not exist/i.test(error.message))) {
+            // Only ABDM-1114 says no ABHA is linked to the mobile: that is an answer, not a failure.
+            // Any other refusal, a 404 from ABDM's API manager included, never answered the question.
+            if (error instanceof AbdmApiError && error.code?.toUpperCase() === NO_ABHA_CODE) {
                 return { sessionId: null, accounts: [] };
             }
             throw error;
         }
 
-        const first: Record<string, any> = (Array.isArray(response) ? response[0] : response) ?? {};
-        const accounts = (Array.isArray(first.ABHA) ? first.ABHA : [])
+        // The documented answer is an array whose first item lists the accounts in ABHA. Any other
+        // shape does not say whether the mobile holds an ABHA, so the desk is not told it holds none.
+        const first: Record<string, any> | null = Array.isArray(response) && response[0] && typeof response[0] === "object" ? response[0] : null;
+        if (!first || !Array.isArray(first.ABHA)) throw this.unexpectedSearchAnswer();
+        if (first.ABHA.length === 0) return { sessionId: null, accounts: [] };
+        const accounts = first.ABHA
             .map((account: any) => ({
-                index: Number(account.index),
-                abhaNumber: text(account.ABHANumber),
-                name: text(account.name),
-                gender: textOrNull(account.gender),
-                authMethods: Array.isArray(account.authMethods) ? account.authMethods.map(String) : [],
+                index: Number(account?.index),
+                abhaNumber: text(account?.ABHANumber),
+                name: text(account?.name),
+                gender: textOrNull(account?.gender),
+                authMethods: Array.isArray(account?.authMethods) ? account.authMethods.map(String) : [],
             }))
             .filter((account: { index: number }) => Number.isFinite(account.index));
-        if (accounts.length === 0) return { sessionId: null, accounts: [] };
+        if (accounts.length === 0) throw this.unexpectedSearchAnswer();
 
         const session = this.sessions.create({
             staffUserId: input.staffUserId,
@@ -298,9 +306,12 @@ export class AbhaLoginService {
      * Verifies the login OTP. A wrong OTP leaves the transaction as it was. A response carrying a
      * refresh token has already issued the user token; one without it issued a short-lived token
      * that verify/user exchanges, after the desk picks an account when there is more than one.
+     * When the OTP already verified but the profile read after it failed, a repeat finishes from
+     * the user token held, without a new OTP.
      */
     async verifyLoginOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<LoginResult> {
         const session = requireSession(this.sessions, input.sessionId, input.staffUserId);
+        if (this.awaitingProfile(session)) return this.finishWithProfile(session, "OTP verified successfully");
         const login = session.login;
         if (!login) throw new AbhaJourneyError(409, "state", "Send the OTP first.");
         if (session.verified) throw new AbhaJourneyError(409, "state", "This ABHA is already verified.");
@@ -323,13 +334,15 @@ export class AbhaLoginService {
         }
         session.txnId = text(response.txnId) || session.txnId;
         const message = text(response.message) || "OTP verified successfully";
-        const token = textOrNull(response.token);
+        // The PHR verify sends the user token inside tokens{token, expiresIn}; the ABHA login at the top level.
+        const tokens: Record<string, any> = login.family === "phr" && response.tokens && typeof response.tokens === "object" ? response.tokens : {};
+        const token = textOrNull(tokens.token) ?? textOrNull(response.token);
         if (!token) {
             throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "login/verify", message: "ABDM verified the OTP but sent no token." });
         }
 
         if (login.family === "phr") {
-            this.holdUserToken(session, token, response.expiresIn, "phr");
+            this.holdUserToken(session, token, tokens.expiresIn ?? response.expiresIn, "phr");
             return this.finishWithProfile(session, message);
         }
         if (textOrNull(response.refreshToken)) {
@@ -357,10 +370,15 @@ export class AbhaLoginService {
         return { status: "choose-account", message, accounts };
     }
 
-    /** Exchanges the short-lived token for the chosen account's user token (verify/user). */
+    /**
+     * Exchanges the short-lived token for the chosen account's user token (verify/user). When the
+     * exchange succeeded but the profile read after it failed, choosing that account again
+     * finishes from the user token held.
+     */
     async selectAccount(input: { sessionId: string; staffUserId: string; abhaNumber: string }): Promise<LoginResult> {
         const session = requireSession(this.sessions, input.sessionId, input.staffUserId);
         const account = session.loginAccounts?.find((candidate) => candidate.abhaNumber === String(input.abhaNumber ?? ""));
+        if (account && this.awaitingProfile(session)) return this.finishWithProfile(session, "ABHA verified.");
         if (!account || !session.tToken) {
             throw new AbhaJourneyError(400, "validation", "Choose one of the ABHA accounts ABDM listed.");
         }
@@ -377,6 +395,8 @@ export class AbhaLoginService {
             throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "profile/login/verify/user", message: "ABDM sent no user token for the chosen account." });
         }
         session.tToken = null;
+        // The user token is this account's alone: a retry after a failed profile read can only choose it.
+        session.loginAccounts = [account];
         this.holdUserToken(session, token, response.expiresIn, "abha");
         return this.finishWithProfile(session, text(response.message) || "ABHA verified.");
     }
@@ -447,7 +467,10 @@ export class AbhaLoginService {
         session.login = null;
     }
 
-    /** Reads the profile with the user token, and marks the session verified. */
+    /**
+     * Reads the profile with the user token, and only then marks the session verified. A failed read
+     * keeps the token, so the desk's next Verify finishes from it instead of needing a new OTP.
+     */
     private async finishWithProfile(session: AbhaSession, message: string): Promise<LoginResult> {
         const phr = session.tokenKind === "phr";
         const response = await this.gateway.call<Record<string, any>>({
@@ -457,6 +480,13 @@ export class AbhaLoginService {
             headers: { "X-token": `Bearer ${session.xToken}` },
         });
         const profile = toProfileSummary(response);
+        const linkedPatient = profile.abhaNumber
+            ? await this.store.findPatientByAbhaNumber(profile.abhaNumber).catch((error: any) => {
+                console.error("[ABDM] Could not check for a patient already holding this ABHA:", error?.message);
+                return null;
+            })
+            : null;
+
         session.verified = true;
         session.profile = profile;
         session.abhaNumber = profile.abhaNumber;
@@ -469,9 +499,22 @@ export class AbhaLoginService {
             abhaNumber: session.abhaNumber,
             abhaAddress: session.abhaAddress,
             profile,
-            linkedPatient: profile.abhaNumber ? await this.store.findPatientByAbhaNumber(profile.abhaNumber) : null,
+            linkedPatient,
             canUpdateMobile: !phr,
         };
+    }
+
+    /** ABDM accepted the OTP and a live user token is held, but the profile read after it failed. */
+    private awaitingProfile(session: AbhaSession): boolean {
+        return session.flow !== "create"
+            && !session.verified
+            && !session.login
+            && !!session.xToken
+            && (session.xTokenExpiresAt === null || this.clock() < session.xTokenExpiresAt);
+    }
+
+    private unexpectedSearchAnswer(): AbdmApiError {
+        return new AbdmApiError({ status: 502, kind: "unavailable", operation: "profile/account/abha/search", message: "ABDM sent an unexpected response to the ABHA search." });
     }
 
     private verifiedAbhaSession(sessionId: string, staffUserId: string): AbhaSession {

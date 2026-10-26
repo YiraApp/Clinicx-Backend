@@ -27,6 +27,7 @@ const accountProfile = {
 let calls: AbdmCall[];
 let answer: (call: AbdmCall) => unknown;
 let now: number;
+let sessions: AbhaSessionStore;
 let service: AbhaLoginService;
 
 const gateway = {
@@ -54,7 +55,7 @@ beforeEach(() => {
         if (call.path.endsWith("/profile/account")) return accountProfile;
         throw new Error(`unexpected call ${call.path}`);
     };
-    const sessions = new AbhaSessionStore(() => now);
+    sessions = new AbhaSessionStore(() => now);
     service = new AbhaLoginService({ findPatientByAbhaNumber: async () => null }, sessions, gateway, fakeCrypto, () => now);
 });
 
@@ -78,7 +79,13 @@ test("an ABHA address offers only the methods ABDM lists, and logs in through th
     answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/phr/web/login/abha/search")
         ? { abhaAddress: "asha@sbx", authMethods: ["MOBILE_OTP", "AADHAAR_OTP", "PASSWORD"], blockedAuthMethods: ["AADHAAR_OTP"], fullName: "Asha" }
         : call.path.endsWith("/phr/web/login/abha/verify")
-            ? { authResult: "success", message: "OTP verified successfully", token: X_TOKEN, refreshToken: "r", abhaNumber: ABHA_NUMBER }
+            // The spec's shape: the user token is in tokens, not at the top level.
+            ? {
+                message: "OTP verified successfully",
+                authResult: "success",
+                users: [{ abhaAddress: "asha@sbx", fullName: "Asha K", abhaNumber: ABHA_NUMBER, status: "ACTIVE", kycStatus: "VERIFIED" }],
+                tokens: { token: X_TOKEN, expiresIn: 600, refreshToken: "r", refreshExpiresIn: 1296000 },
+            }
             : call.path.endsWith("/phr/web/login/profile/abha-profile")
                 ? { abhaAddress: "asha@sbx", abhaNumber: ABHA_NUMBER, firstName: "Asha", lastName: "K", dateOfBirth: "05-08-1990", gender: "F", pinCode: "411001", kycStatus: "VERIFIED" }
                 : normal(call))(answer);
@@ -96,9 +103,23 @@ test("an ABHA address offers only the methods ABDM lists, and logs in through th
     if (result.status !== "verified") return;
     assert.equal(calls.at(-1)!.path, "/abha/api/v3/phr/web/login/profile/abha-profile");
     assert.equal(calls.at(-1)!.headers?.["X-token"], `Bearer ${X_TOKEN}`);
+    assert.equal(sessions.get(sessionId, STAFF)!.xTokenExpiresAt, now + 600_000, "the expiry comes from tokens.expiresIn");
     assert.equal(result.canUpdateMobile, false);
     assert.equal(result.profile.dateOfBirth, "05-08-1990");
     assert.equal(result.profile.kycVerified, true);
+});
+
+test("an ABHA address login still takes a token sent at the top level", async () => {
+    answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/phr/web/login/abha/verify")
+        ? { authResult: "success", token: X_TOKEN, expiresIn: 900 }
+        : call.path.endsWith("/phr/web/login/profile/abha-profile")
+            ? { abhaAddress: "asha@sbx", abhaNumber: ABHA_NUMBER, firstName: "Asha" }
+            : normal(call))(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "abha-address", identifier: "asha@sbx", otpSystem: "abdm", staffUserId: STAFF });
+    const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    assert.equal(result.status, "verified");
+    assert.equal(calls.at(-1)!.headers?.["X-token"], `Bearer ${X_TOKEN}`);
+    assert.equal(sessions.get(sessionId, STAFF)!.xTokenExpiresAt, now + 900_000);
 });
 
 test("a login answer with a refresh token is final: the profile is read with it", async () => {
@@ -156,6 +177,53 @@ test("nobody holds an ABHA: ABDM-1114 reaches the desk unchanged", async () => {
     await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: unknown) => error === notFound);
 });
 
+test("a profile read that fails after the OTP verified is retried from the held token, without a new OTP", async () => {
+    let profileFails = true;
+    answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/profile/account") && profileFails
+        ? new AbdmApiError({ status: 503, kind: "unavailable", operation: "profile/account", message: "Service Unavailable" })
+        : normal(call))(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF });
+    await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: unknown) => error instanceof AbdmApiError && error.kind === "unavailable");
+    await assert.rejects(service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" }), (error: unknown) => error instanceof AbhaJourneyError && error.message === "Verify the ABHA first.", "not verified before the profile is read");
+
+    profileFails = false;
+    const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    assert.equal(result.status, "verified");
+    assert.equal(calls.filter((call) => call.path.endsWith("/profile/login/verify")).length, 1, "the spent OTP is not sent again");
+    assert.equal(calls.at(-1)!.headers?.["X-token"], `Bearer ${X_TOKEN}`);
+    await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 409);
+});
+
+test("choosing the same account again finishes from the held token when the profile read failed", async () => {
+    let profileFails = true;
+    const two = [{ ABHANumber: ABHA_NUMBER, name: "Asha" }, { ABHANumber: "91-4444-5555-6666", name: "Ravi" }];
+    answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/profile/login/verify")
+        ? { txnId: "txn-login", authResult: "success", token: T_TOKEN, accounts: two }
+        : call.path.endsWith("/profile/login/verify/user")
+            ? { token: X_TOKEN, expiresIn: 1800, refreshToken: "r" }
+            : call.path.endsWith("/profile/account") && profileFails
+                ? new AbdmApiError({ status: 0, kind: "unavailable", operation: "profile/account", message: "timed out" })
+                : normal(call))(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "abha-number", identifier: ABHA_NUMBER, otpSystem: "abdm", staffUserId: STAFF });
+    await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    await assert.rejects(service.selectAccount({ sessionId, staffUserId: STAFF, abhaNumber: ABHA_NUMBER }), (error: unknown) => error instanceof AbdmApiError);
+
+    profileFails = false;
+    await assert.rejects(service.selectAccount({ sessionId, staffUserId: STAFF, abhaNumber: "91-4444-5555-6666" }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400, "the held token is the first account's");
+    const result = await service.selectAccount({ sessionId, staffUserId: STAFF, abhaNumber: ABHA_NUMBER });
+    assert.equal(result.status, "verified");
+    assert.equal(calls.filter((call) => call.path.endsWith("/verify/user")).length, 1);
+});
+
+test("a failed clinic lookup does not strand a verified login", async (t) => {
+    t.mock.method(console, "error", () => {});
+    service = new AbhaLoginService({ findPatientByAbhaNumber: async () => { throw new Error("connection lost"); } }, sessions, gateway, fakeCrypto, () => now);
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF });
+    const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    assert.equal(result.status, "verified");
+    if (result.status === "verified") assert.equal(result.linkedPatient, null);
+});
+
 test("find by mobile lists accounts, then sends the OTP only for the chosen one", async () => {
     answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/profile/account/abha/search")
         ? [{ txnId: "txn-search", ABHA: [{ index: 1, ABHANumber: "xx-xxxx-xxxx-3333", name: "Asha", gender: "F", authMethods: ["MOBILE_OTP"] }, { index: 2, ABHANumber: "xx-xxxx-xxxx-6666", name: "Ravi", gender: "M" }] }]
@@ -175,10 +243,32 @@ test("find by mobile lists accounts, then sends the OTP only for the chosen one"
     assert.equal(result.status, "verified");
 });
 
-test("a mobile with no ABHA is an empty answer, not an error", async () => {
-    answer = () => new AbdmApiError({ status: 404, kind: "rejected", operation: "search", message: "ABHA not found" });
-    const found = await service.findByMobile({ mobile: "9876540903", staffUserId: STAFF });
-    assert.deepEqual(found, { sessionId: null, accounts: [] });
+test("a mobile with no ABHA is an empty answer, not an error: ABDM-1114 or an empty ABHA list", async () => {
+    answer = () => new AbdmApiError({ status: 404, kind: "rejected", operation: "search", code: "ABDM-1114", message: "User not found." });
+    assert.deepEqual(await service.findByMobile({ mobile: "9876540903", staffUserId: STAFF }), { sessionId: null, accounts: [] });
+
+    answer = () => [{ txnId: "txn-search", ABHA: [] }];
+    assert.deepEqual(await service.findByMobile({ mobile: "9876540903", staffUserId: STAFF }), { sessionId: null, accounts: [] });
+});
+
+test("find by mobile never reports no ABHA on an answer that did not say so", async () => {
+    // The API manager's own 404, and a not-found refusal without ABDM-1114: both reach the desk.
+    for (const refusal of [
+        new AbdmApiError({ status: 404, kind: "rejected", operation: "search", code: "code", message: "Runtime Error" }),
+        new AbdmApiError({ status: 400, kind: "rejected", operation: "search", message: "ABHA not found" }),
+    ]) {
+        answer = () => refusal;
+        await assert.rejects(service.findByMobile({ mobile: "9876540903", staffUserId: STAFF }), (error: unknown) => error === refusal);
+    }
+
+    // A 200 that is not the documented array of accounts.
+    for (const body of [{ txnId: "txn-search", message: "OTP is sent to Mobile number ending with ******0903" }, [], [{ txnId: "txn-search" }], [{ txnId: "txn-search", ABHA: [{ name: "Asha" }] }]]) {
+        answer = () => body;
+        await assert.rejects(
+            service.findByMobile({ mobile: "9876540903", staffUserId: STAFF }),
+            (error: unknown) => error instanceof AbdmApiError && error.kind === "unavailable" && /unexpected response/.test(error.message),
+        );
+    }
 });
 
 test("a login OTP resend reuses the transaction and stops after two", async () => {

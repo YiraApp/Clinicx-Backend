@@ -4,7 +4,7 @@ import { User } from "../../models/Account/user.model.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import type { AbhaEnrolmentStore, LinkedPatient, NewAbhaConsent } from "../../services/Abdm/abha-enrolment.service.js";
 
-/** The ABHA journey's reads and writes in the clinic database: consents, and ABHA on the Users row. */
+/** The ABHA journey's reads and writes in the clinic database: consents, ABHA on the Users row, and staff roles. */
 export class AbhaRepository implements AbhaEnrolmentStore {
     private get consents() {
         return AppDataSource.getRepository(AbhaConsent);
@@ -43,6 +43,18 @@ export class AbhaRepository implements AbhaEnrolmentStore {
         const user = await this.users.findOne({ where: { Id: userId }, select: { Id: true, FirstName: true, LastName: true } });
         const name = `${user?.FirstName || ""} ${user?.LastName || ""}`.trim();
         return name || null;
+    }
+
+    /** Whether the user holds an active, non-Patient role at the hospital: who may read its Scan and Share queue. */
+    async staffWorksAt(userId: string, hospitalId: number): Promise<boolean> {
+        const rows = await AppDataSource.query(
+            `SELECT TOP 1 1 AS WorksHere
+             FROM UserRoles ur
+             INNER JOIN Roles r ON r.Id = ur.RoleId
+             WHERE ur.UserId = @0 AND ur.HospitalId = @1 AND ur.IsDeleted = 0 AND ur.Status = 1 AND r.RoleName <> 'Patient'`,
+            [userId, hospitalId]
+        );
+        return Array.isArray(rows) && rows.length > 0;
     }
 
     async findPatientByAbhaNumber(abhaNumber: string): Promise<LinkedPatient | null> {

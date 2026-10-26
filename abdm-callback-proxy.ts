@@ -27,6 +27,15 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Which ABDM client signed the call (non-secret claims only), to set ABDM_CALLBACK_CLIENT_IDS.
+    try {
+        const payload = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").split(".")[1] || "";
+        const claims = payload ? JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) : {};
+        console.log(`[proxy] caller clientId=${claims.clientId ?? "-"} azp=${claims.azp ?? "-"} iss=${claims.iss ?? "-"} hip=${req.headers["x-hip-id"] ?? "-"}`);
+    } catch {
+        console.log("[proxy] caller token unreadable");
+    }
+
     const upstream = http.request(
         { hostname: target.hostname, port: target.port, path: req.url, method: req.method, headers: { ...req.headers, host: target.host } },
         (answer) => {

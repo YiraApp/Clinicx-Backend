@@ -10,6 +10,7 @@ import { AbhaSessionStore } from "../../services/Abdm/abha-session.store.js";
 import { abdmCallbackAuth } from "../../services/Abdm/abdm-callback-auth.service.js";
 import { abhaRepository } from "../../repositories/Abdm/abha.repository.js";
 import { abhaShareRepository } from "../../repositories/Abdm/abha-share.repository.js";
+import { shareQueueHospital } from "./share-queue-access.js";
 
 // One session store: a journey verified by create, verify or find can then show its card and link a patient.
 const abhaSessions = new AbhaSessionStore();
@@ -297,10 +298,8 @@ export class AbhaEnrolmentController {
 
     async shareQueue(req: Request, res: Response) {
         try {
-            const hospitalId = headerNumber(req, "x-hospital-id") ?? abdmConfig.hipHospitalId;
-            if (!hospitalId) {
-                throw new AbhaJourneyError(400, "validation", "Select a hospital to see its Scan and Share queue.");
-            }
+            // Only the desk's own hospital, and only for staff who work there.
+            const hospitalId = await shareQueueHospital(headerNumber(req, "x-hospital-id"), staffUserId(req), abhaRepository);
             const counterId = req.query.counterId ? String(req.query.counterId) : undefined;
             const rows = await abhaShareService.queue({ hospitalId, counterId });
             return res.json(ApiResponse.success({ hospitalId, shares: rows.map(toQueueItem) }));

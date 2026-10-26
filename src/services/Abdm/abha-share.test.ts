@@ -32,31 +32,46 @@ let onShares: any[];
 let created: SharedPatient[];
 let updated: string[];
 let byAbha: Map<string, string>;
+let byAddress: Map<string, string[]>;
 let demographicMatches: string[];
+/** Set to make createShare fail, as the database would. */
+let createShareFault: ((row: Omit<ShareRow, "id" | "createdAt">) => void) | null;
+let failNextOnShare: boolean;
 let service: AbhaShareService;
+
+/** Counter ids compare without case, as the database's collation does. */
+const sameCounter = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
 
 const store: AbhaShareStore = {
     async findShareByRequestId(requestId) { return rows.find((row) => row.requestId === requestId) ?? null; },
     async createShare(row) {
+        createShareFault?.(row);
         const id = rows.length + 1;
         rows.push({ ...row, id, createdAt: new Date(now) });
         return id;
     },
     async updateShare(id, changes) { Object.assign(rows.find((row) => row.id === id)!, changes); },
     async findActiveShare({ userId, hospitalId, counterId, now: at }) {
-        return [...rows].reverse().find((row) => row.userId === userId && row.hospitalId === hospitalId && row.counterId === counterId
+        return [...rows].reverse().find((row) => row.userId === userId && row.hospitalId === hospitalId && sameCounter(row.counterId, counterId)
             && row.tokenNumber && row.expiresAt && row.expiresAt > at && ["REGISTERED", "ACKNOWLEDGED"].includes(row.status)) ?? null;
     },
     async maxTokenToday({ hospitalId, counterId }) {
-        return Math.max(0, ...rows.filter((row) => row.hospitalId === hospitalId && row.counterId === counterId).map((row) => Number(row.tokenNumber) || 0));
+        const max = Math.max(0, ...rows.filter((row) => row.hospitalId === hospitalId && sameCounter(row.counterId, counterId)).map((row) => Number(row.tokenNumber) || 0));
+        // A database round trip: another share can run its own read before this one's token is written.
+        await new Promise((resolve) => setImmediate(resolve));
+        return max;
     },
-    async listShares() { return rows; },
+    async listShares({ counterId }) {
+        return [...rows].reverse().filter((row) => row.status !== "REPEAT" && (!counterId || sameCounter(row.counterId, counterId)));
+    },
     async findPatientIdByAbhaNumber(abhaNumber) { return byAbha.get(abhaNumber) ?? null; },
+    async findPatientIdsByAbhaAddress(patient) { return byAddress.get(patient.abhaAddress) ?? []; },
     async findPatientIdsByDemographics() { return demographicMatches; },
     async createPatient(patient) {
         created.push(patient);
         const id = `new-${created.length}`;
         if (patient.abhaNumber) byAbha.set(patient.abhaNumber, id);
+        byAddress.set(patient.abhaAddress, [id]);
         return id;
     },
     async updatePatientAbha(userId) { updated.push(userId); },
@@ -66,6 +81,10 @@ const gateway = {
     async call<T>(call: AbdmCall): Promise<T> {
         assert.equal(call.host, "gateway");
         assert.equal(call.path, "/api/hiecm/patient-share/v3/on-share");
+        if (failNextOnShare) {
+            failNextOnShare = false;
+            throw new Error("The gateway refused the on-share");
+        }
         onShares.push(call.body);
         return {} as T;
     },
@@ -75,13 +94,17 @@ beforeEach(() => {
     process.env.ABDM_HIP_ID = "Yira-HIP";
     process.env.ABDM_HIP_HOSPITAL_ID = "19";
     process.env.ABDM_SHARE_TOKEN_EXPIRY = "60";
+    delete process.env.ABDM_SHARE_EXPIRY_UNIT;
     now = new Date(2026, 9, 26, 10, 0, 0).getTime();
     rows = [];
     onShares = [];
     created = [];
     updated = [];
     byAbha = new Map();
+    byAddress = new Map();
     demographicMatches = [];
+    createShareFault = null;
+    failNextOnShare = false;
     service = new AbhaShareService(store, gateway, () => now);
 });
 
@@ -108,6 +131,15 @@ test("the share is read into the clinic's own shapes", () => {
     });
 });
 
+test("the shared ABHA number is kept in the dashed form, and one that is not 14 digits is dropped", () => {
+    const abhaNumberOf = (abhaNumber: unknown) => service.parse("Yira-HIP", shareBody({ abhaNumber })).patient.abhaNumber;
+    assert.equal(abhaNumberOf("91111122223333"), ABHA_NUMBER);
+    assert.equal(abhaNumberOf("91 1111 2222 3333"), ABHA_NUMBER);
+    assert.equal(abhaNumberOf(ABHA_NUMBER), ABHA_NUMBER);
+    assert.equal(abhaNumberOf("9111112222333"), null);
+    assert.equal(abhaNumberOf(null), null);
+});
+
 test("a share for another HIP, without a counter, or without a name is refused before it is answered", () => {
     const refuse = (hip: string, body: any, status: number) =>
         assert.throws(() => service.parse(hip, body), (error: unknown) => error instanceof AbhaJourneyError && error.status === status);
@@ -116,6 +148,8 @@ test("a share for another HIP, without a counter, or without a name is refused b
     refuse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP" } }, 400);
     refuse("Yira-HIP", shareBody({ name: "" }), 400);
     refuse("Yira-HIP", { ...shareBody(), intent: "RECORD_SHARE" }, 400);
+    refuse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP", context: "C".repeat(21) } }, 400);
+    assert.equal(service.parse("Yira-HIP", { ...shareBody(), metaData: { hipId: "Yira-HIP", context: "C".repeat(20) } }).counterId, "C".repeat(20));
 });
 
 test("a first scan registers a new patient with nothing typed and answers with token 1 (701)", async () => {
@@ -150,18 +184,77 @@ test("a returning patient is matched on the ABHA number and keeps one record (70
     assert.equal(onShares[0].acknowledgement.abhaAddress, "asha.second@sbx");
 });
 
-test("the same counter while the token is valid keeps the token; another counter gets its own (702)", async () => {
+test("a returning patient linked at the desk is matched when ABDM sends the ABHA number without dashes (702)", async () => {
+    byAbha.set(ABHA_NUMBER, EXISTING);
+    await share("req-1", { abhaNumber: "91111122223333" });
+    assert.equal(created.length, 0, "no second record for the same ABHA number");
+    assert.equal(rows[0]!.matchType, "ABHA_NUMBER");
+    assert.equal(rows[0]!.abhaNumber, ABHA_NUMBER);
+});
+
+test("a patient whose record holds the shared ABHA address is matched on it before name and mobile (702)", async () => {
+    byAddress.set("asha.kumari@sbx", [EXISTING]);
+    await share("req-1", { abhaNumber: null, name: "Asha K" });
+    assert.equal(created.length, 0);
+    assert.deepEqual(updated, [EXISTING]);
+    assert.equal(rows[0]!.matchType, "ABHA_ADDRESS");
+
+    byAddress.set("asha.kumari@sbx", [EXISTING, "33333333-3333-3333-3333-333333333333"]);
+    await share("req-2", { abhaNumber: null }, "OPD2");
+    assert.equal(created.length, 0, "two records holding one address are left for the desk");
+    assert.equal(rows[1]!.matchType, "AMBIGUOUS");
+});
+
+test("a repeat scan at the same counter keeps the token and adds no queue entry; another counter gets its own (702)", async () => {
+    const firstExpiry = now + 60 * 60_000;
     await share("req-1");
+    now += 5 * 60_000;
     await share("req-2");
-    assert.equal(rows[1]!.tokenNumber, "1", "no new queue entry at the same counter");
+    assert.equal(rows[1]!.status, "REPEAT");
+    assert.deepEqual((await service.queue({ hospitalId: 19, counterId: "OPD1" })).map((row) => row.requestId), ["req-1"], "one queue entry for the person");
+    assert.deepEqual(onShares[1].acknowledgement.profile, { context: "OPD1", tokenNumber: "1", expiry: 55 }, "the same token, with the time it has left");
+    assert.equal(rows[0]!.status, "ACKNOWLEDGED", "the existing entry is unchanged");
+    assert.equal(rows[0]!.expiresAt!.getTime(), firstExpiry);
 
     await share("req-3", {}, "OPD2");
     assert.equal(rows[2]!.tokenNumber, "1", "the other counter starts its own queue");
     assert.equal(onShares[2].acknowledgement.profile.context, "OPD2");
+    assert.equal((await service.queue({ hospitalId: 19 })).length, 2);
 
-    now += 61 * 60_000;
+    now += 56 * 60_000;
     await share("req-4");
     assert.equal(rows[3]!.tokenNumber, "2", "after the token runs out the patient queues again");
+    assert.equal(rows[3]!.status, "ACKNOWLEDGED");
+});
+
+test("the on-share expiry is sent in the unit ABDM_SHARE_EXPIRY_UNIT names; the token stays valid for the minutes configured", async () => {
+    process.env.ABDM_SHARE_EXPIRY_UNIT = "seconds";
+    await share("req-1");
+    assert.equal(onShares[0].acknowledgement.profile.expiry, 3600);
+    assert.equal(rows[0]!.expiresAt!.getTime(), now + 60 * 60_000);
+
+    now += 59 * 60_000 + 59_500;
+    await share("req-2");
+    assert.equal(onShares[1].acknowledgement.profile.tokenNumber, "1");
+    assert.equal(onShares[1].acknowledgement.profile.expiry, 1, "never below 1");
+});
+
+test("two patients scanning one counter together get tokens 1 and 2", async () => {
+    await Promise.all([
+        share("req-1"),
+        share("req-2", { abhaNumber: "91-4444-5555-6666", abhaAddress: "ravi.kumar@sbx", name: "Ravi Kumar", gender: "M" }),
+    ]);
+    assert.equal(created.length, 2);
+    assert.deepEqual(rows.map((row) => row.tokenNumber).sort(), ["1", "2"]);
+    assert.deepEqual(onShares.map((body) => body.acknowledgement.profile.tokenNumber).sort(), ["1", "2"]);
+});
+
+test("one counter's QR codes that differ only in case still give two patients scanning together tokens 1 and 2", async () => {
+    await Promise.all([
+        share("req-1", {}, "OPD1"),
+        share("req-2", { abhaNumber: "91-4444-5555-6666", abhaAddress: "ravi.kumar@sbx", name: "Ravi Kumar", gender: "M" }, "opd1"),
+    ]);
+    assert.deepEqual(rows.map((row) => row.tokenNumber).sort(), ["1", "2"]);
 });
 
 test("an uncertain demographic match registers nobody and is left for the desk", async () => {
@@ -174,12 +267,43 @@ test("an uncertain demographic match registers nobody and is left for the desk",
     assert.equal(onShares[0].acknowledgement.status, "SUCCESS", "the patient still gets a token");
 });
 
-test("a share the facility cannot register is answered with an error, not left waiting", async () => {
+test("a share the facility cannot register is answered with the error alone, not left waiting", async () => {
     delete process.env.ABDM_HIP_HOSPITAL_ID;
     await share("req-1");
     assert.equal(rows[0]!.status, "FAILED");
-    assert.equal(onShares[0].response.requestId, "req-1");
+    assert.deepEqual(onShares[0], {
+        error: { code: "ABDM-9999", message: "The facility could not register this share. Please ask at the counter." },
+        response: { requestId: "req-1" },
+    });
+});
+
+test("a share that cannot even be recorded is still answered with an error", async () => {
+    createShareFault = () => { throw new Error("String or binary data would be truncated"); };
+    await share("req-1");
+    assert.equal(rows.length, 0);
+    assert.equal(onShares.length, 1);
     assert.equal(onShares[0].error.code, "ABDM-9999");
+    assert.equal(onShares[0].response.requestId, "req-1");
+});
+
+test("a repeat scan whose answer fails still adds no queue entry", async () => {
+    await share("req-1");
+    failNextOnShare = true;
+    await share("req-2");
+    assert.equal(rows[1]!.status, "REPEAT");
+    assert.ok(rows[1]!.error);
+    assert.equal((await service.queue({ hospitalId: 19, counterId: "OPD1" })).length, 1);
+    assert.equal(onShares[1].error.code, "ABDM-9999", "the patient is told it failed");
+});
+
+test("a duplicate delivery that loses the REQUEST-ID to a concurrent one is not answered twice", async () => {
+    createShareFault = (row) => {
+        rows.push({ ...row, id: 99, createdAt: new Date(now) });
+        throw new Error("Violation of UNIQUE KEY constraint UX_AbhaProfileShares_RequestId");
+    };
+    await share("req-1");
+    assert.equal(onShares.length, 0);
+    assert.equal(created.length, 0);
 });
 
 test("the counter QR code opens the PHR share page for this HIP and counter", () => {

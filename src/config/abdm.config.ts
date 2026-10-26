@@ -55,13 +55,20 @@ export const abdmConfig = {
     },
 
     /**
-     * How long a Scan and Share queue token stays valid, sent to ABDM as on-share "expiry".
-     * ABDM's specification gives expiry as a number without a unit; the test cases expect a token
-     * valid for 60 minutes. Confirm the unit at onboarding and set this to match.
+     * How many minutes a Scan and Share queue token stays valid at the clinic. The test cases
+     * expect 60. Always minutes: ABDM_SHARE_EXPIRY_UNIT sets only how it is sent to ABDM.
      */
     get shareTokenExpiry(): number {
         const value = Number(env("ABDM_SHARE_TOKEN_EXPIRY"));
         return Number.isFinite(value) && value > 0 ? value : 60;
+    },
+
+    /**
+     * The unit of the on-share "expiry" ABDM receives: "minutes" (default) or "seconds".
+     * ABDM's specification gives expiry as a number without a unit; confirm it at onboarding.
+     */
+    get shareExpiryUnit(): "minutes" | "seconds" {
+        return env("ABDM_SHARE_EXPIRY_UNIT").toLowerCase() === "seconds" ? "seconds" : "minutes";
     },
 
     /** Client ids allowed to call our callbacks (comma separated); empty accepts any ABDM-signed token. */

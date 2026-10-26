@@ -2,7 +2,8 @@ import { Entity, PrimaryGeneratedColumn, Column } from "typeorm/index.js";
 
 /**
  * One ABDM Scan and Share: a patient scanned a counter's QR code in their ABHA app and shared
- * their profile. Each row is also that counter's queue entry, with the token sent back to the app.
+ * their profile. Each row is also that counter's queue entry, with the token sent back to the app,
+ * except a REPEAT row: a rescan while the patient's token there is live, kept for its REQUEST-ID.
  */
 @Entity({ name: "AbhaProfileShares" })
 export class AbhaProfileShare {
@@ -20,6 +21,7 @@ export class AbhaProfileShare {
     @Column({ type: "varchar", length: 20 })
     CounterId: string;
 
+    /** Stored dashed (91-XXXX-XXXX-XXXX), whichever form ABDM sent. */
     @Column({ type: "varchar", length: 17, nullable: true })
     AbhaNumber?: string | null;
 
@@ -42,11 +44,14 @@ export class AbhaProfileShare {
     @Column({ type: "datetime", nullable: true })
     ExpiresAt?: Date | null;
 
-    /** RECEIVED, REGISTERED, REVIEW (an uncertain match the desk resolves), ACKNOWLEDGED or FAILED. */
+    /**
+     * RECEIVED, REGISTERED, REVIEW (an uncertain match the desk resolves), ACKNOWLEDGED, REPEAT
+     * (answered with the token of a live entry at the same counter; not a queue entry) or FAILED.
+     */
     @Column({ type: "varchar", length: 20 })
     Status: string;
 
-    /** NEW, ABHA_NUMBER, DEMOGRAPHIC or AMBIGUOUS. */
+    /** NEW, ABHA_NUMBER, ABHA_ADDRESS, DEMOGRAPHIC or AMBIGUOUS. */
     @Column({ type: "varchar", length: 20, nullable: true })
     MatchType?: string | null;
 
