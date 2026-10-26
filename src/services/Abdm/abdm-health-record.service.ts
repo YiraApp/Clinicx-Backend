@@ -1,14 +1,16 @@
 import { FhirSourceError, type FhirBundle, type HiType } from "./fhir/fhir-common.js";
 import { BUILDERS, type RecordSourceFor } from "./fhir/health-records.js";
-import type { CodedText, DiagnosticKind, VisitVitals, WellnessMeasurement } from "./fhir/fhir-sources.js";
+import type { CodedText, DiagnosticKind, DocumentSource, RecordParties, VisitVitals, WellnessMeasurement } from "./fhir/fhir-sources.js";
 import { visitVitalsToMeasurements } from "./fhir/measurements.js";
-import { abdmHealthRecordRepository, type AbdmHealthRecordRepository, type VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
+import { abdmHealthRecordRepository, isVitalsRecord, type AbdmHealthRecordRepository, type VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import type { PatientMedicalRecord } from "../../models/Appointments/patient-medical-record.model.js";
 
 /**
  * Which ABDM health records a care context holds, built as NRCES bundles. A visit (an appointment)
- * can hold all eight HI types; a discharge summary and an immunization given outside a visit are
- * care contexts of their own. A type with nothing recorded is not offered, never sent empty.
+ * can hold all eight HI types; every record saved outside a visit (a discharge summary, an
+ * immunization, a vitals check, a prescription, a consultation record, a clinical note, an
+ * uploaded document) is a care context of its own. A type with nothing recorded is not offered,
+ * never sent empty.
  */
 
 export interface HealthRecordBundle {
@@ -20,8 +22,7 @@ export interface HealthRecordBundle {
 
 type SourceOf = { [T in HiType]: { hiType: T; source: RecordSourceFor[T] } }[HiType];
 
-/** Medical record rows that are a vitals check rather than a consultation. */
-export const isVitalsRecord = (r: Pick<PatientMedicalRecord, "Type">): boolean => /vital/i.test(r.Type ?? "");
+export { isVitalsRecord } from "../../repositories/Abdm/abdm-health-record.repository.js";
 
 /** Lab and imaging uploads are diagnostic reports; any other upload is a health document. */
 export const diagnosticKind = (category?: string | null): DiagnosticKind | null => {
@@ -36,6 +37,30 @@ const vitalsOf = (r: PatientMedicalRecord): VisitVitals => ({
 });
 const coded = (text?: string | null, conceptId?: string | null): CodedText[] =>
     text?.trim() ? [{ text: text.trim(), conceptId: conceptId?.trim() || null }] : [];
+
+const prescriptionSource = (parties: RecordParties, p: VisitRecords["prescriptions"][number], fallbackDate: Date): SourceOf => ({
+    hiType: "Prescription",
+    source: {
+        ...parties,
+        prescription: {
+            id: p.row.Id,
+            number: p.row.PrescriptionNumber ?? null,
+            date: p.row.Date ?? p.row.CreatedAt ?? fallbackDate,
+            notes: p.row.Notes ?? null,
+            diagnoses: p.diagnoses,
+            medications: p.medications,
+            signedCopy: p.pdf ? { contentType: "application/pdf", data: p.pdf } : null,
+        },
+    },
+});
+
+/** A document as the HI type it is: lab and imaging uploads are diagnostic reports, any other a health document. */
+const documentSource = (parties: RecordParties, d: DocumentSource, key: string): SourceOf => {
+    const kind = diagnosticKind(d.category);
+    return kind
+        ? { hiType: "DiagnosticReport", source: { ...parties, kind, report: d } }
+        : { hiType: "HealthDocumentRecord", source: { ...parties, key, date: d.createdAt, title: "Health document", documents: [d] } };
+};
 
 /** The records one visit holds, as builder sources. Pure: everything it needs is in [v]. */
 export const visitSources = (v: VisitRecords): SourceOf[] => {
@@ -70,22 +95,7 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
     }
 
     for (const p of v.prescriptions) {
-        if (!p.medications.length) continue;
-        out.push({
-            hiType: "Prescription",
-            source: {
-                ...v.parties,
-                prescription: {
-                    id: p.row.Id,
-                    number: p.row.PrescriptionNumber ?? null,
-                    date: p.row.Date ?? p.row.CreatedAt ?? v.appointment.start,
-                    notes: p.row.Notes ?? null,
-                    diagnoses: p.diagnoses,
-                    medications: p.medications,
-                    signedCopy: p.pdf ? { contentType: "application/pdf", data: p.pdf } : null,
-                },
-            },
-        });
+        if (p.medications.length) out.push(prescriptionSource(v.parties, p, v.appointment.start));
     }
 
     const healthDocuments = [];
@@ -161,7 +171,8 @@ const parseList = (json?: string | null): CodedText[] => {
 
 export class AbdmHealthRecordService {
     constructor(
-        private readonly records: Pick<AbdmHealthRecordRepository, "visit" | "dischargeSummary" | "immunization" | "vitalsRecord"> = abdmHealthRecordRepository,
+        private readonly records: Pick<AbdmHealthRecordRepository,
+            "visit" | "dischargeSummary" | "immunization" | "vitalsRecord" | "prescription" | "consultationRecord" | "clinicalNote" | "standaloneDocument"> = abdmHealthRecordRepository,
         private readonly now: () => Date = () => new Date(),
     ) {}
 
@@ -225,6 +236,61 @@ export class AbdmHealthRecordService {
                 certificate: (i.CertificateDocumentId && certificates.get(i.CertificateDocumentId)) || null,
             },
         }]);
+    }
+
+    /** A prescription saved outside a visit. */
+    async forPrescription(id: string): Promise<HealthRecordBundle[]> {
+        const { row, parties, pdf, medications, diagnoses } = await this.records.prescription(id);
+        if (!medications.length) return [];
+        return this.build([prescriptionSource(parties, { row, medications, diagnoses, pdf }, row.CreatedAt ?? new Date())]);
+    }
+
+    /** A consultation record saved outside a visit: an OPConsultation of its own, dated when it was recorded. */
+    async forConsultationRecord(id: string): Promise<HealthRecordBundle[]> {
+        const { row: r, parties } = await this.records.consultationRecord(id);
+        const date = new Date(r.Date);
+        const vitals = vitalsOf(r);
+        return this.build([{
+            hiType: "OPConsultation",
+            source: {
+                ...parties,
+                key: `medical-record-${r.Id}`,
+                visit: { id: 0, start: date, end: null, teleconsultation: false },
+                chiefComplaints: [...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)],
+                examinationFindings: coded(r.PhysicalExamination, r.PhysicalExaminationConceptId),
+                vitals: Object.values(vitals).some(Boolean) ? vitals : null,
+                vitalsRecordedAt: date,
+                diagnoses: coded(r.Diagnosis, r.DiagnosisConceptId),
+                procedures: coded(r.Treatment, r.TreatmentConceptId),
+                medications: [],
+                notes: [],
+                followUp: r.FollowUpDate ?? null,
+                documents: [],
+            },
+        }]);
+    }
+
+    /** A clinical note written outside a visit: an OPConsultation holding the note. */
+    async forClinicalNote(id: number): Promise<HealthRecordBundle[]> {
+        const { row, parties } = await this.records.clinicalNote(id);
+        if (!row.Notes?.trim()) return [];
+        const date = new Date(row.CreatedAt);
+        return this.build([{
+            hiType: "OPConsultation",
+            source: {
+                ...parties,
+                key: `clinical-note-${row.Id}`,
+                visit: { id: 0, start: date, end: null, teleconsultation: false },
+                chiefComplaints: [], examinationFindings: [], diagnoses: [], procedures: [], medications: [], documents: [],
+                notes: [row.Notes],
+            },
+        }]);
+    }
+
+    /** A document the clinic uploaded outside a visit. */
+    async forDocument(id: number): Promise<HealthRecordBundle[]> {
+        const { parties, document } = await this.records.standaloneDocument(id);
+        return document ? this.build([documentSource(parties, document, `medical-document-${id}`)]) : [];
     }
 
     private build(sources: SourceOf[], hiTypes?: HiType[]): HealthRecordBundle[] {

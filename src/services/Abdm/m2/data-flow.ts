@@ -14,7 +14,8 @@ import type { CareContextRow, Hip, M2Store } from "./m2-store.js";
  */
 
 type Gateway = Pick<AbdmGatewayService, "call" | "getAccessToken">;
-type Records = Pick<AbdmHealthRecordService, "forAppointment" | "forDischargeSummary" | "forImmunization" | "forVitalsRecord">;
+type Records = Pick<AbdmHealthRecordService,
+    "forAppointment" | "forDischargeSummary" | "forImmunization" | "forVitalsRecord" | "forPrescription" | "forConsultationRecord" | "forClinicalNote" | "forDocument">;
 type Push = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{ ok: boolean; status: number }>;
 
 const PUSH_TIMEOUT_MS = 60_000;
@@ -131,6 +132,10 @@ export class DataFlowService {
             case "discharge": return this.records.forDischargeSummary(Number(parsed.sourceId));
             case "immunization": return this.records.forImmunization(Number(parsed.sourceId));
             case "vitals": return this.records.forVitalsRecord(parsed.sourceId);
+            case "prescription": return this.records.forPrescription(parsed.sourceId);
+            case "consultation": return this.records.forConsultationRecord(parsed.sourceId);
+            case "note": return this.records.forClinicalNote(Number(parsed.sourceId));
+            case "document": return this.records.forDocument(Number(parsed.sourceId));
         }
     }
 

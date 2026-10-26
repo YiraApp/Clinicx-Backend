@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AbdmHealthRecordService, diagnosticKind, isVitalsRecord, visitSources } from "./abdm-health-record.service.js";
 import type { VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
-import { documentContentType, visitStart } from "../../repositories/Abdm/abdm-health-record.repository.js";
+import { documentContentType, hasConsultationContent, visitStart } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import { fixtureParties } from "./fhir/fhir-fixtures.js";
 import { immunizationColumns } from "../Appointments/immunization.service.js";
 import { checkDates, codedList, dischargeSummaryColumns } from "../Appointments/discharge-summary.service.js";
@@ -105,6 +105,38 @@ test("an immunization given outside a visit is a record of its own", async () =>
     const records = { immunization: async () => ({ row: { Id: 9, VaccineName: "Hepatitis B vaccine", AdministeredOn: "2026-10-01", CertificateDocumentId: null }, parties: fixtureParties, certificates: new Map() }) };
     const built = await service(records).forImmunization(9);
     assert.deepEqual(built.map((r) => r.hiType), ["ImmunizationRecord"]);
+});
+
+test("records saved outside a visit are shared on their own, each as the HI type it is", async () => {
+    const rx = { row: { Id: "rx-9", Date: day, PrescriptionNumber: 4, CreatedAt: day }, parties: fixtureParties, pdf: null, diagnoses: [], medications: [{ id: "m-1", name: "Amoxicillin 500 mg capsule" }] };
+    const records = {
+        prescription: async () => rx,
+        consultationRecord: async () => ({ row: { Id: "mr-9", Type: "consultation", Date: day, ChiefComplaint: "Toothache", Diagnosis: "Dental caries" }, parties: fixtureParties }),
+        clinicalNote: async () => ({ row: { Id: 5, Notes: "Review in a week.", CreatedAt: day }, parties: fixtureParties }),
+        standaloneDocument: async (id: number) => ({
+            parties: fixtureParties,
+            document: id === 404 ? null : { id: `medical-document-${id}`, title: "Report", category: id === 1 ? "Lab Report" : "Clinical", contentType: "application/pdf", data: pdf, createdAt: day },
+        }),
+    };
+    const s = service(records);
+    assert.deepEqual((await s.forPrescription("rx-9")).map((r) => r.hiType), ["Prescription"]);
+    const consult = await s.forConsultationRecord("mr-9");
+    assert.deepEqual(consult.map((r) => r.hiType), ["OPConsultation"]);
+    const note = await s.forClinicalNote(5);
+    assert.deepEqual(note.map((r) => r.hiType), ["OPConsultation"]);
+    assert.notEqual(consult[0]!.bundle.id, note[0]!.bundle.id, "each record its own bundle");
+    assert.deepEqual((await s.forDocument(1)).map((r) => r.hiType), ["DiagnosticReport"]);
+    assert.deepEqual((await s.forDocument(2)).map((r) => r.hiType), ["HealthDocumentRecord"]);
+
+    assert.deepEqual(await service({ ...records, prescription: async () => ({ ...rx, medications: [] }) }).forPrescription("rx-9"), [], "no medicines, no prescription");
+    assert.deepEqual(await service({ ...records, clinicalNote: async () => ({ row: { Id: 5, Notes: "  ", CreatedAt: day }, parties: fixtureParties }) }).forClinicalNote(5), []);
+    assert.deepEqual(await s.forDocument(404), [], "a file that can't be read is not sent empty");
+});
+
+test("a consultation record is shared on its own only when something is written or measured in it", () => {
+    assert.equal(hasConsultationContent({ Type: "consultation", ChiefComplaint: "Toothache" }), true);
+    assert.equal(hasConsultationContent({ Type: "consultation", Weight: "62" }), true);
+    assert.equal(hasConsultationContent({ Type: "consultation", ChiefComplaint: "  ", Diagnosis: "" }), false);
 });
 
 test("immunization input is checked before it is stored", () => {

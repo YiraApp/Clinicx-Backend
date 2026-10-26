@@ -91,9 +91,12 @@ const visit = (): VisitRecords => ({
     prescriptions: [{ row: { Id: "rx-1", Date: new Date("2026-10-20T10:10:00+05:30") } as any, medications: [{ id: "m-1", name: "Paracetamol 650 mg tablet" }], diagnoses: [], pdf: null }],
     notes: [], documents: [], bills: [], immunizations: [], certificates: new Map(),
 });
+const noStandalone = () => ({ prescriptions: [] as any[], consultations: [] as any[], notes: [] as any[], documents: [] as any[] });
+let standalone = noStandalone();
 const records = {
     visit: async () => visit(),
     standaloneRecordIds: async () => ({ dischargeSummaryIds: [3], immunizationIds: [], vitalsRecordIds: [] }),
+    standaloneRecords: async () => standalone,
     dischargeSummary: async () => ({ summary: { AdmittedAt: new Date("2026-10-10T09:00:00+05:30"), DischargedAt: new Date("2026-10-12T09:00:00+05:30") } } as any),
     immunization: async () => { throw new Error("unused"); },
     vitalsRecord: async () => { throw new Error("unused"); },
@@ -107,6 +110,7 @@ const realConsole = { log: console.log, warn: console.warn, error: console.error
 const hip = { id: HIP, hospitalId: HOSPITAL, name: "Ocimum Dental Clinic" };
 
 beforeEach(() => {
+    standalone = noStandalone();
     store = new MemoryStore();
     gateway = new FakeGateway();
     catalog = new CareContextCatalog(store, records as any);
@@ -133,6 +137,25 @@ test("care contexts: one per visit and per stay, referenced so they resolve back
     store.contexts[0]!.linkStatus = "linked";
     await catalog.refresh(hip, PATIENT);
     assert.equal(store.contexts[0]!.linkStatus, "linked", "a refresh keeps link state");
+});
+
+test("each record saved outside a visit is a care context of its own, shared as its HI type, displayed without its content", async () => {
+    const d = new Date("2026-10-26T10:00:00+05:30");
+    standalone = {
+        prescriptions: [{ id: "6a1f-rx", date: d }],
+        consultations: [{ id: "77b2-mr", date: d }],
+        notes: [{ id: 12, date: d }],
+        documents: [{ id: 40, date: d, category: "Lab Report" }, { id: 41, date: d, category: "Clinical" }],
+    };
+    const contexts = await catalog.refresh(hip, PATIENT);
+    const byRef = Object.fromEntries(contexts.map((c) => [c.referenceNumber, [c.kind, c.display, c.hiTypes]]));
+    assert.deepEqual(byRef["RX-6a1f-rx"], ["prescription", "Prescription, 26 Oct 2026", ["Prescription"]]);
+    assert.deepEqual(byRef["MR-77b2-mr"], ["consultation", "Consultation record, 26 Oct 2026", ["OPConsultation"]]);
+    assert.deepEqual(byRef["CN-12"], ["note", "Clinical note, 26 Oct 2026", ["OPConsultation"]]);
+    assert.deepEqual(byRef["DOC-40"], ["document", "Lab report, 26 Oct 2026", ["DiagnosticReport"]]);
+    assert.deepEqual(byRef["DOC-41"], ["document", "Health document, 26 Oct 2026", ["HealthDocumentRecord"]]);
+    assert.deepEqual(parseCareContextReference("DOC-41"), { kind: "document", sourceId: "41" });
+    assert.deepEqual(parseCareContextReference("RX-6a1f-rx"), { kind: "prescription", sourceId: "6a1f-rx" });
 });
 
 test("byHiType: one patient entry per HI type, with its care contexts and their count", () => {
@@ -399,6 +422,10 @@ const healthRecords = {
     forDischargeSummary: async () => [],
     forImmunization: async () => [],
     forVitalsRecord: async () => [],
+    forPrescription: async () => [],
+    forConsultationRecord: async () => [],
+    forClinicalNote: async () => [],
+    forDocument: async () => [],
 };
 
 test("a consent notification is stored and acknowledged; a revocation updates it", async () => {
