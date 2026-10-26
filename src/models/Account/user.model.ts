@@ -34,6 +34,21 @@ export class User {
     @Column({ type: "varchar", length: 255, nullable: true })
     AadharNo?: string;
 
+    /** ABDM ABHA number, 91-XXXX-XXXX-XXXX. Unique across live patient records. */
+    @Column({ type: "varchar", length: 17, nullable: true })
+    AbhaNumber?: string | null;
+
+    /** Preferred ABHA address, such as name@sbx or name@abdm. */
+    @Column({ type: "varchar", length: 100, nullable: true })
+    AbhaAddress?: string | null;
+
+    @Column({ type: "datetime", nullable: true })
+    AbhaLinkedAt?: Date | null;
+
+    /** Registered (or linked) through the ABHA step at the front desk, with a verified ABHA. */
+    @Column({ type: "bit", default: false })
+    RegisteredViaAbha: boolean;
+
     @Column({ type: "varchar", length: 15, nullable: true })
     AlternatePhoneNumber?: string;
 

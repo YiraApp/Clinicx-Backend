@@ -55,7 +55,40 @@ export class MigrationService {
 
                 `IF NOT EXISTS (SELECT * FROM AppVersions WHERE Platform = 'ios')
                 INSERT INTO AppVersions (Platform, Version, MinVersion, ForceUpdate, Url, IsLatest, IsDeleted, CreatedAt, Maintenance, Logout)
-                VALUES ('ios', '1.0.0', '1.0.0', 0, 'https://apps.apple.com/app/yira-clinx/id6741477759', 1, 0, GETDATE(), 0, 0);`
+                VALUES ('ios', '1.0.0', '1.0.0', 0, 'https://apps.apple.com/app/yira-clinx/id6741477759', 1, 0, GETDATE(), 0, 0);`,
+
+                // ABDM M1: ABHA number and preferred ABHA address beside the patient's other identifiers
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'AbhaNumber') ALTER TABLE Users ADD AbhaNumber VARCHAR(17) NULL;",
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'AbhaAddress') ALTER TABLE Users ADD AbhaAddress VARCHAR(100) NULL;",
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'AbhaLinkedAt') ALTER TABLE Users ADD AbhaLinkedAt DATETIME NULL;",
+
+                // Patients registered through the ABHA step at the front desk (filterable in patient lists)
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Users') AND name = 'RegisteredViaAbha') ALTER TABLE Users ADD RegisteredViaAbha BIT NOT NULL CONSTRAINT DF_Users_RegisteredViaAbha DEFAULT 0;",
+                // Every ABHA linked so far came through that step
+                "UPDATE Users SET RegisteredViaAbha = 1 WHERE AbhaNumber IS NOT NULL AND RegisteredViaAbha = 0;",
+
+                // One ABHA number links to one patient record
+                `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_Users_AbhaNumber' AND object_id = OBJECT_ID('Users'))
+                EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_Users_AbhaNumber ON Users (AbhaNumber) WHERE AbhaNumber IS NOT NULL AND IsDeleted = 0');`,
+
+                // Who agreed to ABHA creation, who confirmed it at the desk, and when (no Aadhaar is stored)
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbhaConsents')
+                CREATE TABLE AbhaConsents (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    ConsentCode VARCHAR(50) NOT NULL,
+                    ConsentVersion VARCHAR(10) NOT NULL,
+                    Declarations NVARCHAR(MAX) NOT NULL,
+                    StaffUserId UNIQUEIDENTIFIER NOT NULL,
+                    StaffName NVARCHAR(200) NULL,
+                    BeneficiaryName NVARCHAR(200) NULL,
+                    HospitalId INT NULL,
+                    OrganizationId INT NULL,
+                    TxnId VARCHAR(64) NULL,
+                    AbhaNumber VARCHAR(17) NULL,
+                    PatientUserId UNIQUEIDENTIFIER NULL,
+                    AgreedAt DATETIME NOT NULL,
+                    CreatedAt DATETIME NOT NULL DEFAULT GETDATE()
+                );`
             ];
 
             for (const query of queries) {

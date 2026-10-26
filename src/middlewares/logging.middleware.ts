@@ -3,6 +3,7 @@ import { AppDataSource } from "../config/database.js";
 import { APILog } from "../models/Logs/apilog.model.js";
 import { verifyAccessToken } from "../utils/jwt.utils.js";
 import { findByAccessToken } from "../repositories/Account/token.repository.js";
+import { maskRequestBodyForLog, maskResponseForLog } from "../utils/log-mask.utils.js";
 
 const apiLogRepository = AppDataSource.getRepository(APILog);
 
@@ -149,10 +150,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
 
     // Truncate and mask RequestBody
     if (req.body) {
-        let body = { ...req.body };
-        if (body.password) body.password = "********";
-        if (body.Password) body.Password = "********";
-        const bodyStr = JSON.stringify(body);
+        const bodyStr = JSON.stringify(maskRequestBodyForLog(req.path, req.body));
         requestLog.RequestBody = bodyStr.length > 2000 ? bodyStr.substring(0, 2000) + "... [truncated]" : bodyStr;
     }
 
@@ -264,6 +262,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
                 }
             }
 
+            responseStr = maskResponseForLog(req.path, responseStr);
             requestLog.Response = responseStr.length > 2000 ? responseStr.substring(0, 2000) + "... [truncated]" : responseStr;
             requestLog.ResponseStatusCode = res.statusCode;
             requestLog.ResponseTimeMs = durationMs;

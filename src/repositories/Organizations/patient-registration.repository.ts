@@ -3,6 +3,7 @@ import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { AppointmentStatus } from "../../enums/appointments.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
+import { abhaPatientCondition, parseAbhaPatientFilter } from "../../utils/abha-filter.utils.js";
 
 export class PatientRegistrationRepository {
     private repo = AppDataSource.getRepository(PatientRegistration);
@@ -63,6 +64,11 @@ export class PatientRegistrationRepository {
         if (filters.tokenNumber || filters.token) {
             const tokenVal = (filters.tokenNumber || filters.token).trim();
             query.andWhere("(u.TokenNumber LIKE :tokenFilter OR pr.TokenNumber LIKE :tokenFilter)", { tokenFilter: `%${tokenVal}%` });
+        }
+
+        const abhaCondition = abhaPatientCondition(parseAbhaPatientFilter(filters.abha), "u");
+        if (abhaCondition) {
+            query.andWhere(abhaCondition);
         }
 
         if (filters.doctorId) {
@@ -179,6 +185,10 @@ export class PatientRegistrationRepository {
             statsQuery.andWhere("(u.TokenNumber LIKE :tokenFilter OR pr.TokenNumber LIKE :tokenFilter)", { tokenFilter: `%${tokenVal}%` });
         }
 
+        if (abhaCondition) {
+            statsQuery.andWhere(abhaCondition);
+        }
+
         if (filters.doctorId) {
             statsQuery.andWhere(
                 `EXISTS (SELECT 1 FROM Appointments a WHERE a.UserId = u.Id AND a.DoctorId = :doctorId)`,
@@ -189,6 +199,7 @@ export class PatientRegistrationRepository {
         const stats = await statsQuery
             .select("COUNT(pr.Id)", "total")
             .addSelect("SUM(CASE WHEN u.Status = 1 THEN 1 ELSE 0 END)", "active")
+            .addSelect("SUM(CASE WHEN u.RegisteredViaAbha = 1 THEN 1 ELSE 0 END)", "abha")
             .getRawOne();
 
 
@@ -217,6 +228,9 @@ export class PatientRegistrationRepository {
                 allergies: pr.Allergies,
                 medicalHistory: pr.MedicalHistory,
                 tokenNumber: pr.TokenNumber || pr.User?.TokenNumber || null,
+                registeredViaAbha: !!pr.User?.RegisteredViaAbha,
+                abhaNumber: pr.User?.AbhaNumber ?? null,
+                abhaAddress: pr.User?.AbhaAddress ?? null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,
                 insuranceStatus: ins?.Status ?? null,
@@ -238,7 +252,8 @@ export class PatientRegistrationRepository {
             summary: {
                 totalUsers: parseInt(stats.total) || 0,
                 activeUsers: parseInt(stats.active) || 0,
-                inactiveUsers: (parseInt(stats.total) || 0) - (parseInt(stats.active) || 0)
+                inactiveUsers: (parseInt(stats.total) || 0) - (parseInt(stats.active) || 0),
+                abhaPatients: parseInt(stats.abha) || 0
             },
             patients,
             total,

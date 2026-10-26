@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { patientRegistrationService } from "../../services/Organizations/patient-registration.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
+import { parseAbhaPatientFilter } from "../../utils/abha-filter.utils.js";
 
 export class PatientRegistrationController {
 
@@ -85,6 +86,7 @@ export class PatientRegistrationController {
             const gender = req.query.gender as string | undefined;
             const status = req.query.status as string | undefined;
             const doctorId = req.query.doctorId as string | undefined;
+            const abha = parseAbhaPatientFilter(req.query.abha);
 
             if (!orgId) {
                 return res.status(400).json(ApiResponse.error("Organization ID is required."));
@@ -101,7 +103,8 @@ export class PatientRegistrationController {
                 search: search,
                 gender: gender,
                 status: statusBool,
-                doctorId: doctorId
+                doctorId: doctorId,
+                abha: abha
             });
 
 
