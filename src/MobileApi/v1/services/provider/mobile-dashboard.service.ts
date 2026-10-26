@@ -701,9 +701,9 @@ export class MobileDashboardService {
 
         const apptWhere: any = { UserId: patientId };
         if (orgId) apptWhere.OrgId = orgId;
-        if (hospitalId) apptWhere.HospitalId = hospitalId;
+                if (hospitalId && Number(hospitalId) > 0) apptWhere.HospitalId = Number(hospitalId);
         const appointments = await appointmentRepo.find({
-            where: { UserId: patientId },
+            where: apptWhere,
             relations: ["Doctor", "Hospital", "Organization"],
             order: { AppointmentDate: "DESC", StartTime: "DESC" }
         });
@@ -823,7 +823,15 @@ export class MobileDashboardService {
             order: { CreatedAt: "DESC" }
         });
 
-        const mappedAppointments = allPatientAppts.map(a => {
+        let apptsToMap = allPatientAppts;
+        if (hospitalId && Number(hospitalId) > 0) {
+            apptsToMap = allPatientAppts.filter(a => {
+                const aHospId = Number(a.HospitalId || a.Hospital?.Id || 0);
+                return aHospId === Number(hospitalId);
+            });
+        }
+
+        const mappedAppointments = apptsToMap.map(a => {
             const apptId = a.Id;
             const apptIdStr = String(apptId).toLowerCase().trim();
 

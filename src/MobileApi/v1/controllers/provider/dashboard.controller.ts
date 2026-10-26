@@ -164,7 +164,21 @@ export const getPatientOverview = async (req: Request, res: Response) => {
         }
 
         const parsedOrgId = orgId !== undefined && orgId !== null && !isNaN(Number(orgId)) ? Number(orgId) : undefined;
-        const parsedHospitalId = hospitalId !== undefined && hospitalId !== null && !isNaN(Number(hospitalId)) ? Number(hospitalId) : undefined;
+        let parsedHospitalId = hospitalId !== undefined && hospitalId !== null && !isNaN(Number(hospitalId)) && Number(hospitalId) > 0 ? Number(hospitalId) : undefined;
+
+        // If hospitalId was not provided, fallback to the authenticated doctor/provider's hospital
+        if (!parsedHospitalId && (req as any).user?.userId) {
+            try {
+                const docUserId = (req as any).user.userId;
+                const { AppDataSource } = await import("../../../../config/database.js");
+                const rows = await AppDataSource.query("SELECT HospitalId FROM HealthcareProviders WHERE UserId = @0 AND IsDeleted = 0", [docUserId]);
+                if (rows && rows.length > 0 && rows[0].HospitalId) {
+                    parsedHospitalId = Number(rows[0].HospitalId);
+                }
+            } catch (err) {
+                // Ignore fallback error
+            }
+        }
 
         const result = await mobileDashboardService.getPatientOverview(patientId, parsedOrgId, parsedHospitalId);
 

@@ -7,6 +7,7 @@ import { PatientRegistration } from "../../../../models/Organizations/patient-re
 import { Hospital } from "../../../../models/Organizations/hospital.model.js";
 import { HealthcareProvider } from "../../../../models/Organizations/healthcare-provider.model.js";
 import { HealthcareProviderScheduleSlot } from "../../../../models/Organizations/healthcare-provider-schedule-slot.model.js";
+import { PatientAccessConsent } from "../../../../models/Consent/patient-access-consent.model.js";
 import { healthcareProviderRepository } from "../../../../repositories/Organizations/healthcare-provider.repository.js";
 import { pushNotificationService } from "../../../../services/Notifications/push-notification.service.js";
 import { whatsappService } from "../../../../services/Common/whatsapp.service.js";
@@ -49,11 +50,13 @@ export class MobileAppointmentService {
 
         if (isDoctor) {
             statsQuery.where("apt.DoctorId = :doctorId", { doctorId });
-            if (hospitalId && hospitalId > 0) {
+            if (hospitalId && hospitalId > 0 && affiliatedHospitalIds.includes(hospitalId)) {
                 statsQuery.andWhere("apt.HospitalId = :hospitalId", { hospitalId });
+            } else if (affiliatedHospitalIds.length > 0) {
+                statsQuery.andWhere("apt.HospitalId IN (:...affiliatedHospitalIds)", { affiliatedHospitalIds });
             }
             if (orgId && orgId > 0) {
-                statsQuery.andWhere("apt.OrgId = :orgId", { orgId });
+                statsQuery.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
             }
         } else {
             statsQuery.where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
@@ -116,11 +119,13 @@ export class MobileAppointmentService {
 
         if (isDoctor) {
             query.where("apt.DoctorId = :doctorId", { doctorId });
-            if (hospitalId && hospitalId > 0) {
+            if (hospitalId && hospitalId > 0 && affiliatedHospitalIds.includes(hospitalId)) {
                 query.andWhere("apt.HospitalId = :hospitalId", { hospitalId });
+            } else if (affiliatedHospitalIds.length > 0) {
+                query.andWhere("apt.HospitalId IN (:...affiliatedHospitalIds)", { affiliatedHospitalIds });
             }
             if (orgId && orgId > 0) {
-                query.andWhere("apt.OrgId = :orgId", { orgId });
+                query.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
             }
         } else {
             query.where("(apt.DoctorId = :doctorId OR apt.UserId IN (:...allFamilyUserIds))", { doctorId, allFamilyUserIds });
@@ -708,6 +713,53 @@ export class MobileAppointmentService {
             slot.IsBooked = true;
             slot.Status = "Booked";
             await slotRepo.save(slot);
+        }
+
+                // Auto-grant 7 days of medical records access to doctor if patient consented (default true)
+        const shouldGrantAccess = data.shareRecords !== false && data.grantRecordAccess !== false;
+        if (shouldGrantAccess && patientUser?.Id && data.doctorId) {
+            try {
+                const consentRepo = AppDataSource.getRepository(PatientAccessConsent);
+                let consent = await consentRepo.findOne({
+                    where: { PatientId: patientUser.Id, DoctorId: data.doctorId },
+                    order: { Id: "DESC" }
+                });
+
+                const now = new Date();
+                const expires = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+                if (consent) {
+                    consent.Status = "APPROVED";
+                    consent.Duration = "7_DAYS";
+                    consent.DurationMinutes = 10080;
+                    consent.RequestedAt = now;
+                    consent.ApprovedAt = now;
+                    consent.ExpiresAt = expires;
+                    consent.HospitalId = data.hospitalId;
+                    consent.OrganizationId = data.orgId;
+                    consent.Notes = "Auto-granted during appointment booking (7 days)";
+                    consent.UpdatedAt = now;
+                    await consentRepo.save(consent);
+                } else {
+                    consent = consentRepo.create({
+                        PatientId: patientUser.Id,
+                        DoctorId: data.doctorId,
+                        HospitalId: data.hospitalId,
+                        OrganizationId: data.orgId,
+                        Duration: "7_DAYS",
+                        DurationMinutes: 10080,
+                        Status: "APPROVED",
+                        RequestedAt: now,
+                        ApprovedAt: now,
+                        ExpiresAt: expires,
+                        Notes: "Auto-granted during appointment booking (7 days)"
+                    });
+                    await consentRepo.save(consent);
+                }
+                console.log(`[MobileAppointmentService] Auto-granted 7-day record access for patient ${patientUser.Id} to doctor ${data.doctorId}`);
+            } catch (consentErr) {
+                console.error("[MobileAppointmentService] Failed to auto-grant record access:", consentErr);
+            }
         }
 
         if (!requiresOnlinePayment) {

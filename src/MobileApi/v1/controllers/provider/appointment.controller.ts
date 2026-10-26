@@ -74,7 +74,9 @@ export const bookAppointment = async (req: Request, res: Response) => {
             customTreatmentPlans,
             discountAmount,
             includeConsultationFee,
-            consultationFee
+            consultationFee,
+            shareRecords,
+            grantRecordAccess
         } = req.body;
 
         if (!doctorId || hospitalId === undefined || orgId === undefined || !patientPhone) {
@@ -113,7 +115,8 @@ export const bookAppointment = async (req: Request, res: Response) => {
             customTreatmentPlans: Array.isArray(customTreatmentPlans) ? customTreatmentPlans : [],
             discountAmount: discountAmount ? Number(discountAmount) : 0,
             includeConsultationFee: includeConsultationFee !== undefined ? Boolean(includeConsultationFee) : true,
-            consultationFee: consultationFee !== undefined ? Number(consultationFee) : undefined
+            consultationFee: consultationFee !== undefined ? Number(consultationFee) : undefined,
+            shareRecords: shareRecords !== undefined ? Boolean(shareRecords) : (grantRecordAccess !== undefined ? Boolean(grantRecordAccess) : true)
         });
 
         return res.json(ApiResponse.success(result, "Appointment booked successfully."));
@@ -357,7 +360,7 @@ export const getTreatmentPlans = async (req: Request, res: Response) => {
  */
 export const getPatientAppointments = async (req: Request, res: Response) => {
     try {
-        const { patientPhone, userId, orgId } = req.body;
+        const { patientPhone, userId, orgId, hospitalId } = req.body;
         const { Appointment } = await import("../../../../models/Appointments/appointment.model.js");
         const { User } = await import("../../../../models/Account/user.model.js");
         const { AppDataSource } = await import("../../../../config/database.js");
@@ -374,6 +377,9 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
 
         if (userId) {
             qb.where("a.UserId = :userId", { userId });
+        }
+        if (hospitalId && Number(hospitalId) > 0) {
+            qb.andWhere("a.HospitalId = :hospitalId", { hospitalId: Number(hospitalId) });
         } else if (patientPhone) {
             const cleanPhone = String(patientPhone).replace(/\D/g, "");
             const last10 = cleanPhone.slice(-10);
