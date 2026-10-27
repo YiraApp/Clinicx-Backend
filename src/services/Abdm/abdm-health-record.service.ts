@@ -62,6 +62,25 @@ const documentSource = (parties: RecordParties, d: DocumentSource, key: string):
         : { hiType: "HealthDocumentRecord", source: { ...parties, key, date: d.createdAt, title: "Health document", documents: [d] } };
 };
 
+const INVOICEABLE = new Set(["Pending", "PartiallyPaid", "Paid"]);
+
+/**
+ * When a visit's records start: the appointment, or an earlier record made for it (a bill paid in
+ * advance). ABDM shares a care context only inside the consented date range, which ends when the
+ * patient consents, so a visit booked for tomorrow with a bill paid today is dated today.
+ */
+export const visitRecordDate = (v: VisitRecords): Date => {
+    const dates = [
+        v.appointment.start,
+        ...v.medicalRecords.map((r) => r.Date),
+        ...v.prescriptions.map((p) => p.row.Date ?? p.row.CreatedAt),
+        ...v.documents.map((d) => d.createdAt),
+        ...v.bills.map((b) => b.CreatedAt),
+        ...v.immunizations.map((i) => i.AdministeredOn),
+    ].map((d) => (d ? new Date(d) : null)).filter((d): d is Date => d !== null && !Number.isNaN(d.getTime()));
+    return new Date(Math.min(...dates.map((d) => d.getTime())));
+};
+
 /** The records one visit holds, as builder sources. Pure: everything it needs is in [v]. */
 export const visitSources = (v: VisitRecords): SourceOf[] => {
     const out: SourceOf[] = [];
@@ -117,6 +136,8 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
     }
 
     for (const b of v.bills) {
+        // Only an issued bill with items is an invoice: a care context never claims one it can't build
+        if (!INVOICEABLE.has(b.BillStatus) || !(b.BillItems ?? []).length) continue;
         out.push({
             hiType: "Invoice",
             source: {

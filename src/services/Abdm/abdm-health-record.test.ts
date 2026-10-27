@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AbdmHealthRecordService, diagnosticKind, isVitalsRecord, visitSources } from "./abdm-health-record.service.js";
+import { AbdmHealthRecordService, diagnosticKind, isVitalsRecord, visitRecordDate, visitSources } from "./abdm-health-record.service.js";
 import type { VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import { documentContentType, hasConsultationContent, visitStart } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import { fixtureParties } from "./fhir/fhir-fixtures.js";
@@ -137,6 +137,22 @@ test("a consultation record is shared on its own only when something is written 
     assert.equal(hasConsultationContent({ Type: "consultation", ChiefComplaint: "Toothache" }), true);
     assert.equal(hasConsultationContent({ Type: "consultation", Weight: "62" }), true);
     assert.equal(hasConsultationContent({ Type: "consultation", ChiefComplaint: "  ", Diagnosis: "" }), false);
+});
+
+test("only an issued bill with items is an invoice", () => {
+    const bill = visit().bills[0] as any;
+    const invoices = (bills: any[]) => visitSources(visit({ bills })).filter((x) => x.hiType === "Invoice").length;
+    assert.equal(invoices([bill, { ...bill, AppointmentBillId: "b2", BillStatus: "Paid" }]), 2);
+    assert.equal(invoices([{ ...bill, BillStatus: "Draft" }]), 0);
+    assert.equal(invoices([{ ...bill, BillItems: [] }]), 0, "a care context never claims an invoice it can't build");
+});
+
+test("a visit is dated by its earliest record: a bill paid today for tomorrow's appointment is today's", () => {
+    const tomorrow = new Date("2026-10-27T09:30:00+05:30");
+    const paidToday = new Date("2026-10-26T17:26:00+05:30");
+    const v = visit({ appointment: { id: 342, start: tomorrow, end: null, teleconsultation: false }, medicalRecords: [], prescriptions: [], documents: [], immunizations: [], bills: [{ ...(visit().bills[0] as any), CreatedAt: paidToday }] });
+    assert.equal(visitRecordDate(v).getTime(), paidToday.getTime());
+    assert.equal(visitRecordDate(visit({ immunizations: [] })).getTime(), day.getTime(), "otherwise the appointment");
 });
 
 test("immunization input is checked before it is stored", () => {

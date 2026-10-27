@@ -1,5 +1,5 @@
 import type { HiType } from "../fhir/fhir-common.js";
-import { diagnosticKind, visitSources } from "../abdm-health-record.service.js";
+import { diagnosticKind, visitRecordDate, visitSources } from "../abdm-health-record.service.js";
 import { abdmHealthRecordRepository, type AbdmHealthRecordRepository } from "../../../repositories/Abdm/abdm-health-record.repository.js";
 import type { CareContextKind, CareContextRow, CareContextSeed, Hip, M2Store } from "./m2-store.js";
 
@@ -68,7 +68,7 @@ export class CareContextCatalog {
             try {
                 const visit = await this.records.visit(appointmentId, { files: false });
                 const hiTypes = [...new Set(visitSources(visit).map((s) => s.hiType))];
-                seed("visit", appointmentId, visit.appointment.start, careContextDisplay("visit", visit.appointment.start, { teleconsultation: visit.appointment.teleconsultation }), hiTypes);
+                seed("visit", appointmentId, visitRecordDate(visit), careContextDisplay("visit", visit.appointment.start, { teleconsultation: visit.appointment.teleconsultation }), hiTypes);
             } catch (error: any) {
                 console.warn(`[ABDM] visit ${appointmentId} left out of care contexts: ${error?.message}`);
             }

@@ -5,6 +5,7 @@ import { PatientMedicalRecord } from "../../models/Appointments/patient-medical-
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { ClinicalNote } from "../../models/Appointments/clinical-note.model.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
+import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
 import { PatientImmunization } from "../../models/Appointments/patient-immunization.model.js";
 import { DischargeSummary } from "../../models/Appointments/discharge-summary.model.js";
 import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
@@ -115,7 +116,7 @@ export class AbdmHealthRecordRepository {
         if (!appointment) throw new Error(`Appointment ${appointmentId} not found.`);
         const { UserId: patientId, HospitalId: hospitalId } = appointment;
 
-        const [parties, registration, medicalRecords, prescriptionRows, notes, documentRows, bills, immunizations] = await Promise.all([
+        const [parties, registration, medicalRecords, prescriptionRows, notes, documentRows, bills, immunizations, postVisitRows] = await Promise.all([
             this.parties(patientId, appointment.DoctorId, hospitalId),
             AppDataSource.getRepository(PatientRegistration).findOne({ where: { UserId: patientId, HospitalId: hospitalId, IsDeleted: false } }),
             AppDataSource.getRepository(PatientMedicalRecord).find({ where: { AppointmentId: appointmentId }, order: { Date: "ASC" } }),
@@ -133,6 +134,12 @@ export class AbdmHealthRecordRepository {
                 order: { CreatedAt: "ASC" },
             }),
             AppDataSource.getRepository(PatientImmunization).find({ where: { AppointmentId: appointmentId, IsDeleted: false }, order: { AdministeredOn: "ASC" } }),
+            // Files produced after the visit (reports, summaries). Its prescription PDF is left out: the
+            // Prescription bundle already carries the clinic's signed copy.
+            AppDataSource.getRepository(PostVisitDocument).find({
+                where: { AppointmentId: appointmentId, IsDeleted: false, Status: "ACTIVE", DocumentType: Not("PRESCRIPTION") },
+                order: { CreatedAt: "ASC" },
+            }),
         ]);
 
         const prescriptions = await Promise.all(prescriptionRows.map(async (row) => ({
@@ -153,6 +160,17 @@ export class AbdmHealthRecordRepository {
                 createdAt: d.CreatedAt,
             } : null;
         }))).filter((d): d is NonNullable<typeof d> => d !== null);
+        const postVisitDocuments = (await Promise.all(postVisitRows.map(async (d) => {
+            const data = options.files ? await this.tryRead(d.BlobUrl) : Buffer.alloc(0);
+            return data ? {
+                id: `post-visit-document-${d.Id}`,
+                title: d.FileName,
+                category: d.DocumentType,
+                contentType: documentContentType(d.MimeType, d.FileName?.split(".").pop()),
+                data,
+                createdAt: d.GeneratedAt ?? d.CreatedAt,
+            } : null;
+        }))).filter((d): d is NonNullable<typeof d> => d !== null);
 
         return {
             parties,
@@ -166,7 +184,7 @@ export class AbdmHealthRecordRepository {
             medicalRecords,
             prescriptions,
             notes: notes.map((n) => n.Notes ?? "").filter((n) => n.trim()),
-            documents,
+            documents: [...documents, ...postVisitDocuments],
             bills,
             immunizations,
             certificates: options.files ? await this.certificates(immunizations) : new Map(),

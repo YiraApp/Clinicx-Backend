@@ -238,20 +238,44 @@ export class AbdmM2Repository implements M2Store {
 
 export const abdmM2Repository = new AbdmM2Repository();
 
+/** Record tables an unnamed update is followed up in, and whether their rows name a visit. */
+const RECENT_TABLES: Record<string, boolean> = {
+    PatientMedicalRecord: true, PatientPrescription: true, PatientClinicalNotes: true, MedicalDocuments: true,
+    AppointmentBills: true, PatientImmunizations: true, PostVisitDocuments: true, DischargeSummaries: false,
+};
+
 /** Whose a saved record is: a prescription line by its prescription, a visit record by its appointment's patient and hospital. */
+const ownerOf = async (ref: RecordRef): Promise<{ patientId: string; hospitalId: number } | null> => {
+    let { patientId, hospitalId, appointmentId } = ref;
+    if (ref.prescriptionId) {
+        const rx = (await q(`SELECT PatientId, HospitalId, AppointmentId FROM PatientPrescription WHERE Id = @0`, [ref.prescriptionId]))[0];
+        if (!rx) return null;
+        ({ PatientId: patientId, HospitalId: hospitalId } = rx);
+        appointmentId = Number(rx.AppointmentId) || null;
+    }
+    if (appointmentId) {
+        const appointment = (await q(`SELECT UserId, HospitalId FROM Appointments WHERE Id = @0`, [appointmentId]))[0];
+        if (appointment?.UserId && appointment.HospitalId) return { patientId: String(appointment.UserId).toLowerCase(), hospitalId: Number(appointment.HospitalId) };
+    }
+    return patientId && hospitalId ? { patientId: String(patientId).toLowerCase(), hospitalId: Number(hospitalId) } : null;
+};
+
 export const abdmRecordOwners: RecordOwners = {
-    async owner(ref: RecordRef) {
-        let { patientId, hospitalId, appointmentId } = ref;
-        if (ref.prescriptionId) {
-            const rx = (await q(`SELECT PatientId, HospitalId, AppointmentId FROM PatientPrescription WHERE Id = @0`, [ref.prescriptionId]))[0];
-            if (!rx) return null;
-            ({ PatientId: patientId, HospitalId: hospitalId } = rx);
-            appointmentId = Number(rx.AppointmentId) || null;
+    async owners(ref: RecordRef) {
+        if (!ref.recentIn) {
+            const owner = await ownerOf(ref);
+            return owner ? [owner] : [];
         }
-        if (appointmentId) {
-            const appointment = (await q(`SELECT UserId, HospitalId FROM Appointments WHERE Id = @0`, [appointmentId]))[0];
-            if (appointment?.UserId && appointment.HospitalId) return { patientId: String(appointment.UserId).toLowerCase(), hospitalId: Number(appointment.HospitalId) };
+        if (!(ref.recentIn in RECENT_TABLES) || !ref.since) return [];
+        const rows = await q(
+            `SELECT TOP 50 PatientId, HospitalId${RECENT_TABLES[ref.recentIn] ? ", AppointmentId" : ""} FROM ${ref.recentIn} WHERE UpdatedAt >= @0`,
+            [ref.since],
+        );
+        const owners = new Map<string, { patientId: string; hospitalId: number }>();
+        for (const r of rows) {
+            const owner = await ownerOf({ patientId: r.PatientId, hospitalId: Number(r.HospitalId) || null, appointmentId: Number(r.AppointmentId) || null });
+            if (owner) owners.set(`${owner.hospitalId}|${owner.patientId}`, owner);
         }
-        return patientId && hospitalId ? { patientId: String(patientId).toLowerCase(), hospitalId: Number(hospitalId) } : null;
+        return [...owners.values()];
     },
 };
