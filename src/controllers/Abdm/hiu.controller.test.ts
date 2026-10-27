@@ -10,6 +10,9 @@ const CTX = { staffUserId: "11111111-1111-1111-1111-111111111111", hospitalId: 7
 const calls: { method: string; args: unknown[] }[] = [];
 let configured = true;
 let failure: unknown = null;
+/** The hospital each options call was asked for. */
+const optionsAsked: number[] = [];
+const NOT_SET_UP = "This hospital isn't set up as an ABDM HIU facility yet. A system admin can add its HFR facility id under ABDM Facilities.";
 
 const record = (method: string, result: unknown) => async (...args: unknown[]) => {
     calls.push({ method, args });
@@ -19,7 +22,10 @@ const record = (method: string, result: unknown) => async (...args: unknown[]) =
 
 const services: HiuStaffServices = {
     consent: {
-        options: () => ({ configured, purposes: [], hiTypes: [], accessModes: ["VIEW"], defaults: { purpose: "CAREMGT", accessMode: "VIEW" } }),
+        options: async (ctx) => {
+            optionsAsked.push(ctx.hospitalId);
+            return { configured, ...(configured ? {} : { reason: NOT_SET_UP }), purposes: [], hiTypes: [], accessModes: ["VIEW"], defaults: { purpose: "CAREMGT" as const, accessMode: "VIEW" as const } };
+        },
         patientAbha: record("patientAbha", { userId: "u", name: "N", abhaAddress: null, abhaNumberMasked: null }) as any,
         create: record("create", { id: 1, status: "SENDING" }) as any,
         list: record("list", { items: [], total: 0 }) as any,
@@ -50,6 +56,7 @@ const run = async (handler: (req: any, res: any) => Promise<unknown>, req: Parti
 
 const reset = () => {
     calls.length = 0;
+    optionsAsked.length = 0;
     configured = true;
     failure = null;
 };
@@ -102,13 +109,23 @@ test("while the HIU is not set up, options still answers (configured:false) and 
     const options = await run(c.options);
     assert.equal(options.statusCode, 200);
     assert.equal(options.body.data.configured, false);
+    assert.equal(options.body.data.reason, NOT_SET_UP);
     for (const handler of [c.create, c.list, c.detail, c.refreshStatus, c.patientAbha, c.records, c.record, c.requestRecords]) {
         const res = await run(handler, { params: { id: "1", userId: "u" } });
         assert.equal(res.statusCode, 503);
         assert.equal(res.body.data.kind, "not-configured");
+        assert.equal(res.body.message, NOT_SET_UP, "the message says this hospital is not set up as an HIU");
+        assert.doesNotMatch(res.body.message, /expired/i);
         assert.equal(res.headers["cache-control"], "no-store");
     }
     assert.equal(calls.length, 0);
+});
+
+test("whether the HIU is set up is asked for the hospital the access guard verified", async () => {
+    reset();
+    await run(c.options);
+    await run(c.list, { body: { hospitalId: 99 }, query: { hospitalId: "99" } });
+    assert.deepEqual(optionsAsked, [CTX.hospitalId, CTX.hospitalId]);
 });
 
 test("without the access guard's context nothing runs", async () => {

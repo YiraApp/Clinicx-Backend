@@ -139,8 +139,9 @@ const newRequestInput = (body: any): NewConsentRequestInput => ({
 });
 
 /**
- * The staff API's handlers over [services]. Every handler but options answers 503 not-configured
- * while the HIU settings are missing (plan D1), before any work.
+ * The staff API's handlers over [services]. Every handler but options answers 503 not-configured,
+ * before any work, while the server cannot act as an HIU or the hospital has no HIU id (plan D1;
+ * the message says which).
  */
 export const createHiuController = (services: () => Promise<HiuStaffServices> = hiuServices) => {
     const handle = (work: (s: HiuStaffServices, ctx: StaffContext, req: Request, res: Response) => Promise<unknown>, gate = true): Handler =>
@@ -150,7 +151,10 @@ export const createHiuController = (services: () => Promise<HiuStaffServices> = 
                 const ctx = hiuStaffContext(req);
                 if (!ctx) throw new HiuError("forbidden", "Your access to ABDM record requests could not be confirmed.");
                 const s = await services();
-                if (gate && !s.consent.options().configured) throw hiuNotConfiguredError();
+                if (gate) {
+                    const options = await s.consent.options(ctx);
+                    if (!options.configured) throw options.reason ? new HiuError("not-configured", options.reason) : hiuNotConfiguredError();
+                }
                 return await work(s, ctx, req, res);
             } catch (error) {
                 return sendHiuError(res, error);
@@ -158,7 +162,7 @@ export const createHiuController = (services: () => Promise<HiuStaffServices> = 
         };
 
     return {
-        options: handle(async (s, _ctx, _req, res) => res.json(ApiResponse.success(s.consent.options())), false),
+        options: handle(async (s, ctx, _req, res) => res.json(ApiResponse.success(await s.consent.options(ctx))), false),
 
         patientAbha: handle(async (s, ctx, req, res) =>
             res.json(ApiResponse.success(await s.consent.patientAbha(ctx, String(req.params.userId ?? ""))))),

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import { abdmConfig } from "../../config/abdm.config.js";
 import { abdmCallbackAuth, type AbdmCallbackAuth } from "../../services/Abdm/abdm-callback-auth.service.js";
+import { abdmFacilities, type AbdmFacilityDirectory } from "../../services/Abdm/abdm-facilities.service.js";
 import type { CallbackHeaders, HiuConsentService } from "../../services/Abdm/hiu/hiu-consent.service.js";
 import type { HiuDataFlowService } from "../../services/Abdm/hiu/hiu-data-flow.service.js";
 import { hiuServices } from "./hiu.controller.js";
@@ -10,9 +10,10 @@ import { hiuServices } from "./hiu.controller.js";
  * HIPs' data push (POST /api/v3/hiu/data-push/:pushToken).
  *
  * Gateway callbacks: the bearer must be ABDM's gateway token (signature, expiry and the client
- * pin), REQUEST-ID must be present, and X-HIU-ID, which the spec sends on all five, must name this
- * HIU. Then the callback is answered 200 {} at once and handed to its service without waiting:
- * the services match it to our stored REQUEST-ID and never throw.
+ * pin), REQUEST-ID must be present, and X-HIU-ID, which the spec sends on all five, must name the
+ * HIU of one of this deployment's hospitals (AbdmFacilities). Then the callback is answered 200 {}
+ * at once and handed to its service without waiting: the services match it to our stored
+ * REQUEST-ID, take it only when that request was raised as the same HIU, and never throw.
  *
  * Data push: the bearer is the HIP's own gateway token, so its signature and expiry are checked
  * without the gateway client pin. Any ABDM client can hold such a token, so the push token in the
@@ -32,8 +33,8 @@ export type HiuCallbackServices = {
 export interface HiuCallbackDeps {
     auth: Pick<AbdmCallbackAuth, "verify">;
     services: () => Promise<HiuCallbackServices>;
-    /** The configured HIU id; empty while the HIU is not set up, which refuses every callback. */
-    hiuId: () => string;
+    /** The hospitals' HIUs: a callback whose X-HIU-ID names none of them is refused. */
+    directory: Pick<AbdmFacilityDirectory, "hiuById">;
 }
 
 const header = (req: Request, name: string): string | null => {
@@ -109,7 +110,7 @@ const dispatch = (services: HiuCallbackServices, name: CallbackName, body: any, 
 const defaultDeps: HiuCallbackDeps = {
     auth: abdmCallbackAuth,
     services: hiuServices,
-    hiuId: () => abdmConfig.hiuId,
+    directory: abdmFacilities,
 };
 
 export const createHiuCallbackController = (deps: HiuCallbackDeps = defaultDeps) => {
@@ -128,10 +129,16 @@ export const createHiuCallbackController = (deps: HiuCallbackDeps = defaultDeps)
         if (!requestId) {
             return res.status(400).json(badRequest("REQUEST-ID header is required"));
         }
-        const ours = deps.hiuId();
         const hiuId = header(req, "x-hiu-id");
-        if (!ours || hiuId !== ours) {
-            console.warn(`${label} refused: X-HIU-ID ${hiuId ? "names another HIU" : "is missing"}${ours ? "" : " (ABDM_HIU_ID is not set)"}`);
+        let hiu;
+        try {
+            hiu = hiuId ? await deps.directory.hiuById(hiuId) : null;
+        } catch (error: any) {
+            console.error(`${label} X-HIU-ID could not be checked: ${error?.code ?? error?.name ?? "error"}`);
+            return res.status(500).json({ error: { code: "500", message: "The callback could not be taken. Send it again." } });
+        }
+        if (!hiu) {
+            console.warn(`${label} refused: X-HIU-ID ${hiuId ? `${safeValue(hiuId)} is no hospital's HIU here` : "is missing"}`);
             return res.status(400).json(badRequest("X-HIU-ID does not name this HIU"));
         }
         const body = req.body;

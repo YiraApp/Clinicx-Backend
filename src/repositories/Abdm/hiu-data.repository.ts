@@ -74,6 +74,7 @@ export const toArtefact = (row: any): HiuDataArtefact => ({
     consentArtefactId: row.ConsentArtefactId,
     consentRequestId: row.ConsentRequestId ?? null,
     hospitalId: Number(row.HospitalId),
+    hiuId: row.HiuId ?? null,
     hipId: row.HipId ?? null,
     status: row.Status,
     dateFrom: dateOrNull(row.DateFrom),
@@ -136,7 +137,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
 
     async findArtefact(artefactDbId: number): Promise<HiuDataArtefact | null> {
         const rows = rowsOf(await this.query(
-            `SELECT a.Id, a.ConsentArtefactId, r.ConsentRequestId, a.HospitalId, a.HipId, a.Status, a.DateFrom, a.DateTo,
+            `SELECT a.Id, a.ConsentArtefactId, r.ConsentRequestId, r.HiuId, a.HospitalId, a.HipId, a.Status, a.DateFrom, a.DateTo,
                     a.DataEraseAt, a.FetchedAt, a.CareContexts, a.RecordsPurgedAt
              FROM AbdmHiuConsentArtefacts a
              LEFT JOIN AbdmHiuConsentRequests r ON r.Id = a.ConsentRequestFk

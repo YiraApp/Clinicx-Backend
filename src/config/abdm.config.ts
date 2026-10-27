@@ -17,7 +17,7 @@ const isDataKeyId = (value: string): boolean => /^[A-Za-z0-9_-]{1,32}$/.test(val
  * character set, short enough that base + "/api/v3/hiu/data-push/" + a 64-character token stays
  * within ABDM's 255 characters (hiu-enums DATA_PUSH_URL_PATTERN; hiu-data-flow.service.ts).
  */
-const isDataPushBase = (value: string): boolean => value.length <= 255 - 22 - 64 && /^https?:\/\/[a-zA-Z0-9_\-@,.:=?/&]+$/.test(value);
+export const isDataPushBase = (value: string): boolean => value.length <= 255 - 22 - 64 && /^https?:\/\/[a-zA-Z0-9_\-@,.:=?/&]+$/.test(value);
 
 export const abdmConfig = {
     get clientId(): string {
@@ -78,21 +78,23 @@ export const abdmConfig = {
     // ---- Milestone 3: ClinicX as a Health Information User (HIU) ----
 
     /**
-     * The HIU service id sent as X-HIU-ID and consent.hiu.id. Kept separate from ABDM_HIP_ID and
-     * never defaulted to it: while it is empty every HIU endpoint answers not-configured.
+     * Legacy: the one HIU id of the deployment, from before each hospital requested records as its
+     * own HFR facility (AbdmFacilities.HiuId, else its HipId). Read ONLY by the startup migration,
+     * to fill in the HIU id of requests raised under it; no call or callback uses it.
      */
     get hiuId(): string {
         return env("ABDM_HIU_ID");
     },
 
-    /** consent.hiu.name. Defaults to the HIP name. */
+    /** Legacy, like hiuId: no longer read (the HIU's name is its facility's name). Defaults to the HIP name. */
     get hiuName(): string {
         return env("ABDM_HIU_NAME") || env("ABDM_HIP_NAME");
     },
 
     /**
      * Public origin HIPs push encrypted records to (POST {base}/api/v3/hiu/data-push/{token}), with
-     * no trailing slash. In dev the ngrok domain; deployed, the backend host.
+     * no trailing slash. In dev the ngrok domain; deployed, the backend host. One for the whole
+     * deployment; when empty, the bridge URL (AbdmSettings) is used.
      */
     get dataPushBaseUrl(): string {
         return withoutTrailingSlash(env("ABDM_DATA_PUSH_BASE_URL"));
@@ -136,11 +138,12 @@ export const abdmConfig = {
     },
 
     /**
-     * The HIU id, a 32-byte data key with a usable key id, and a usable push address are all set.
-     * Checked up front so a consent is never raised whose records could not then be requested.
+     * The deployment can act as an HIU: a 32-byte data key with a usable key id, and a push address
+     * that is usable when set (left empty, the bridge URL is used, checked where it is read). Which
+     * HIU id a hospital asks as is per hospital (AbdmFacilities), not part of this.
      */
     get hiuConfigured(): boolean {
-        return this.hiuId.length > 0 && isDataKey(this.hiuDataKey) && isDataKeyId(this.hiuDataKeyId) && isDataPushBase(this.dataPushBaseUrl);
+        return isDataKey(this.hiuDataKey) && isDataKeyId(this.hiuDataKeyId) && (!this.dataPushBaseUrl || isDataPushBase(this.dataPushBaseUrl));
     },
 
     get isConfigured(): boolean {

@@ -108,7 +108,7 @@ beforeEach(() => {
     failNextOnShare = false;
     // Yira Hospitals (19) runs Scan and Share as Yira-HIP
     service = new AbhaShareService(store, gateway, () => now, {
-        byScanShareHipId: async (id) => (id === "Yira-HIP" ? { hospitalId: 19, hipId: null, name: "Yira.ai", scanShareHipId: "Yira-HIP", autoLink: false } : null),
+        byScanShareHipId: async (id) => (id === "Yira-HIP" ? { hospitalId: 19, hipId: null, name: "Yira.ai", scanShareHipId: "Yira-HIP", hiuId: null, autoLink: false } : null),
     });
 });
 

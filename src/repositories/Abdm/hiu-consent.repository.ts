@@ -125,6 +125,7 @@ export class HiuConsentRepository implements HiuConsentStore {
         const saved = await this.requests.save(this.requests.create({
             InitRequestId: row.initRequestId,
             HospitalId: row.hospitalId,
+            HiuId: row.hiuId,
             OrganizationId: row.organizationId,
             StaffUserId: row.staffUserId,
             StaffName: row.staffName ? row.staffName.slice(0, 200) : null,

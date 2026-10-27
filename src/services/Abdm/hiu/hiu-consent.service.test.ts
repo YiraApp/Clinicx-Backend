@@ -1,6 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "crypto";
+import { AbdmFacilityDirectory } from "../abdm-facilities.service.js";
 import { AbdmApiError, type AbdmCall } from "../abdm-gateway.service.js";
 import { atRestKeysFrom, open } from "./hiu-at-rest.js";
 import type { HiuAuditEventInput } from "./hiu-audit.js";
@@ -13,6 +14,7 @@ import {
     type ArtefactWithTransfer,
     type ConsentRequestRow,
     type HiuConsentStore,
+    type HiuDirectory,
     type HiuSettings,
     type NewConsentRequestInput,
     type StaffContext,
@@ -22,6 +24,11 @@ const PATIENT = "11111111-1111-1111-1111-111111111111";
 const OTHER_PATIENT = "33333333-3333-3333-3333-333333333333";
 const STAFF = "22222222-2222-2222-2222-222222222222";
 const HIU_ID = "IN3610001174";
+/** Hospital 20's own HIU (another tenant on the same deployment). */
+const HIU_B = "IN3610002222";
+const B_PATIENT = "44444444-4444-4444-4444-444444444444";
+const B_CONSENT_REQUEST = "eeeeeeee-0000-4000-8000-00000000000e";
+const B_ARTEFACT = "ffffffff-0000-4000-8000-00000000000f";
 const ARTEFACT_A = "aaaaaaaa-0000-4000-8000-00000000000a";
 const ARTEFACT_B = "bbbbbbbb-0000-4000-8000-00000000000b";
 const CONSENT_REQUEST = "cccccccc-0000-4000-8000-00000000000c";
@@ -32,6 +39,9 @@ const keys = atRestKeysFrom({ key: randomBytes(32).toString("base64"), keyId: "k
 let now: number;
 let ids: number;
 let settings: HiuSettings;
+/** Each hospital's HIU, as AbdmFacilities gives it. */
+let hius: Map<number, { id: string; hospitalId: number; name: string }>;
+let pushBase: string;
 let requests: (ConsentRequestRow & { organizationId: number | null })[];
 let artefacts: ArtefactWithTransfer[];
 let records: { artefactFk: number }[];
@@ -51,7 +61,13 @@ let service: HiuConsentService;
 const patients = new Map([
     [PATIENT, { hospitalId: 19, name: "Asha Kumari", abhaAddress: "asha.kumari@sbx", abhaNumber: "91-1111-2222-3333" }],
     [OTHER_PATIENT, { hospitalId: 19, name: "No Abha", abhaAddress: null as string | null, abhaNumber: null as string | null }],
+    [B_PATIENT, { hospitalId: 20, name: "Ravi B", abhaAddress: "ravi.b@sbx" as string | null, abhaNumber: "91-4444-5555-6666" as string | null }],
 ]);
+
+const directory: HiuDirectory = {
+    async hiu(hospitalId) { return (hospitalId && hius.get(hospitalId)) || null; },
+    async hiuById(hiuId) { return [...hius.values()].find((hiu) => hiu.id === hiuId) ?? null; },
+};
 
 const withName = (row: ConsentRequestRow): ConsentRequestRow => ({
     ...row,
@@ -254,7 +270,9 @@ const onFetchBody = (requestId: string, consentId: string, overrides: Record<str
 beforeEach(() => {
     now = Date.parse("2026-10-26T06:00:00.000Z");
     ids = 100;
-    settings = { configured: true, hiuId: HIU_ID, hiuName: "A A Hospital", abhaAddressSuffix: "@sbx" };
+    settings = { configured: true, abhaAddressSuffix: "@sbx" };
+    hius = new Map([[19, { id: HIU_ID, hospitalId: 19, name: "A A Hospital" }], [20, { id: HIU_B, hospitalId: 20, name: "B B Clinic" }]]);
+    pushBase = "https://clinic.example.org";
     requests = [];
     artefacts = [];
     records = [];
@@ -274,6 +292,8 @@ beforeEach(() => {
         audit: { record: async (event) => { audits.push(event); } },
         clock: () => now,
         settings: () => settings,
+        directory,
+        pushBaseUrl: async () => pushBase,
         atRestKeys: () => keys,
         newId: () => `req-${++next}`,
         requester: {
@@ -297,15 +317,16 @@ const assertRefused = async (promise: Promise<unknown>, kind: string, status: nu
 
 // ---- options and patient ----
 
-test("options list ABDM's purposes, the eight HI types and access modes, with the defaults", () => {
-    const options = service.options();
+test("options list ABDM's purposes, the eight HI types and access modes, with the defaults", async () => {
+    const options = await service.options(ctx);
     assert.equal(options.configured, true);
+    assert.equal(options.reason, undefined);
     assert.deepEqual(options.purposes.map((p) => p.code), ["CAREMGT", "BTG", "PUBHLTH", "HPAYMT", "DSRCH", "PATRQT"]);
     assert.equal(options.hiTypes.length, 8);
     assert.deepEqual(options.accessModes, ["VIEW", "STORE", "STREAM", "QUERY"]);
     assert.deepEqual(options.defaults, { purpose: "CAREMGT", accessMode: "VIEW" });
     settings.configured = false;
-    assert.equal(service.options().configured, false);
+    assert.equal((await service.options(ctx)).configured, false);
 });
 
 test("patientAbha returns the stored address and a masked number, only for this hospital's patients", async () => {
@@ -874,7 +895,7 @@ test("callback handlers never throw, even when the store fails", async () => {
         findRequestByConsentRequestId: async () => { throw new Error("db down"); },
         findArtefactByFetchRequestId: async () => { throw new Error("db down"); },
         findRequestByStatusRequestId: async () => { throw new Error("db down"); },
-    }, { gateway, audit: { record: async () => {} }, clock: () => now, settings: () => settings });
+    }, { gateway, audit: { record: async () => {} }, clock: () => now, settings: () => settings, directory, pushBaseUrl: async () => pushBase });
     await broken.onInit({ response: { requestId: "x" } }, headers("a"));
     await broken.onStatus({ response: { requestId: "x" } }, headers("a"));
     await broken.notify({ notification: { consentRequestId: CONSENT_REQUEST, status: "GRANTED", consentArtefacts: [] } }, headers("a"));
@@ -937,4 +958,172 @@ test("no log line carries the ABHA address or a care-context reference", async (
     }
     assert.ok(lines.length > 0);
     assert.ok(!lines.some((line) => /asha\.kumari|CC-SECRET|PR-1|sig==/.test(line)), lines.join("\n"));
+});
+
+// ---- per tenant: each hospital asks as its own HIU, and callbacks only reach requests raised as it ----
+
+test("options say per hospital whether it can raise requests, and why not", async () => {
+    hius.delete(20);
+    const notSetUp = await service.options(otherHospital);
+    assert.equal(notSetUp.configured, false);
+    assert.match(notSetUp.reason!, /isn't set up as an ABDM HIU facility/);
+    assert.doesNotMatch(notSetUp.reason!, /expired/i);
+    assert.equal((await service.options(ctx)).configured, true, "another hospital's HIU does not make this one configured, nor the other way");
+
+    pushBase = "";
+    const noPush = await service.options(ctx);
+    assert.equal(noPush.configured, false);
+    assert.match(noPush.reason!, /push address/);
+});
+
+test("a hospital without an HIU id gets 503 not-configured: nothing stored, no call, never another hospital's id", async () => {
+    hius.delete(20);
+    patients.get(B_PATIENT)!.hospitalId = 20;
+    await assert.rejects(service.create(otherHospital, input({ patientUserId: B_PATIENT })), (error: any) => {
+        assert.ok(error instanceof HiuError);
+        assert.equal(error.kind, "not-configured");
+        assert.equal(error.status, 503);
+        assert.match(error.message, /This hospital isn't set up as an ABDM HIU facility/);
+        assert.doesNotMatch(error.message, /expired/i);
+        return true;
+    });
+    assert.equal(calls.length, 0);
+    assert.equal(requests.length, 0);
+    // An entry for a hospital that answers with another hospital's HIU is refused too.
+    hius.set(20, { id: HIU_ID, hospitalId: 19, name: "A A Hospital" });
+    await assertRefused(service.create(otherHospital, input({ patientUserId: B_PATIENT })), "not-configured", 503);
+    assert.equal(calls.length, 0);
+});
+
+test("an HIU id two hospitals would answer to (one's HIU id, the other's HIP id) is used by neither", async () => {
+    // Rows written around save()'s check (two overlapping admin saves, a direct edit): the indexes
+    // are per column, so nothing in the database stops it.
+    const facilities = new AbdmFacilityDirectory({
+        async list() {
+            return [
+                { hospitalId: 19, hipId: null, hiuId: HIU_ID, name: "A A Hospital", scanShareHipId: null, autoLink: false },
+                { hospitalId: 20, hipId: HIU_ID, hiuId: null, name: "B B Clinic", scanShareHipId: null, autoLink: false },
+            ];
+        },
+        async save() {},
+    });
+    const shared = new HiuConsentService(store, {
+        gateway,
+        audit: { record: async (event) => { audits.push(event); } },
+        clock: () => now,
+        settings: () => settings,
+        directory: facilities,
+        pushBaseUrl: async () => pushBase,
+        atRestKeys: () => keys,
+        newId: () => "req-shared",
+    });
+    for (const staff of [ctx, otherHospital]) {
+        const options = await shared.options(staff);
+        assert.equal(options.configured, false, `hospital ${staff.hospitalId}`);
+        assert.match(options.reason!, /isn't set up as an ABDM HIU facility/);
+    }
+    await assertRefused(shared.create(ctx, input()), "not-configured", 503);
+    await assertRefused(shared.create(otherHospital, input({ patientUserId: B_PATIENT })), "not-configured", 503);
+    assert.equal(calls.length, 0);
+    assert.equal(requests.length, 0);
+});
+
+/** Raises a request at hospital 20 (HIU_B) and lets on-init answer it as HIU_B. */
+const raisedAtB = async (): Promise<ConsentRequestRow> => {
+    const summary = await service.create(otherHospital, input({ patientUserId: B_PATIENT }));
+    const row = requests.find((r) => r.id === summary.id)!;
+    await service.onInit({ consentRequest: { id: B_CONSENT_REQUEST }, error: null, response: { requestId: row.initRequestId } }, { requestId: "cb-init-b", hiuId: HIU_B, timestamp: null });
+    return row;
+};
+
+test("two hospitals raise requests each as its own HIU: consent.hiu, requester and the stored HIU id never cross", async () => {
+    const a = await raised();
+    const b = await raisedAtB();
+    assert.equal(a.hiuId, HIU_ID);
+    assert.equal(b.hiuId, HIU_B);
+    const [initA, initB] = calls.filter(({ call }) => call.path.endsWith("/request/init")).map(({ call }) => (call.body as any).consent);
+    assert.deepEqual(initA.hiu, { id: HIU_ID, name: "A A Hospital" });
+    assert.deepEqual(initB.hiu, { id: HIU_B, name: "B B Clinic" });
+    assert.equal(initB.requester.identifier.value, HIU_B);
+    assert.equal(b.status, "REQUESTED");
+
+    await service.refreshStatus(otherHospital, b.id);
+    await service.refreshStatus(ctx, a.id);
+    const statuses = calls.filter(({ call }) => call.path.endsWith("/request/status")).map(({ call }) => call.headers?.["X-HIU-ID"]);
+    assert.deepEqual(statuses, [HIU_B, HIU_ID]);
+});
+
+test("a request keeps the HIU id it was raised as, even after its hospital's id changes", async () => {
+    const a = await raised();
+    hius.set(19, { id: "IN3610009999", hospitalId: 19, name: "A A Hospital" });
+    await service.refreshStatus(ctx, a.id);
+    assert.equal(calls.at(-1)!.call.headers?.["X-HIU-ID"], HIU_ID);
+    assert.equal(requests.find((r) => r.id === a.id)!.hiuId, HIU_ID);
+});
+
+test("a callback whose X-HIU-ID names hospital A's facility cannot update hospital B's request", async () => {
+    const b = await raisedAtB();
+    const asA = (requestId: string) => ({ requestId, hiuId: HIU_ID, timestamp: null });
+    const before = calls.length;
+
+    // on-init for B's init REQUEST-ID, sent as A: dropped.
+    const second = await service.create(otherHospital, input({ patientUserId: B_PATIENT, purposeCode: "PATRQT" }));
+    const secondRow = requests.find((r) => r.id === second.id)!;
+    await service.onInit({ consentRequest: { id: "dddddddd-0000-4000-8000-00000000000d" }, error: null, response: { requestId: secondRow.initRequestId } }, asA("x-init"));
+    assert.equal(secondRow.status, "SENDING");
+    assert.equal(secondRow.consentRequestId, null);
+    assert.deepEqual([audits.at(-1)!.event, audits.at(-1)!.outcome, audits.at(-1)!.detail], ["ON_INIT", "IGNORED", "HIU mismatch"]);
+
+    // on-status as A: dropped.
+    await service.refreshStatus(otherHospital, b.id);
+    const statusId = calls.at(-1)!.call.requestId!;
+    await service.onStatus({ consentRequest: { id: B_CONSENT_REQUEST, status: "DENIED" }, response: { requestId: statusId } }, asA("x-status"));
+    assert.equal(b.status, "REQUESTED");
+
+    // notify GRANTED as A: nothing stored, acknowledged or fetched.
+    const callsBeforeNotify = calls.length;
+    await service.notify({ notification: { consentRequestId: B_CONSENT_REQUEST, status: "GRANTED", consentArtefacts: [{ id: B_ARTEFACT }] } }, asA("x-notify"));
+    assert.equal(artefacts.length, 0);
+    assert.equal(b.status, "REQUESTED");
+    assert.equal(calls.length, callsBeforeNotify, "no on-notify, no fetch");
+    assert.deepEqual([audits.at(-1)!.outcome, audits.at(-1)!.detail, audits.at(-1)!.hospitalId], ["IGNORED", "HIU mismatch", 20]);
+
+    // As B it goes through, and the fetch is sent as B.
+    await service.notify({ notification: { consentRequestId: B_CONSENT_REQUEST, status: "GRANTED", consentArtefacts: [{ id: B_ARTEFACT }] } }, { requestId: "b-notify", hiuId: HIU_B, timestamp: null });
+    assert.equal(b.status, "GRANTED");
+    const fetch = calls.at(-1)!.call;
+    assert.equal(fetch.path, "/api/hiecm/consent/v3/fetch");
+    assert.equal(fetch.headers?.["X-HIU-ID"], HIU_B);
+
+    // on-fetch as A: nothing stored, no records asked for; as B: stored.
+    await service.onFetch(onFetchBody(fetchRequestIdOf(B_ARTEFACT), B_ARTEFACT), asA("x-fetch"));
+    assert.equal(artefacts[0]!.fetchedAt, null);
+    assert.deepEqual(requested, []);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(B_ARTEFACT), B_ARTEFACT), { requestId: "b-fetch", hiuId: HIU_B, timestamp: null });
+    assert.ok(artefacts[0]!.fetchedAt);
+    assert.deepEqual(requested, [artefacts[0]!.id]);
+
+    // A revocation as A, naming only B's artefact, ends nothing.
+    await service.notify({ notification: { status: "REVOKED", consentArtefacts: [{ id: B_ARTEFACT }] } }, asA("x-revoke"));
+    assert.equal(artefacts[0]!.status, "GRANTED");
+    assert.ok(calls.length > before);
+});
+
+test("a request with no HIU id on record is never asked about or fetched as another HIU", async () => {
+    const a = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    const row = requests.find((r) => r.id === a.id)!;
+    row.hiuId = null;
+    await assertRefused(service.refreshStatus(ctx, a.id), "conflict", 409);
+    // Its fetch was refused; the sweep does not ask again without an HIU id.
+    const artefact = artefacts.find((x) => x.consentArtefactId === ARTEFACT_A)!;
+    artefact.fetchRequestId = null;
+    now += 10 * 60_000;
+    const before = calls.length;
+    assert.equal(await service.retryFetches(), 0);
+    assert.equal(calls.length, before);
+    // And no callback can match it.
+    await service.onStatus({ consentRequest: { id: CONSENT_REQUEST, status: "REVOKED" }, response: { requestId: "none" } }, headers("cb"));
+    await notify("REVOKED", [ARTEFACT_A], "revoke-1");
+    assert.equal(artefact.status, "GRANTED");
 });

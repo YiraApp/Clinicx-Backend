@@ -1,9 +1,11 @@
 import { randomUUID } from "crypto";
-import { abdmConfig } from "../../../config/abdm.config.js";
+import { abdmConfig, isDataPushBase } from "../../../config/abdm.config.js";
 import { hiuAuditRepository } from "../../../repositories/Abdm/hiu-audit.repository.js";
+import type { AbdmFacilityDirectory, Hiu } from "../abdm-facilities.service.js";
 import { AbdmApiError, abdmGatewayService, isOutcomeUnknown, normalizeAbdmCode, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import { atRestKeysFromConfig, seal, type AtRestKeys } from "./hiu-at-rest.js";
 import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, notifyAuditEvent, type HiuAudit } from "./hiu-audit.js";
+import { deploymentPushBaseUrl } from "./hiu-data-flow.service.js";
 import {
     HIU_ACCESS_MODES,
     HIU_DEFAULT_FREQUENCY,
@@ -12,6 +14,7 @@ import {
     HIU_PURPOSE_REF_URI,
     HiuError,
     abdmDateTime,
+    hiuFacilityNotConfiguredError,
     hiuNotConfiguredError,
     isAbhaAddress,
     isAccessMode,
@@ -40,6 +43,10 @@ import {
  *   consent/fetch (REQUEST-ID stored first)                             ──► on-fetch: what was granted
  *   and hand the artefact to the data-flow service (HealthInformationRequester).
  *
+ * Per tenant: a request is raised as its hospital's HIU id (AbdmFacilities: HiuId, else HipId),
+ * stored on the row; status, fetch and the data flow then use the row's id, and a callback is
+ * taken only when its X-HIU-ID is that same id. A hospital without one cannot raise requests.
+ *
  * Every callback answer is matched to the REQUEST-ID we stored before the call; anything unknown is
  * logged and dropped. Callbacks can repeat and arrive out of order, so every handler is idempotent and
  * no handler throws. Logs carry ids, statuses and counts: never ABHA addresses, care-context
@@ -54,7 +61,10 @@ export type StaffContext = { staffUserId: string; hospitalId: number; organizati
 export type CallbackHeaders = { requestId: string | null; hiuId: string | null; timestamp: string | null };
 
 export interface HiuOptions {
+    /** The server can act as an HIU and this hospital has an HIU id. */
     configured: boolean;
+    /** Why not, for staff; only when configured is false. */
+    reason?: string;
     purposes: { code: string; text: string }[];
     hiTypes: { code: string; label: string }[];
     accessModes: string[];
@@ -138,6 +148,8 @@ export interface ConsentRequestRow {
     consentRequestId: string | null;
     statusRequestId: string | null;
     hospitalId: number;
+    /** The HIU id the request was raised as (X-HIU-ID of every later call about it); null only on a request from before it was stored. */
+    hiuId: string | null;
     organizationId: number | null;
     staffUserId: string;
     staffName: string | null;
@@ -285,16 +297,21 @@ export interface HiuConsentStore {
     listEvents(input: { hospitalId: number; consentRequestId: string | null; requestIds: string[]; artefactIds: string[] }): Promise<{ at: Date; event: string; outcome: string }[]>;
 }
 
-/** The settings the consent side needs; read from abdmConfig unless a test injects them. */
+/** The deployment-wide settings the consent side needs; read from abdmConfig unless a test injects them. */
 export interface HiuSettings {
+    /** The deployment can act as an HIU (ABDM client, records key); which HIU id is per hospital. */
     configured: boolean;
-    hiuId: string;
-    hiuName: string;
     abhaAddressSuffix: string;
 }
 
+export type HiuDirectory = Pick<AbdmFacilityDirectory, "hiu" | "hiuById">;
+
 export interface HiuConsentDeps {
     gateway?: Pick<AbdmGatewayService, "call">;
+    /** Each hospital's HIU (AbdmFacilities); the deployment's directory unless a test injects one. */
+    directory?: HiuDirectory;
+    /** The records push base (ABDM_DATA_PUSH_BASE_URL, else the bridge URL), checked before a request is raised. */
+    pushBaseUrl?: () => Promise<string>;
     audit?: HiuAudit;
     clock?: () => number;
     requester?: HealthInformationRequester | null;
@@ -442,11 +459,16 @@ const maskAbhaNumber = (abhaNumber: string | null): string | null => {
 
 const defaultSettings = (): HiuSettings => ({
     // The client credentials too: without them the init could not be sent, so nothing is stored.
-    configured: abdmConfig.hiuConfigured && abdmConfig.isConfigured && SERVICE_ID_PATTERN.test(abdmConfig.hiuId),
-    hiuId: abdmConfig.hiuId,
-    hiuName: abdmConfig.hiuName,
+    configured: abdmConfig.hiuConfigured && abdmConfig.isConfigured,
     abhaAddressSuffix: abdmConfig.abhaAddressSuffix,
 });
+
+/** The deployment's facility directory, loaded on first use so this module loads without a database. */
+const facilityDirectory = async (): Promise<HiuDirectory> => (await import("../abdm-facilities.service.js")).abdmFacilities;
+const defaultDirectory: HiuDirectory = {
+    hiu: async (hospitalId) => (await facilityDirectory()).hiu(hospitalId),
+    hiuById: async (hiuId) => (await facilityDirectory()).hiuById(hiuId),
+};
 
 /**
  * A consent/request/init that got no answer (a timeout, or the connection dropped): ABDM may still
@@ -482,6 +504,8 @@ export class HiuConsentService {
     private readonly audit: HiuAudit;
     private readonly clock: () => number;
     private readonly settings: () => HiuSettings;
+    private readonly directory: HiuDirectory;
+    private readonly pushBaseUrl: () => Promise<string>;
     private readonly atRestKeys: () => AtRestKeys | null;
     private readonly newId: () => string;
     private requester: HealthInformationRequester | null;
@@ -492,6 +516,8 @@ export class HiuConsentService {
         this.audit = deps.audit ?? hiuAuditRepository;
         this.clock = deps.clock ?? Date.now;
         this.settings = deps.settings ?? defaultSettings;
+        this.directory = deps.directory ?? defaultDirectory;
+        this.pushBaseUrl = deps.pushBaseUrl ?? deploymentPushBaseUrl;
         this.atRestKeys = deps.atRestKeys ?? atRestKeysFromConfig;
         this.newId = deps.newId ?? randomUUID;
         this.requester = deps.requester ?? null;
@@ -502,9 +528,34 @@ export class HiuConsentService {
         this.requester = requester;
     }
 
-    options(): HiuOptions {
+    /**
+     * The HIU [hospitalId]'s staff request records as. Refused (503 not-configured) unless the server
+     * can act as an HIU and the hospital has an HIU id of its own: never another hospital's id.
+     */
+    private async hiuFor(hospitalId: number): Promise<Hiu> {
+        if (!this.settings().configured) throw hiuNotConfiguredError();
+        const base = await this.pushBaseUrl().catch(() => "");
+        if (!isDataPushBase(base)) throw hiuNotConfiguredError();
+        const hiu = await this.directory.hiu(hospitalId);
+        if (!hiu || hiu.hospitalId !== hospitalId || !SERVICE_ID_PATTERN.test(hiu.id)) throw hiuFacilityNotConfiguredError();
+        // ABDM's answers come back by that id: it must lead to this hospital alone, as the callbacks
+        // resolve it. An id two hospitals answer to (rows written around save()'s check) is never used.
+        if ((await this.directory.hiuById(hiu.id))?.hospitalId !== hospitalId) throw hiuFacilityNotConfiguredError();
+        return hiu;
+    }
+
+    /** What the staff form offers, and whether this hospital can raise requests now (and why not). */
+    async options(ctx: Pick<StaffContext, "hospitalId">): Promise<HiuOptions> {
+        let reason: string | null = null;
+        try {
+            await this.hiuFor(ctx.hospitalId);
+        } catch (error) {
+            if (!(error instanceof HiuError)) throw error;
+            reason = error.message;
+        }
         return {
-            configured: this.settings().configured,
+            configured: reason === null,
+            ...(reason === null ? {} : { reason }),
             purposes: HIU_PURPOSES.map(({ code, text }) => ({ code, text })),
             hiTypes: HIU_HI_TYPES.map(({ code, label }) => ({ code, label })),
             accessModes: [...HIU_ACCESS_MODES],
@@ -530,7 +581,7 @@ export class HiuConsentService {
      */
     async create(ctx: StaffContext, input: NewConsentRequestInput): Promise<ConsentRequestSummary> {
         const settings = this.settings();
-        if (!settings.configured) throw hiuNotConfiguredError();
+        const hiu = await this.hiuFor(ctx.hospitalId);
 
         const now = this.clock();
         const patientUserId = text(input?.patientUserId);
@@ -576,6 +627,7 @@ export class HiuConsentService {
             return this.store.createRequest({
                 initRequestId,
                 hospitalId: ctx.hospitalId,
+                hiuId: hiu.id,
                 organizationId: ctx.organizationId,
                 staffUserId: ctx.staffUserId,
                 staffName,
@@ -595,9 +647,9 @@ export class HiuConsentService {
         const body = buildInitBody({
             purposeCode: input.purposeCode,
             abhaAddress,
-            hiuId: settings.hiuId,
-            hiuName: settings.hiuName,
-            requesterName: staffName || settings.hiuName || settings.hiuId,
+            hiuId: hiu.id,
+            hiuName: hiu.name,
+            requesterName: staffName || hiu.name || hiu.id,
             hiTypes,
             accessMode: input.accessMode,
             from: range.from,
@@ -689,13 +741,14 @@ export class HiuConsentService {
 
     /** Asks ABDM for the request's status; the answer arrives on on-status. */
     async refreshStatus(ctx: StaffContext, id: number): Promise<ConsentRequestSummary> {
-        const settings = this.settings();
-        if (!settings.configured) throw hiuNotConfiguredError();
+        await this.hiuFor(ctx.hospitalId);
         const row = Number.isInteger(id) && id > 0 ? await this.store.findRequest(ctx.hospitalId, id) : null;
         if (!row) throw new HiuError("not-found", "No such record request at this hospital.");
         if (!row.consentRequestId) {
             throw new HiuError("conflict", "ABDM hasn't given this request an id yet, so its status can't be asked for.");
         }
+        // Asked as the HIU the request was raised as, which may differ from the hospital's id today.
+        if (!row.hiuId) throw new HiuError("conflict", "This request has no ABDM HIU id on record, so its status can't be asked for.");
 
         const statusRequestId = this.newId();
         await this.store.updateRequest(row.id, { statusRequestId });
@@ -705,7 +758,7 @@ export class HiuConsentService {
                 method: "POST",
                 host: "gateway",
                 path: "/api/hiecm/consent/v3/request/status",
-                headers: { "X-HIU-ID": settings.hiuId },
+                headers: { "X-HIU-ID": row.hiuId },
                 body: { consentRequestId: row.consentRequestId },
                 requestId: statusRequestId,
             });
@@ -772,7 +825,7 @@ export class HiuConsentService {
         let sent = 0;
         for (const artefact of due) {
             const row = await this.store.findRequestById(artefact.consentRequestFk);
-            if (!row) continue;
+            if (!row?.hiuId) continue;
             const fetchRequestId = this.newId();
             const claimed = await this.store.reclaimFetch({
                 artefactId: artefact.id,
@@ -797,6 +850,7 @@ export class HiuConsentService {
             const requestId = text(body?.response?.requestId);
             const row = requestId ? await this.store.findRequestByInitRequestId(requestId) : null;
             if (!row) return this.dropUnknown(HIU_AUDIT_EVENTS.ON_INIT, requestId, headers);
+            if (await this.dropOtherHiu(row, HIU_AUDIT_EVENTS.ON_INIT, requestId, headers)) return;
             const at = new Date(this.clock());
             const consentRequestId = abdmId(body?.consentRequest?.id);
             const error = body?.error && typeof body.error === "object" ? body.error : null;
@@ -834,6 +888,7 @@ export class HiuConsentService {
             const requestId = text(body?.response?.requestId);
             const row = requestId ? await this.store.findRequestByStatusRequestId(requestId) : null;
             if (!row) return this.dropUnknown(HIU_AUDIT_EVENTS.ON_STATUS, requestId, headers);
+            if (await this.dropOtherHiu(row, HIU_AUDIT_EVENTS.ON_STATUS, requestId, headers)) return;
             const error = body?.error && typeof body.error === "object" ? body.error : null;
             const consentRequestId = abdmId(body?.consentRequest?.id);
             const status = text(body?.consentRequest?.status);
@@ -882,17 +937,24 @@ export class HiuConsentService {
 
             // The requests this notification concerns: by consentRequestId, else (a revocation names
             // only artefacts) through the artefacts we hold.
-            let rows: ConsentRequestRow[] = [];
+            let found: ConsentRequestRow[] = [];
             const byId = consentRequestId ? await this.store.findRequestByConsentRequestId(consentRequestId) : null;
             if (byId) {
-                rows = [byId];
+                found = [byId];
             } else if (artefactIds.length > 0 && (status === "REVOKED" || status === "EXPIRED")) {
                 const known = await this.store.findArtefactsByConsentArtefactIds(artefactIds);
                 for (const fk of new Set(known.map((artefact) => artefact.consentRequestFk))) {
                     const row = await this.store.findRequestById(fk);
-                    if (row) rows.push(row);
+                    if (row) found.push(row);
                 }
             }
+            // Only requests raised as the HIU this notification is addressed to: another tenant's
+            // facility can never change (or acknowledge) a request it did not raise.
+            const rows: ConsentRequestRow[] = [];
+            for (const row of found) {
+                if (!(await this.dropOtherHiu(row, notifyAuditEvent(status), notifyRequestId, headers))) rows.push(row);
+            }
+            if (found.length > 0 && rows.length === 0) return;
             if (rows.length === 0) {
                 await this.audit.record({
                     hospitalId: null,
@@ -941,6 +1003,7 @@ export class HiuConsentService {
             if (!artefact) return this.dropUnknown(HIU_AUDIT_EVENTS.ON_FETCH, requestId, headers);
             const row = await this.store.findRequestById(artefact.consentRequestFk);
             if (!row) return this.dropUnknown(HIU_AUDIT_EVENTS.ON_FETCH, requestId, headers);
+            if (await this.dropOtherHiu(row, HIU_AUDIT_EVENTS.ON_FETCH, requestId, headers)) return;
             const now = this.clock();
             const at = new Date(now);
             const consent = body?.consent && typeof body.consent === "object" ? body.consent : null;
@@ -1017,6 +1080,24 @@ export class HiuConsentService {
         } catch (error: any) {
             console.error(`[ABDM HIU] ${name} REQUEST-ID=${text(headers?.requestId) || "-"} failed: ${error?.code ?? error?.kind ?? error?.name ?? "error"}`);
         }
+    }
+
+    /**
+     * True, after auditing it IGNORED, when [row] was raised as another HIU than the callback's
+     * X-HIU-ID: one tenant's facility never updates another tenant's request.
+     */
+    private async dropOtherHiu(row: ConsentRequestRow, event: string, requestId: string | null, headers: CallbackHeaders): Promise<boolean> {
+        const hiuId = text(headers?.hiuId);
+        if (row.hiuId && hiuId === row.hiuId) return false;
+        await this.audit.record({
+            hospitalId: row.hospitalId,
+            event,
+            requestId: requestId || text(headers?.requestId) || null,
+            outcome: HIU_AUDIT_OUTCOMES.IGNORED,
+            detail: "HIU mismatch",
+        });
+        console.warn(`[ABDM HIU] ${event} REQUEST-ID=${requestId || text(headers?.requestId) || "-"} names another HIU than request=${row.id}; dropped`);
+        return true;
     }
 
     private async dropUnknown(event: string, requestId: string, headers: CallbackHeaders): Promise<void> {
@@ -1140,6 +1221,7 @@ export class HiuConsentService {
 
     /** consent/fetch for every granted artefact of the request not yet fetched (claimed first, so a repeat fetches nothing). */
     private async fetchArtefacts(row: ConsentRequestRow): Promise<void> {
+        if (!row.hiuId) return;
         for (const artefact of await this.store.listArtefacts(row.id)) {
             if (artefact.status !== "GRANTED" || artefact.fetchRequestId || artefact.fetchedAt) continue;
             const fetchRequestId = this.newId();
@@ -1156,7 +1238,7 @@ export class HiuConsentService {
                 method: "POST",
                 host: "gateway",
                 path: "/api/hiecm/consent/v3/fetch",
-                headers: { "X-HIU-ID": this.settings().hiuId },
+                headers: { "X-HIU-ID": row.hiuId ?? "" },
                 body: { consentId: artefact.consentArtefactId },
                 requestId: fetchRequestId,
             });

@@ -48,6 +48,7 @@ export const toRequestRow = (raw: any): ConsentRequestRow => ({
     consentRequestId: raw.ConsentRequestId ?? null,
     statusRequestId: raw.StatusRequestId ?? null,
     hospitalId: Number(raw.HospitalId),
+    hiuId: raw.HiuId ?? null,
     organizationId: raw.OrganizationId ?? null,
     staffUserId: String(raw.StaffUserId),
     staffName: raw.StaffName ?? null,

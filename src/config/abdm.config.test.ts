@@ -41,7 +41,7 @@ test("HIU settings default as the contract says", () => {
     assert.equal(abdmConfig.hiuDataKeyId, "k1");
     assert.deepEqual(abdmConfig.hiuRoleNames, ["Provider", "Hospital Admin"]);
     assert.equal(abdmConfig.hiuTransferWindowMinutes, 20);
-    assert.equal(abdmConfig.hiuConfigured, false);
+    assert.equal(abdmConfig.hiuConfigured, false, "no records key");
 });
 
 test("HIU settings are read and cleaned", () => {
@@ -69,8 +69,8 @@ test("HIU settings are read and cleaned", () => {
     assert.equal(abdmConfig.hiuDataKeyId, "k2");
 });
 
-test("hiuConfigured needs the HIU id, a 32-byte key and the push address", () => {
-    process.env.ABDM_HIU_ID = "IN3610001174";
+test("hiuConfigured needs a 32-byte key and a usable push address when one is set; not ABDM_HIU_ID", () => {
+    delete process.env.ABDM_HIU_ID;
     process.env.ABDM_HIU_DATA_KEY = KEY;
     process.env.ABDM_DATA_PUSH_BASE_URL = "https://example.ngrok-free.dev";
     assert.equal(abdmConfig.hiuConfigured, true);
@@ -89,9 +89,8 @@ test("hiuConfigured needs the HIU id, a 32-byte key and the push address", () =>
     assert.equal(abdmConfig.hiuConfigured, true);
     delete process.env.ABDM_HIU_DATA_KEY_ID;
 
-    delete process.env.ABDM_HIU_ID;
-    assert.equal(abdmConfig.hiuConfigured, false);
     process.env.ABDM_HIU_ID = "IN3610001174";
+    assert.equal(abdmConfig.hiuConfigured, true, "the legacy ABDM_HIU_ID plays no part");
     process.env.ABDM_DATA_PUSH_BASE_URL = "example.ngrok-free.dev";
     assert.equal(abdmConfig.hiuConfigured, false, "the push base needs a scheme");
     process.env.ABDM_DATA_PUSH_BASE_URL = "https://exa mple.dev";
@@ -99,5 +98,7 @@ test("hiuConfigured needs the HIU id, a 32-byte key and the push address", () =>
     process.env.ABDM_DATA_PUSH_BASE_URL = `https://${"a".repeat(170)}.dev`;
     assert.equal(abdmConfig.hiuConfigured, false, "a base too long for a 255-character dataPushUrl is refused");
     delete process.env.ABDM_DATA_PUSH_BASE_URL;
+    assert.equal(abdmConfig.hiuConfigured, true, "unset, the bridge URL is the push address (checked where it is read)");
+    delete process.env.ABDM_HIU_DATA_KEY;
     assert.equal(abdmConfig.hiuConfigured, false);
 });

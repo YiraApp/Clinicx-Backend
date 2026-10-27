@@ -7,6 +7,16 @@ import { callbackSummary, createHiuCallbackController, type HiuCallbackServices 
 import { createHiuCallbackRouter, createHiuDataPushRouter } from "../../routes/Abdm/hiu-callback.routes.js";
 
 const HIU = "IN3610001174";
+/** Another hospital's HIU on the same deployment. */
+const HIU_B = "IN3610002222";
+const hius = new Map([[HIU, { id: HIU, hospitalId: 19, name: "A A Hospital" }], [HIU_B, { id: HIU_B, hospitalId: 20, name: "B B Clinic" }]]);
+const hiuLookups: (string | null | undefined)[] = [];
+const directory = {
+    async hiuById(id: string | null | undefined) {
+        hiuLookups.push(id);
+        return id ? hius.get(id) ?? null : null;
+    },
+};
 const TOKEN = "a".repeat(64);
 
 /** Auth stub: "gateway-token" is ABDM's gateway, "hip-token" a HIP's own token (refused by the pin). */
@@ -43,7 +53,7 @@ const services: HiuCallbackServices = {
     },
 };
 
-const controller = createHiuCallbackController({ auth, services: async () => services, hiuId: () => HIU });
+const controller = createHiuCallbackController({ auth, services: async () => services, directory });
 
 // The same order as app.ts: the push router before the global parser, then the callback router.
 const app = express();
@@ -119,7 +129,7 @@ test("the callbacks check the gateway pin; a service failure after the answer is
     authCalls.length = 0;
     const failing = createHiuCallbackController({
         auth,
-        hiuId: () => HIU,
+        directory,
         services: async () => ({ ...services, consent: { ...services.consent, notify: async () => { throw new Error("boom"); } } }),
     });
     const res: any = { statusCode: 0, body: null, status(code: number) { this.statusCode = code; return this; }, json(body: unknown) { this.body = body; return this; } };
@@ -130,13 +140,46 @@ test("the callbacks check the gateway pin; a service failure after the answer is
     assert.deepEqual(authCalls, [{ pinClient: undefined }], "the default (pinned) verify");
 });
 
-test("while ABDM_HIU_ID is not set every callback is refused", async () => {
+test("with no hospital set up as an HIU every callback is refused, the old ABDM_HIU_ID included", async () => {
     calls.length = 0;
-    const unset = createHiuCallbackController({ auth, services: async () => services, hiuId: () => "" });
+    const unset = createHiuCallbackController({ auth, services: async () => services, directory: { hiuById: async () => null } });
     const res: any = { statusCode: 0, status(code: number) { this.statusCode = code; return this; }, json() { return this; } };
-    const headers = { authorization: "Bearer gateway-token", "request-id": "r", "x-hiu-id": "" };
-    await unset.onInit({ headers, body: {} } as any, res);
-    assert.equal(res.statusCode, 400);
+    for (const hiuId of ["", HIU]) {
+        const headers = { authorization: "Bearer gateway-token", "request-id": "r", "x-hiu-id": hiuId };
+        await unset.onInit({ headers, body: {} } as any, res);
+        assert.equal(res.statusCode, 400);
+    }
+    assert.equal(calls.length, 0);
+});
+
+test("each hospital's HIU is accepted with its own X-HIU-ID, passed on for the service to match against the request", async () => {
+    for (const [path, method] of CALLBACKS) {
+        calls.length = 0;
+        hiuLookups.length = 0;
+        const answer = await post(path, { ...good, "X-HIU-ID": HIU_B });
+        assert.equal(answer.status, 200);
+        assert.deepEqual(hiuLookups, [HIU_B], "X-HIU-ID is checked against the facility directory");
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.method, method);
+        assert.equal(calls[0]!.headers.hiuId, HIU_B);
+    }
+});
+
+test("an X-HIU-ID no hospital acts as is refused 400 ABDM-1006 before any service call", async () => {
+    calls.length = 0;
+    const unknown = await post("/api/v3/hiu/consent/request/notify", { ...good, "X-HIU-ID": "IN9999999999" });
+    assert.equal(unknown.status, 400);
+    assert.deepEqual(unknown.json, { error: { code: "ABDM-1006", message: "X-HIU-ID does not name this HIU" } });
+    assert.equal(calls.length, 0);
+});
+
+test("when the facility directory cannot be read the callback is answered 500, not taken", async () => {
+    calls.length = 0;
+    const broken = createHiuCallbackController({ auth, services: async () => services, directory: { hiuById: async () => { throw new Error("db down"); } } });
+    const res: any = { statusCode: 0, status(code: number) { this.statusCode = code; return this; }, json() { return this; } };
+    await broken.notify({ headers: { authorization: "Bearer gateway-token", "request-id": "r", "x-hiu-id": HIU }, body: {} } as any, res);
+    assert.equal(res.statusCode, 500);
+    await settle();
     assert.equal(calls.length, 0);
 });
 

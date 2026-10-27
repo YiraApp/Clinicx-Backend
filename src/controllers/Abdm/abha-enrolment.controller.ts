@@ -12,7 +12,7 @@ import { abhaRepository } from "../../repositories/Abdm/abha.repository.js";
 import { abhaShareRepository } from "../../repositories/Abdm/abha-share.repository.js";
 import { shareQueueHospital } from "./share-queue-access.js";
 import { AbdmBridgeService, BridgeUrlError } from "../../services/Abdm/abdm-bridge.service.js";
-import { abdmFacilities, FacilityError, scanShareHipIdOf } from "../../services/Abdm/abdm-facilities.service.js";
+import { abdmFacilities, FacilityClashError, FacilityError, hiuIdOf, scanShareHipIdOf } from "../../services/Abdm/abdm-facilities.service.js";
 import { autoLinker } from "../../services/Abdm/m2/index.js";
 
 // One session store: a journey verified by create, verify or find can then show its card and link a patient.
@@ -137,8 +137,9 @@ export class AbhaEnrolmentController {
     /**
      * Sets up a hospital as an ABDM facility: body.hipId is its HFR facility id, linked to this
      * deployment's bridge as HIP, and body.scanShareHipId the HIP id its Scan and Share counters
-     * use when that is not the HFR id (one of the two is needed); hipName, autoLink and isActive
-     * are optional.
+     * use when that is not the HFR id, and body.hiuId the HFR id it requests records as (M3) when
+     * that is not its HIP id (one of the three is needed); hipName, autoLink and isActive are optional.
+     * isActive false needs no id and frees the hospital's ids (refused while it has record requests open).
      */
     async saveFacility(req: Request, res: Response) {
         const hospitalId = Number(req.params.hospitalId);
@@ -152,19 +153,23 @@ export class AbhaEnrolmentController {
             const body = req.body ?? {};
             const saved = await abdmFacilities.save(hospitalId, {
                 hipId: body.hipId,
+                hiuId: body.hiuId,
                 hipName: body.hipName,
                 scanShareHipId: body.scanShareHipId,
                 autoLink: body.autoLink === true,
                 isActive: body.isActive !== false,
             }, (req as any).userId ? staffUserId(req) : null);
-            console.log(`[ABDM] facility for hospital ${hospitalId} set to ${body.hipId} by user ${staffUserId(req)}`);
-            return res.json(ApiResponse.success(saved, saved ? `Hospital ${hospitalId} acts as ABDM facility ${saved.hipId ?? saved.scanShareHipId}.` : `Hospital ${hospitalId} no longer acts as an ABDM facility.`));
+            const hiuId = saved ? hiuIdOf(saved) : null;
+            console.log(`[ABDM] facility for hospital ${hospitalId} set to HIP ${saved?.hipId ?? "-"}, HIU ${hiuId ?? "-"} by user ${staffUserId(req)}`);
+            return res.json(ApiResponse.success(saved, saved
+                ? `Hospital ${hospitalId} acts as ABDM facility ${saved.hipId ?? saved.scanShareHipId ?? hiuId}${hiuId ? `, and requests records as HIU ${hiuId}` : ""}.`
+                : `Hospital ${hospitalId} no longer acts as an ABDM facility.`));
         } catch (error) {
             if (error instanceof FacilityError) {
-                return res.status(400).json(ApiResponse.error(error.message, { kind: "invalid" }));
+                return res.status(error instanceof FacilityClashError ? 409 : 400).json(ApiResponse.error(error.message, { kind: "invalid" }));
             }
             if ([2627, 2601].includes((error as any)?.number ?? (error as any)?.driverError?.number)) {
-                return res.status(409).json(ApiResponse.error("That HIP id is already saved for another hospital.", { kind: "invalid" }));
+                return res.status(409).json(ApiResponse.error("That HIP or HIU id is already saved for another hospital.", { kind: "invalid" }));
             }
             return sendError(res, error);
         }

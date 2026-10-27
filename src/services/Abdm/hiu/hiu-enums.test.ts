@@ -9,6 +9,7 @@ import {
     HIU_PURPOSES,
     HiuError,
     hiTypeLabel,
+    hiuFacilityNotConfiguredError,
     hiuNotConfiguredError,
     isAbhaAddress,
     isAccessMode,
@@ -108,4 +109,9 @@ test("HiuError carries status, kind and details, and never the word the frontend
     const notConfigured = hiuNotConfiguredError();
     assert.equal(notConfigured.status, 503);
     assert.equal(notConfigured.kind, "not-configured");
+    const facilityNotConfigured = hiuFacilityNotConfiguredError();
+    assert.equal(facilityNotConfigured.status, 503);
+    assert.equal(facilityNotConfigured.kind, "not-configured");
+    assert.match(facilityNotConfigured.message, /hospital isn't set up as an ABDM HIU facility/);
+    for (const error of [notConfigured, facilityNotConfigured]) assert.doesNotMatch(error.message, /expired/i);
 });

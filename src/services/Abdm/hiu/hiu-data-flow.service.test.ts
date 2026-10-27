@@ -7,6 +7,7 @@ import { atRestKeysFrom, open, seal, type AtRestKeys } from "./hiu-at-rest.js";
 import type { HiuAuditEventInput } from "./hiu-audit.js";
 import { DATA_PUSH_URL_PATTERN, HiuError } from "./hiu-enums.js";
 import {
+    deploymentPushBaseUrl,
     HIU_RECORDS_RESPONSE_MAX_BYTES,
     HiuDataFlowService,
     sha256Hex,
@@ -26,6 +27,9 @@ const GRANT_FROM = new Date("2024-01-15T05:30:00.123Z");
 const GRANT_TO = new Date("2026-10-20T18:29:59.999Z");
 const ERASE_AT = new Date("2026-12-31T00:00:00.000Z");
 const TRANSACTION = "5a7c9e1f-0000-4000-8000-00000000abcd";
+/** The HIU id artefact 1's consent request was raised as (its hospital's), and another hospital's. */
+const HIU = "IN3610001174";
+const HIU_B = "IN3610002222";
 
 // ---- In-memory store, with the database's guarantees: the unique page index and atomic claims ----
 
@@ -38,6 +42,8 @@ let audits: HiuAuditEventInput[];
 let tasks: Promise<void>[];
 let decrypts: number;
 let settings: HiuDataFlowSettings;
+/** The deployment's push base (ABDM_DATA_PUSH_BASE_URL, else the bridge URL). */
+let pushBase: string;
 let gatewayFault: ((call: AbdmCall) => void | Promise<void>) | null;
 /** Checked inside the gateway stub: the data request must be stored before the call goes out. */
 let storedBeforeCall: boolean[];
@@ -170,6 +176,7 @@ const makeService = () => new HiuDataFlowService({
     crypto,
     atRestKeys: () => KEYS,
     settings: () => settings,
+    pushBaseUrl: async () => pushBase,
     runInBackground: (task) => { tasks.push(task()); },
 });
 
@@ -186,6 +193,7 @@ const grantedArtefact = (overrides: Partial<HiuDataArtefact> = {}): HiuDataArtef
     consentArtefactId: "art-0001",
     consentRequestId: "cr-0001",
     hospitalId: HOSPITAL,
+    hiuId: HIU,
     hipId: "IN2810014366",
     status: "GRANTED",
     dateFrom: GRANT_FROM,
@@ -233,7 +241,7 @@ const notifies = () => calls.filter((call) => call.path.endsWith("/health-inform
 /** Requests records for artefact 1 and acknowledges with TRANSACTION. */
 const openTransfer = async (service: HiuDataFlowService) => {
     await service.requestForArtefact(1);
-    await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb-1", hiuId: settings.hiuId, timestamp: null });
+    await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb-1", hiuId: HIU, timestamp: null });
 };
 
 let logged: string[];
@@ -252,7 +260,8 @@ beforeEach(() => {
     storedBeforeCall = [];
     bytesReceived = new Map();
     listBudgets = [];
-    settings = { hiuId: "IN3610001174", dataPushBaseUrl: "https://clinic.example.org", transferWindowMinutes: 20 };
+    settings = { transferWindowMinutes: 20 };
+    pushBase = "https://clinic.example.org";
     logged = [];
     for (const level of ["log", "warn", "error"] as const) {
         console[level] = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
@@ -339,11 +348,14 @@ test("a second request while a transfer is open is refused with no call", async 
 });
 
 test("missing HIU settings answer not-configured with no call", async () => {
-    settings = { ...settings, hiuId: "" };
-    await assert.rejects(makeService().requestForArtefact(1), (error: any) => error instanceof HiuError && error.kind === "not-configured" && error.status === 503);
-    settings = { ...settings, hiuId: "IN3610001174", dataPushBaseUrl: "" };
+    artefacts.set(1, grantedArtefact({ hiuId: null }));
+    await assert.rejects(makeService().requestForArtefact(1), (error: any) => error instanceof HiuError && error.kind === "not-configured" && error.status === 503
+        && /isn't set up as an ABDM HIU facility/.test(error.message) && !/expired/i.test(error.message), "a request raised with no HIU id is never asked as another");
+    artefacts.set(1, grantedArtefact());
+    pushBase = "";
     await assert.rejects(makeService().requestForArtefact(1), (error: any) => error instanceof HiuError && error.kind === "not-configured");
-    const unkeyed = new HiuDataFlowService({ store, audit, gateway, clock: () => now, atRestKeys: () => null, settings: () => ({ ...settings, dataPushBaseUrl: "https://x.org" }) });
+    pushBase = "https://clinic.example.org";
+    const unkeyed = new HiuDataFlowService({ store, audit, gateway, clock: () => now, atRestKeys: () => null, settings: () => settings, pushBaseUrl: async () => "https://x.org" });
     await assert.rejects(unkeyed.requestForArtefact(1), (error: any) => error instanceof HiuError && error.kind === "not-configured");
     assert.equal(calls.length, 0);
 });
@@ -357,9 +369,9 @@ test("dataPushUrl stays within 255 characters of ABDM's allowed set, or nothing 
 
     requests[0].sessionStatus = "FAILED";
     calls = [];
-    settings = { ...settings, dataPushBaseUrl: `https://${"a".repeat(180)}.example.org` };
+    pushBase = `https://${"a".repeat(180)}.example.org`;
     await assert.rejects(service.requestForArtefact(1), (error: any) => error instanceof HiuError && error.kind === "not-configured");
-    settings = { ...settings, dataPushBaseUrl: "https://clinic.example.org/push#x" };
+    pushBase = "https://clinic.example.org/push#x";
     await assert.rejects(service.requestForArtefact(1), (error: any) => error instanceof HiuError && error.kind === "not-configured");
     assert.equal(calls.length, 0);
     assert.equal(requests.length, 1);
@@ -392,7 +404,7 @@ for (const [name, error] of [
         assert.equal(audits.at(-1)!.outcome, "FAILED");
 
         gatewayFault = null;
-        await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb-late", hiuId: settings.hiuId, timestamp: null });
+        await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb-late", hiuId: HIU, timestamp: null });
         assert.equal(requests[0].transactionId, TRANSACTION);
         assert.equal((await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("late")) }]))).status, 202);
         await settle();
@@ -416,7 +428,7 @@ test("a refusal does not fail a transfer that on-request already answered", asyn
     const service = makeService();
     gatewayFault = async (call) => {
         // on-request (and the HIP's first page) beat the gateway's answer, which is then an error.
-        await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: call.requestId } }, { requestId: "cb-early", hiuId: settings.hiuId, timestamp: null });
+        await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: call.requestId } }, { requestId: "cb-early", hiuId: HIU, timestamp: null });
         throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "x", message: "Bad gateway" });
     };
     await assert.rejects(service.requestForArtefact(1), AbdmApiError);
@@ -433,7 +445,7 @@ test("on-request for a request already closed is not taken up, and is audited as
     const service = makeService();
     await assert.rejects(service.requestForArtefact(1), AbdmApiError);
     assert.equal(requests[0].sessionStatus, "FAILED");
-    await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: settings.hiuId, timestamp: null });
+    await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: HIU, timestamp: null });
     assert.equal(requests[0].transactionId, null);
     const last = audits.at(-1)!;
     assert.deepEqual([last.event, last.outcome, last.detail], ["ON_REQUEST", "IGNORED", "request already closed"]);
@@ -487,7 +499,7 @@ test("records show one transfer only: the received one, never a failed earlier c
     requests[0].privateKey = null;
     calls = [];
     await service.requestRecords(STAFF, 1);
-    await service.onRequest({ hiRequest: { transactionId: `${TRANSACTION}-2`, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[1].hiRequestId } }, { requestId: "cb-2", hiuId: settings.hiuId, timestamp: null });
+    await service.onRequest({ hiRequest: { transactionId: `${TRANSACTION}-2`, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[1].hiRequestId } }, { requestId: "cb-2", hiuId: HIU, timestamp: null });
     assert.equal((await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("full")) }], `${TRANSACTION}-2`))).status, 202);
     await settle();
     assert.equal(requests[1].sessionStatus, "RECEIVED");
@@ -511,14 +523,14 @@ test("on-request stores the transaction id; an error fails the request and drops
     assert.equal(requests[0].sessionStatus, "REQUESTED");
     assert.ok(requests[0].privateKey);
 
-    await service.onRequest({ hiRequest: { transactionId: "other", sessionStatus: "REQUESTED" }, response: { requestId: "not-ours" } }, { requestId: "cb-2", hiuId: null, timestamp: null });
+    await service.onRequest({ hiRequest: { transactionId: "other", sessionStatus: "REQUESTED" }, response: { requestId: "not-ours" } }, { requestId: "cb-2", hiuId: HIU, timestamp: null });
     assert.equal(requests[0].transactionId, TRANSACTION);
     assert.equal(audits.at(-1)!.outcome, "IGNORED");
 
     artefacts.set(2, grantedArtefact({ id: 2, consentArtefactId: "art-0002" }));
     await service.requestForArtefact(2);
     const second = requests[1];
-    await service.onRequest({ hiRequest: null, error: { code: "ABDM-1001: ", message: "No data found" }, response: { requestId: second.hiRequestId } }, { requestId: "cb-3", hiuId: null, timestamp: null });
+    await service.onRequest({ hiRequest: null, error: { code: "ABDM-1001: ", message: "No data found" }, response: { requestId: second.hiRequestId } }, { requestId: "cb-3", hiuId: HIU, timestamp: null });
     assert.equal(requests[1].sessionStatus, "FAILED");
     assert.equal(requests[1].privateKey, null);
     assert.match(requests[1].error!, /ABDM-1001\)/);
@@ -531,7 +543,7 @@ test("on-request whose transaction id is not adopted (the request closed meanwhi
     // The read saw the request open; the window sweep closed it before the claim ran.
     store.adoptTransactionId = async () => false;
     try {
-        await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: settings.hiuId, timestamp: null });
+        await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, error: null, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: HIU, timestamp: null });
     } finally {
         store.adoptTransactionId = adopt;
     }
@@ -607,7 +619,7 @@ test("the push address is checked on its own, before any body: unknown, ended, p
     now = T0;
     requests[0].sessionStatus = "FAILED";
     assert.equal((await service.pushAddressProblem(token))!.status, 409);
-    const unkeyed = new HiuDataFlowService({ store, audit, gateway, clock: () => now, atRestKeys: () => null, settings: () => settings });
+    const unkeyed = new HiuDataFlowService({ store, audit, gateway, clock: () => now, atRestKeys: () => null, settings: () => settings, pushBaseUrl: async () => pushBase });
     assert.equal((await unkeyed.pushAddressProblem(token))!.status, 503);
 });
 
@@ -617,7 +629,7 @@ for (const [name, close] of [
 ] as const) {
     test(`a page being decrypted when ${name} is dropped, not stored`, async () => {
         const closing: HiuDataStore = { ...store, async addPage(input) { close(); return store.addPage(input); } };
-        const service = new HiuDataFlowService({ store: closing, audit, gateway, clock: () => now, crypto, atRestKeys: () => KEYS, settings: () => settings, runInBackground: (task) => { tasks.push(task()); } });
+        const service = new HiuDataFlowService({ store: closing, audit, gateway, clock: () => now, crypto, atRestKeys: () => KEYS, settings: () => settings, pushBaseUrl: async () => pushBase, runInBackground: (task) => { tasks.push(task()); } });
         await openTransfer(service);
         assert.equal((await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("late")) }]))).status, 202);
         await settle();
@@ -658,7 +670,7 @@ test("records come with content only up to a fixed size per answer; the rest is 
 
     // A budget that fits only the first record's content.
     const budgeted: HiuDataStore = { ...store, listRecords: (artefactFk, at) => store.listRecords(artefactFk, at, records[0].content!.length * 2) };
-    const small = new HiuDataFlowService({ store: budgeted, audit, gateway, clock: () => now, crypto, atRestKeys: () => KEYS, settings: () => settings });
+    const small = new HiuDataFlowService({ store: budgeted, audit, gateway, clock: () => now, crypto, atRestKeys: () => KEYS, settings: () => settings, pushBaseUrl: async () => pushBase });
     const view = await small.records(STAFF, 1);
     assert.ok(view.available);
     if (view.available) {
@@ -711,7 +723,7 @@ test("round trip with a fake HIP: decrypted, verified, sealed, notified RECEIVED
         consentId: "art-0001",
         transactionId: TRANSACTION,
         doneAt: new Date(T0).toISOString(),
-        notifier: { type: "HIU", id: "IN3610001174" },
+        notifier: { type: "HIU", id: HIU },
         statusNotification: {
             sessionStatus: "RECEIVED",
             hipId: "IN2810014366",
@@ -829,7 +841,7 @@ test("a push that beats on-request adopts its transaction id", async () => {
     assert.equal(requests[0].transactionId, TRANSACTION);
     assert.equal(notifies().length, 1);
     // The late on-request is a repeat and changes nothing.
-    await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: null, timestamp: null });
+    await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: HIU, timestamp: null });
     assert.equal(requests[0].sessionStatus, "RECEIVED");
 });
 
@@ -927,4 +939,65 @@ test("content that is not JSON is returned as raw text", async () => {
         assert.equal(view.records[0].bundle, null);
         assert.equal(view.records[0].raw, "plain text note");
     }
+});
+
+// ---- per tenant: each request is asked, acknowledged and reported as the HIU it was raised as ----
+
+test("two hospitals' transfers never cross: X-HIU-ID, on-request and notify each use their own request's HIU id", async () => {
+    const service = makeService();
+    artefacts.set(2, grantedArtefact({ id: 2, consentArtefactId: "art-0002", consentRequestId: "cr-0002", hospitalId: 8, hiuId: HIU_B }));
+    await service.requestForArtefact(1);
+    await service.requestForArtefact(2);
+    assert.deepEqual(calls.map((call) => call.headers), [{ "X-HIU-ID": HIU }, { "X-HIU-ID": HIU_B }]);
+
+    // Hospital A's facility answering for hospital B's request changes nothing.
+    const [a, b] = requests;
+    await service.onRequest({ hiRequest: { transactionId: `${TRANSACTION}-b`, sessionStatus: "REQUESTED" }, response: { requestId: b.hiRequestId } }, { requestId: "cb-x", hiuId: HIU, timestamp: null });
+    assert.equal(b.transactionId, null);
+    assert.equal(b.sessionStatus, "REQUESTED");
+    assert.ok(b.privateKey, "the key is kept");
+    assert.deepEqual([audits.at(-1)!.event, audits.at(-1)!.outcome, audits.at(-1)!.detail, audits.at(-1)!.hospitalId], ["ON_REQUEST", "IGNORED", "HIU mismatch", 8]);
+
+    await service.onRequest({ hiRequest: { transactionId: `${TRANSACTION}-b`, sessionStatus: "REQUESTED" }, response: { requestId: b.hiRequestId } }, { requestId: "cb-b", hiuId: HIU_B, timestamp: null });
+    await service.onRequest({ hiRequest: { transactionId: `${TRANSACTION}-a`, sessionStatus: "REQUESTED" }, response: { requestId: a.hiRequestId } }, { requestId: "cb-a", hiuId: HIU, timestamp: null });
+    assert.equal(b.transactionId, `${TRANSACTION}-b`);
+    assert.equal(a.transactionId, `${TRANSACTION}-a`);
+
+    // Both windows pass: each FAILED notify names its own HIU.
+    await service.failTransfer(b.id);
+    await service.failTransfer(a.id);
+    const sent = notifies().map((call) => (call.body as any).notification);
+    assert.deepEqual(sent.map((n) => [n.consentId, n.notifier]), [
+        ["art-0002", { type: "HIU", id: HIU_B }],
+        ["art-0001", { type: "HIU", id: HIU }],
+    ]);
+});
+
+test("a request with no HIU id on record is never asked for, and its transfer is never notified as another HIU", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    artefacts.set(1, { ...artefacts.get(1)!, hiuId: null });
+    await service.failTransfer(requests[0].id);
+    assert.equal(notifies().length, 0);
+    assert.equal(requests[0].sessionStatus, "FAILED");
+});
+
+test("the push base is ABDM_DATA_PUSH_BASE_URL when set, else the bridge URL", async () => {
+    const saved = process.env.ABDM_DATA_PUSH_BASE_URL;
+    const bridge = { bridgeUrl: async () => "https://bridge.example.org" };
+    try {
+        process.env.ABDM_DATA_PUSH_BASE_URL = "https://push.example.org/";
+        assert.equal(await deploymentPushBaseUrl(bridge), "https://push.example.org");
+        delete process.env.ABDM_DATA_PUSH_BASE_URL;
+        assert.equal(await deploymentPushBaseUrl(bridge), "https://bridge.example.org");
+        assert.equal(await deploymentPushBaseUrl({ bridgeUrl: async () => "" }), "", "neither set: no push address");
+    } finally {
+        if (saved === undefined) delete process.env.ABDM_DATA_PUSH_BASE_URL;
+        else process.env.ABDM_DATA_PUSH_BASE_URL = saved;
+    }
+
+    // The data flow builds its push address on whichever it is given.
+    pushBase = "https://bridge.example.org";
+    await makeService().requestForArtefact(1);
+    assert.match(hiRequestOf().hiRequest.dataPushUrl, /^https:\/\/bridge\.example\.org\/api\/v3\/hiu\/data-push\/[0-9a-f]{64}$/);
 });

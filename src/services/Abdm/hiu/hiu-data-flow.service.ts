@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { abdmConfig } from "../../../config/abdm.config.js";
+import type { AbdmSettings } from "../abdm-facilities.service.js";
 import { AbdmApiError, abdmGatewayService, isOutcomeUnknown, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import {
     decryptEntry as fideliusDecrypt,
@@ -19,6 +20,7 @@ import {
     abdmDateTime,
     HIU_ENTRY_MEDIA,
     HiuError,
+    hiuFacilityNotConfiguredError,
     hiuNotConfiguredError,
     isDataPushUrl,
     type HiuHiStatus,
@@ -43,6 +45,10 @@ import {
  * (RECEIVED, or FAILED when an entry could not be decrypted or verified), with hiStatus OK or
  * ERRORED per care context. A transfer that does not finish inside its window is notified FAILED
  * by the maintenance sweep (failTransfer). Either way our private key is set to NULL.
+ *
+ * Per tenant: every call and notify about an artefact carries the HIU id its consent request was
+ * raised as (the request row's HiuId), and on-request is taken only from that same X-HIU-ID. The
+ * push address is the deployment's (ABDM_DATA_PUSH_BASE_URL, else the bridge URL).
  *
  * Logs carry the transaction id, page n of m, counts and outcomes only: never content, keys,
  * nonces, push tokens, care-context references or ABHA addresses.
@@ -93,6 +99,8 @@ export interface HiuDataArtefact {
     /** ABDM's consent request id of the request that produced it (for the audit trail). */
     consentRequestId: string | null;
     hospitalId: number;
+    /** The HIU id its consent request was raised as (X-HIU-ID, notifier.id); null when that request has none. */
+    hiuId: string | null;
     hipId: string | null;
     status: string;
     /** The granted range and erase date, from on-fetch. */
@@ -225,8 +233,6 @@ export interface HiuDataFlowCrypto {
 }
 
 export interface HiuDataFlowSettings {
-    hiuId: string;
-    dataPushBaseUrl: string;
     transferWindowMinutes: number;
     /** Largest total entry content per transfer, in megabytes (ABDM_DATA_PUSH_MAX_TRANSFER_MB). */
     maxTransferMb?: number;
@@ -241,11 +247,13 @@ export interface HiuDataFlowDeps {
     /** The at-rest key set; null means not configured. */
     atRestKeys?: () => AtRestKeys | null;
     settings?: () => HiuDataFlowSettings;
+    /** The records push base for the whole deployment; deploymentPushBaseUrl unless a test injects one. */
+    pushBaseUrl?: () => Promise<string>;
     /** Runs a page's processing after acceptPush has answered. Tests pass one they can await. */
     runInBackground?: (task: () => Promise<void>) => void;
 }
 
-/** Path our dataPushUrl carries, after ABDM_DATA_PUSH_BASE_URL. The token follows. */
+/** Path our dataPushUrl carries, after the push base (deploymentPushBaseUrl). The token follows. */
 export const DATA_PUSH_PATH = "/api/v3/hiu/data-push/";
 /** dhPublicKey.expiry: how long ABDM and the HIP may use our public key. */
 export const HIU_KEY_LIFETIME_MS = 30 * 60_000;
@@ -270,9 +278,17 @@ const DESCRIPTIONS = {
 
 export const sha256Hex = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 
+/**
+ * The public origin HIPs push records to, one for the whole deployment: ABDM_DATA_PUSH_BASE_URL
+ * when set, else the bridge URL ABDM already calls us on (AbdmSettings). Empty when neither is set.
+ */
+export const deploymentPushBaseUrl = async (bridge?: Pick<AbdmSettings, "bridgeUrl">): Promise<string> => {
+    if (abdmConfig.dataPushBaseUrl) return abdmConfig.dataPushBaseUrl;
+    // Loaded on first use, so this module loads without a database.
+    return (bridge ?? (await import("../abdm-facilities.service.js")).abdmSettings).bridgeUrl();
+};
+
 const defaultSettings = (): HiuDataFlowSettings => ({
-    hiuId: abdmConfig.hiuId,
-    dataPushBaseUrl: abdmConfig.dataPushBaseUrl,
     transferWindowMinutes: abdmConfig.hiuTransferWindowMinutes,
     maxTransferMb: abdmConfig.dataPushMaxTransferMb,
 });
@@ -340,6 +356,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
     private readonly crypto: HiuDataFlowCrypto;
     private readonly atRestKeys: () => AtRestKeys | null;
     private readonly settings: () => HiuDataFlowSettings;
+    private readonly pushBaseUrl: () => Promise<string>;
     private readonly runInBackground: (task: () => Promise<void>) => void;
 
     constructor(deps: HiuDataFlowDeps) {
@@ -350,6 +367,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
         this.crypto = deps.crypto ?? { generateKeyMaterial: fideliusKeyMaterial, decryptEntry: fideliusDecrypt, verifyChecksum: fideliusVerifyChecksum };
         this.atRestKeys = deps.atRestKeys ?? atRestKeysFromConfig;
         this.settings = deps.settings ?? defaultSettings;
+        this.pushBaseUrl = deps.pushBaseUrl ?? deploymentPushBaseUrl;
         this.runInBackground = deps.runInBackground ?? defaultBackground;
     }
 
@@ -365,10 +383,13 @@ export class HiuDataFlowService implements HealthInformationRequester {
     async requestForArtefact(artefactDbId: number, staffUserId?: string): Promise<void> {
         const settings = this.settings();
         const keys = this.atRestKeys();
-        if (!settings.hiuId || !settings.dataPushBaseUrl || !keys) throw hiuNotConfiguredError();
+        const pushBaseUrl = await this.pushBaseUrl();
+        if (!pushBaseUrl || !keys) throw hiuNotConfiguredError();
 
         const artefact = await this.store.findArtefact(artefactDbId);
         if (!artefact) throw new HiuError("not-found", "That consent artefact was not found.");
+        // Asked as the HIU its consent was raised as; never another hospital's, never a default.
+        if (!artefact.hiuId) throw hiuFacilityNotConfiguredError();
         const now = new Date(this.clock());
         const refuse = async (error: HiuError): Promise<never> => {
             await this.audit.record({
@@ -401,9 +422,9 @@ export class HiuDataFlowService implements HealthInformationRequester {
 
         // The pushToken authenticates the HIP's pushes; only its hash is stored.
         const pushToken = randomBytes(32).toString("hex");
-        const dataPushUrl = `${settings.dataPushBaseUrl}${DATA_PUSH_PATH}${pushToken}`;
+        const dataPushUrl = `${pushBaseUrl}${DATA_PUSH_PATH}${pushToken}`;
         if (dataPushUrl.length > 255 || !isDataPushUrl(dataPushUrl)) {
-            throw new HiuError("not-configured", "The records push address (ABDM_DATA_PUSH_BASE_URL) is too long or has characters ABDM does not allow.");
+            throw new HiuError("not-configured", "The records push address (ABDM_DATA_PUSH_BASE_URL, or the bridge URL) is too long or has characters ABDM does not allow.");
         }
 
         const keyMaterial = this.crypto.generateKeyMaterial();
@@ -435,7 +456,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
                 host: "gateway",
                 path: "/api/hiecm/data-flow/v3/health-information/request",
                 requestId: hiRequestId,
-                headers: { "X-HIU-ID": settings.hiuId },
+                headers: { "X-HIU-ID": artefact.hiuId },
                 body: healthInformationRequestBody({
                     consentArtefactId: artefact.consentArtefactId,
                     dateFrom,
@@ -498,11 +519,6 @@ export class HiuDataFlowService implements HealthInformationRequester {
      */
     async onRequest(body: any, headers: CallbackHeaders): Promise<void> {
         const requestId = typeof body?.response?.requestId === "string" ? body.response.requestId : null;
-        const settings = this.settings();
-        if (headers?.hiuId && settings.hiuId && headers.hiuId !== settings.hiuId) {
-            console.warn(`[ABDM HIU] on-request for another HIU dropped REQUEST-ID=${headers.requestId ?? "-"}`);
-            return;
-        }
         const row = requestId ? await this.store.findDataRequestByHiRequestId(requestId) : null;
         if (!row) {
             console.warn(`[ABDM HIU] on-request for an unknown request dropped REQUEST-ID=${headers?.requestId ?? "-"}`);
@@ -510,6 +526,18 @@ export class HiuDataFlowService implements HealthInformationRequester {
             return;
         }
         const artefact = await this.store.findArtefact(row.artefactFk);
+        // Only from the HIU the request was raised as: one tenant's facility never settles another's transfer.
+        if (!artefact?.hiuId || headers?.hiuId !== artefact.hiuId) {
+            console.warn(`[ABDM HIU] on-request for another HIU dropped REQUEST-ID=${headers?.requestId ?? "-"}`);
+            await this.audit.record({
+                hospitalId: row.hospitalId,
+                event: HIU_AUDIT_EVENTS.ON_REQUEST,
+                requestId: row.hiRequestId,
+                outcome: HIU_AUDIT_OUTCOMES.IGNORED,
+                detail: "HIU mismatch",
+            });
+            return;
+        }
         const auditBase = {
             hospitalId: row.hospitalId,
             event: HIU_AUDIT_EVENTS.ON_REQUEST,
@@ -818,7 +846,8 @@ export class HiuDataFlowService implements HealthInformationRequester {
             console.warn(`[ABDM HIU] transfer for REQUEST-ID=${row.hiRequestId} closed ${sessionStatus} without a transaction id; no notify sent`);
             return;
         }
-        if (!settings.hiuId) {
+        const hiuId = artefact?.hiuId;
+        if (!hiuId) {
             console.warn(`[ABDM HIU] transfer transactionId=${row.transactionId} closed ${sessionStatus}; HIU id missing, no notify sent`);
             return;
         }
@@ -835,7 +864,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
                         consentId: artefact?.consentArtefactId ?? "",
                         transactionId: row.transactionId,
                         doneAt: abdmDateTime(now),
-                        notifier: { type: "HIU", id: settings.hiuId },
+                        notifier: { type: "HIU", id: hiuId },
                         statusNotification: {
                             sessionStatus,
                             hipId: artefact?.hipId ?? "",

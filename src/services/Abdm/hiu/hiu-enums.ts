@@ -208,6 +208,10 @@ export class HiuError extends Error {
     }
 }
 
-/** The 503 every HIU staff endpoint answers while the HIU settings are missing. */
+/** The 503 every HIU staff endpoint answers while the deployment's HIU settings are missing. */
 export const hiuNotConfiguredError = (): HiuError =>
-    new HiuError("not-configured", "ABDM record requests aren't set up for this clinic yet: the HIU id, records key or push address is missing.");
+    new HiuError("not-configured", "ABDM record requests aren't set up on this server yet: the records key or push address is missing.");
+
+/** The 503 a hospital's HIU staff endpoints answer while the hospital has no HIU id (AbdmFacilities). */
+export const hiuFacilityNotConfiguredError = (): HiuError =>
+    new HiuError("not-configured", "This hospital isn't set up as an ABDM HIU facility yet. A system admin can add its HFR facility id under ABDM Facilities.");

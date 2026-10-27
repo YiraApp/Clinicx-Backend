@@ -345,6 +345,11 @@ export class MigrationService {
             EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_AbdmFacilities_HipId ON AbdmFacilities (HipId) WHERE HipId IS NOT NULL');`,
             `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_AbdmFacilities_ScanShareHipId' AND object_id = OBJECT_ID('AbdmFacilities'))
             EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_AbdmFacilities_ScanShareHipId ON AbdmFacilities (ScanShareHipId) WHERE ScanShareHipId IS NOT NULL');`,
+            // The HFR facility id the hospital requests records as (M3, X-HIU-ID) when it is not the
+            // HIP id; NULL means the HIP id. One HIU id serves one hospital.
+            "IF COL_LENGTH('dbo.AbdmFacilities', 'HiuId') IS NULL ALTER TABLE AbdmFacilities ADD HiuId VARCHAR(20) NULL;",
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_AbdmFacilities_HiuId' AND object_id = OBJECT_ID('AbdmFacilities'))
+            EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_AbdmFacilities_HiuId ON AbdmFacilities (HiuId) WHERE HiuId IS NOT NULL');`,
 
             // ABDM for the whole deployment (one client id, one bridge): the bridge URL ABDM should
             // call back on, and the ABDM client ids allowed to call our callbacks
@@ -368,8 +373,9 @@ export class MigrationService {
 
     /**
      * ABDM Milestone 3 (ClinicX as a Health Information User): the five AbdmHiu* tables, their
-     * indexes, and the "ABDM Record Request" menu for the roles in ABDM_HIU_ROLE_NAMES (plan
-     * section 5, decision D9). Idempotent: a table is created when missing, then every column is
+     * indexes, the HIU id of requests raised before it was per hospital (from ABDM_HIU_ID, only
+     * where none is stored), the "ABDM Record Request" menu for the roles in ABDM_HIU_ROLE_NAMES
+     * (plan section 5, decision D9) and the "ABDM Facilities" menu for system admins. Idempotent: a table is created when missing, then every column is
      * added behind its own COL_LENGTH guard, so a table created by an earlier version gains later
      * columns. Fails startup on error, like ensureAbdmSchema(). Never drops or alters an existing column.
      */
@@ -400,22 +406,58 @@ export class MigrationService {
                 .join("\n"));
         }
 
-        // The sidebar item (D9). A high OrderNo keeps it last, so it never becomes a landing page.
-        // Inserted only when no row has its route, so an admin's later edit or deactivation stands.
-        await run(`IF NOT EXISTS (SELECT 1 FROM SidebarMenus WHERE Route = @0)
+        // Requests raised before HIU ids were per hospital carry none: they were raised as the one
+        // ABDM_HIU_ID of the time, so they keep it and their callbacks still match. Rows that have
+        // an id are never touched; with ABDM_HIU_ID unset (or unusable) nothing is filled in.
+        const legacyHiuId = abdmConfig.hiuId;
+        if (/^[A-Za-z0-9_-]{1,20}$/.test(legacyHiuId)) {
+            const filled = await run(`UPDATE dbo.AbdmHiuConsentRequests SET HiuId = @0 OUTPUT inserted.Id WHERE HiuId IS NULL;`, [legacyHiuId]);
+            if (Array.isArray(filled) && filled.length) console.log(`ABDM HIU: ${filled.length} earlier record requests given HIU id ${legacyHiuId} (ABDM_HIU_ID).`);
+        } else if (legacyHiuId) {
+            console.warn("ABDM HIU: ABDM_HIU_ID is not a usable HIU id; earlier record requests keep no HIU id.");
+        }
+
+        // The sidebar items (D9). A high OrderNo keeps each last, so it never becomes a landing page.
+        await seedMenu(run, ABDM_HIU_MENU, abdmConfig.hiuRoleNames, "ABDM_HIU_ROLE_NAMES");
+        // The system admins' screen that sets each hospital up as an ABDM facility (HIP and HIU ids).
+        await seedMenu(run, ABDM_FACILITIES_MENU, [ABDM_FACILITIES_ROLE], "the system admin role");
+        console.log("ABDM HIU schema guaranteed.");
+    }
+}
+
+/** The staff page's sidebar item (D9). */
+export const ABDM_HIU_MENU = { name: "ABDM Record Request", route: "/abdm/record-request", icon: "FileSearch", orderNo: 900 } as const;
+
+/** The system admins' ABDM facility setup (per hospital HIP and HIU ids). */
+export const ABDM_FACILITIES_MENU = { name: "ABDM Facilities", route: "/admin/abdm-facilities", icon: "Building2", orderNo: 910 } as const;
+/** The role the facility routes allow (systemAdminOnly). */
+export const ABDM_FACILITIES_ROLE = "Yira System Admin";
+
+type MigrationRun = (statement: string, params?: unknown[]) => Promise<any>;
+
+/**
+ * A sidebar item, inserted only when no row has its route (so an admin's later edit or
+ * deactivation stands), and a global (no organization, no hospital) assignment of it to each of
+ * [roleNames], only where none exists, active or not: an admin who switched it off is not overridden.
+ */
+const seedMenu = async (
+    run: MigrationRun,
+    menu: { name: string; route: string; icon: string; orderNo: number },
+    roleNames: string[],
+    roleSource: string,
+): Promise<void> => {
+    await run(`IF NOT EXISTS (SELECT 1 FROM SidebarMenus WHERE Route = @0)
             INSERT INTO SidebarMenus (MenuName, Route, Icon, ImagePath, UseImage, ParentMenuId, OrderNo, Status, CreatedAt)
             VALUES (@1, @0, @2, NULL, 0, NULL, @3, 1, GETDATE());`,
-            [ABDM_HIU_MENU.route, ABDM_HIU_MENU.name, ABDM_HIU_MENU.icon, ABDM_HIU_MENU.orderNo]);
+    [menu.route, menu.name, menu.icon, menu.orderNo]);
 
-        // A global (no organization, no hospital) assignment per allowed role, only where none exists,
-        // active or not: an admin who switched it off is not overridden.
-        for (const roleName of abdmConfig.hiuRoleNames) {
-            const matched = await run(`SELECT COUNT(*) AS Matches FROM Roles WHERE UPPER(LTRIM(RTRIM(RoleName))) = UPPER(@0) OR UPPER(NormalizedName) = UPPER(@0);`, [roleName]);
-            if (!Number(matched?.[0]?.Matches)) {
-                console.warn(`ABDM HIU menu: no role is named "${roleName.slice(0, 60)}" (ABDM_HIU_ROLE_NAMES); nothing assigned for it.`);
-                continue;
-            }
-            await run(`INSERT INTO RoleSidebarMenus (RoleId, MenuId, OrganizationId, HospitalId, Status, CreatedAt)
+    for (const roleName of roleNames) {
+        const matched = await run(`SELECT COUNT(*) AS Matches FROM Roles WHERE UPPER(LTRIM(RTRIM(RoleName))) = UPPER(@0) OR UPPER(NormalizedName) = UPPER(@0);`, [roleName]);
+        if (!Number(matched?.[0]?.Matches)) {
+            console.warn(`${menu.name} menu: no role is named "${roleName.slice(0, 60)}" (${roleSource}); nothing assigned for it.`);
+            continue;
+        }
+        await run(`INSERT INTO RoleSidebarMenus (RoleId, MenuId, OrganizationId, HospitalId, Status, CreatedAt)
             SELECT r.Id, m.MenuId, NULL, NULL, 1, GETDATE()
             FROM Roles r
             CROSS JOIN (SELECT TOP 1 MenuId FROM SidebarMenus WHERE Route = @1 ORDER BY MenuId) m
@@ -423,14 +465,9 @@ export class MigrationService {
               AND NOT EXISTS (
                 SELECT 1 FROM RoleSidebarMenus x
                 WHERE x.RoleId = r.Id AND x.MenuId = m.MenuId AND x.OrganizationId IS NULL AND x.HospitalId IS NULL
-              );`, [roleName, ABDM_HIU_MENU.route]);
-        }
-        console.log("ABDM HIU schema guaranteed.");
+              );`, [roleName, menu.route]);
     }
-}
-
-/** The staff page's sidebar item (D9). */
-export const ABDM_HIU_MENU = { name: "ABDM Record Request", route: "/abdm/record-request", icon: "FileSearch", orderNo: 900 } as const;
+};
 
 interface HiuTableSpec {
     name: string;
@@ -465,6 +502,9 @@ const ABDM_HIU_TABLES: HiuTableSpec[] = [
             ["AbdmError", "NVARCHAR(500) NULL"],
             ["CreatedAt", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuConsentRequests_CreatedAt DEFAULT GETDATE()"],
             ["UpdatedAt", "DATETIME2(3) NULL"],
+            // The HIU id the request was raised as (its hospital's, at the time): every later call and
+            // callback about it uses this one. Set at create, never changed.
+            ["HiuId", "VARCHAR(20) NULL"],
         ],
         indexes: [
             { name: "UX_AbdmHiuConsentRequests_InitRequestId", on: "InitRequestId", unique: true },

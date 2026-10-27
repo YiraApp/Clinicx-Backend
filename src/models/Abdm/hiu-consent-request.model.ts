@@ -25,6 +25,14 @@ export class HiuConsentRequest {
     @Column({ type: "int" })
     HospitalId: number;
 
+    /**
+     * The HIU id (HFR facility id) the request was raised as, written at create and never changed:
+     * status, fetch, the data flow and callbacks about it all use this one. Null only on a request
+     * from before it was stored (the startup migration fills those from ABDM_HIU_ID when set).
+     */
+    @Column({ type: "varchar", length: 20, nullable: true })
+    HiuId?: string | null;
+
     @Column({ type: "int", nullable: true })
     OrganizationId?: number | null;
 
