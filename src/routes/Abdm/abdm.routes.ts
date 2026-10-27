@@ -31,6 +31,7 @@ abdmRouter.get("/health-records/vitals/:id", hr.vitals.bind(hr));
 // M2: a patient's care contexts and their link state; linking and the deep-link SMS
 const m2 = abdmM2Controller;
 abdmRouter.get("/patients/:userId/care-contexts", m2.careContexts.bind(m2));
+abdmRouter.get("/patients/:userId/care-contexts/:reference", m2.careContextView.bind(m2));
 abdmRouter.post("/patients/:userId/link", m2.link.bind(m2));
 abdmRouter.post("/patients/:userId/sms-notify", m2.smsNotify.bind(m2));
 

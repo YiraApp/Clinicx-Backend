@@ -50,20 +50,20 @@ export class SnomedController {
                 );
             } catch (snomedError: any) {
                 console.warn("SNOMED CT server error (returning empty results):", snomedError?.message || snomedError);
-                results = { items: [], total: 0 };
+                results = { items: [], total: 0, unavailable: true };
             }
 
             res.json({
                 status: true,
-                message: "Concepts retrieved successfully",
+                message: results?.unavailable ? "SNOMED CT search is unavailable right now." : "Concepts retrieved successfully",
                 data: results
             });
         } catch (error: any) {
             console.error("SNOMED search error:", error?.message || error);
             res.json({
                 status: true,
-                message: "No results found",
-                data: { items: [], total: 0 }
+                message: "SNOMED CT search is unavailable right now.",
+                data: { items: [], total: 0, unavailable: true }
             });
         }
     }

@@ -10,7 +10,7 @@ export type { Hip };
  */
 
 /** A visit, or a record saved outside one, which is then a care context of its own. */
-export type CareContextKind = "visit" | "discharge" | "immunization" | "vitals" | "prescription" | "consultation" | "note" | "document";
+export type CareContextKind = "visit" | "discharge" | "immunization" | "vitals" | "prescription" | "consultation" | "note" | "document" | "report" | "wellness";
 export type LinkStatus = "not-linked" | "awaiting-token" | "linking" | "linked" | "failed";
 
 export interface CareContextSeed {
@@ -34,6 +34,8 @@ export interface CareContextRow extends CareContextSeed {
     linkedAt: Date | null;
     notifiedHiTypes: HiType[];
     lastError: string | null;
+    /** When the clinic's record first became a care context: soon after it was saved. */
+    createdAt?: Date | null;
 }
 
 export type LinkStatePatch = Partial<Pick<CareContextRow, "linkStatus" | "linkedVia" | "linkedAbhaAddress" | "linkRequestId" | "linkedAt" | "notifiedHiTypes" | "lastError">>;

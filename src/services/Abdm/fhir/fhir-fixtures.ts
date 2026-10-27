@@ -57,7 +57,22 @@ export const FIXTURES: { [T in HiType]: RecordSourceFor[T] } = {
     DiagnosticReport: {
         ...fixtureParties,
         kind: "lab",
-        report: { id: "doc-lab-1", title: "Complete blood count", category: "Lab", contentType: "application/pdf", data: pdf, createdAt: at("2026-10-19T09:00:00+05:30") },
+        entered: {
+            id: "dr-1",
+            test: { text: "Complete blood count", conceptId: "58410-2" },
+            issuedAt: at("2026-10-19T09:00:00+05:30"),
+            collectedAt: at("2026-10-18T08:30:00+05:30"),
+            performedBy: "City Diagnostics",
+            specimen: { text: "Blood specimen", conceptId: "119297000" },
+            results: [
+                { id: "r-1", name: { text: "Haemoglobin", conceptId: "38082009" }, value: 11.2, unit: "g/dL", low: 13, high: 17, interpretation: "low" },
+                { id: "r-2", name: { text: "Total leukocyte count" }, value: 7600, unit: "/uL", low: 4000, high: 11000, interpretation: "normal" },
+                { id: "r-3", name: { text: "Peripheral smear" }, valueText: "Microcytic hypochromic picture" },
+            ],
+            conclusion: "Mild anaemia.",
+            conclusionCodes: [{ text: "Anaemia", conceptId: "271737000" }],
+        },
+        document: { id: "doc-lab-1", title: "Complete blood count", category: "Lab", contentType: "application/pdf", data: pdf, createdAt: at("2026-10-19T09:00:00+05:30") },
     },
     DischargeSummary: {
         ...fixtureParties,

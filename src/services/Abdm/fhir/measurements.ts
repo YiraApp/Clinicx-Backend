@@ -21,7 +21,7 @@ const MEASURES: Record<Exclude<WellnessMeasurement["kind"], "bloodPressure">, Me
     respiratoryRate: { section: "VitalSigns", code: "9279-1", display: "Respiratory rate", unit: "breaths/minute", ucum: "/min" },
     oxygenSaturation: { section: "VitalSigns", code: "2708-6", display: "Oxygen saturation in Arterial blood", unit: "%", ucum: "%" },
     // ndhm-vital-signs has this one temperature code; the unit says how it was measured.
-    temperature: { section: "VitalSigns", code: "61008-9", display: "Body surface temperature", unit: "Cel", ucum: "Cel" },
+    temperature: { section: "VitalSigns", code: "61008-9", display: "Body surface temperature", unit: "°C", ucum: "Cel" },
     height: { section: "BodyMeasurement", code: "8302-2", display: "Body height", unit: "cm", ucum: "cm" },
     weight: { section: "BodyMeasurement", code: "29463-7", display: "Body weight", unit: "kg", ucum: "kg" },
     bmi: { section: "BodyMeasurement", code: "39156-5", display: "Body mass index (BMI) [Ratio]", unit: "kg/m2", ucum: "kg/m2" },
@@ -47,6 +47,34 @@ export const sectionOf = (m: WellnessMeasurement): WellnessSection =>
 
 const quantity = (value: number, unit: string, ucum: string) => ({ value, unit, system: UCUM, code: ucum });
 
+const INTERPRETATION = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation";
+const FLAGS = { L: "Low", N: "Normal", H: "High" } as const;
+
+/** Whole years from [birthDate] (YYYY-MM-DD) to [at]; null without a birth date. */
+const ageAt = (birthDate: unknown, at: Date): number | null => {
+    const m = String(birthDate ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return null;
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    return at.getFullYear() - y - (at.getMonth() + 1 < mo || (at.getMonth() + 1 === mo && at.getDate() < d) ? 1 : 0);
+};
+
+/**
+ * A blood pressure reading against the adult range (systolic 90–139, diastolic 60–89 mmHg: below is
+ * low, 140/90 and above is high), as the reference range and interpretation a PHR app shows. Only for
+ * adults: a child's range depends on age and height, so a child's reading is given without either.
+ */
+const bpComponent = (code: string, display: string, value: number, low: number, high: number, adult: boolean) => {
+    const flag = value < low ? "L" : value > high ? "H" : "N";
+    return {
+        code: { coding: [{ system: LOINC, code, display }] },
+        valueQuantity: quantity(value, "mmHg", "mm[Hg]"),
+        ...(adult ? {
+            interpretation: [{ coding: [{ system: INTERPRETATION, code: flag, display: FLAGS[flag] }], text: FLAGS[flag] }],
+            referenceRange: [{ low: quantity(low, "mmHg", "mm[Hg]"), high: quantity(high, "mmHg", "mm[Hg]"), text: "Adult" }],
+        } : {}),
+    };
+};
+
 /**
  * One measurement as an Observation. [profile] is the NRCES profile it claims: a wellness profile
  * in a WellnessRecord, the plain Observation profile in a consultation's examination.
@@ -67,20 +95,22 @@ export const measurementObservation = (key: string, m: WellnessMeasurement, pati
     };
 
     if (m.kind === "bloodPressure") {
+        const age = ageAt(patient.birthDate, m.at);
+        const adult = age !== null && age >= 18;
         return {
             ...base,
             text: narrative(`Blood pressure ${m.systolic}/${m.diastolic} mmHg`),
             code: { coding: [{ system: LOINC, code: BLOOD_PRESSURE.code, display: BLOOD_PRESSURE.display }], text: "Blood pressure" },
             component: [
-                { code: { coding: [{ system: LOINC, code: "8480-6", display: "Systolic blood pressure" }] }, valueQuantity: quantity(m.systolic, "mmHg", "mm[Hg]") },
-                { code: { coding: [{ system: LOINC, code: "8462-4", display: "Diastolic blood pressure" }] }, valueQuantity: quantity(m.diastolic, "mmHg", "mm[Hg]") },
+                bpComponent("8480-6", "Systolic blood pressure", m.systolic, 90, 139, adult),
+                bpComponent("8462-4", "Diastolic blood pressure", m.diastolic, 60, 89, adult),
             ],
         };
     }
 
     const measure = MEASURES[m.kind];
     // A temperature above 45 is Fahrenheit: the desk records 98.6, not 37.
-    const [unit, ucum] = m.kind === "temperature" && m.value > 45 ? ["degF", "[degF]"] : [measure.unit, measure.ucum];
+    const [unit, ucum] = m.kind === "temperature" && m.value > 45 ? ["°F", "[degF]"] : [measure.unit, measure.ucum];
     return {
         ...base,
         text: narrative(`${measure.display}: ${m.value} ${unit}`),

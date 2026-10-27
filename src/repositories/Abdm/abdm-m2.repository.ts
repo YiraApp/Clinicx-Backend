@@ -37,6 +37,7 @@ const careContext = (r: any): CareContextRow => ({
     linkedAt: r.LinkedAt ? new Date(r.LinkedAt) : null,
     notifiedHiTypes: list(r.NotifiedHiTypes),
     lastError: r.LastError ?? null,
+    createdAt: r.CreatedAt ? new Date(r.CreatedAt) : null,
 });
 
 const PATIENT_COLUMNS = `u.Id, u.FirstName, u.LastName, u.Gender, CONVERT(varchar(10), u.DateOfBirth, 23) AS DateOfBirth, u.PhoneNumber, u.AbhaNumber, u.AbhaAddress`;
@@ -242,6 +243,7 @@ export const abdmM2Repository = new AbdmM2Repository();
 const RECENT_TABLES: Record<string, boolean> = {
     PatientMedicalRecord: true, PatientPrescription: true, PatientClinicalNotes: true, MedicalDocuments: true,
     AppointmentBills: true, PatientImmunizations: true, PostVisitDocuments: true, DischargeSummaries: false,
+    DiagnosticReports: true, WellnessRecords: true,
 };
 
 /** Whose a saved record is: a prescription line by its prescription, a visit record by its appointment's patient and hospital. */

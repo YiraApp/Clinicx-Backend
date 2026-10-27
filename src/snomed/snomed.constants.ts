@@ -91,6 +91,7 @@ export const ucumCodes = [
     { unit: "kilocalorie", code: "kcal", display: "Calories Burned (kcal)" }
 ];
 
-export const SNOMED_BASE_URL = "http://172.212.228.114:8080";
+/** The Snowstorm SNOMED CT server: SNOMED_BASE_URL in the environment, else the clinic's own. */
+export const SNOMED_BASE_URL = (process.env.SNOMED_BASE_URL || "http://172.212.228.114:8080").trim().replace(/\/+$/, "");
 export const BRANCH_INTERNATIONAL = "MAIN";
 export const BRANCH_INDIAN = "MAIN/SNOMEDCT-IN";

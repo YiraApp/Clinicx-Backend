@@ -4,6 +4,8 @@ import type { CodedText, DiagnosticKind, DocumentSource, RecordParties, VisitVit
 import { visitVitalsToMeasurements } from "./fhir/measurements.js";
 import { abdmHealthRecordRepository, isVitalsRecord, type AbdmHealthRecordRepository, type VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import type { PatientMedicalRecord } from "../../models/Appointments/patient-medical-record.model.js";
+import { bmiOf } from "../Appointments/wellness-record.service.js";
+import type { ReportResult } from "../Appointments/diagnostic-report.service.js";
 
 /**
  * Which ABDM health records a care context holds, built as NRCES bundles. A visit (an appointment)
@@ -38,6 +40,17 @@ const vitalsOf = (r: PatientMedicalRecord): VisitVitals => ({
 const coded = (text?: string | null, conceptId?: string | null): CodedText[] =>
     text?.trim() ? [{ text: text.trim(), conceptId: conceptId?.trim() || null }] : [];
 
+/** Each concept once: the same words (or the same code) recorded twice in a visit is one condition. */
+const distinctCoded = (items: CodedText[]): CodedText[] => {
+    const seen = new Set<string>();
+    return items.filter((c) => {
+        const key = c.conceptId || c.text.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+};
+
 const prescriptionSource = (parties: RecordParties, p: VisitRecords["prescriptions"][number], fallbackDate: Date): SourceOf => ({
     hiType: "Prescription",
     source: {
@@ -58,7 +71,7 @@ const prescriptionSource = (parties: RecordParties, p: VisitRecords["prescriptio
 const documentSource = (parties: RecordParties, d: DocumentSource, key: string): SourceOf => {
     const kind = diagnosticKind(d.category);
     return kind
-        ? { hiType: "DiagnosticReport", source: { ...parties, kind, report: d } }
+        ? { hiType: "DiagnosticReport", source: { ...parties, kind, document: d } }
         : { hiType: "HealthDocumentRecord", source: { ...parties, key, date: d.createdAt, title: "Health document", documents: [d] } };
 };
 
@@ -85,6 +98,9 @@ export const visitRecordDate = (v: VisitRecords): Date => {
 export const visitSources = (v: VisitRecords): SourceOf[] => {
     const out: SourceOf[] = [];
     const visitKey = `appointment-${v.appointment.id}`;
+    const visit = { id: v.appointment.id, start: v.appointment.start, end: v.appointment.end, teleconsultation: v.appointment.teleconsultation };
+    // Every record of the visit carries it, so they share one encounter
+    const parties = { ...v.parties, visit };
     const consultations = v.medicalRecords.filter((r) => !isVitalsRecord(r));
     const vitalsChecks = v.medicalRecords.filter(isVitalsRecord);
 
@@ -94,15 +110,15 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
         out.push({
             hiType: "OPConsultation",
             source: {
-                ...v.parties,
-                visit: { id: v.appointment.id, start: v.appointment.start, end: v.appointment.end, teleconsultation: v.appointment.teleconsultation },
+                ...parties,
                 chiefComplaints: consultations.flatMap((r) => [...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)]),
                 examinationFindings: consultations.flatMap((r) => coded(r.PhysicalExamination, r.PhysicalExaminationConceptId)),
                 vitals: withVitals ? vitalsOf(withVitals) : null,
                 vitalsRecordedAt: withVitals?.Date ?? null,
                 allergies: v.registration.allergies,
                 medicalHistory: v.registration.medicalHistory,
-                diagnoses: consultations.flatMap((r) => coded(r.Diagnosis, r.DiagnosisConceptId)),
+                // The consultation's diagnoses and its prescriptions', which the medicines are for
+                diagnoses: distinctCoded([...consultations.flatMap((r) => coded(r.Diagnosis, r.DiagnosisConceptId)), ...v.prescriptions.flatMap((p) => p.diagnoses)]),
                 procedures: consultations.flatMap((r) => coded(r.Treatment, r.TreatmentConceptId)),
                 medications: v.prescriptions.flatMap((p) => p.medications),
                 authoredOn: v.prescriptions[0]?.row.Date ?? null,
@@ -114,25 +130,25 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
     }
 
     for (const p of v.prescriptions) {
-        if (p.medications.length) out.push(prescriptionSource(v.parties, p, v.appointment.start));
+        if (p.medications.length) out.push(prescriptionSource(parties, p, v.appointment.start));
     }
 
     const healthDocuments = [];
     for (const d of v.documents) {
         const kind = diagnosticKind(d.category);
-        if (kind) out.push({ hiType: "DiagnosticReport", source: { ...v.parties, kind, report: d } });
+        if (kind) out.push({ hiType: "DiagnosticReport", source: { ...parties, kind, document: d } });
         else healthDocuments.push(d);
     }
     if (healthDocuments.length) {
         out.push({
             hiType: "HealthDocumentRecord",
-            source: { ...v.parties, key: `${visitKey}:documents`, date: v.appointment.start, title: "Health documents", documents: healthDocuments },
+            source: { ...parties, key: `${visitKey}:documents`, date: v.appointment.start, title: "Health documents", documents: healthDocuments },
         });
     }
 
     const measurements: WellnessMeasurement[] = vitalsChecks.flatMap((r) => visitVitalsToMeasurements(vitalsOf(r), new Date(r.Date)));
     if (measurements.length) {
-        out.push({ hiType: "WellnessRecord", source: { ...v.parties, key: `${visitKey}:wellness`, date: v.appointment.start, measurements } });
+        out.push({ hiType: "WellnessRecord", source: { ...parties, key: `${visitKey}:wellness`, date: v.appointment.start, measurements } });
     }
 
     for (const b of v.bills) {
@@ -141,7 +157,7 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
         out.push({
             hiType: "Invoice",
             source: {
-                ...v.parties,
+                ...parties,
                 bill: {
                     id: b.AppointmentBillId,
                     number: b.BillNumber,
@@ -163,7 +179,7 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
         out.push({
             hiType: "ImmunizationRecord",
             source: {
-                ...v.parties,
+                ...parties,
                 key: `${visitKey}:immunizations`,
                 date: v.appointment.start,
                 immunizations: v.immunizations.map((i) => ({
@@ -193,7 +209,8 @@ const parseList = (json?: string | null): CodedText[] => {
 export class AbdmHealthRecordService {
     constructor(
         private readonly records: Pick<AbdmHealthRecordRepository,
-            "visit" | "dischargeSummary" | "immunization" | "vitalsRecord" | "prescription" | "consultationRecord" | "clinicalNote" | "standaloneDocument"> = abdmHealthRecordRepository,
+            "visit" | "dischargeSummary" | "immunization" | "vitalsRecord" | "prescription" | "consultationRecord" | "clinicalNote" | "standaloneDocument"
+            | "diagnosticReport" | "wellnessRecord"> = abdmHealthRecordRepository,
         private readonly now: () => Date = () => new Date(),
     ) {}
 
@@ -312,6 +329,65 @@ export class AbdmHealthRecordService {
     async forDocument(id: number): Promise<HealthRecordBundle[]> {
         const { parties, document } = await this.records.standaloneDocument(id);
         return document ? this.build([documentSource(parties, document, `medical-document-${id}`)]) : [];
+    }
+
+    /** A lab or imaging report entered at the clinic; a draft is not shared. */
+    async forDiagnosticReport(id: number): Promise<HealthRecordBundle[]> {
+        const { row: r, parties, document } = await this.records.diagnosticReport(id);
+        if (r.Status !== "Final") return [];
+        let results: ReportResult[] = [];
+        try {
+            results = r.Results ? JSON.parse(r.Results) : [];
+        } catch { /* unreadable results: the report goes without them, and the builder says if that is not enough */ }
+        return this.build([{
+            hiType: "DiagnosticReport",
+            source: {
+                ...parties,
+                kind: r.Category === "Imaging" ? "imaging" : "lab",
+                entered: {
+                    id: String(r.Id),
+                    test: { text: r.TestName, conceptId: r.TestConceptId ?? null },
+                    issuedAt: new Date(r.IssuedAt),
+                    collectedAt: r.CollectedAt ? new Date(r.CollectedAt) : null,
+                    performedBy: r.PerformedBy ?? null,
+                    specimen: r.SpecimenType ? { text: r.SpecimenType, conceptId: r.SpecimenConceptId ?? null } : null,
+                    results: results.map((x, i) => ({
+                        id: String(i), name: { text: x.name, conceptId: x.conceptId ?? null },
+                        value: x.value ?? null, valueText: x.valueText ?? null, unit: x.unit ?? null,
+                        low: x.low ?? null, high: x.high ?? null, referenceText: x.referenceText ?? null, interpretation: x.interpretation ?? null,
+                    })),
+                    conclusion: r.Conclusion ?? null,
+                    conclusionCodes: parseList(r.ConclusionCodes),
+                },
+                document,
+            },
+        }]);
+    }
+
+    /** A wellness check recorded at the clinic: its measurements, BMI worked out from height and weight. */
+    async forWellnessRecord(id: number): Promise<HealthRecordBundle[]> {
+        const { row: w, parties } = await this.records.wellnessRecord(id);
+        const at = new Date(w.RecordedAt);
+        const measurements: WellnessMeasurement[] = [];
+        if (w.Systolic != null && w.Diastolic != null) measurements.push({ kind: "bloodPressure", systolic: Number(w.Systolic), diastolic: Number(w.Diastolic), at });
+        const add = (kind: Exclude<WellnessMeasurement["kind"], "bloodPressure">, value: unknown) => {
+            const n = value === null || value === undefined ? NaN : Number(value);
+            if (Number.isFinite(n)) measurements.push({ kind, value: n, at });
+        };
+        add("heartRate", w.HeartRate);
+        add("respiratoryRate", w.RespiratoryRate);
+        add("oxygenSaturation", w.SpO2);
+        add("temperature", w.TemperatureC);
+        add("height", w.HeightCm);
+        add("weight", w.WeightKg);
+        add("bmi", bmiOf(w.HeightCm, w.WeightKg));
+        add("steps", w.Steps);
+        add("caloriesBurned", w.CaloriesBurned);
+        add("sleepHours", w.SleepHours);
+        add("bloodGlucose", w.BloodGlucose);
+        add("fluidIntakeLitres", w.FluidIntakeLitres);
+        if (!measurements.length) return [];
+        return this.build([{ hiType: "WellnessRecord", source: { ...parties, key: `wellness-record-${w.Id}`, date: at, measurements } }]);
     }
 
     private build(sources: SourceOf[], hiTypes?: HiType[]): HealthRecordBundle[] {

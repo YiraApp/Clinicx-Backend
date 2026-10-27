@@ -149,11 +149,48 @@ test("Prescription: one section of MedicationRequests and the PDF, coded as Pres
 });
 
 test("DiagnosticReport: the report file alone, typed as a laboratory report", () => {
-    const s = composition(build("DiagnosticReport")).section[0];
+    const fileOnly = { ...FIXTURES.DiagnosticReport, entered: null };
+    const s = composition(build("DiagnosticReport", fileOnly)).section[0];
     assert.deepEqual(s.entry.map((e: any) => e.type), ["DocumentReference"]);
-    const doc = resources(build("DiagnosticReport"), "DocumentReference")[0];
+    const doc = resources(build("DiagnosticReport", fileOnly), "DocumentReference")[0];
     assert.equal(doc.type.coding[0].code, "4241000179101");
     assert.ok(doc.content[0].attachment.data.length > 0);
+});
+
+test("DiagnosticReport: an entered lab report is a DiagnosticReportLab with its results, ranges, flags, specimen and file", () => {
+    const bundle = build("DiagnosticReport");
+    assert.deepEqual(composition(bundle).section[0].entry.map((e: any) => e.type), ["DiagnosticReport"]);
+    const report = resources(bundle, "DiagnosticReport")[0];
+    assert.equal(report.meta.profile[0], NRCES + "DiagnosticReportLab");
+    assert.deepEqual(report.category, [{ text: "Laboratory" }]);
+    assert.deepEqual(report.code.coding[0], { system: "http://loinc.org", code: "58410-2", display: "Complete blood count" });
+    assert.equal(report.conclusion, "Mild anaemia.");
+    assert.equal(report.conclusionCode[0].coding[0].code, "271737000");
+    assert.equal(report.result.length, 3);
+    assert.ok(report.resultsInterpreter.length && report.presentedForm[0].data.length > 0);
+    const [hb, tlc, smear] = resources(bundle, "Observation");
+    assert.deepEqual(hb.valueQuantity, { value: 11.2, unit: "g/dL" });
+    assert.deepEqual(hb.referenceRange, [{ low: { value: 13, unit: "g/dL" }, high: { value: 17, unit: "g/dL" } }]);
+    assert.equal(hb.interpretation[0].coding[0].code, "L");
+    assert.equal(tlc.interpretation[0].coding[0].code, "N");
+    assert.equal(smear.valueString, "Microcytic hypochromic picture");
+    const specimen = resources(bundle, "Specimen")[0];
+    assert.ok(specimen.receivedTime && specimen.collection.collectedDateTime);
+    assert.equal(hb.specimen.reference, `urn:uuid:${specimen.id}`);
+});
+
+test("DiagnosticReport: an imaging report carries its image as Media; one without a conclusion, results or image is refused", () => {
+    const imaging = { ...FIXTURES.DiagnosticReport, kind: "imaging" as const, entered: { ...FIXTURES.DiagnosticReport.entered!, results: [], specimen: null } };
+    const bundle = build("DiagnosticReport", imaging);
+    const report = resources(bundle, "DiagnosticReport")[0];
+    assert.equal(report.meta.profile[0], NRCES + "DiagnosticReportImaging");
+    assert.equal(report.media[0].link.reference, `urn:uuid:${resources(bundle, "Media")[0].id}`);
+    assert.equal(report.presentedForm, undefined, "the image is sent once, as Media");
+
+    const entered = FIXTURES.DiagnosticReport.entered!;
+    assert.throws(() => build("DiagnosticReport", { ...FIXTURES.DiagnosticReport, entered: { ...entered, conclusion: " " } }), FhirSourceError);
+    assert.throws(() => build("DiagnosticReport", { ...FIXTURES.DiagnosticReport, entered: { ...entered, results: [] } }), FhirSourceError);
+    assert.throws(() => build("DiagnosticReport", { ...imaging, document: null }), FhirSourceError);
 });
 
 test("DischargeSummary: an inpatient stay, investigations as text, sections coded as DischargeSummaryRecord fixes", () => {
@@ -189,7 +226,7 @@ test("WellnessRecord: sections by the titles NRCES slices on, observations by it
     assert.deepEqual([...profiles].sort(), ["ObservationBodyMeasurement", "ObservationGeneralAssessment", "ObservationPhysicalActivity", "ObservationVitalSigns"]);
 });
 
-test("Invoice: GST split into CGST and SGST, IGST named in text, and a draft bill is not an invoice", () => {
+test("Invoice: GST split into CGST and SGST, IGST coded in Clinicx's system, and a draft bill is not an invoice", () => {
     const bundle = build("Invoice");
     const invoice = resources(bundle, "Invoice")[0];
     assert.equal(invoice.status, "balanced");
@@ -201,7 +238,15 @@ test("Invoice: GST split into CGST and SGST, IGST named in text, and a draft bil
 
     const igst = buildInvoice({ ...FIXTURES.Invoice, bill: { ...FIXTURES.Invoice.bill, cgst: 0, sgst: 0, igst: 252 } }, NOW);
     const igstTax = (resources(igst, "Invoice")[0].lineItem[1].priceComponent as any[]).find((p) => p.type === "tax");
+    assert.deepEqual(igstTax.code.coding, [{ system: "https://clinicx.yira.ai/fhir/price-components", code: "IGST", display: "IGST" }]);
     assert.deepEqual([igstTax.code.text, igstTax.amount.value], ["IGST", 252]);
+    // NRCES Invoice: every price component's code has exactly one coding with system, code and display
+    for (const b of [bundle, igst]) {
+        for (const p of resources(b, "Invoice")[0].lineItem.flatMap((l: any) => l.priceComponent)) {
+            assert.equal(p.code.coding?.length, 1, `${p.type} has one coding`);
+            assert.ok(p.code.coding[0].system && p.code.coding[0].code && p.code.coding[0].display, `${p.type} coding is complete`);
+        }
+    }
 
     assert.throws(() => buildInvoice({ ...FIXTURES.Invoice, bill: { ...FIXTURES.Invoice.bill, status: "Draft" } }, NOW), FhirSourceError);
 });
@@ -209,4 +254,47 @@ test("Invoice: GST split into CGST and SGST, IGST named in text, and a draft bil
 test("attachments never leave the bundle as anything but base64 of the file", () => {
     const doc = resources(build("HealthDocumentRecord"), "DocumentReference")[0] as FhirResource & any;
     assert.equal(Buffer.from(doc.content[0].attachment.data, "base64").toString(), "%PDF-1.4\n% fixture\n");
+});
+
+test("every record names its encounter, so a PHR app shows the visit type instead of NA", () => {
+    for (const hiType of HI_TYPES) {
+        const bundle = build(hiType);
+        const ref = composition(bundle).encounter?.reference;
+        assert.ok(ref, `${hiType} has Composition.encounter`);
+        const encounter = bundle.entry.find((e) => e.fullUrl === ref)?.resource as any;
+        assert.equal(encounter?.resourceType, "Encounter", `${hiType}'s encounter is in the bundle`);
+        assert.ok(["AMB", "VR", "IMP"].includes(encounter.class.code), hiType);
+    }
+    // Records of one visit share its encounter
+    const visitOf = { ...fixtureParties, visit: { id: 101, start: new Date("2026-10-20T10:00:00+05:30"), end: null, teleconsultation: false } };
+    const invoice = build("Invoice", { ...FIXTURES.Invoice, ...visitOf });
+    const prescription = build("Prescription", { ...FIXTURES.Prescription, ...visitOf });
+    assert.equal(composition(invoice).encounter.reference, composition(prescription).encounter.reference);
+});
+
+test("conditions say when they were recorded, and medicines name the diagnosis they treat in words", () => {
+    for (const hiType of ["OPConsultation", "Prescription", "DischargeSummary"] as const) {
+        const conditions = resources(build(hiType), "Condition");
+        assert.ok(conditions.length && conditions.every((c) => c.recordedDate), `${hiType} conditions have recordedDate`);
+    }
+    const meds = resources(build("Prescription"), "MedicationRequest");
+    assert.ok(meds.every((m) => m.reasonCode?.length === m.reasonReference?.length && m.reasonCode[0].text), "reasonCode beside reasonReference");
+});
+
+test("an adult's blood pressure carries the reference range and interpretation; a child's does not", () => {
+    const bp = (birthDate: string) => resources(build("WellnessRecord", { ...FIXTURES.WellnessRecord, patient: { ...fixtureParties.patient, birthDate } }), "Observation")
+        .find((o) => o.component)!.component;
+    const adult = bp("1990-04-12");
+    assert.deepEqual(adult.map((c: any) => c.interpretation[0].coding[0].code), ["N", "N"], "118/76 is normal");
+    assert.deepEqual([adult[0].referenceRange[0].low.value, adult[0].referenceRange[0].high.value], [90, 139]);
+    const child = bp("2020-01-01");
+    assert.ok(child.every((c: any) => !c.interpretation && !c.referenceRange));
+    const temperature = resources(build("OPConsultation"), "Observation").find((o) => o.code?.coding?.[0]?.code === "61008-9");
+    assert.ok(["°C", "°F"].includes(temperature.valueQuantity.unit), "a readable unit, the UCUM code beside it");
+});
+
+test("an immunization's route and site are coded where the form's choice names one", () => {
+    const im = resources(build("ImmunizationRecord", { ...FIXTURES.ImmunizationRecord, immunizations: FIXTURES.ImmunizationRecord.immunizations.map((i) => ({ ...i, route: "Intradermal", site: "Left deltoid" })) }), "Immunization")[0];
+    assert.equal(im.route.coding[0].code, "372464004");
+    assert.deepEqual([im.site.coding[0].code, im.site.text], ["LD", "Left deltoid"]);
 });

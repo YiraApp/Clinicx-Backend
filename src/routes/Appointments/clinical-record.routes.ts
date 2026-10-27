@@ -1,9 +1,14 @@
 import { Router } from "express";
 import { immunizationController } from "../../controllers/Appointments/immunization.controller.js";
 import { dischargeSummaryController } from "../../controllers/Appointments/discharge-summary.controller.js";
+import { diagnosticReportController } from "../../controllers/Appointments/diagnostic-report.controller.js";
+import { wellnessRecordController } from "../../controllers/Appointments/wellness-record.controller.js";
 import { authMiddleware } from "../../middlewares/auth.middleware.js";
 
-/** Immunizations and discharge summaries: the records behind ABDM's ImmunizationRecord and DischargeSummary. */
+/**
+ * Immunizations, discharge summaries, diagnostic reports and wellness records: the records behind
+ * ABDM's ImmunizationRecord, DischargeSummary, DiagnosticReport and WellnessRecord.
+ */
 
 const immunizationRouter = Router();
 const im = immunizationController;
@@ -20,4 +25,19 @@ dischargeSummaryRouter.get("/:id", authMiddleware, ds.get.bind(ds));
 dischargeSummaryRouter.patch("/:id", authMiddleware, ds.update.bind(ds));
 dischargeSummaryRouter.delete("/:id", authMiddleware, ds.delete.bind(ds));
 
-export { immunizationRouter, dischargeSummaryRouter };
+const diagnosticReportRouter = Router();
+const dr = diagnosticReportController;
+diagnosticReportRouter.post("/", authMiddleware, dr.create.bind(dr));
+diagnosticReportRouter.get("/patient/:patientId", authMiddleware, dr.listForPatient.bind(dr));
+diagnosticReportRouter.get("/:id", authMiddleware, dr.get.bind(dr));
+diagnosticReportRouter.patch("/:id", authMiddleware, dr.update.bind(dr));
+diagnosticReportRouter.delete("/:id", authMiddleware, dr.delete.bind(dr));
+
+const wellnessRecordRouter = Router();
+const wr = wellnessRecordController;
+wellnessRecordRouter.post("/", authMiddleware, wr.create.bind(wr));
+wellnessRecordRouter.get("/patient/:patientId", authMiddleware, wr.listForPatient.bind(wr));
+wellnessRecordRouter.patch("/:id", authMiddleware, wr.update.bind(wr));
+wellnessRecordRouter.delete("/:id", authMiddleware, wr.delete.bind(wr));
+
+export { immunizationRouter, dischargeSummaryRouter, diagnosticReportRouter, wellnessRecordRouter };

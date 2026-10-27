@@ -91,7 +91,7 @@ const visit = (): VisitRecords => ({
     prescriptions: [{ row: { Id: "rx-1", Date: new Date("2026-10-20T10:10:00+05:30") } as any, medications: [{ id: "m-1", name: "Paracetamol 650 mg tablet" }], diagnoses: [], pdf: null }],
     notes: [], documents: [], bills: [], immunizations: [], certificates: new Map(),
 });
-const noStandalone = () => ({ prescriptions: [] as any[], consultations: [] as any[], notes: [] as any[], documents: [] as any[] });
+const noStandalone = () => ({ prescriptions: [] as any[], consultations: [] as any[], notes: [] as any[], documents: [] as any[], reports: [] as any[], wellness: [] as any[] });
 let standalone = noStandalone();
 const records = {
     visit: async () => visit(),
@@ -146,6 +146,8 @@ test("each record saved outside a visit is a care context of its own, shared as 
         consultations: [{ id: "77b2-mr", date: d }],
         notes: [{ id: 12, date: d }],
         documents: [{ id: 40, date: d, category: "Lab Report" }, { id: 41, date: d, category: "Clinical" }],
+        reports: [{ id: 7, date: d, category: "Lab" }, { id: 8, date: d, category: "Imaging" }],
+        wellness: [{ id: 3, date: d }],
     };
     const contexts = await catalog.refresh(hip, PATIENT);
     const byRef = Object.fromEntries(contexts.map((c) => [c.referenceNumber, [c.kind, c.display, c.hiTypes]]));
@@ -154,6 +156,9 @@ test("each record saved outside a visit is a care context of its own, shared as 
     assert.deepEqual(byRef["CN-12"], ["note", "Clinical note, 26 Oct 2026", ["OPConsultation"]]);
     assert.deepEqual(byRef["DOC-40"], ["document", "Lab report, 26 Oct 2026", ["DiagnosticReport"]]);
     assert.deepEqual(byRef["DOC-41"], ["document", "Health document, 26 Oct 2026", ["HealthDocumentRecord"]]);
+    assert.deepEqual(byRef["DR-7"], ["report", "Lab report, 26 Oct 2026", ["DiagnosticReport"]]);
+    assert.deepEqual(byRef["DR-8"], ["report", "Imaging report, 26 Oct 2026", ["DiagnosticReport"]]);
+    assert.deepEqual(byRef["WR-3"], ["wellness", "Wellness record, 26 Oct 2026", ["WellnessRecord"]]);
     assert.deepEqual(parseCareContextReference("DOC-41"), { kind: "document", sourceId: "41" });
     assert.deepEqual(parseCareContextReference("RX-6a1f-rx"), { kind: "prescription", sourceId: "6a1f-rx" });
 });
@@ -426,6 +431,8 @@ const healthRecords = {
     forConsultationRecord: async () => [],
     forClinicalNote: async () => [],
     forDocument: async () => [],
+    forDiagnosticReport: async () => [],
+    forWellnessRecord: async () => [],
 };
 
 test("a consent notification is stored and acknowledged; a revocation updates it", async () => {
@@ -482,6 +489,42 @@ test("a health information request on a granted consent is acknowledged, encrypt
 
     await flow.onHealthInformationRequest(hip, "hi-2", hiRequest(hiu));
     assert.equal(pushes.length, 1, "the same transaction delivered again is not served twice");
+});
+
+test("each record is pushed only when its own date is inside the consented range, whatever its visit's date", async () => {
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.test@sbx" });
+    const pushes: any[] = [];
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async (_url, init) => {
+        pushes.push(JSON.parse(init.body));
+        return { ok: true, status: 202 };
+    });
+    const hiu = generateKeyMaterial();
+    // The fixture visit OP-101 holds a consultation dated 10:00 and an invoice dated 10:25, IST on 2026-10-20
+    const fetch = async (transactionId: string, from: string, to: string) => {
+        await flow.onConsentNotify(hip, `cn-${transactionId}`, consentNotification("GRANTED", {
+            hiTypes: ["OPConsultation", "Invoice"],
+            permission: { dateRange: { from, to }, dataEraseAt: "2027-01-31T00:00:00Z" },
+        }));
+        await flow.onHealthInformationRequest(hip, `hi-${transactionId}`, { ...hiRequest(hiu, { from, to }), transactionId });
+        const page = pushes.find((p) => p.transactionId === transactionId);
+        const titles = (page?.entries ?? []).map((e: any) =>
+            JSON.parse(decrypt(e.content, hiu, { publicKey: page.keyMaterial.dhPublicKey.keyValue, nonce: page.keyMaterial.nonce })).entry[0].resource.title);
+        const visit = gateway.last("/health-information/notify").body.notification.statusNotification.statusResponses
+            .find((s: any) => s.careContextReference === "OP-101");
+        return { titles, visit: [visit.hiStatus, visit.description] };
+    };
+
+    const ending = await fetch("t-end", "2026-01-01T00:00:00Z", "2026-10-20T10:10:00+05:30");
+    assert.deepEqual(ending.titles, ["Consultation report"], "the invoice came after the range ended");
+    assert.deepEqual(ending.visit, ["DELIVERED", "Delivered"]);
+
+    const starting = await fetch("t-start", "2026-10-20T10:10:00+05:30", "2026-12-31T00:00:00Z");
+    assert.deepEqual(starting.titles, ["Invoice INV-2026-0001"], "the visit began before the range, its invoice inside it");
+
+    const before = await fetch("t-before", "2026-01-01T00:00:00Z", "2026-10-19T00:00:00Z");
+    assert.equal(before.titles.length, 0, "nothing pushed for the visit");
+    assert.deepEqual(before.visit, ["ERRORED", "Outside the consented date range."]);
 });
 
 test("a request for exactly the consented range is served though the stored dates lost a millisecond to rounding", async () => {

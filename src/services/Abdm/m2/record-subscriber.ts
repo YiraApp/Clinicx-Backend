@@ -10,7 +10,7 @@ import type { RecordRef } from "./auto-link.js";
 /** Tables whose rows carry PatientId, HospitalId and, for visit records, AppointmentId. */
 const RECORD_TABLES = new Set([
     "PatientMedicalRecord", "PatientPrescription", "PatientClinicalNotes", "MedicalDocuments",
-    "AppointmentBills", "PatientImmunizations", "DischargeSummaries", "PostVisitDocuments",
+    "AppointmentBills", "PatientImmunizations", "DischargeSummaries", "PostVisitDocuments", "DiagnosticReports", "WellnessRecords",
 ]);
 /** An update that names no owner is followed up through the table's recently updated rows. */
 const RECENT_WINDOW_MS = 60_000;

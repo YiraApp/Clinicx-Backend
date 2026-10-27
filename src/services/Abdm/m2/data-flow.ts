@@ -14,8 +14,9 @@ import type { CareContextRow, Hip, M2Store } from "./m2-store.js";
  */
 
 type Gateway = Pick<AbdmGatewayService, "call" | "getAccessToken">;
-type Records = Pick<AbdmHealthRecordService,
-    "forAppointment" | "forDischargeSummary" | "forImmunization" | "forVitalsRecord" | "forPrescription" | "forConsultationRecord" | "forClinicalNote" | "forDocument">;
+export type Records = Pick<AbdmHealthRecordService,
+    "forAppointment" | "forDischargeSummary" | "forImmunization" | "forVitalsRecord" | "forPrescription" | "forConsultationRecord" | "forClinicalNote" | "forDocument"
+    | "forDiagnosticReport" | "forWellnessRecord">;
 type Push = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{ ok: boolean; status: number }>;
 
 const PUSH_TIMEOUT_MS = 60_000;
@@ -25,6 +26,24 @@ const PUSH_TIMEOUT_MS = 60_000;
  * the stored end (…48.060Z). Seen 2026-10-26 on PHR app fetches, which ask for exactly that.
  */
 const STORED_DATE_SLACK_MS = 4;
+
+/** The bundles a care context shares, built from its records as they are now; none for a reference that is not one. */
+export const bundlesForReference = async (records: Records, referenceNumber: string): Promise<HealthRecordBundle[]> => {
+    const parsed = parseCareContextReference(referenceNumber);
+    if (!parsed) return [];
+    switch (parsed.kind) {
+        case "visit": return records.forAppointment(Number(parsed.sourceId));
+        case "discharge": return records.forDischargeSummary(Number(parsed.sourceId));
+        case "immunization": return records.forImmunization(Number(parsed.sourceId));
+        case "vitals": return records.forVitalsRecord(parsed.sourceId);
+        case "prescription": return records.forPrescription(parsed.sourceId);
+        case "consultation": return records.forConsultationRecord(parsed.sourceId);
+        case "note": return records.forClinicalNote(Number(parsed.sourceId));
+        case "document": return records.forDocument(Number(parsed.sourceId));
+        case "report": return records.forDiagnosticReport(Number(parsed.sourceId));
+        case "wellness": return records.forWellnessRecord(Number(parsed.sourceId));
+    }
+};
 
 export interface StatusResponse {
     careContextReference: string;
@@ -36,6 +55,10 @@ const date = (v: unknown): Date | null => {
     const d = v ? new Date(String(v)) : null;
     return d && !Number.isNaN(d.getTime()) ? d : null;
 };
+
+/** A record's own date: its Composition's. */
+const recordDateOf = (b: HealthRecordBundle): Date | null =>
+    date(b.bundle.entry.find((e) => e.resource.resourceType === "Composition")?.resource.date);
 
 export class DataFlowService {
     constructor(
@@ -124,19 +147,8 @@ export class DataFlowService {
         await this.transfer(hip, transactionId, body);
     }
 
-    private async bundlesFor(context: CareContextRow): Promise<HealthRecordBundle[]> {
-        const parsed = parseCareContextReference(context.referenceNumber);
-        if (!parsed) return [];
-        switch (parsed.kind) {
-            case "visit": return this.records.forAppointment(Number(parsed.sourceId));
-            case "discharge": return this.records.forDischargeSummary(Number(parsed.sourceId));
-            case "immunization": return this.records.forImmunization(Number(parsed.sourceId));
-            case "vitals": return this.records.forVitalsRecord(parsed.sourceId);
-            case "prescription": return this.records.forPrescription(parsed.sourceId);
-            case "consultation": return this.records.forConsultationRecord(parsed.sourceId);
-            case "note": return this.records.forClinicalNote(Number(parsed.sourceId));
-            case "document": return this.records.forDocument(Number(parsed.sourceId));
-        }
+    private bundlesFor(context: CareContextRow): Promise<HealthRecordBundle[]> {
+        return bundlesForReference(this.records, context.referenceNumber);
     }
 
     /** Builds, encrypts and pushes what the consent covers, one page per care context, then notifies ABDM. */
@@ -162,10 +174,16 @@ export class DataFlowService {
             if (row.linkStatus !== "linked" || (patientAbha && row.linkedAbhaAddress && row.linkedAbhaAddress.toLowerCase() !== patientAbha)) {
                 errored("This care context is not linked to the consenting patient."); continue;
             }
-            if (row.recordDate < from || row.recordDate > to) { errored("Outside the consented date range."); continue; }
             try {
-                const bundles = (await this.bundlesFor(row)).filter((b) => allowed.has(b.hiType));
-                if (!bundles.length) { errored("No records of the consented types."); continue; }
+                const consented = (await this.bundlesFor(row)).filter((b) => allowed.has(b.hiType));
+                if (!consented.length) { errored("No records of the consented types."); continue; }
+                // Each record by its own date, not its care context's: a visit's prescription written
+                // after the consented range ended is not shared, one written inside it is
+                const bundles = consented.filter((b) => {
+                    const at = recordDateOf(b) ?? row.recordDate;
+                    return at >= from && at <= to;
+                });
+                if (!bundles.length) { errored("Outside the consented date range."); continue; }
                 pages.push({
                     reference: ref,
                     entries: bundles.map((b) => {

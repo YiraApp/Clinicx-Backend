@@ -2,11 +2,12 @@ import {
     FhirSourceError, binaryResource, concept, conditionResource, documentBundle, documentReferenceResource, encounterResource,
     allergyResource, findingResource, fhirDate, fhirDateTime, followUpAppointmentResource, medicationRequestResource,
     narrative, NRCES, organizationResource, patientResource, practitionerResource, procedureResource, ref, resourceId, section,
-    LOINC, type FhirBundle, type FhirResource, type HiType,
+    LOCAL_SYSTEM, LOINC, SNOMED, UCUM, type FhirBundle, type FhirResource, type HiType,
 } from "./fhir-common.js";
 import { measurementObservation, sectionOf, visitVitalsToMeasurements, WELLNESS_PROFILES, type WellnessSection } from "./measurements.js";
+import { routeOf } from "./dosage.js";
 import type {
-    DiagnosticReportSource, DischargeSummarySource, HealthDocumentSource, ImmunizationSource, InvoiceSource,
+    DiagnosticReportSource, DischargeSummarySource, ReportResultSource, HealthDocumentSource, ImmunizationSource, InvoiceSource,
     OpConsultationSource, PrescriptionSource, RecordParties, WellnessSource,
 } from "./fhir-sources.js";
 
@@ -21,6 +22,16 @@ const parties = (s: RecordParties) => ({
     practitioner: practitionerResource(s.practitioner),
     organization: organizationResource(s.organization),
 });
+
+/**
+ * The encounter a record belongs to: its visit's, shared by every record of the visit, or else an
+ * outpatient encounter of its own on the record's date. A PHR app shows the encounter's class under
+ * the facility ("ambulatory"), and "NA" for a record without one.
+ */
+const encounterOf = (s: RecordParties, patient: FhirResource, key: string, at: Date): FhirResource =>
+    s.visit
+        ? encounterResource({ key: `appointment-${s.visit.id}`, kind: s.visit.teleconsultation ? "virtual" : "outpatient", patient, start: s.visit.start, end: s.visit.end })
+        : encounterResource({ key, kind: "outpatient", patient, start: at });
 
 // OPConsultRecord section slices, discriminated on code.coding.code
 const OP = {
@@ -41,8 +52,9 @@ export const buildOpConsultation = (s: OpConsultationSource, now: Date = new Dat
     const { patient, practitioner, organization } = parties(s);
     const at = s.vitalsRecordedAt ?? s.visit.start;
 
-    const complaints = s.chiefComplaints.map((c, i) => conditionResource(`${key}:complaint:${i}`, c, patient, "Chief complaint"));
-    const diagnoses = s.diagnoses.map((d, i) => conditionResource(`${key}:diagnosis:${i}`, d, patient, "Diagnosis"));
+    const recorded = s.authoredOn ?? s.visit.start;
+    const complaints = s.chiefComplaints.map((c, i) => conditionResource(`${key}:complaint:${i}`, c, patient, "Chief complaint", s.visit.start));
+    const diagnoses = s.diagnoses.map((d, i) => conditionResource(`${key}:diagnosis:${i}`, d, patient, "Diagnosis", recorded));
     const encounter = encounterResource({
         key, kind: s.visit.teleconsultation ? "virtual" : "outpatient", patient, start: s.visit.start, end: s.visit.end, diagnoses,
     });
@@ -50,9 +62,9 @@ export const buildOpConsultation = (s: OpConsultationSource, now: Date = new Dat
         ...s.examinationFindings.map((f, i) => findingResource(`${key}:exam:${i}`, f, patient, at, "Examination finding", undefined, practitioner)),
         ...visitVitalsToMeasurements(s.vitals, at).map((m, i) => measurementObservation(`${key}:vital:${i}`, m, patient, "Observation", practitioner)),
     ];
-    const allergies = s.allergies?.trim() ? [allergyResource(`${key}:allergies`, s.allergies.trim(), patient, practitioner)] : [];
+    const allergies = s.allergies?.trim() ? [allergyResource(`${key}:allergies`, s.allergies.trim(), patient, practitioner, s.visit.start)] : [];
     const history = s.medicalHistory?.trim()
-        ? [conditionResource(`${key}:history`, { text: s.medicalHistory.trim() }, patient, "Medical history")]
+        ? [conditionResource(`${key}:history`, { text: s.medicalHistory.trim() }, patient, "Medical history", s.visit.start)]
         : [];
     const medications = s.medications.map((m) => medicationRequestResource(m, patient, practitioner, s.authoredOn ?? s.visit.start, diagnoses));
     const procedures = s.procedures.map((p, i) => procedureResource(`${key}:procedure:${i}`, p, patient, s.visit.start));
@@ -93,8 +105,9 @@ export const buildPrescription = (s: PrescriptionSource, now: Date = new Date())
     const { patient, practitioner, organization } = parties(s);
     if (p.medications.length === 0) throw new FhirSourceError(`Prescription ${p.id} has no medicines.`);
 
-    const diagnoses = p.diagnoses.map((d, i) => conditionResource(`${key}:diagnosis:${i}`, d, patient, "Diagnosis"));
+    const diagnoses = p.diagnoses.map((d, i) => conditionResource(`${key}:diagnosis:${i}`, d, patient, "Diagnosis", p.date));
     const medications = p.medications.map((m) => medicationRequestResource(m, patient, practitioner, p.date, diagnoses));
+    const encounter = encounterOf(s, patient, key, p.date);
     const signed = p.signedCopy ? [binaryResource(`${key}:pdf`, p.signedCopy.contentType, p.signedCopy.data)] : [];
     const record = { code: "440545006", display: "Prescription record" };
 
@@ -105,37 +118,152 @@ export const buildPrescription = (s: PrescriptionSource, now: Date = new Date())
         title: "Prescription record",
         key,
         date: p.date,
-        patient, author: practitioner, custodian: organization,
+        patient, author: practitioner, custodian: organization, encounter,
         sections: [section("Prescription record", [...medications, ...signed], record)],
         summary: `Prescription for ${s.patient.name} by ${s.practitioner.name}, ${fhirDate(p.date)}: ${p.medications.map((m) => m.name).join(", ")}`,
     }, [...medications, ...signed, ...diagnoses], now);
 };
 
 /**
- * DiagnosticReport: one lab or imaging report the clinic holds as a file. The file goes in as a
- * DocumentReference, which the section allows on its own: NRCES's DiagnosticReportLab and
- * DiagnosticReportImaging profiles require result observations or media and an interpretation,
- * which a scanned report does not carry, so no DiagnosticReport resource is invented for it.
+ * DiagnosticReport. A report entered at the clinic is a DiagnosticReportLab (its results as
+ * Observations with value, unit, reference range and interpretation, the specimen, the conclusion,
+ * and the report file as its presented form) or a DiagnosticReportImaging (the image as Media and
+ * the conclusion). NRCES requires those, so the clinic's form does too before a report is Final.
+ * A report the clinic holds only as an uploaded file goes in as a DocumentReference, which the
+ * section allows on its own: a scanned report carries no results or conclusion to put in a
+ * DiagnosticReport, so none is invented for it.
  */
+const OBSERVATION_CATEGORY = "http://terminology.hl7.org/CodeSystem/observation-category";
+const LOINC_CODE = /^\d{1,7}-\d$/;
+
+const INTERPRETATIONS = {
+    normal: { code: "N", display: "Normal" },
+    high: { code: "H", display: "High" },
+    low: { code: "L", display: "Low" },
+    abnormal: { code: "A", display: "Abnormal" },
+} as const;
+
+/** One result of a report: its value with unit, the reference range, and whether it is normal, high or low. */
+const resultObservation = (key: string, r: ReportResultSource, patient: FhirResource, at: Date, performer: FhirResource, lab: boolean, specimen?: FhirResource): FhirResource => {
+    const valueWords = r.value !== null && r.value !== undefined ? `${r.value}${r.unit ? ` ${r.unit}` : ""}` : (r.valueText ?? "");
+    const unit = r.unit ? { unit: r.unit } : {};
+    const range = [r.low, r.high].some((v) => v !== null && v !== undefined) || r.referenceText ? [{
+        ...(r.low !== null && r.low !== undefined ? { low: { value: r.low, ...unit } } : {}),
+        ...(r.high !== null && r.high !== undefined ? { high: { value: r.high, ...unit } } : {}),
+        ...(r.referenceText ? { text: r.referenceText } : {}),
+    }] : null;
+    return {
+        resourceType: "Observation",
+        id: resourceId("Observation", key),
+        meta: { profile: [NRCES + "Observation"] },
+        text: narrative(`${r.name.text}: ${valueWords}${r.interpretation && r.interpretation !== "normal" ? ` (${INTERPRETATIONS[r.interpretation].display})` : ""}`),
+        status: "final",
+        category: [{ coding: [{ system: OBSERVATION_CATEGORY, code: lab ? "laboratory" : "imaging", display: lab ? "Laboratory" : "Imaging" }] }],
+        code: concept(r.name),
+        subject: ref(patient, "Patient"),
+        effectiveDateTime: fhirDateTime(at),
+        performer: [ref(performer, "Practitioner")],
+        ...(r.value !== null && r.value !== undefined ? { valueQuantity: { value: r.value, ...unit } } : { valueString: r.valueText }),
+        ...(r.interpretation ? {
+            interpretation: [{ coding: [{ system: "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation", ...INTERPRETATIONS[r.interpretation] }], text: INTERPRETATIONS[r.interpretation].display }],
+        } : {}),
+        ...(range ? { referenceRange: range } : {}),
+        ...(specimen ? { specimen: ref(specimen, "Specimen") } : {}),
+    };
+};
+
 export const buildDiagnosticReport = (s: DiagnosticReportSource, now: Date = new Date()): FhirBundle => {
-    const key = `report-${s.report.id}`;
+    const e = s.entered ?? null;
+    const doc = s.document ?? null;
     const { patient, practitioner, organization } = parties(s);
+    const lab = s.kind === "lab";
     const studies = { code: "721981007", display: "Diagnostic studies report" };
-    // 4241000179101 is the code NRCES's own examples type a laboratory report with.
-    const file = documentReferenceResource(s.report, patient, s.kind === "lab" ? { code: "4241000179101", display: "Laboratory report" } : undefined);
-    const title = s.kind === "lab" ? "Laboratory report" : "Imaging report";
+    const title = lab ? "Laboratory report" : "Imaging report";
+
+    if (!e) {
+        if (!doc) throw new FhirSourceError("A diagnostic report needs its results or its file.");
+        // 4241000179101 is the code NRCES's own examples type a laboratory report with.
+        const file = documentReferenceResource(doc, patient, lab ? { code: "4241000179101", display: "Laboratory report" } : undefined);
+        const fileKey = `report-${doc.id}`;
+        return documentBundle({
+            hiType: "DiagnosticReport",
+            profile: "DiagnosticReportRecord",
+            type: { coding: studies, text: title },
+            title: `${title}: ${doc.title}`,
+            key: fileKey,
+            date: doc.createdAt,
+            patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, fileKey, doc.createdAt),
+            sections: [section(title, [file], studies)],
+            summary: `${title} for ${s.patient.name}: ${doc.title}, ${fhirDate(doc.createdAt)}`,
+        }, [file], now);
+    }
+
+    const key = `diagnostic-report-${e.id}`;
+    const conclusion = e.conclusion?.trim();
+    if (!conclusion) throw new FhirSourceError(`Report ${e.id} has no conclusion.`);
+    if (lab && !e.results.length) throw new FhirSourceError(`Lab report ${e.id} has no results.`);
+    if (!lab && !doc) throw new FhirSourceError(`Imaging report ${e.id} has no image.`);
+    const effective = e.collectedAt ?? e.issuedAt;
+
+    // The lab received the specimen it collected: NRCES requires both times, and the clinic records one
+    const specimen: FhirResource[] = lab && e.specimen && e.collectedAt ? [{
+        resourceType: "Specimen",
+        id: resourceId("Specimen", key),
+        meta: { profile: [NRCES + "Specimen"] },
+        text: narrative(`Specimen: ${e.specimen.text}`),
+        type: concept(e.specimen),
+        subject: ref(patient, "Patient"),
+        receivedTime: fhirDateTime(e.collectedAt),
+        collection: { collectedDateTime: fhirDateTime(e.collectedAt) },
+    }] : [];
+    const results = e.results.map((r) => resultObservation(`${key}:result:${r.id}`, r, patient, effective, practitioner, lab, specimen[0]));
+    const media: FhirResource[] = !lab && doc ? [{
+        resourceType: "Media",
+        id: resourceId("Media", key),
+        meta: { profile: [NRCES + "Media"] },
+        text: narrative(`Image: ${doc.title}`),
+        status: "completed",
+        content: { contentType: doc.contentType, language: "en-IN", data: doc.data.toString("base64"), title: doc.title, creation: fhirDateTime(doc.createdAt) },
+    }] : [];
+    const report: FhirResource = {
+        resourceType: "DiagnosticReport",
+        id: resourceId("DiagnosticReport", key),
+        meta: { profile: [NRCES + (lab ? "DiagnosticReportLab" : "DiagnosticReportImaging")] },
+        text: narrative(`${title}: ${e.test.text}. ${conclusion}`),
+        status: "final",
+        // NRCES fixes the category to SNOMED CT diagnostic services and its examples name one service each
+        // (haematology, CT); a report's own service isn't recorded, so the category is said in words.
+        category: [{ text: lab ? "Laboratory" : "Imaging" }],
+        // NRCES fixes the test's code to LOINC: a LOINC code is sent as one, a SNOMED CT pick as the test's words
+        code: LOINC_CODE.test(e.test.conceptId ?? "")
+            ? { coding: [{ system: LOINC, code: e.test.conceptId, display: e.test.text }], text: e.test.text }
+            : { text: e.test.text },
+        subject: ref(patient, "Patient"),
+        effectiveDateTime: fhirDateTime(effective),
+        issued: fhirDateTime(e.issuedAt),
+        performer: [ref(organization, "Organization"), ...(e.performedBy?.trim() ? [{ display: e.performedBy.trim() }] : [])],
+        resultsInterpreter: [ref(practitioner, "Practitioner")],
+        ...(specimen.length ? { specimen: specimen.map((x) => ref(x, "Specimen")) } : {}),
+        ...(results.length ? { result: results.map((o) => ref(o, "Observation")) } : {}),
+        ...(media.length ? { media: media.map((m) => ({ comment: doc!.title, link: ref(m, "Media") })) } : {}),
+        conclusion,
+        ...(e.conclusionCodes.length ? { conclusionCode: e.conclusionCodes.map((c) => concept(c)) } : {}),
+        ...(lab && doc ? {
+            presentedForm: [{ contentType: doc.contentType, language: "en-IN", data: doc.data.toString("base64"), title: doc.title, creation: fhirDateTime(doc.createdAt) }],
+        } : {}),
+    };
 
     return documentBundle({
         hiType: "DiagnosticReport",
         profile: "DiagnosticReportRecord",
         type: { coding: studies, text: title },
-        title: `${title}: ${s.report.title}`,
+        title: `${title}: ${e.test.text}`,
         key,
-        date: s.report.createdAt,
-        patient, author: practitioner, custodian: organization,
-        sections: [section(title, [file], studies)],
-        summary: `${title} for ${s.patient.name}: ${s.report.title}, ${fhirDate(s.report.createdAt)}`,
-    }, [file], now);
+        date: e.issuedAt,
+        patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, key, effective),
+        sections: [section(title, [report], studies)],
+        summary: `${title} for ${s.patient.name}: ${e.test.text}, ${fhirDate(e.issuedAt)}`,
+    }, [report, ...results, ...specimen, ...media], now);
 };
 
 /** HealthDocumentRecord: documents the clinic holds that are not a lab, imaging or prescription record. */
@@ -152,7 +280,7 @@ export const buildHealthDocumentRecord = (s: HealthDocumentSource, now: Date = n
         title: s.title,
         key: s.key,
         date: s.date,
-        patient, author: practitioner, custodian: organization,
+        patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, s.key, s.date),
         sections: [section("Health Document", files, artifact)],
         summary: `${s.title} for ${s.patient.name}: ${s.documents.map((d) => d.title).join(", ")}`,
     }, files, now);
@@ -185,7 +313,7 @@ export const buildWellnessRecord = (s: WellnessSource, now: Date = new Date()): 
         title: "Wellness Record",
         key: s.key,
         date: s.date,
-        patient, author: practitioner, custodian: organization,
+        patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, s.key, s.date),
         sections,
         summary: `Wellness record for ${s.patient.name}, ${fhirDate(s.date)}`,
     }, [...bySection.values()].flat(), now);
@@ -193,6 +321,12 @@ export const buildWellnessRecord = (s: WellnessSource, now: Date = new Date()): 
 
 const BILLING = "https://nrces.in/ndhm/fhir/r4/CodeSystem/ndhm-billing-codes";
 const PRICE = "https://nrces.in/ndhm/fhir/r4/CodeSystem/ndhm-price-components";
+/**
+ * ndhm-price-components (IG 6.5.0) has MRP, Rate, Discount, CGST and SGST, and no IGST. The binding is
+ * extensible and a price component needs one coding with system, code and display, so IGST is coded
+ * in Clinicx's own system.
+ */
+const IGST = { system: `${LOCAL_SYSTEM}/price-components`, code: "IGST", display: "IGST" };
 // ndhm-billing-codes (IG 6.5.0): 00 Consultation, 03 OPD, 99 Others
 const billingCode = (itemType: string) =>
     itemType === "Consultation" ? { code: "00", display: "Consultation" }
@@ -220,7 +354,7 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
         code: { coding: [{ system: BILLING, ...billingCode(item.type) }] },
         subject: ref(patient, "Patient"),
         performer: [{ actor: ref(practitioner, "Practitioner") }],
-        quantity: { value: item.quantity },
+        quantity: { value: item.quantity, unit: item.quantity === 1 ? "unit" : "units", system: UCUM, code: "1" },
         productCodeableConcept: { text: item.name },
     } as FhirResource));
 
@@ -236,8 +370,7 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
                         { type: "tax", code: { coding: [{ system: PRICE, code: "03", display: "CGST" }] }, amount: money(item.gstAmount / 2) },
                         { type: "tax", code: { coding: [{ system: PRICE, code: "04", display: "SGST" }] }, amount: money(item.gstAmount / 2) },
                     ]
-                    // ndhm-price-components has no IGST code: named in text instead.
-                    : [{ type: "tax", code: { text: "IGST" }, amount: money(item.gstAmount) }]
+                    : [{ type: "tax", code: { coding: [IGST], text: "IGST" }, amount: money(item.gstAmount) }]
                 : []),
         ],
     }));
@@ -267,10 +400,21 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
         title: `Invoice ${b.number}`,
         key,
         date: b.date,
-        patient, author: practitioner, custodian: organization,
+        patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, key, b.date),
         sections: [section("Invoice", [invoice])],
         summary: `Invoice ${b.number} for ${s.patient.name} from ${s.organization.name}, INR ${b.total}`,
     }, [invoice, ...charges], now);
+};
+
+// Injection sites as FHIR's immunization-site codes (HL7 v3 ActSite), for the sites the clinic's form offers
+const SITES: Array<[RegExp, string, string]> = [
+    [/left deltoid/, "LD", "left deltoid"], [/right deltoid/, "RD", "right deltoid"],
+    [/left thigh/, "LT", "left thigh"], [/right thigh/, "RT", "right thigh"],
+    [/left upper arm/, "LUA", "left upper arm"], [/right upper arm/, "RUA", "right upper arm"],
+];
+const siteOf = (site: string) => {
+    const known = SITES.find(([re]) => re.test(site.toLowerCase()));
+    return known ? { coding: [{ system: "http://terminology.hl7.org/CodeSystem/v3-ActSite", code: known[1], display: known[2] }], text: site } : { text: site };
 };
 
 /** ImmunizationRecord: the vaccines given, the next dose due, and a certificate if one was uploaded. */
@@ -290,8 +434,8 @@ export const buildImmunizationRecord = (s: ImmunizationSource, now: Date = new D
         occurrenceDateTime: typeof im.date === "string" ? fhirDate(im.date) : fhirDateTime(im.date),
         primarySource: true,
         ...(im.lotNumber ? { lotNumber: im.lotNumber } : {}),
-        ...(im.site ? { site: { text: im.site } } : {}),
-        ...(im.route ? { route: { text: im.route } } : {}),
+        ...(im.site ? { site: siteOf(im.site) } : {}),
+        ...(im.route ? { route: routeOf(im.route) } : {}),
         performer: [{ actor: ref(practitioner, "Practitioner") }],
         ...(im.manufacturer || im.notes ? { note: [{ text: [im.manufacturer ? `Manufacturer: ${im.manufacturer}` : null, im.notes].filter(Boolean).join(". ") }] } : {}),
         ...(im.doseNumber ? { protocolApplied: [{ doseNumberPositiveInt: im.doseNumber }] } : {}),
@@ -305,8 +449,11 @@ export const buildImmunizationRecord = (s: ImmunizationSource, now: Date = new D
         text: narrative(`Next doses due: ${due.map((im) => `${im.vaccine.text} on ${fhirDate(im.nextDueDate!)}`).join(", ")}`),
         patient: ref(patient, "Patient"),
         date: fhirDateTime(s.date),
+        authority: ref(organization, "Organization"),
         recommendation: due.map((im) => ({
             vaccineCode: [concept(im.vaccine)],
+            description: `Next dose of ${im.vaccine.text}`,
+            ...(im.doseNumber ? { doseNumberPositiveInt: im.doseNumber + 1 } : {}),
             forecastStatus: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/immunization-recommendation-status", code: "due", display: "Due" }] },
             dateCriterion: [{
                 code: { coding: [{ system: LOINC, code: "30980-7", display: "Date vaccine due" }] },
@@ -323,7 +470,7 @@ export const buildImmunizationRecord = (s: ImmunizationSource, now: Date = new D
         title: "Immunization record",
         key: s.key,
         date: s.date,
-        patient, author: practitioner, custodian: organization,
+        patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, s.key, s.date),
         sections: [section("Immunization record", [...immunizations, ...recommendation, ...certificate], record)],
         summary: `Immunization record for ${s.patient.name}: ${s.immunizations.map((im) => im.vaccine.text).join(", ")}`,
     }, [...immunizations, ...recommendation, ...certificate], now);
@@ -348,14 +495,15 @@ export const buildDischargeSummary = (s: DischargeSummarySource, now: Date = new
     const key = `discharge-${d.id}`;
     const { patient, practitioner, organization } = parties(s);
 
-    const complaints = d.chiefComplaints.map((c, i) => conditionResource(`${key}:complaint:${i}`, c, patient, "Chief complaint"));
-    const diagnoses = d.diagnoses.map((c, i) => conditionResource(`${key}:diagnosis:${i}`, c, patient, "Diagnosis"));
-    const history = d.medicalHistory.map((c, i) => conditionResource(`${key}:history:${i}`, c, patient, "Medical history"));
+    // Complaints and history are taken on admission; the diagnoses are the ones the stay ended with
+    const complaints = d.chiefComplaints.map((c, i) => conditionResource(`${key}:complaint:${i}`, c, patient, "Chief complaint", d.admittedAt));
+    const diagnoses = d.diagnoses.map((c, i) => conditionResource(`${key}:diagnosis:${i}`, c, patient, "Diagnosis", d.dischargedAt));
+    const history = d.medicalHistory.map((c, i) => conditionResource(`${key}:history:${i}`, c, patient, "Medical history", d.admittedAt));
     const encounter = encounterResource({
         key, kind: "inpatient", patient, start: d.admittedAt, end: d.dischargedAt, diagnoses, dischargeDisposition: d.disposition,
     });
     const examination = d.examinationFindings.map((f, i) => findingResource(`${key}:exam:${i}`, f, patient, d.admittedAt, "Examination finding", undefined, practitioner));
-    const allergies = d.allergies?.trim() ? [allergyResource(`${key}:allergies`, d.allergies.trim(), patient, practitioner)] : [];
+    const allergies = d.allergies?.trim() ? [allergyResource(`${key}:allergies`, d.allergies.trim(), patient, practitioner, d.admittedAt)] : [];
     const procedures = d.procedures.map((p, i) => procedureResource(`${key}:procedure:${i}`, p, patient, d.admittedAt));
     const medications = d.medications.map((m) => medicationRequestResource(m, patient, practitioner, d.dischargedAt, diagnoses));
     const planText = [d.carePlan?.trim(), d.followUp ? `Follow up on ${fhirDate(d.followUp)}.` : null].filter(Boolean).join(" ");
@@ -366,6 +514,7 @@ export const buildDischargeSummary = (s: DischargeSummarySource, now: Date = new
         text: narrative(planText),
         status: "active",
         intent: "plan",
+        category: [{ coding: [{ system: SNOMED, code: "736353004", display: "Inpatient care plan" }], text: "Discharge care plan" }],
         title: "Discharge care plan",
         description: planText,
         subject: ref(patient, "Patient"),

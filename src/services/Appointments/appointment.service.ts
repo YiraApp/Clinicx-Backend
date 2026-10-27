@@ -12,6 +12,7 @@ import { appointmentBillRepository } from "../../repositories/Payments/appointme
 import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
 import { zoomService } from "../Common/zoom.service.js";
 import { mailService } from "../Mail/mail.service.js";
+import { slotClosed } from "../../utils/slot-time.utils.js";
 
 export class AppointmentService {
     async bookAppointmentFromPulse(data: {
@@ -521,40 +522,10 @@ export class AppointmentService {
             if (slot.IsBooked) throw new Error("Slot is already booked.");
             if (!slot.IsAvailable) throw new Error("Slot is blocked.");
 
-            // 1b. Check if slot date or time is in the past
-            const now = new Date();
-            const slotDateStr = slot.SlotDate instanceof Date 
-                ? slot.SlotDate.toISOString().split('T')[0] 
-                : String(slot.SlotDate).split('T')[0];
-            const [y, m, d] = slotDateStr.split('-').map(Number);
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const slotDay = new Date(y, m - 1, d);
-
-            if (slotDay < today) {
-                throw new Error("Appointment booking is not allowed for past dates.");
-            }
-            if (slotDay.getTime() === today.getTime() && slot.StartTime) {
-                let sh = 0, sm = 0;
-                const match12 = slot.StartTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
-                if (match12) {
-                    sh = parseInt(match12[1], 10);
-                    sm = parseInt(match12[2], 10);
-                    const ampm = match12[4].toUpperCase();
-                    if (ampm === "PM" && sh < 12) sh += 12;
-                    if (ampm === "AM" && sh === 12) sh = 0;
-                } else {
-                    const match24 = slot.StartTime.match(/^(\d{1,2}):(\d{2})/);
-                    if (match24) {
-                        sh = parseInt(match24[1], 10);
-                        sm = parseInt(match24[2], 10);
-                    }
-                }
-                const slotMinutes = sh * 60 + sm;
-                const currentMinutes = now.getHours() * 60 + now.getMinutes();
-                if (slotMinutes <= currentMinutes) {
-                    throw new Error("Appointment booking is not allowed for past time slots.");
-                }
-            }
+            // 1b. A slot can be booked until it ends: not on a past day, and not once it is over today
+            const closed = slotClosed(slot, new Date());
+            if (closed === "date") throw new Error("Appointment booking is not allowed for past dates.");
+            if (closed === "time") throw new Error("Appointment booking is not allowed for past time slots.");
 
             // 2. Generate Meeting URL if teleconsultation
             let meetingUrl: string | undefined = undefined;

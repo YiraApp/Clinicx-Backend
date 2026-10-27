@@ -6,6 +6,8 @@ import { PatientPrescription } from "../../models/Appointments/patient-prescript
 import { ClinicalNote } from "../../models/Appointments/clinical-note.model.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
+import { PatientDiagnosticReport } from "../../models/Appointments/diagnostic-report.model.js";
+import { WellnessRecord } from "../../models/Appointments/wellness-record.model.js";
 import { PatientImmunization } from "../../models/Appointments/patient-immunization.model.js";
 import { DischargeSummary } from "../../models/Appointments/discharge-summary.model.js";
 import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
@@ -243,12 +245,13 @@ export class AbdmHealthRecordRepository {
      * The rest of a patient's records saved outside a visit at this hospital, each a care context
      * of its own: prescriptions with medicines, consultation records and clinical notes with
      * something written, and documents the clinic uploaded that are shareable and not
-     * confidential (one attached to a discharge summary or an immunization travels with that).
+     * confidential (one attached to a discharge summary, an immunization or a diagnostic report
+     * travels with that), Final diagnostic reports, and wellness records.
      */
     async standaloneRecords(patientId: string, hospitalId: number) {
         const q = (sql: string) => AppDataSource.query(sql, [patientId, hospitalId]);
         const noVisit = (column: string) => `(${column} IS NULL OR CAST(${column} AS VARCHAR(40)) IN ('', '0'))`;
-        const [prescriptions, records, notes, documents] = await Promise.all([
+        const [prescriptions, records, notes, documents, reports, wellness] = await Promise.all([
             q(`SELECT p.Id, COALESCE(p.Date, p.CreatedAt) AS RecordDate FROM PatientPrescription p
                WHERE p.PatientId = @0 AND p.HospitalId = @1 AND ${noVisit("p.AppointmentId")}
                  AND EXISTS (SELECT 1 FROM PrescriptionMedication m WHERE m.PrescriptionId = p.Id)`),
@@ -262,13 +265,18 @@ export class AbdmHealthRecordRepository {
                  AND d.IsShareable = 1 AND d.IsConfidential = 0 AND d.IsPatientUploaded = 0
                  AND COALESCE(d.DocumentCategory, '') NOT LIKE '%insurance%'
                  AND NOT EXISTS (SELECT 1 FROM DischargeSummaries s WHERE s.DocumentId = d.Id AND s.IsDeleted = 0)
-                 AND NOT EXISTS (SELECT 1 FROM PatientImmunizations i WHERE i.CertificateDocumentId = d.Id AND i.IsDeleted = 0)`),
+                 AND NOT EXISTS (SELECT 1 FROM PatientImmunizations i WHERE i.CertificateDocumentId = d.Id AND i.IsDeleted = 0)
+                 AND NOT EXISTS (SELECT 1 FROM DiagnosticReports r WHERE r.DocumentId = d.Id AND r.IsDeleted = 0)`),
+            q(`SELECT Id, IssuedAt, Category FROM DiagnosticReports WHERE PatientId = @0 AND HospitalId = @1 AND Status = 'Final' AND IsDeleted = 0`),
+            q(`SELECT Id, RecordedAt FROM WellnessRecords WHERE PatientId = @0 AND HospitalId = @1 AND IsDeleted = 0`),
         ]);
         return {
             prescriptions: prescriptions.map((r: any) => ({ id: String(r.Id), date: new Date(r.RecordDate) })),
             consultations: records.filter((r) => !isVitalsRecord(r) && hasConsultationContent(r)).map((r) => ({ id: r.Id, date: new Date(r.Date) })),
             notes: notes.map((r: any) => ({ id: Number(r.Id), date: new Date(r.CreatedAt) })),
             documents: documents.map((r: any) => ({ id: Number(r.Id), date: new Date(r.CreatedAt), category: r.DocumentCategory ?? null })),
+            reports: reports.map((r: any) => ({ id: Number(r.Id), date: new Date(r.IssuedAt), category: String(r.Category) })),
+            wellness: wellness.map((r: any) => ({ id: Number(r.Id), date: new Date(r.RecordedAt) })),
         };
     }
 
@@ -302,6 +310,24 @@ export class AbdmHealthRecordRepository {
         if (!row) throw new Error(`Clinical note ${id} not found.`);
         if (!row.HospitalId) throw new Error(`Clinical note ${id} names no hospital, so no facility can share it.`);
         return { row, parties: await this.parties(row.PatientId, row.DoctorId, Number(row.HospitalId)) };
+    }
+
+    /** A lab or imaging report entered at the clinic, with its attached file. */
+    async diagnosticReport(id: number) {
+        const row = await AppDataSource.getRepository(PatientDiagnosticReport).findOne({ where: { Id: id, IsDeleted: false } });
+        if (!row) throw new Error(`Diagnostic report ${id} not found.`);
+        const [parties, document] = await Promise.all([
+            this.parties(row.PatientId, row.DoctorId, row.HospitalId),
+            row.DocumentId ? this.document(row.DocumentId) : Promise.resolve(null),
+        ]);
+        return { row, parties, document };
+    }
+
+    /** A wellness check recorded at the clinic. */
+    async wellnessRecord(id: number) {
+        const row = await AppDataSource.getRepository(WellnessRecord).findOne({ where: { Id: id, IsDeleted: false } });
+        if (!row) throw new Error(`Wellness record ${id} not found.`);
+        return { row, parties: await this.parties(row.PatientId, row.RecordedById, row.HospitalId) };
     }
 
     /** A document the clinic uploaded outside a visit, with its file. */

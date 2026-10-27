@@ -61,7 +61,7 @@ export class SnomedService {
 
             if (!response.ok) {
                 console.warn(`SNOMED Server responded with status: ${response.status} — returning empty results`);
-                return { items: [], total: 0 };
+                return { items: [], total: 0, unavailable: true };
             }
 
             const data = await response.json();
@@ -72,7 +72,9 @@ export class SnomedService {
             } else {
                 console.warn("Error fetching SNOMED concepts:", error?.message || error);
             }
-            return { items: [], total: 0 };
+            // Said, not hidden: a picker shows "no matches" for an empty list, and the desk then saves
+            // free text without a code believing SNOMED CT has nothing for it
+            return { items: [], total: 0, unavailable: true };
         }
     }
 

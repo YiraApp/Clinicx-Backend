@@ -183,3 +183,17 @@ test("a Final discharge summary can't be dated in the future; a Draft can", () =
     assert.doesNotThrow(() => checkDates(stay("2026-10-26T12:33:00Z", "Final"), now), "a desk clock a few minutes ahead");
     assert.throws(() => checkDates(stay("2026-10-26T05:00:00Z", "Draft"), now), /before admittedAt/);
 });
+
+test("a visit's records all carry the visit, and its consultation lists the prescriptions' diagnoses once", () => {
+    const sources = visitSources(visit({
+        prescriptions: [{
+            row: { Id: "rx-1", Date: day, PrescriptionNumber: 1, CreatedAt: day } as any,
+            medications: [{ id: "m-1", name: "Paracetamol 650 mg tablet", dosage: "650 mg" }],
+            diagnoses: [{ text: "Dental caries", conceptId: "80967001" }, { text: "Gingivitis", conceptId: "66383009" }],
+            pdf,
+        }],
+    }));
+    assert.ok(sources.every((s) => (s.source as any).visit?.id === 101), "every source names visit 101");
+    const op = sources.find((s) => s.hiType === "OPConsultation")!.source as any;
+    assert.deepEqual(op.diagnoses.map((d: any) => d.text), ["Dental caries", "Gingivitis"], "the consultation's caries and the prescription's gingivitis, caries once");
+});

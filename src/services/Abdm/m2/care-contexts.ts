@@ -13,12 +13,13 @@ import type { CareContextKind, CareContextRow, CareContextSeed, Hip, M2Store } f
 
 const REFERENCE_PREFIX: Record<CareContextKind, string> = {
     visit: "OP", discharge: "IP", immunization: "IM", vitals: "VT", prescription: "RX", consultation: "MR", note: "CN", document: "DOC",
+    report: "DR", wellness: "WR",
 };
 
 export const careContextReference = (kind: CareContextKind, sourceId: string | number): string => `${REFERENCE_PREFIX[kind]}-${sourceId}`;
 
 export const parseCareContextReference = (ref: string): { kind: CareContextKind; sourceId: string } | null => {
-    const match = ref.match(/^(OP|IP|IM|VT|RX|MR|CN|DOC)-(.+)$/);
+    const match = ref.match(/^(OP|IP|IM|VT|RX|MR|CN|DOC|DR|WR)-(.+)$/);
     if (!match) return null;
     const kind = (Object.entries(REFERENCE_PREFIX).find(([, prefix]) => prefix === match[1])![0]) as CareContextKind;
     return { kind, sourceId: match[2]! };
@@ -36,6 +37,8 @@ export const careContextDisplay = (kind: CareContextKind, date: Date, options: {
         case "prescription": return `Prescription, ${day(date)}`;
         case "consultation": return `Consultation record, ${day(date)}`;
         case "note": return `Clinical note, ${day(date)}`;
+        case "report": return `${options.category === "Imaging" ? "Imaging report" : "Lab report"}, ${day(date)}`;
+        case "wellness": return `Wellness record, ${day(date)}`;
         // The kind of document only: its title or file name may name a condition
         case "document": {
             const kind = diagnosticKind(options.category);
@@ -94,6 +97,8 @@ export class CareContextCatalog {
         for (const p of other.prescriptions) seed("prescription", p.id, p.date, careContextDisplay("prescription", p.date), ["Prescription"]);
         for (const r of other.consultations) seed("consultation", r.id, r.date, careContextDisplay("consultation", r.date), ["OPConsultation"]);
         for (const n of other.notes) seed("note", n.id, n.date, careContextDisplay("note", n.date), ["OPConsultation"]);
+        for (const r of other.reports) seed("report", r.id, r.date, careContextDisplay("report", r.date, { category: r.category }), ["DiagnosticReport"]);
+        for (const w of other.wellness) seed("wellness", w.id, w.date, careContextDisplay("wellness", w.date), ["WellnessRecord"]);
         for (const d of other.documents) {
             seed("document", d.id, d.date, careContextDisplay("document", d.date, { category: d.category }), [diagnosticKind(d.category) ? "DiagnosticReport" : "HealthDocumentRecord"]);
         }

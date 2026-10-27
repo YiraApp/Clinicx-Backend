@@ -84,6 +84,8 @@ import { HiuAuditEvent } from "../models/Abdm/hiu-audit-event.model.js";
 import { AbdmExchange } from "../models/Abdm/abdm-exchange.model.js";
 import { PatientImmunization } from "../models/Appointments/patient-immunization.model.js";
 import { DischargeSummary } from "../models/Appointments/discharge-summary.model.js";
+import { PatientDiagnosticReport } from "../models/Appointments/diagnostic-report.model.js";
+import { WellnessRecord } from "../models/Appointments/wellness-record.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -154,7 +156,9 @@ export const AppDataSource = new DataSource({
         HiuAuditEvent,
         AbdmExchange,
         PatientImmunization,
-        DischargeSummary
+        DischargeSummary,
+        PatientDiagnosticReport,
+        WellnessRecord
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,

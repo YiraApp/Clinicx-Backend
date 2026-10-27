@@ -33,11 +33,21 @@ export interface OrganizationSource {
     email?: string | null;
 }
 
+/** The visit (appointment) a record was made at. */
+export interface VisitRef {
+    id: number;
+    start: Date;
+    end?: Date | null;
+    teleconsultation: boolean;
+}
+
 /** Who a record is about, who wrote it, and where. */
 export interface RecordParties {
     patient: PatientSource;
     practitioner: PractitionerSource;
     organization: OrganizationSource;
+    /** The visit the record came from, if any: every record of one visit shares its encounter. */
+    visit?: VisitRef | null;
 }
 
 /** Words as the clinician recorded them, with the SNOMED CT concept picked for them, if any. */
@@ -83,7 +93,7 @@ export interface OpConsultationSource extends RecordParties {
      * consultation record or a clinical note saved outside a visit), when it is that record's own.
      */
     key?: string;
-    visit: { id: number; start: Date; end?: Date | null; teleconsultation: boolean };
+    visit: VisitRef;
     chiefComplaints: CodedText[];
     examinationFindings: CodedText[];
     vitals?: VisitVitals | null;
@@ -116,9 +126,38 @@ export interface PrescriptionSource extends RecordParties {
 
 export type DiagnosticKind = "lab" | "imaging";
 
+/** One result line of a lab or imaging report. */
+export interface ReportResultSource {
+    id: string;
+    name: CodedText;
+    value?: number | null;
+    valueText?: string | null;
+    unit?: string | null;
+    low?: number | null;
+    high?: number | null;
+    referenceText?: string | null;
+    interpretation?: "normal" | "high" | "low" | "abnormal" | null;
+}
+
+/**
+ * A lab or imaging report: entered at the clinic (the test, its results and the conclusion), an
+ * uploaded report file, or both. The file is carried whole as the report's presented form.
+ */
 export interface DiagnosticReportSource extends RecordParties {
     kind: DiagnosticKind;
-    report: DocumentSource;
+    entered?: {
+        id: string;
+        test: CodedText;
+        issuedAt: Date;
+        collectedAt?: Date | null;
+        /** The lab or imaging centre, by name. */
+        performedBy?: string | null;
+        specimen?: CodedText | null;
+        results: ReportResultSource[];
+        conclusion?: string | null;
+        conclusionCodes: CodedText[];
+    } | null;
+    document?: DocumentSource | null;
 }
 
 export interface HealthDocumentSource extends RecordParties {

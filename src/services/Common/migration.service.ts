@@ -326,6 +326,70 @@ export class MigrationService {
                 CONSTRAINT UX_AbdmDataTransfers_Transaction UNIQUE (TransactionId)
             );`,
 
+            // Lab and imaging reports entered at the clinic: what ABDM shares as a DiagnosticReport once Final
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DiagnosticReports')
+            CREATE TABLE DiagnosticReports (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                PatientId UNIQUEIDENTIFIER NOT NULL,
+                HospitalId INT NOT NULL,
+                OrganizationId INT NULL,
+                AppointmentId INT NULL,
+                DoctorId UNIQUEIDENTIFIER NULL,
+                Category VARCHAR(20) NOT NULL,
+                TestName NVARCHAR(200) NOT NULL,
+                TestConceptId VARCHAR(20) NULL,
+                SpecimenType NVARCHAR(100) NULL,
+                SpecimenConceptId VARCHAR(20) NULL,
+                CollectedAt DATETIME NULL,
+                IssuedAt DATETIME NOT NULL,
+                PerformedBy NVARCHAR(200) NULL,
+                Results NVARCHAR(MAX) NULL,
+                Conclusion NVARCHAR(MAX) NULL,
+                ConclusionCodes NVARCHAR(MAX) NULL,
+                DocumentId INT NULL,
+                Status VARCHAR(20) NOT NULL DEFAULT 'Draft',
+                IsDeleted BIT NOT NULL DEFAULT 0,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                CreatedBy NVARCHAR(100) NULL,
+                UpdatedAt DATETIME NULL,
+                UpdatedBy NVARCHAR(100) NULL
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_DiagnosticReports_Patient' AND object_id = OBJECT_ID('DiagnosticReports'))
+            CREATE INDEX IX_DiagnosticReports_Patient ON DiagnosticReports (PatientId, HospitalId);`,
+
+            // Wellness checks recorded at the clinic: what ABDM shares as a WellnessRecord
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'WellnessRecords')
+            CREATE TABLE WellnessRecords (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                PatientId UNIQUEIDENTIFIER NOT NULL,
+                HospitalId INT NOT NULL,
+                OrganizationId INT NULL,
+                AppointmentId INT NULL,
+                RecordedById UNIQUEIDENTIFIER NULL,
+                RecordedAt DATETIME NOT NULL,
+                Systolic INT NULL,
+                Diastolic INT NULL,
+                HeartRate INT NULL,
+                RespiratoryRate INT NULL,
+                TemperatureC DECIMAL(4,1) NULL,
+                SpO2 INT NULL,
+                HeightCm DECIMAL(5,1) NULL,
+                WeightKg DECIMAL(5,1) NULL,
+                Steps INT NULL,
+                CaloriesBurned INT NULL,
+                SleepHours DECIMAL(4,1) NULL,
+                BloodGlucose DECIMAL(5,1) NULL,
+                FluidIntakeLitres DECIMAL(4,1) NULL,
+                Notes NVARCHAR(1000) NULL,
+                IsDeleted BIT NOT NULL DEFAULT 0,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                CreatedBy NVARCHAR(100) NULL,
+                UpdatedAt DATETIME NULL,
+                UpdatedBy NVARCHAR(100) NULL
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_WellnessRecords_Patient' AND object_id = OBJECT_ID('WellnessRecords'))
+            CREATE INDEX IX_WellnessRecords_Patient ON WellnessRecords (PatientId, HospitalId);`,
+
             // ABDM per tenant: the HFR facility each hospital acts as (HIP id), its name as patients
             // see it, and the HIP id its Scan and Share counters use when that is not the HFR id (a
             // hospital with no HFR id yet can still run Scan and Share)

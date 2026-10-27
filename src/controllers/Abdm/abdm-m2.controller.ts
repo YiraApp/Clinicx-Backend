@@ -5,6 +5,10 @@ import { careContextCatalog, hipLinkingService } from "../../services/Abdm/m2/in
 import { LinkingError } from "../../services/Abdm/m2/hip-linking.js";
 import { abdmM2Repository } from "../../repositories/Abdm/abdm-m2.repository.js";
 import { abdmFacilities } from "../../services/Abdm/abdm-facilities.service.js";
+import { abdmHealthRecordService } from "../../services/Abdm/abdm-health-record.service.js";
+import { bundlesForReference } from "../../services/Abdm/m2/data-flow.js";
+import { recordView } from "../../services/Abdm/fhir/record-view.js";
+import { FhirSourceError } from "../../services/Abdm/fhir/fhir-common.js";
 
 /**
  * Staff view of a patient's ABDM care contexts, and the two things staff can start: linking and the
@@ -60,9 +64,41 @@ export class AbdmM2Controller {
                     linkStatus: c.linkStatus,
                     linkedAt: c.linkedAt?.toISOString() ?? null,
                     lastError: c.lastError,
+                    // For ordering by what was added most recently
+                    addedAt: c.createdAt?.toISOString() ?? null,
                 })),
             }));
         } catch (error) {
+            return sendError(res, error);
+        }
+    }
+
+    /**
+     * One care context in words: its bundles built now from the records, exactly as a consented
+     * fetch would get them, each read back as sections and lines (files listed, not sent).
+     */
+    async careContextView(req: Request, res: Response) {
+        try {
+            const hip = await hipFor(req);
+            const patient = await abdmM2Repository.patient(userId(req));
+            if (!patient) return res.status(404).json(ApiResponse.error("Patient not found."));
+            const reference = String(req.params.reference);
+            const [context] = await abdmM2Repository.careContextsByRefs(hip.id, [reference]);
+            if (!context || context.patientUserId !== patient.userId.toLowerCase()) {
+                return res.status(404).json(ApiResponse.error("That record is not one of this patient's ABDM records here."));
+            }
+            const records = await bundlesForReference(abdmHealthRecordService, reference);
+            return res.json(ApiResponse.success({
+                referenceNumber: context.referenceNumber,
+                kind: context.kind,
+                display: context.display,
+                date: context.recordDate.toISOString(),
+                records: records.map(recordView),
+            }));
+        } catch (error: any) {
+            // The record can't be shared as it stands (a Final report with no conclusion, say): say what is missing
+            if (error instanceof FhirSourceError) return res.status(422).json(ApiResponse.error(error.message, { kind: "record" }));
+            if (/not found/i.test(error?.message ?? "")) return res.status(404).json(ApiResponse.error(error.message));
             return sendError(res, error);
         }
     }

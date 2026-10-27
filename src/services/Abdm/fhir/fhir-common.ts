@@ -1,4 +1,5 @@
 import { v5 as uuidv5 } from "uuid";
+import { dosageOf } from "./dosage.js";
 import type { OrganizationSource, PatientSource, PractitionerSource, CodedText, DocumentSource, MedicationSource } from "./fhir-sources.js";
 
 /**
@@ -54,8 +55,19 @@ export const ref = (resource: FhirResource, display?: string) => ({
     ...(display ? { display } : {}),
 });
 
-/** A section entry. Prescription, DiagnosticReport, Immunization and Invoice slice their entries on type. */
-export const entryRef = (resource: FhirResource) => ({ reference: `urn:uuid:${resource.id}`, type: resource.resourceType });
+/** What a person calls a resource: the words of its code, medicine, vaccine or title. */
+export const displayOf = (r: FhirResource): string => {
+    const x = r as any;
+    const words = [x.code?.text, x.medicationCodeableConcept?.text, x.vaccineCode?.text, x.type?.text, x.title, x.description,
+        x.code?.coding?.[0]?.display, r.resourceType].find((w) => typeof w === "string" && w.trim());
+    return String(words).trim();
+};
+
+/**
+ * A section entry, named: PHR apps list a section by its entries' display. Prescription,
+ * DiagnosticReport, Immunization and Invoice slice their entries on type.
+ */
+export const entryRef = (resource: FhirResource) => ({ reference: `urn:uuid:${resource.id}`, type: resource.resourceType, display: displayOf(resource) });
 
 const escapeHtml = (text: string): string =>
     text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -133,7 +145,7 @@ export const practitionerResource = (p: PractitionerSource): FhirResource => ({
     meta: meta("Practitioner"),
     text: narrative(`Practitioner: ${p.name}`),
     identifier: [p.registrationNumber
-        ? { type: { coding: [{ system: V2_0203, code: "MD", display: "Medical License number" }] }, value: p.registrationNumber }
+        ? { type: { coding: [{ system: V2_0203, code: "MD", display: "Medical License number" }] }, system: `${LOCAL_SYSTEM}/medical-council-registration`, value: p.registrationNumber }
         : { type: { coding: [{ system: V2_0203, code: "EI", display: "Employee number" }] }, system: `${LOCAL_SYSTEM}/practitioner`, value: p.id }],
     name: [{ text: p.name }],
     ...(p.qualification ? { qualification: [{ code: { text: p.qualification } }] } : {}),
@@ -155,6 +167,19 @@ export const organizationResource = (o: OrganizationSource): FhirResource => ({
         ],
     } : {}),
 });
+
+const DISPOSITIONS: Array<[RegExp, string, string]> = [
+    [/against|lama|dama/, "aadvice", "Left against advice"],
+    [/expired|death|died|deceased/, "exp", "Expired"],
+    [/transfer|refer|other (hospital|facility)/, "other-hcf", "Other healthcare facility"],
+    [/home|discharged/, "home", "Home"],
+];
+const dispositionOf = (text: string) => {
+    const known = DISPOSITIONS.find(([re]) => re.test(text.toLowerCase()));
+    return known
+        ? { coding: [{ system: "http://terminology.hl7.org/CodeSystem/discharge-disposition", code: known[1], display: known[2] }], text }
+        : { text };
+};
 
 export const encounterResource = (e: {
     key: string;
@@ -186,27 +211,33 @@ export const encounterResource = (e: {
                 use: { coding: [{ system: SNOMED, code: "39154008", display: "Clinical diagnosis" }] },
             })),
         } : {}),
-        ...(e.dischargeDisposition ? { hospitalization: { dischargeDisposition: { text: e.dischargeDisposition } } } : {}),
+        ...(e.dischargeDisposition ? { hospitalization: { dischargeDisposition: dispositionOf(e.dischargeDisposition) } } : {}),
     };
 };
 
-export const conditionResource = (key: string, item: CodedText, patient: FhirResource, label: string): FhirResource => ({
+/** [recordedAt]: when the clinic recorded it, which a PHR app shows as "Recorded". */
+export const conditionResource = (key: string, item: CodedText, patient: FhirResource, label: string, recordedAt: Date): FhirResource => ({
     resourceType: "Condition",
     id: resourceId("Condition", key),
     meta: meta("Condition"),
     text: narrative(`${label}: ${item.text}`),
+    // What the clinician recorded is current: a complaint, a diagnosis or history on the record
+    clinicalStatus: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/condition-clinical", code: "active", display: "Active" }] },
     code: concept(item),
     subject: ref(patient, "Patient"),
+    recordedDate: fhirDateTime(recordedAt),
 });
 
-export const allergyResource = (key: string, text: string, patient: FhirResource, recorder: FhirResource): FhirResource => ({
+export const allergyResource = (key: string, text: string, patient: FhirResource, recorder: FhirResource, recordedAt?: Date): FhirResource => ({
     resourceType: "AllergyIntolerance",
     id: resourceId("AllergyIntolerance", key),
     meta: meta("AllergyIntolerance"),
     text: narrative(`Allergies: ${text}`),
     // ait-1: clinicalStatus is required; allergies on the patient's record are current ones
     clinicalStatus: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical", code: "active", display: "Active" }] },
+    verificationStatus: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification", code: "confirmed", display: "Confirmed" }] },
     code: { text },
+    ...(recordedAt ? { recordedDate: fhirDateTime(recordedAt) } : {}),
     patient: ref(patient, "Patient"),
     recorder: ref(recorder, "Practitioner"),
 });
@@ -243,25 +274,22 @@ export const medicationRequestResource = (
     authoredOn: Date,
     reasons: FhirResource[] = [],
 ): FhirResource => {
-    const dosage = [m.dosage, m.frequency, m.duration ? `for ${m.duration}` : null].map((part) => part?.trim()).filter(Boolean).join(", ");
+    const dosage = dosageOf(m);
     return {
         resourceType: "MedicationRequest",
         id: resourceId("MedicationRequest", m.id),
         meta: meta("MedicationRequest"),
-        text: narrative(`${m.name}${dosage ? `: ${dosage}` : ""}`),
+        text: narrative(`${m.name}: ${dosage.text}`),
         status: "active",
         intent: "order",
         medicationCodeableConcept: concept({ text: m.name, conceptId: m.conceptId }),
         subject: ref(patient, "Patient"),
         authoredOn: fhirDateTime(authoredOn),
         requester: ref(requester, "Practitioner"),
-        ...(reasons.length ? { reasonReference: reasons.map((r) => ref(r, "Condition")) } : {}),
-        // Dose, frequency and route are free text in the clinic's prescriptions: carried as text, never coded here.
-        dosageInstruction: [{
-            text: dosage || "Dosage not recorded",
-            ...(m.instructions?.trim() ? { patientInstruction: m.instructions.trim() } : {}),
-            ...(m.route?.trim() ? { route: { text: m.route.trim() } } : {}),
-        }],
+        // The diagnosis it treats, as words and code (which a PHR app shows) and as the Condition itself
+        ...(reasons.length ? { reasonCode: reasons.map((r) => r.code), reasonReference: reasons.map((r) => ref(r, "Condition")) } : {}),
+        // The sentence as written, with frequency, duration, dose and route as elements wherever the words are clear
+        dosageInstruction: [dosage],
     };
 };
 
@@ -272,6 +300,9 @@ export const followUpAppointmentResource = (key: string, at: Date, patient: Fhir
     meta: meta("Appointment"),
     text: narrative(`Follow-up on ${fhirDate(at)}`),
     status: "proposed",
+    // NRCES fixes the type's system to SNOMED CT; these are the codes its own example uses
+    serviceType: [{ coding: [{ system: SNOMED, code: "11429006", display: "Consultation" }] }],
+    appointmentType: { coding: [{ system: SNOMED, code: "185389009", display: "Follow-up visit" }] },
     description: "Follow-up visit",
     start: fhirDateTime(at),
     end: fhirDateTime(at),
@@ -297,7 +328,7 @@ export const documentReferenceResource = (doc: DocumentSource, patient: FhirReso
     text: narrative(`${doc.title} (${doc.contentType})`),
     status: "current",
     docStatus: "final",
-    type: type ? { coding: [{ system: SNOMED, ...type }], text: doc.title } : { text: doc.category || doc.title },
+    type: { coding: [{ system: SNOMED, ...(type ?? { code: "419891008", display: "Record artifact" }) }], text: type ? doc.title : doc.category || doc.title },
     subject: ref(patient, "Patient"),
     date: fhirDateTime(doc.createdAt),
     content: [{
