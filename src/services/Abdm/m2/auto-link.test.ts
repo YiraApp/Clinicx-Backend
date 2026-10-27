@@ -10,6 +10,7 @@ const PATIENT = "5bfd87da-0ec5-4577-9740-77cf53c24425";
 
 let linked: Array<[string, string]>;
 let notified: Array<[string, string]>;
+let texted: Array<[string, string]>;
 let autoLinkHips: Hip[];
 let noAbha: Set<string>;
 
@@ -39,6 +40,10 @@ const linking = {
         notified.push([hip.id, userId]);
         return 0;
     },
+    async notifyBySms(hip: Hip, userId: string) {
+        texted.push([hip.id, userId]);
+        return noAbha.has(userId) ? "sms-request-id" : null;
+    },
 };
 const autoLinker = () => new AutoLinker(owners, { hips: async (o?: { autoLink?: boolean }) => (o?.autoLink ? autoLinkHips : [OCIMUM]) }, linking, 60_000);
 
@@ -46,6 +51,7 @@ beforeEach(() => {
     recentLookups = [];
     linked = [];
     notified = [];
+    texted = [];
     autoLinkHips = [OCIMUM];
     noAbha = new Set();
 });
@@ -74,13 +80,14 @@ test("a hospital without AutoLink, or a record at another hospital, links nothin
     assert.deepEqual(linked, []);
 });
 
-test("a patient with no ABHA is skipped quietly, and the rest still link", async () => {
+test("a patient with no ABHA is texted the deep link instead of linked, and the rest still link", async () => {
     noAbha.add("no-abha");
     const linker = autoLinker();
     linker.recordSaved({ patientId: "no-abha", hospitalId: 20 });
     linker.recordSaved({ patientId: PATIENT, hospitalId: 20 });
     await linker.settle();
     assert.deepEqual(linked, [[OCIMUM.id, PATIENT]]);
+    assert.deepEqual(texted, [[OCIMUM.id, "no-abha"]], "only the patient linking refused for want of an ABHA");
 });
 
 test("each record table is read for its owner; other tables are ignored", () => {

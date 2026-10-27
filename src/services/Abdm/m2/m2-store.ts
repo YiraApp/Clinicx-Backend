@@ -32,6 +32,10 @@ export interface CareContextRow extends CareContextSeed {
     linkedAbhaAddress: string | null;
     linkRequestId: string | null;
     linkedAt: Date | null;
+    /**
+     * The HI types ABDM has been told of: by the link, by a context notify after it, or, for a patient
+     * with no ABHA on record, by the deep-link SMS.
+     */
     notifiedHiTypes: HiType[];
     lastError: string | null;
     /** When the clinic's record first became a care context: soon after it was saved. */

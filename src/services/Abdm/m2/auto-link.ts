@@ -7,7 +7,9 @@ import { LinkingError, type HipLinkingService } from "./hip-linking.js";
  * line names its prescription, a visit record its appointment. Saves come in bursts (a visit saves
  * its prescription, notes and vitals together), so they wait a few seconds to settle, then each
  * patient is linked once: new care contexts with link/carecontext, care contexts already linked
- * that gained records with link/context/notify. The scheduled sweep remains the safety net.
+ * that gained records with link/context/notify. A patient with a mobile and no ABHA on record is
+ * texted ABDM's deep link instead (sms/notify2), once per new record. The scheduled sweep remains the
+ * safety net for linking.
  */
 
 /** What a saved row says about its owner. */
@@ -29,7 +31,7 @@ export interface RecordOwners {
     owners(ref: RecordRef): Promise<Array<{ patientId: string; hospitalId: number }>>;
 }
 
-type Linking = Pick<HipLinkingService, "link" | "notifyChanges">;
+type Linking = Pick<HipLinkingService, "link" | "notifyChanges" | "notifyBySms">;
 type Facilities = Pick<AbdmFacilityDirectory, "hips">;
 
 const SETTLE_MS = 5_000;
@@ -94,7 +96,17 @@ export class AutoLinker {
                 }
             } catch (error: any) {
                 // No ABHA yet, or no gender and date of birth: nothing to link, and the screen says why.
-                if (!(error instanceof LinkingError)) console.warn(`[ABDM] auto-link at ${hip.id} skipped a patient: ${error?.message}`);
+                if (!(error instanceof LinkingError)) {
+                    console.warn(`[ABDM] auto-link at ${hip.id} skipped a patient: ${error?.message}`);
+                    continue;
+                }
+                // With no ABHA on record, ABDM texts the patient a link to find the new records instead
+                try {
+                    const requestId = await this.linking.notifyBySms(hip, patientId);
+                    if (requestId) console.log(`[ABDM] auto-link at ${hip.id}: deep-link SMS requested for a patient without ABHA, REQUEST-ID=${requestId}`);
+                } catch (smsError: any) {
+                    console.warn(`[ABDM] auto-link at ${hip.id}: the deep-link SMS failed: ${smsError?.message}`);
+                }
             }
         }
     }

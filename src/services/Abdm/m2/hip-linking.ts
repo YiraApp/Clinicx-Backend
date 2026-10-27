@@ -287,6 +287,25 @@ export class HipLinkingService {
         return { requestId };
     }
 
+    /**
+     * For a patient with a mobile and no ABHA address on record: once their records hold something ABDM
+     * has not been told of, ask ABDM to text them the deep link, so they can find those records from a
+     * PHR app. One SMS covers every new record, and saving a record already announced sends none.
+     * Returns the SMS's request id, or null when none was due.
+     */
+    async notifyBySms(hip: Hip, userId: string): Promise<string | null> {
+        const patient = await this.patient(userId);
+        if (patient.abhaAddress || (patient.phone ?? "").replace(/\D/g, "").length < 10) return null;
+        const contexts = await this.catalog.refresh(hip, userId);
+        const fresh = contexts.filter((c) => c.linkStatus !== "linked" && c.hiTypes.some((t) => !c.notifiedHiTypes.includes(t)));
+        if (!fresh.length) return null;
+        const { requestId } = await this.smsNotify(hip, userId);
+        for (const c of fresh) {
+            await this.store.setLinkState([c.id], { notifiedHiTypes: [...new Set([...c.notifiedHiTypes, ...c.hiTypes])] as HiType[] });
+        }
+        return requestId;
+    }
+
     /** Links and announces new records for every patient who holds an ABHA, at each of these facilities. */
     async sweep(facilities: Hip[]): Promise<{ patients: number; queued: number; notified: number }> {
         let patients = 0, queued = 0, notified = 0;

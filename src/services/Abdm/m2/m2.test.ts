@@ -297,6 +297,32 @@ test("the deep-link SMS goes to the patient's ten digit mobile with the facility
     assert.deepEqual(gateway.last("/sms/notify2").body, { notification: { phoneNo: "9800000000", hip: { id: HIP, name: "Ocimum Dental Clinic" } } });
 });
 
+test("a patient with a mobile and no ABHA is texted the deep link once per new record, never for one already announced", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    const first = await linking.notifyBySms(hip, PATIENT);
+    assert.ok(first, "the new records are announced");
+    assert.deepEqual(gateway.last("/sms/notify2").body, { notification: { phoneNo: "9800000000", hip: { id: HIP, name: "Ocimum Dental Clinic" } } });
+    assert.ok(store.contexts.every((c) => c.hiTypes.every((t) => c.notifiedHiTypes.includes(t))), "each care context remembers what was announced");
+    const sms = () => gateway.calls.filter((c: any) => c.path.endsWith("/sms/notify2")).length;
+    assert.equal(await linking.notifyBySms(hip, PATIENT), null, "the same records saved again: no second SMS");
+    assert.equal(sms(), 1);
+
+    // A new kind of record on the visit is new to ABDM
+    const op = store.contexts.find((c) => c.referenceNumber === "OP-101")!;
+    op.notifiedHiTypes = op.notifiedHiTypes.filter((t) => t !== "Prescription");
+    assert.ok(await linking.notifyBySms(hip, PATIENT));
+    assert.equal(sms(), 2);
+});
+
+test("no deep-link SMS for a patient who holds an ABHA, or who has no ten digit mobile", async () => {
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.equal(await linking.notifyBySms(hip, PATIENT), null, "an ABHA is linked instead");
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null, phone: "12345" });
+    assert.equal(await linking.notifyBySms(hip, PATIENT), null);
+    assert.equal(gateway.calls.filter((c: any) => c.path.endsWith("/sms/notify2")).length, 0);
+});
+
 // ---------- user-initiated linking
 
 const sent: Array<{ to: string; otp: string }> = [];
