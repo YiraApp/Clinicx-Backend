@@ -98,6 +98,28 @@ export class MigrationService {
             `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_Users_AbhaNumber' AND object_id = OBJECT_ID('Users'))
             EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_Users_AbhaNumber ON Users (AbhaNumber) WHERE AbhaNumber IS NOT NULL AND IsDeleted = 0');`,
 
+            // Every ABHA address a patient holds: one ABHA number can carry several, and an address
+            // without a number (non-KYC) has only this. Lower case; one patient per address.
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserAbhaAddresses')
+            CREATE TABLE UserAbhaAddresses (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                UserId UNIQUEIDENTIFIER NOT NULL,
+                AbhaAddress VARCHAR(100) NOT NULL,
+                CreatedAt DATETIME NOT NULL DEFAULT GETDATE()
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_UserAbhaAddresses_Address' AND object_id = OBJECT_ID('UserAbhaAddresses'))
+            CREATE UNIQUE INDEX UX_UserAbhaAddresses_Address ON UserAbhaAddresses (AbhaAddress);`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_UserAbhaAddresses_User' AND object_id = OBJECT_ID('UserAbhaAddresses'))
+            CREATE INDEX IX_UserAbhaAddresses_User ON UserAbhaAddresses (UserId);`,
+            // The address each patient already holds, once per address (the latest link wins a tie)
+            `INSERT INTO UserAbhaAddresses (UserId, AbhaAddress)
+            SELECT ranked.Id, ranked.Address FROM (
+                SELECT u.Id, LOWER(u.AbhaAddress) AS Address,
+                       ROW_NUMBER() OVER (PARTITION BY LOWER(u.AbhaAddress) ORDER BY u.AbhaLinkedAt DESC) AS Rank
+                FROM Users u WHERE u.IsDeleted = 0 AND u.AbhaAddress IS NOT NULL AND u.AbhaAddress <> ''
+            ) ranked
+            WHERE ranked.Rank = 1 AND NOT EXISTS (SELECT 1 FROM UserAbhaAddresses a WHERE a.AbhaAddress = ranked.Address);`,
+
             // Who agreed to ABHA creation, who confirmed it at the desk, and when (no Aadhaar is stored)
             `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbhaConsents')
             CREATE TABLE AbhaConsents (

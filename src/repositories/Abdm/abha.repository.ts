@@ -4,7 +4,7 @@ import { User } from "../../models/Account/user.model.js";
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { Hospital } from "../../models/Organizations/hospital.model.js";
 import type { HipHospitalLookup } from "../../services/Abdm/abdm-bridge.service.js";
-import type { AbhaEnrolmentStore, LinkedPatient, NewAbhaConsent } from "../../services/Abdm/abha-enrolment.service.js";
+import type { AbhaEnrolmentStore, AbhaToLink, LinkedPatient, NewAbhaConsent } from "../../services/Abdm/abha-enrolment.service.js";
 
 /** The ABHA journey's reads and writes in the clinic database: consents, ABHA on the Users row, and staff roles. */
 export class AbhaRepository implements AbhaEnrolmentStore, HipHospitalLookup {
@@ -77,22 +77,66 @@ export class AbhaRepository implements AbhaEnrolmentStore, HipHospitalLookup {
         };
     }
 
-    async getPatient(userId: string): Promise<{ abhaNumber: string | null; isPatient: boolean } | null> {
-        const user = await this.users.findOne({ where: { Id: userId, IsDeleted: false }, select: { Id: true, AbhaNumber: true } });
+    async findPatientByAbhaAddresses(abhaAddresses: string[]): Promise<LinkedPatient | null> {
+        if (abhaAddresses.length === 0) return null;
+        const list = abhaAddresses.map((_, i) => `@${i}`).join(", ");
+        const rows = await AppDataSource.query(
+            `SELECT TOP 1 u.Id, u.FirstName, u.LastName, u.TokenNumber
+             FROM Users u
+             WHERE u.IsDeleted = 0
+               AND (LOWER(u.AbhaAddress) IN (${list})
+                    OR EXISTS (SELECT 1 FROM UserAbhaAddresses a WHERE a.UserId = u.Id AND a.AbhaAddress IN (${list})))`,
+            abhaAddresses.map((address) => address.toLowerCase()),
+        );
+        const user = rows[0];
         if (!user) return null;
-        const registrations = await AppDataSource.getRepository(PatientRegistration).count({ where: { UserId: userId, IsDeleted: false } });
-        return { abhaNumber: user.AbhaNumber ?? null, isPatient: registrations > 0 };
+        return {
+            userId: String(user.Id),
+            name: `${user.FirstName || ""} ${user.LastName || ""}`.trim(),
+            tokenNumber: user.TokenNumber ?? null,
+        };
     }
 
-    async linkAbha(userId: string, abhaNumber: string, abhaAddress: string | null, hospitalId: number | null): Promise<void> {
-        await this.users.update(userId, { AbhaNumber: abhaNumber, AbhaAddress: abhaAddress, AbhaLinkedAt: new Date(), RegisteredViaAbha: true });
-        if (hospitalId) {
-            // What this hospital's "From ABHA" filter reads.
-            await AppDataSource.getRepository(PatientRegistration).update(
-                { UserId: userId, HospitalId: hospitalId, IsDeleted: false },
-                { RegisteredViaAbha: true },
-            );
-        }
+    async getPatient(userId: string): Promise<{ abhaNumber: string | null; abhaAddresses: string[]; isPatient: boolean } | null> {
+        const user = await this.users.findOne({ where: { Id: userId, IsDeleted: false }, select: { Id: true, AbhaNumber: true, AbhaAddress: true } });
+        if (!user) return null;
+        const registrations = await AppDataSource.getRepository(PatientRegistration).count({ where: { UserId: userId, IsDeleted: false } });
+        const rows: { AbhaAddress: string }[] = await AppDataSource.query(`SELECT AbhaAddress FROM UserAbhaAddresses WHERE UserId = @0`, [userId]);
+        const abhaAddresses = [...new Set([user.AbhaAddress, ...rows.map((row) => row.AbhaAddress)]
+            .filter((address): address is string => !!address)
+            .map((address) => address.toLowerCase()))];
+        return { abhaNumber: user.AbhaNumber ?? null, abhaAddresses, isPatient: registrations > 0 };
+    }
+
+    async linkAbha(userId: string, abha: AbhaToLink, hospitalId: number | null): Promise<void> {
+        await AppDataSource.transaction(async (manager) => {
+            // A null number or address never clears the one already stored.
+            const update: Partial<User> = { AbhaLinkedAt: new Date(), RegisteredViaAbha: true };
+            if (abha.abhaNumber) update.AbhaNumber = abha.abhaNumber;
+            if (abha.abhaAddress) update.AbhaAddress = abha.abhaAddress;
+            await manager.getRepository(User).update(userId, update);
+
+            for (const address of abha.abhaAddresses) {
+                // A deleted patient's address is free for the record that holds the ABHA now.
+                await manager.query(
+                    `DELETE a FROM UserAbhaAddresses a INNER JOIN Users u ON u.Id = a.UserId WHERE a.AbhaAddress = @0 AND u.IsDeleted = 1`,
+                    [address],
+                );
+                await manager.query(
+                    `IF NOT EXISTS (SELECT 1 FROM UserAbhaAddresses WHERE UserId = @0 AND AbhaAddress = @1)
+                     INSERT INTO UserAbhaAddresses (UserId, AbhaAddress) VALUES (@0, @1)`,
+                    [userId, address],
+                );
+            }
+
+            if (hospitalId) {
+                // What this hospital's "From ABHA" filter reads.
+                await manager.getRepository(PatientRegistration).update(
+                    { UserId: userId, HospitalId: hospitalId, IsDeleted: false },
+                    { RegisteredViaAbha: true },
+                );
+            }
+        });
     }
 }
 

@@ -8,7 +8,9 @@ import {
     OTP_MAX_RESENDS,
     OTP_RESEND_COOLDOWN_MS,
     assertCanResend,
+    findLinkedPatient,
     requireSession,
+    sessionAbhaAddresses,
     text,
     textOrNull,
     toProfileSummary,
@@ -79,14 +81,14 @@ const NO_ABHA_CODE = "ABDM-1114";
 const OTP_SYSTEM_FOR_METHOD: Record<string, LoginOtpSystem> = { MOBILE_OTP: "abdm", AADHAAR_OTP: "aadhaar" };
 
 export class AbhaLoginService {
-    private readonly store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber">;
+    private readonly store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses">;
     private readonly gateway: Pick<AbdmGatewayService, "call">;
     private readonly crypto: Pick<AbdmCryptoService, "encrypt" | "invalidate">;
     private readonly clock: () => number;
     private readonly sessions: AbhaSessionStore;
 
     constructor(
-        store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber">,
+        store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses">,
         sessions: AbhaSessionStore,
         gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService,
         crypto: Pick<AbdmCryptoService, "encrypt" | "invalidate"> = abdmCryptoService,
@@ -177,6 +179,7 @@ export class AbhaLoginService {
             staffUserId: input.staffUserId,
             flow: "verify",
             txnId: this.requireTxnId(response.txnId, "login/request/otp"),
+            loginAbhaAddress: family === "phr" ? identifier : null,
             login: {
                 family,
                 requestPath,
@@ -480,17 +483,18 @@ export class AbhaLoginService {
             headers: { "X-token": `Bearer ${session.xToken}` },
         });
         const profile = toProfileSummary(response);
-        const linkedPatient = profile.abhaNumber
-            ? await this.store.findPatientByAbhaNumber(profile.abhaNumber).catch((error: any) => {
-                console.error("[ABDM] Could not check for a patient already holding this ABHA:", error?.message);
-                return null;
-            })
-            : null;
+        // An ABHA-address login keeps the address the patient gave, not the account's preferred one.
+        const loginAddress = session.loginAbhaAddress;
+        if (loginAddress && !profile.abhaAddresses.some((address) => address.toLowerCase() === loginAddress)) {
+            profile.abhaAddresses.push(loginAddress);
+        }
+        const abhaAddress = loginAddress ?? profile.abhaAddresses[0] ?? null;
+        const linkedPatient = await findLinkedPatient(this.store, profile.abhaNumber, sessionAbhaAddresses({ abhaAddress, profile }));
 
         session.verified = true;
         session.profile = profile;
         session.abhaNumber = profile.abhaNumber;
-        session.abhaAddress = profile.abhaAddresses[0] ?? null;
+        session.abhaAddress = abhaAddress;
         session.loginAccounts = null;
 
         return {

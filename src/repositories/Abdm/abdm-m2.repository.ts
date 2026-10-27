@@ -64,7 +64,8 @@ export class AbdmM2Repository implements M2Store {
             params.push(value);
             where.push(clause(params.length - 1));
         };
-        if (c.abhaAddress) add((i) => `LOWER(u.AbhaAddress) = LOWER(@${i})`, c.abhaAddress);
+        // Any address the patient holds, not only the one the record shows
+        if (c.abhaAddress) add((i) => `(LOWER(u.AbhaAddress) = LOWER(@${i}) OR EXISTS (SELECT 1 FROM UserAbhaAddresses a WHERE a.UserId = u.Id AND a.AbhaAddress = LOWER(@${i})))`, c.abhaAddress);
         if (c.abhaNumber) add((i) => `REPLACE(u.AbhaNumber, '-', '') = @${i}`, c.abhaNumber.replace(/\D/g, ""));
         // Mobiles are stored with or without +91: compare the last ten digits
         if (c.mobile) add((i) => `RIGHT(REPLACE(REPLACE(u.PhoneNumber, '+', ''), ' ', ''), 10) = @${i}`, c.mobile.replace(/\D/g, "").slice(-10));
@@ -77,6 +78,15 @@ export class AbdmM2Repository implements M2Store {
             params,
         );
         return rows.map(patient);
+    }
+
+    async abhaAddresses(userId: string): Promise<string[]> {
+        const rows = await q(
+            `SELECT LOWER(u.AbhaAddress) AS AbhaAddress FROM Users u WHERE u.Id = @0 AND u.IsDeleted = 0 AND u.AbhaAddress IS NOT NULL AND u.AbhaAddress <> ''
+             UNION SELECT a.AbhaAddress FROM UserAbhaAddresses a INNER JOIN Users u ON u.Id = a.UserId AND u.IsDeleted = 0 WHERE a.UserId = @0`,
+            [userId],
+        );
+        return rows.map((r) => String(r.AbhaAddress));
     }
 
     async patientsWithAbhaAt(hospitalId: number): Promise<string[]> {

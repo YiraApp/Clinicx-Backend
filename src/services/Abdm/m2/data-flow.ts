@@ -166,12 +166,20 @@ export class DataFlowService {
         const refs = consent.careContexts.map((c) => c.careContextReference);
         const rows = new Map((await this.store.careContextsByRefs(hip.id, refs)).map((r) => [r.referenceNumber, r]));
         const patientAbha = consent.patientAbhaAddress?.toLowerCase();
+        // A care context linked under one of the patient's addresses serves a consent raised
+        // against another of them: both belong to the same ABHA.
+        const addressesOf = new Map<string, Promise<string[]>>();
+        const consentingPatient = async (row: CareContextRow): Promise<boolean> => {
+            if (!patientAbha || !row.linkedAbhaAddress || row.linkedAbhaAddress.toLowerCase() === patientAbha) return true;
+            if (!addressesOf.has(row.patientUserId)) addressesOf.set(row.patientUserId, this.store.abhaAddresses(row.patientUserId));
+            return (await addressesOf.get(row.patientUserId)!).includes(patientAbha);
+        };
 
         for (const ref of refs) {
             const row = rows.get(ref);
             const errored = (description: string) => statuses.push({ careContextReference: ref, hiStatus: "ERRORED", description });
             if (!row) { errored("Unknown care context."); continue; }
-            if (row.linkStatus !== "linked" || (patientAbha && row.linkedAbhaAddress && row.linkedAbhaAddress.toLowerCase() !== patientAbha)) {
+            if (row.linkStatus !== "linked" || !(await consentingPatient(row))) {
                 errored("This care context is not linked to the consenting patient."); continue;
             }
             try {

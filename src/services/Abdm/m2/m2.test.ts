@@ -34,6 +34,8 @@ class MemoryStore implements M2Store {
             || (c.mobile && p.phone?.replace(/\D/g, "").slice(-10) === c.mobile.replace(/\D/g, "").slice(-10))
             || (c.userId && p.userId === c.userId.toLowerCase()));
     }
+    extraAddresses: string[] = [];
+    async abhaAddresses(id: string) { const p = await this.patient(id); return p?.abhaAddress ? [p.abhaAddress.toLowerCase(), ...this.extraAddresses] : [...this.extraAddresses]; }
     async patientsWithAbhaAt() { return this.patients.filter((p) => p.abhaAddress).map((p) => p.userId); }
     async appointmentIds() { return this.appointments; }
     async upsertCareContexts(seeds: CareContextSeed[]) {
@@ -454,6 +456,36 @@ const hiRequest = (hiu: ReturnType<typeof generateKeyMaterial>, extra: { from?: 
         dataPushUrl: "https://hiu.example.test/data/push",
         keyMaterial: { cryptoAlg: "ECDH", curve: "Curve25519", dhPublicKey: { expiry: "2026-12-31T00:00:00Z", parameters: "Ephemeral public key", keyValue: hiu.publicKey }, nonce: hiu.nonce },
     },
+});
+
+test("a care context linked under one of the patient's addresses serves a consent raised against another", async () => {
+    await catalog.refresh(hip, PATIENT);
+    store.extraAddresses = ["asha.work@sbx"];
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.work@sbx" });
+    const pushes: any[] = [];
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async (url, init) => {
+        pushes.push(JSON.parse(init.body));
+        return { ok: true, status: 202 };
+    });
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED"));
+    await flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial()));
+    assert.equal(pushes.length, 1, "asha.test@sbx and asha.work@sbx are the same ABHA");
+    assert.equal(pushes[0].entries[0].careContextReference, "OP-101");
+});
+
+test("a consent for an address the patient does not hold gets nothing", async () => {
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.test@sbx" });
+    const pushes: any[] = [];
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async (_url, init) => {
+        pushes.push(JSON.parse(init.body));
+        return { ok: true, status: 202 };
+    });
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED", { patient: { id: "stranger@sbx" } }));
+    await flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial()));
+    assert.equal(pushes.length, 0);
+    const statuses = gateway.last("/health-information/notify").body.notification.statusNotification.statusResponses;
+    assert.ok(statuses.every((s: any) => s.hiStatus === "ERRORED"));
 });
 
 test("a health information request on a granted consent is acknowledged, encrypted, pushed and reported", async () => {

@@ -13,6 +13,7 @@ import {
     type LinkedPatient,
     type NewAbhaConsent,
 } from "./abha-enrolment.service.js";
+import { AbhaSessionStore } from "./abha-session.store.js";
 
 const STAFF = "11111111-1111-1111-1111-111111111111";
 const PATIENT = "22222222-2222-2222-2222-222222222222";
@@ -47,7 +48,8 @@ let calls: AbdmCall[];
 let answer: Answer;
 let now: number;
 let consents: Map<number, NewAbhaConsent & { txnId?: string; abhaNumber?: string; patientUserId?: string }>;
-let patients: Map<string, { name: string; abhaNumber: string | null; abhaAddress: string | null; isPatient?: boolean; linkedAtHospital?: number | null }>;
+let patients: Map<string, { name: string; abhaNumber: string | null; abhaAddress: string | null; abhaAddresses: string[]; isPatient?: boolean; linkedAtHospital?: number | null }>;
+let sessions: AbhaSessionStore;
 let service: AbhaEnrolmentService;
 
 const store: AbhaEnrolmentStore = {
@@ -69,12 +71,24 @@ const store: AbhaEnrolmentStore = {
         }
         return null;
     },
+    async findPatientByAbhaAddresses(abhaAddresses): Promise<LinkedPatient | null> {
+        for (const [userId, patient] of patients) {
+            if (patient.abhaAddresses.some((address) => abhaAddresses.includes(address))) return { userId, name: patient.name, tokenNumber: null };
+        }
+        return null;
+    },
     async getPatient(userId) {
         const patient = patients.get(userId);
-        return patient ? { abhaNumber: patient.abhaNumber, isPatient: patient.isPatient !== false } : null;
+        return patient ? { abhaNumber: patient.abhaNumber, abhaAddresses: patient.abhaAddresses, isPatient: patient.isPatient !== false } : null;
     },
-    async linkAbha(userId, abhaNumber, abhaAddress, hospitalId) {
-        Object.assign(patients.get(userId)!, { abhaNumber, abhaAddress, linkedAtHospital: hospitalId });
+    async linkAbha(userId, abha, hospitalId) {
+        const patient = patients.get(userId)!;
+        Object.assign(patient, {
+            abhaNumber: abha.abhaNumber ?? patient.abhaNumber,
+            abhaAddress: abha.abhaAddress ?? patient.abhaAddress,
+            abhaAddresses: [...new Set([...patient.abhaAddresses, ...abha.abhaAddresses])],
+            linkedAtHospital: hospitalId,
+        });
     },
 };
 
@@ -122,8 +136,8 @@ beforeEach(() => {
     fakeCrypto.invalidated = 0;
     consents = new Map();
     patients = new Map([
-        [PATIENT, { name: "Asha Kumari", abhaNumber: null, abhaAddress: null }],
-        [OTHER_PATIENT, { name: "Someone Else", abhaNumber: null, abhaAddress: null }],
+        [PATIENT, { name: "Asha Kumari", abhaNumber: null, abhaAddress: null, abhaAddresses: [] }],
+        [OTHER_PATIENT, { name: "Someone Else", abhaNumber: null, abhaAddress: null, abhaAddresses: [] }],
     ]);
     answer = (call) => {
         if (call.path.endsWith("/enrollment/request/otp")) {
@@ -137,7 +151,8 @@ beforeEach(() => {
         if (call.path.endsWith("/profile/account/abha-card")) return { contentType: "image/png", data: Buffer.from("png-bytes") };
         throw new Error(`unexpected call ${call.path}`);
     };
-    service = new AbhaEnrolmentService(store, gateway, fakeCrypto, () => now);
+    sessions = new AbhaSessionStore(() => now);
+    service = new AbhaEnrolmentService(store, gateway, fakeCrypto, () => now, sessions);
 });
 
 test("an invalid Aadhaar number is refused on our side and nothing is sent or stored", async () => {
@@ -405,6 +420,79 @@ test("linking refuses a record that holds another ABHA, a non-patient, and a mal
         service.linkToPatient({ sessionId, staffUserId: STAFF, userId: "not-a-guid" }),
         (error: unknown) => error instanceof AbhaJourneyError && error.status === 404,
     );
+});
+
+/** A verified ABHA-address login, as abha-login.service leaves it, for the link step to use. */
+const verifiedAddressLogin = (abhaNumber: string | null, abhaAddress: string, others: string[] = []): string =>
+    sessions.create({
+        staffUserId: STAFF,
+        flow: "verify",
+        txnId: "txn-login",
+        verified: true,
+        tokenKind: "phr",
+        xToken: X_TOKEN,
+        abhaNumber,
+        abhaAddress,
+        profile: { ...toProfileSummary({ firstName: "Asha" }), abhaNumber, abhaAddresses: [...others, abhaAddress] },
+    }).id;
+
+test("every ABHA address is stored, and the one the record shows is the one the patient gave", async () => {
+    const sessionId = verifiedAddressLogin(ABHA_NUMBER, "asha.work@sbx", ["asha.kumari@sbx"]);
+    const linked = await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT });
+    assert.deepEqual(linked, { abhaNumber: ABHA_NUMBER, abhaAddress: "asha.work@sbx" });
+    assert.equal(patients.get(PATIENT)!.abhaAddress, "asha.work@sbx");
+    assert.deepEqual(patients.get(PATIENT)!.abhaAddresses.sort(), ["asha.kumari@sbx", "asha.work@sbx"]);
+
+    // Another desk holding a second address of the same ABHA finds the patient by it.
+    patients.get(PATIENT)!.abhaNumber = null;
+    const other = verifiedAddressLogin(null, "asha.kumari@sbx");
+    await assert.rejects(
+        service.linkToPatient({ sessionId: other, staffUserId: STAFF, userId: OTHER_PATIENT }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.kind === "already-linked",
+    );
+});
+
+test("a re-verify that brings no address keeps the stored one", async () => {
+    Object.assign(patients.get(PATIENT)!, { abhaNumber: ABHA_NUMBER, abhaAddress: "asha.kumari@sbx", abhaAddresses: ["asha.kumari@sbx"] });
+    const sessionId = sessions.create({ staffUserId: STAFF, flow: "verify", txnId: "t", verified: true, xToken: X_TOKEN, abhaNumber: ABHA_NUMBER, abhaAddress: null, profile: toProfileSummary({ ABHANumber: ABHA_NUMBER }) }).id;
+    const linked = await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT });
+    assert.equal(linked.abhaAddress, null);
+    assert.equal(patients.get(PATIENT)!.abhaAddress, "asha.kumari@sbx");
+});
+
+test("an ABHA address without an ABHA number links by its address, once per patient", async () => {
+    const sessionId = verifiedAddressLogin(null, "asha.nokyc@sbx");
+    const linked = await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT, hospitalId: 19 });
+    assert.deepEqual(linked, { abhaNumber: null, abhaAddress: "asha.nokyc@sbx" });
+    assert.equal(patients.get(PATIENT)!.abhaNumber, null);
+    assert.deepEqual(patients.get(PATIENT)!.abhaAddresses, ["asha.nokyc@sbx"]);
+    assert.equal(patients.get(PATIENT)!.linkedAtHospital, 19);
+
+    await assert.rejects(
+        service.linkToPatient({ sessionId, staffUserId: STAFF, userId: OTHER_PATIENT }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.kind === "already-linked" && (error.details.linkedPatient as LinkedPatient).userId === PATIENT,
+    );
+    // The same address again on the same record is fine.
+    await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT });
+});
+
+test("an ABHA that shares nothing with the record's ABHA is refused, whichever side has no number", async () => {
+    Object.assign(patients.get(PATIENT)!, { abhaNumber: "91-9999-8888-7777", abhaAddress: "ravi@sbx", abhaAddresses: ["ravi@sbx"] });
+    await assert.rejects(
+        service.linkToPatient({ sessionId: verifiedAddressLogin(null, "asha.nokyc@sbx"), staffUserId: STAFF, userId: PATIENT }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.kind === "different-abha",
+    );
+
+    Object.assign(patients.get(PATIENT)!, { abhaNumber: null, abhaAddress: "ravi.nokyc@sbx", abhaAddresses: ["ravi.nokyc@sbx"] });
+    await assert.rejects(
+        service.linkToPatient({ sessionId: verifiedAddressLogin(ABHA_NUMBER, "asha.kumari@sbx"), staffUserId: STAFF, userId: PATIENT }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.kind === "different-abha",
+    );
+
+    // An address-only record gains the ABHA number its address now belongs to.
+    const sessionId = verifiedAddressLogin(ABHA_NUMBER, "asha.kumari@sbx", ["ravi.nokyc@sbx"]);
+    await service.linkToPatient({ sessionId, staffUserId: STAFF, userId: PATIENT });
+    assert.equal(patients.get(PATIENT)!.abhaNumber, ABHA_NUMBER);
 });
 
 test("a database hiccup after ABDM created the ABHA does not strand the journey", async () => {

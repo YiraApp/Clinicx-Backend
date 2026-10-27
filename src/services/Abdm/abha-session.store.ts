@@ -93,6 +93,8 @@ export interface AbhaSession {
     profile: AbhaProfileSummary | null;
     abhaNumber: string | null;
     abhaAddress: string | null;
+    /** An ABHA-address login: the address the patient gave, which the record keeps over the preferred one. */
+    loginAbhaAddress: string | null;
     /** Create journey: the communication mobile, when it is not the Aadhaar-linked one. */
     communicationMobile: { encrypted: string; last4: string; otp: OtpState | null; verified: boolean } | null;
     login: PendingLogin | null;
@@ -131,6 +133,7 @@ export class AbhaSessionStore {
             profile: null,
             abhaNumber: null,
             abhaAddress: null,
+            loginAbhaAddress: null,
             communicationMobile: null,
             login: null,
             foundAccounts: null,

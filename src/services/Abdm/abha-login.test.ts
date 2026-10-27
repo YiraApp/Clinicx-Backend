@@ -56,7 +56,7 @@ beforeEach(() => {
         throw new Error(`unexpected call ${call.path}`);
     };
     sessions = new AbhaSessionStore(() => now);
-    service = new AbhaLoginService({ findPatientByAbhaNumber: async () => null }, sessions, gateway, fakeCrypto, () => now);
+    service = new AbhaLoginService({ findPatientByAbhaNumber: async () => null, findPatientByAbhaAddresses: async () => null }, sessions, gateway, fakeCrypto, () => now);
 });
 
 test("an ABHA number login sends the dashed number encrypted, with the chosen OTP system", async () => {
@@ -120,6 +120,40 @@ test("an ABHA address login still takes a token sent at the top level", async ()
     assert.equal(result.status, "verified");
     assert.equal(calls.at(-1)!.headers?.["X-token"], `Bearer ${X_TOKEN}`);
     assert.equal(sessions.get(sessionId, STAFF)!.xTokenExpiresAt, now + 900_000);
+});
+
+test("an ABHA address login keeps the address the patient gave, not the preferred one", async () => {
+    answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/phr/web/login/abha/verify")
+        ? { authResult: "success", tokens: { token: X_TOKEN, expiresIn: 600 } }
+        : call.path.endsWith("/phr/web/login/profile/abha-profile")
+            ? { preferredAbhaAddress: "asha@sbx", phrAddress: ["asha@sbx"], abhaNumber: ABHA_NUMBER, firstName: "Asha" }
+            : normal(call))(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "abha-address", identifier: "Asha.Work@sbx", otpSystem: "abdm", staffUserId: STAFF });
+    const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    assert.equal(result.status, "verified");
+    if (result.status !== "verified") return;
+    assert.equal(result.abhaAddress, "asha.work@sbx");
+    assert.deepEqual(result.profile.abhaAddresses, ["asha@sbx", "asha.work@sbx"], "every address the ABHA holds is kept");
+});
+
+test("an ABHA address without an ABHA number finds its patient by the address", async () => {
+    const seen: string[][] = [];
+    service = new AbhaLoginService({
+        findPatientByAbhaNumber: async () => { throw new Error("there is no number to look up"); },
+        findPatientByAbhaAddresses: async (addresses) => { seen.push(addresses); return { userId: "p-1", name: "Asha", tokenNumber: null }; },
+    }, sessions, gateway, fakeCrypto, () => now);
+    answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/phr/web/login/abha/verify")
+        ? { authResult: "success", tokens: { token: X_TOKEN, expiresIn: 600 } }
+        : call.path.endsWith("/phr/web/login/profile/abha-profile")
+            ? { abhaAddress: "asha@sbx", firstName: "Asha", kycStatus: "PENDING" }
+            : normal(call))(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "abha-address", identifier: "asha@sbx", otpSystem: "abdm", staffUserId: STAFF });
+    const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    assert.equal(result.status, "verified");
+    if (result.status !== "verified") return;
+    assert.equal(result.abhaNumber, null);
+    assert.deepEqual(seen, [["asha@sbx"]]);
+    assert.equal(result.linkedPatient?.userId, "p-1");
 });
 
 test("a login answer with a refresh token is final: the profile is read with it", async () => {
@@ -217,7 +251,7 @@ test("choosing the same account again finishes from the held token when the prof
 
 test("a failed clinic lookup does not strand a verified login", async (t) => {
     t.mock.method(console, "error", () => {});
-    service = new AbhaLoginService({ findPatientByAbhaNumber: async () => { throw new Error("connection lost"); } }, sessions, gateway, fakeCrypto, () => now);
+    service = new AbhaLoginService({ findPatientByAbhaNumber: async () => { throw new Error("connection lost"); }, findPatientByAbhaAddresses: async () => null }, sessions, gateway, fakeCrypto, () => now);
     const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF });
     const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
     assert.equal(result.status, "verified");

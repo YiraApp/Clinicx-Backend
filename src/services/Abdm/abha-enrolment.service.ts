@@ -80,11 +80,53 @@ export interface AbhaEnrolmentStore {
     updateConsent(consentId: number, changes: { txnId?: string; abhaNumber?: string; patientUserId?: string }): Promise<void>;
     staffName(userId: string): Promise<string | null>;
     findPatientByAbhaNumber(abhaNumber: string): Promise<LinkedPatient | null>;
-    /** A live user record: the ABHA number it holds, and whether it is registered as a patient anywhere. */
-    getPatient(userId: string): Promise<{ abhaNumber: string | null; isPatient: boolean } | null>;
-    /** Records the ABHA on the user, and on their registration at [hospitalId] when one is given. */
-    linkAbha(userId: string, abhaNumber: string, abhaAddress: string | null, hospitalId: number | null): Promise<void>;
+    /** The live patient holding any of these ABHA addresses (lower case). */
+    findPatientByAbhaAddresses(abhaAddresses: string[]): Promise<LinkedPatient | null>;
+    /** A live user record: the ABHA number and every ABHA address it holds, and whether it is registered as a patient anywhere. */
+    getPatient(userId: string): Promise<{ abhaNumber: string | null; abhaAddresses: string[]; isPatient: boolean } | null>;
+    /**
+     * Records the ABHA on the user, and on their registration at [hospitalId] when one is given.
+     * Adds [abhaAddresses] to the ones the user already holds; a null number or address keeps the stored one.
+     */
+    linkAbha(userId: string, abha: AbhaToLink, hospitalId: number | null): Promise<void>;
 }
+
+/** What a verified session links to a patient: an ABHA number, an address, or both. */
+export interface AbhaToLink {
+    abhaNumber: string | null;
+    /** The address the record shows: the preferred one, or the one the patient logged in with. */
+    abhaAddress: string | null;
+    /** Every address ABDM listed for this ABHA, lower case, [abhaAddress] among them. */
+    abhaAddresses: string[];
+}
+
+/** Every ABHA address the session knows for the person, lower case, the one it keeps first. */
+export const sessionAbhaAddresses = (session: Pick<AbhaSession, "abhaAddress" | "profile">): string[] => {
+    const addresses: string[] = [];
+    for (const value of [session.abhaAddress, ...(session.profile?.abhaAddresses ?? [])]) {
+        const address = text(value).toLowerCase();
+        if (address && !addresses.includes(address)) addresses.push(address);
+    }
+    return addresses;
+};
+
+/**
+ * The patient already holding this ABHA: by its number, else by any of its addresses, which is
+ * the only key an address without an ABHA number has.
+ */
+export const findLinkedPatient = async (
+    store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses">,
+    abhaNumber: string | null,
+    abhaAddresses: string[],
+): Promise<LinkedPatient | null> => {
+    try {
+        const byNumber = abhaNumber ? await store.findPatientByAbhaNumber(abhaNumber) : null;
+        return byNumber ?? (abhaAddresses.length > 0 ? await store.findPatientByAbhaAddresses(abhaAddresses) : null);
+    } catch (error: any) {
+        console.error("[ABDM] Could not check for a patient already holding this ABHA:", error?.message);
+        return null;
+    }
+};
 
 export interface VerifyOtpResult {
     isNew: boolean;
@@ -158,7 +200,7 @@ export const toProfileSummary = (response: Record<string, any>): AbhaProfileSumm
         const address = text(value);
         if (address && !addresses.includes(address)) addresses.push(address);
     };
-    // The preferred address first: it is the one the record keeps.
+    // The preferred address first: the record shows it, unless the patient logged in with another.
     addAddress(profile.preferredAbhaAddress);
     addAddress(profile.abhaAddress);
     if (Array.isArray(profile.phrAddress)) profile.phrAddress.forEach(addAddress);
@@ -408,12 +450,7 @@ export class AbhaEnrolmentService {
         const linkedLast4 = session.aadhaarMobileLast4 ?? lastFourDigits(profile.mobile);
         const mobileVerificationNeeded = isNew && linkedLast4 !== mobile.slice(-4);
         const encryptedMobile = mobileVerificationNeeded ? await this.crypto.encrypt(mobile) : null;
-        const linkedPatient = profile.abhaNumber
-            ? await this.store.findPatientByAbhaNumber(profile.abhaNumber).catch((error: any) => {
-                console.error("[ABDM] Could not check for a patient already holding this ABHA:", error?.message);
-                return null;
-            })
-            : null;
+        const linkedPatient = await findLinkedPatient(this.store, profile.abhaNumber, sessionAbhaAddresses({ abhaAddress: null, profile }));
 
         session.isNew = isNew;
         session.verified = true;
@@ -530,6 +567,10 @@ export class AbhaEnrolmentService {
         session.txnId = text(response.txnId) || session.txnId;
         session.abhaNumber = textOrNull(response.healthIdNumber) ?? session.abhaNumber;
         session.abhaAddress = textOrNull(response.preferredAbhaAddress) ?? `${localPart}${suffix}`;
+        // The new address is the preferred one now; the account's earlier addresses stay its too.
+        if (session.profile) {
+            session.profile.abhaAddresses = [session.abhaAddress, ...session.profile.abhaAddresses.filter((address) => address.toLowerCase() !== session.abhaAddress!.toLowerCase())];
+        }
         return { abhaNumber: session.abhaNumber, abhaAddress: session.abhaAddress };
     }
 
@@ -553,14 +594,16 @@ export class AbhaEnrolmentService {
     }
 
     /**
-     * Stores the ABHA number and preferred address on the clinic's patient record. The values
-     * come from the verified session, never from the browser. One ABHA number, one patient.
+     * Stores the ABHA number and every ABHA address on the clinic's patient record. The values
+     * come from the verified session, never from the browser. One ABHA, one patient: an ABHA
+     * address without an ABHA number (a non-KYC address) links by its address alone.
      */
-    async linkToPatient(input: { sessionId: string; staffUserId: string; userId: string; hospitalId?: number | null }): Promise<{ abhaNumber: string; abhaAddress: string | null }> {
+    async linkToPatient(input: { sessionId: string; staffUserId: string; userId: string; hospitalId?: number | null }): Promise<{ abhaNumber: string | null; abhaAddress: string | null }> {
         const session = this.verifiedSession(input.sessionId, input.staffUserId);
         const abhaNumber = session.abhaNumber;
-        if (!abhaNumber) {
-            throw new AbhaJourneyError(409, "state", "ABDM has not returned an ABHA number for this session yet.");
+        const abhaAddresses = sessionAbhaAddresses(session);
+        if (!abhaNumber && abhaAddresses.length === 0) {
+            throw new AbhaJourneyError(409, "state", "ABDM has not returned an ABHA number or ABHA address for this session yet.");
         }
         if (!GUID.test(input.userId)) {
             throw new AbhaJourneyError(404, "not-found", "Patient record not found.");
@@ -573,29 +616,40 @@ export class AbhaEnrolmentService {
             throw new AbhaJourneyError(409, "not-a-patient", "This record is not registered as a patient, so an ABHA can't be linked to it.");
         }
         // Never overwrite one ABHA with another: that is a different person, or a decision for ABDM.
-        if (patient.abhaNumber && patient.abhaNumber !== abhaNumber) {
+        if (patient.abhaNumber && abhaNumber && patient.abhaNumber !== abhaNumber) {
             throw new AbhaJourneyError(409, "different-abha", "This patient record already holds a different ABHA number. Check you have the right patient; the ABHA was not linked.");
         }
+        // Without an ABHA number on both sides, only a shared address shows it is the same ABHA.
+        const recordHoldsAbha = !!patient.abhaNumber || patient.abhaAddresses.length > 0;
+        const sharesAddress = patient.abhaAddresses.some((address) => abhaAddresses.includes(address.toLowerCase()));
+        if ((!patient.abhaNumber || !abhaNumber) && recordHoldsAbha && !sharesAddress) {
+            throw new AbhaJourneyError(409, "different-abha", "This patient record already holds a different ABHA. Check you have the right patient; the ABHA was not linked.");
+        }
 
-        const holder = await this.store.findPatientByAbhaNumber(abhaNumber);
+        const holder = await this.holderOf(abhaNumber, abhaAddresses);
         if (holder && holder.userId.toLowerCase() !== input.userId.toLowerCase()) {
             throw this.alreadyLinked(holder);
         }
 
+        const abhaAddress = session.abhaAddress ? session.abhaAddress.toLowerCase() : abhaAddresses[0] ?? null;
         try {
-            await this.store.linkAbha(input.userId, abhaNumber, session.abhaAddress, input.hospitalId ?? null);
+            await this.store.linkAbha(input.userId, { abhaNumber, abhaAddress, abhaAddresses }, input.hospitalId ?? null);
         } catch (error: any) {
-            // The unique index caught a link made a moment ago by another desk.
-            if (/UX_Users_AbhaNumber|duplicate key/i.test(String(error?.message))) {
-                const current = await this.store.findPatientByAbhaNumber(abhaNumber);
-                throw this.alreadyLinked(current);
+            // A unique index caught a link made a moment ago by another desk.
+            if (/UX_Users_AbhaNumber|UX_UserAbhaAddresses_Address|duplicate key/i.test(String(error?.message))) {
+                throw this.alreadyLinked(await this.holderOf(abhaNumber, abhaAddresses));
             }
             throw error;
         }
         if (session.consentId !== null) {
-            await this.store.updateConsent(session.consentId, { abhaNumber, patientUserId: input.userId });
+            await this.store.updateConsent(session.consentId, { ...(abhaNumber ? { abhaNumber } : {}), patientUserId: input.userId });
         }
-        return { abhaNumber, abhaAddress: session.abhaAddress };
+        return { abhaNumber, abhaAddress };
+    }
+
+    private async holderOf(abhaNumber: string | null, abhaAddresses: string[]): Promise<LinkedPatient | null> {
+        const byNumber = abhaNumber ? await this.store.findPatientByAbhaNumber(abhaNumber) : null;
+        return byNumber ?? (abhaAddresses.length > 0 ? await this.store.findPatientByAbhaAddresses(abhaAddresses) : null);
     }
 
     private alreadyLinked(holder: LinkedPatient | null): AbhaJourneyError {

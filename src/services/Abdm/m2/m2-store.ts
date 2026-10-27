@@ -92,6 +92,8 @@ export interface M2Store {
     patient(userId: string): Promise<PatientProfile | null>;
     /** Patients registered at the hospital who match any criterion given. */
     patientsAt(hospitalId: number, criteria: { abhaAddress?: string; abhaNumber?: string; mobile?: string; userId?: string }): Promise<PatientProfile[]>;
+    /** Every ABHA address the patient holds, lower case: one ABHA number can carry several. */
+    abhaAddresses(userId: string): Promise<string[]>;
     /** Patients registered at the hospital who hold an ABHA address. */
     patientsWithAbhaAt(hospitalId: number): Promise<string[]>;
     appointmentIds(patientUserId: string, hospitalId: number): Promise<number[]>;
