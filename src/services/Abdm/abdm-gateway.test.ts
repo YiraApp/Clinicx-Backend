@@ -305,6 +305,14 @@ test("ABDM's error shapes all parse", () => {
         message: "Invalid OTP value",
         field: null,
     });
+    // A refused transaction, as enrollment/request/otp answered a resend on 2026-10-27: the message is in txnId.
+    assert.deepEqual(parseAbdmError(400, { txnId: "Invalid Transaction Id", timestamp: "2026-10-27 16:33:54" }), {
+        code: null,
+        message: "Invalid Transaction Id",
+        field: "txnId",
+    });
+    // A txnId that is an id stays data, never the message.
+    assert.equal(parseAbdmError(400, { txnId: "6f1c2a9e-1d2b-4c3d-9e8f-0a1b2c3d4e5f", timestamp: "2026-10-27 16:33:54" }).message, "ABDM answered with HTTP 400 and no message.");
     // The HIE-CM gateway's shape, as the sandbox answered it on 2026-10-26
     assert.deepEqual(parseAbdmError(400, [{ error: { code: "ABDM-1002: ", message: "Invalid HIP ID, it must be in Alpha numeric and _ in middle" } }]), {
         code: "ABDM-1002",

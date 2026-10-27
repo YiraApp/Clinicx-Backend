@@ -227,6 +227,8 @@ export class AbhaEnrolmentService {
     private readonly crypto: Pick<AbdmCryptoService, "encrypt" | "invalidate">;
     private readonly clock: () => number;
     private readonly sessions: AbhaSessionStore;
+    /** Journeys with an Aadhaar OTP resend on its way: the resend count is written only once ABDM answers. */
+    private readonly resending = new Set<string>();
 
     constructor(
         store: AbhaEnrolmentStore,
@@ -309,7 +311,12 @@ export class AbhaEnrolmentService {
         return { sessionId: session.id, message, resendsLeft: OTP_MAX_RESENDS, resendAvailableInSeconds: OTP_RESEND_COOLDOWN_MS / 1000 };
     }
 
-    /** Resends the Aadhaar OTP on the same transaction. */
+    /**
+     * Resends the Aadhaar OTP on the same transaction, as the ABHA specification says. ABDM's
+     * enrolment service can refuse that transaction ({"txnId": "Invalid Transaction Id"}, the sandbox
+     * on 2026-10-27): the OTP then goes out once on a fresh request, whose transaction the journey
+     * takes over. Either way it is one resend.
+     */
     async resendAadhaarOtp(sessionId: string, staffUserId: string): Promise<{ message: string; resendsLeft: number; resendAvailableInSeconds: number }> {
         const session = this.session(sessionId, staffUserId);
         const aadhaarOtp = session.aadhaarOtp;
@@ -317,19 +324,43 @@ export class AbhaEnrolmentService {
             throw new AbhaJourneyError(409, "state", "The Aadhaar OTP is already verified.");
         }
         assertCanResend(aadhaarOtp, this.clock());
+        if (this.resending.has(session.id)) {
+            throw new AbhaJourneyError(409, "state", "The OTP is already being sent again.");
+        }
+        this.resending.add(session.id);
 
-        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
-            operation: "enrollment/request/otp (aadhaar, resend)",
-            method: "POST",
-            path: "/abha/api/v3/enrollment/request/otp",
-            body: { txnId: session.txnId, scope: ["abha-enrol"], loginHint: "aadhaar", loginId: session.encryptedAadhaar, otpSystem: "aadhaar" },
-        }));
-        session.txnId = text(response.txnId) || session.txnId;
-        session.aadhaarOtp = { sentAt: this.clock(), resends: aadhaarOtp.resends + 1 };
-        const message = text(response.message) || "OTP sent again to the Aadhaar-linked mobile number.";
-        session.aadhaarMobileLast4 = lastFourDigits(message) ?? session.aadhaarMobileLast4;
+        try {
+            const requestOtp = (txnId: string | null) => withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
+                operation: txnId ? "enrollment/request/otp (aadhaar, resend)" : "enrollment/request/otp (aadhaar, resend on a new transaction)",
+                method: "POST",
+                path: "/abha/api/v3/enrollment/request/otp",
+                body: { ...(txnId ? { txnId } : {}), scope: ["abha-enrol"], loginHint: "aadhaar", loginId: session.encryptedAadhaar, otpSystem: "aadhaar" },
+            }));
+            let response: { txnId?: string; message?: string };
+            try {
+                response = await requestOtp(session.txnId);
+            } catch (error) {
+                if (!(error instanceof AbdmApiError && error.kind === "rejected" && error.field === "txnId")) throw error;
+                console.warn(`[ABDM] Aadhaar OTP resend: ABDM refused the transaction (${error.message}, REQUEST-ID=${error.requestId ?? "-"}); sending it on a new one`);
+                response = await requestOtp(null);
+                const txnId = text(response.txnId);
+                if (!txnId) {
+                    throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "enrollment/request/otp", message: "ABDM sent no transaction id with the OTP." });
+                }
+                if (session.consentId !== null) {
+                    await this.store.updateConsent(session.consentId, { txnId }).catch((updateError: any) =>
+                        console.error("[ABDM] Could not record the new transaction on the consent:", updateError?.message));
+                }
+            }
+            session.txnId = text(response.txnId) || session.txnId;
+            session.aadhaarOtp = { sentAt: this.clock(), resends: aadhaarOtp.resends + 1 };
+            const message = text(response.message) || "OTP sent again to the Aadhaar-linked mobile number.";
+            session.aadhaarMobileLast4 = lastFourDigits(message) ?? session.aadhaarMobileLast4;
 
-        return { message, resendsLeft: OTP_MAX_RESENDS - session.aadhaarOtp.resends, resendAvailableInSeconds: OTP_RESEND_COOLDOWN_MS / 1000 };
+            return { message, resendsLeft: OTP_MAX_RESENDS - session.aadhaarOtp.resends, resendAvailableInSeconds: OTP_RESEND_COOLDOWN_MS / 1000 };
+        } finally {
+            this.resending.delete(session.id);
+        }
     }
 
     /**

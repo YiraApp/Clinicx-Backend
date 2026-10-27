@@ -92,8 +92,10 @@ export const parseAbdmError = (status: number, body: unknown): { code: string | 
         return { code: null, message: b.description.trim(), field: null };
     }
 
-    // A transaction id is an identifier, never the message naming what was refused.
-    const field = Object.keys(b).find((key) => key !== "timestamp" && key !== "txnId" && typeof b[key] === "string");
+    // A transaction id is an identifier, never the message naming what was refused, but the ABHA
+    // service refuses a transaction in that same field ({"txnId": "Invalid Transaction Id"}): a txnId
+    // holding words is the message.
+    const field = Object.keys(b).find((key) => key !== "timestamp" && typeof b[key] === "string" && (key !== "txnId" || /\s/.test(b[key])));
     if (field) {
         return { code: null, message: String(b[field]), field };
     }

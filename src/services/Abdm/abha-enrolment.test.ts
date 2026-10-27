@@ -203,6 +203,65 @@ test("resend waits 60 seconds, reuses the transaction, and stops after two", asy
     assert.equal(calls.length, 3, "the third resend never reaches ABDM");
 });
 
+test("a resend ABDM refuses on the transaction goes out once on a new one, which the journey takes over", async () => {
+    const { sessionId } = await startJourney();
+    let fresh = 0;
+    answer = (call) => {
+        if (call.path.endsWith("/enrollment/request/otp")) {
+            if ((call.body as any).txnId) {
+                return new AbdmApiError({ status: 400, kind: "rejected", operation: call.operation, field: "txnId", message: "Invalid Transaction Id", requestId: "rid" });
+            }
+            fresh += 1;
+            return { txnId: `txn-new-${fresh}`, message: otpSent.message };
+        }
+        if (call.path.endsWith("/enrollment/enrol/byAadhaar")) return enrolled(true);
+        throw new Error(`unexpected call ${call.path}`);
+    };
+
+    now += 60_000;
+    const first = await service.resendAadhaarOtp(sessionId, STAFF);
+    assert.equal(first.resendsLeft, 1);
+    assert.equal(first.message, otpSent.message);
+    assert.deepEqual(calls[1]!.body, { txnId: "txn-1", scope: ["abha-enrol"], loginHint: "aadhaar", loginId: `enc(${AADHAAR})`, otpSystem: "aadhaar" });
+    assert.deepEqual(calls[2]!.body, { scope: ["abha-enrol"], loginHint: "aadhaar", loginId: `enc(${AADHAAR})`, otpSystem: "aadhaar" });
+    assert.equal(consents.get(1)!.txnId, "txn-new-1");
+
+    now += 60_000;
+    const second = await service.resendAadhaarOtp(sessionId, STAFF);
+    assert.equal(second.resendsLeft, 0);
+    assert.equal((calls[3]!.body as any).txnId, "txn-new-1", "the next resend tries the transaction it took over");
+
+    now += 60_000;
+    await assert.rejects(service.resendAadhaarOtp(sessionId, STAFF), (error: unknown) => error instanceof AbhaJourneyError && error.message === RESEND_LIMIT_MESSAGE);
+    assert.equal(calls.length, 5, "two resends, each tried on the transaction and then on a new one; the third never reaches ABDM");
+
+    await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
+    assert.equal((calls[5]!.body as any).authData.otp.txnId, "txn-new-2", "the OTP is verified on the newest transaction");
+});
+
+test("two resends pressed together send one", async () => {
+    const { sessionId } = await startJourney();
+    now += 60_000;
+    const [first, second] = await Promise.allSettled([service.resendAadhaarOtp(sessionId, STAFF), service.resendAadhaarOtp(sessionId, STAFF)]);
+    assert.equal(first.status, "fulfilled");
+    assert.ok(second.status === "rejected" && second.reason instanceof AbhaJourneyError && second.reason.kind === "state");
+    assert.equal(calls.length, 2, "the first send and one resend");
+    assert.equal(first.status === "fulfilled" && first.value.resendsLeft, 1);
+});
+
+test("any other refusal of a resend is shown as it is and not sent again", async () => {
+    const { sessionId } = await startJourney();
+    const refusal = new AbdmApiError({ status: 400, kind: "rejected", operation: "enrollment/request/otp", field: "loginId", message: "Invalid LoginId" });
+    answer = (call) => {
+        if (call.path.endsWith("/enrollment/request/otp")) return refusal;
+        throw new Error(`unexpected call ${call.path}`);
+    };
+
+    now += 60_000;
+    await assert.rejects(service.resendAadhaarOtp(sessionId, STAFF), (error: unknown) => error === refusal);
+    assert.equal(calls.length, 2, "one resend call, no second try");
+});
+
 test("a wrong OTP shows ABDM's message and keeps the transaction for the right one", async () => {
     const { sessionId } = await startJourney();
     const uidaiRefusal = new AbdmApiError({ status: 422, kind: "rejected", operation: "byAadhaar", code: "ABDM-1204", message: "UIDAI Error code : 400 : Invalid Aadhaar OTP value." });
