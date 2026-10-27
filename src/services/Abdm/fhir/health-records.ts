@@ -37,7 +37,7 @@ const OP = {
 
 /** OPConsultation: one outpatient visit (an appointment) and everything recorded at it. */
 export const buildOpConsultation = (s: OpConsultationSource, now: Date = new Date()): FhirBundle => {
-    const key = `appointment-${s.visit.id}`;
+    const key = s.key ?? `appointment-${s.visit.id}`;
     const { patient, practitioner, organization } = parties(s);
     const at = s.vitalsRecordedAt ?? s.visit.start;
 

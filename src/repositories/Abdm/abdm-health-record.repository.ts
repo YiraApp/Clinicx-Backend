@@ -5,6 +5,7 @@ import { PatientMedicalRecord } from "../../models/Appointments/patient-medical-
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { ClinicalNote } from "../../models/Appointments/clinical-note.model.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
+import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
 import { PatientImmunization } from "../../models/Appointments/patient-immunization.model.js";
 import { DischargeSummary } from "../../models/Appointments/discharge-summary.model.js";
 import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
@@ -62,6 +63,14 @@ export const documentContentType = (mime: string | null | undefined, extension: 
 const coded = (text?: string | null, conceptId?: string | null): CodedText[] =>
     text?.trim() ? [{ text: text.trim(), conceptId: conceptId?.trim() || null }] : [];
 
+/** Medical record rows that are a vitals check rather than a consultation. */
+export const isVitalsRecord = (r: Pick<PatientMedicalRecord, "Type">): boolean => /vital/i.test(r.Type ?? "");
+
+/** A consultation record with something written in it, or measured: worth sharing on its own. */
+export const hasConsultationContent = (r: Partial<PatientMedicalRecord>): boolean =>
+    [r.ChiefComplaint, r.Symptoms, r.PhysicalExamination, r.Diagnosis, r.Treatment, r.BloodPressure, r.HeartRate, r.Temperature, r.Weight, r.Height, r.SpO2]
+        .some((v) => typeof v === "string" && v.trim() !== "") || Boolean(r.FollowUpDate);
+
 export class AbdmHealthRecordRepository {
     constructor(private readonly documents: DocumentReader = { read: (url) => blobService.downloadFile(url) }) {}
 
@@ -107,7 +116,7 @@ export class AbdmHealthRecordRepository {
         if (!appointment) throw new Error(`Appointment ${appointmentId} not found.`);
         const { UserId: patientId, HospitalId: hospitalId } = appointment;
 
-        const [parties, registration, medicalRecords, prescriptionRows, notes, documentRows, bills, immunizations] = await Promise.all([
+        const [parties, registration, medicalRecords, prescriptionRows, notes, documentRows, bills, immunizations, postVisitRows] = await Promise.all([
             this.parties(patientId, appointment.DoctorId, hospitalId),
             AppDataSource.getRepository(PatientRegistration).findOne({ where: { UserId: patientId, HospitalId: hospitalId, IsDeleted: false } }),
             AppDataSource.getRepository(PatientMedicalRecord).find({ where: { AppointmentId: appointmentId }, order: { Date: "ASC" } }),
@@ -125,6 +134,12 @@ export class AbdmHealthRecordRepository {
                 order: { CreatedAt: "ASC" },
             }),
             AppDataSource.getRepository(PatientImmunization).find({ where: { AppointmentId: appointmentId, IsDeleted: false }, order: { AdministeredOn: "ASC" } }),
+            // Files produced after the visit (reports, summaries). Its prescription PDF is left out: the
+            // Prescription bundle already carries the clinic's signed copy.
+            AppDataSource.getRepository(PostVisitDocument).find({
+                where: { AppointmentId: appointmentId, IsDeleted: false, Status: "ACTIVE", DocumentType: Not("PRESCRIPTION") },
+                order: { CreatedAt: "ASC" },
+            }),
         ]);
 
         const prescriptions = await Promise.all(prescriptionRows.map(async (row) => ({
@@ -145,6 +160,17 @@ export class AbdmHealthRecordRepository {
                 createdAt: d.CreatedAt,
             } : null;
         }))).filter((d): d is NonNullable<typeof d> => d !== null);
+        const postVisitDocuments = (await Promise.all(postVisitRows.map(async (d) => {
+            const data = options.files ? await this.tryRead(d.BlobUrl) : Buffer.alloc(0);
+            return data ? {
+                id: `post-visit-document-${d.Id}`,
+                title: d.FileName,
+                category: d.DocumentType,
+                contentType: documentContentType(d.MimeType, d.FileName?.split(".").pop()),
+                data,
+                createdAt: d.GeneratedAt ?? d.CreatedAt,
+            } : null;
+        }))).filter((d): d is NonNullable<typeof d> => d !== null);
 
         return {
             parties,
@@ -158,7 +184,7 @@ export class AbdmHealthRecordRepository {
             medicalRecords,
             prescriptions,
             notes: notes.map((n) => n.Notes ?? "").filter((n) => n.trim()),
-            documents,
+            documents: [...documents, ...postVisitDocuments],
             bills,
             immunizations,
             certificates: options.files ? await this.certificates(immunizations) : new Map(),
@@ -211,6 +237,79 @@ export class AbdmHealthRecordRepository {
             immunizationIds: immunizations.map((i) => i.Id),
             vitalsRecordIds: vitals.map((v) => v.Id),
         };
+    }
+
+    /**
+     * The rest of a patient's records saved outside a visit at this hospital, each a care context
+     * of its own: prescriptions with medicines, consultation records and clinical notes with
+     * something written, and documents the clinic uploaded that are shareable and not
+     * confidential (one attached to a discharge summary or an immunization travels with that).
+     */
+    async standaloneRecords(patientId: string, hospitalId: number) {
+        const q = (sql: string) => AppDataSource.query(sql, [patientId, hospitalId]);
+        const noVisit = (column: string) => `(${column} IS NULL OR CAST(${column} AS VARCHAR(40)) IN ('', '0'))`;
+        const [prescriptions, records, notes, documents] = await Promise.all([
+            q(`SELECT p.Id, COALESCE(p.Date, p.CreatedAt) AS RecordDate FROM PatientPrescription p
+               WHERE p.PatientId = @0 AND p.HospitalId = @1 AND ${noVisit("p.AppointmentId")}
+                 AND EXISTS (SELECT 1 FROM PrescriptionMedication m WHERE m.PrescriptionId = p.Id)`),
+            AppDataSource.getRepository(PatientMedicalRecord).find({
+                where: [IsNull(), 0].map((AppointmentId) => ({ PatientId: patientId, HospitalId: hospitalId, AppointmentId })),
+            }),
+            q(`SELECT Id, CreatedAt FROM PatientClinicalNotes
+               WHERE PatientId = @0 AND HospitalId = @1 AND ${noVisit("AppointmentId")} AND LEN(LTRIM(RTRIM(COALESCE(Notes, '')))) > 0`),
+            q(`SELECT d.Id, d.CreatedAt, d.DocumentCategory FROM MedicalDocuments d
+               WHERE d.PatientId = @0 AND d.HospitalId = @1 AND ${noVisit("d.AppointmentId")} AND d.IsDeleted = 0
+                 AND d.IsShareable = 1 AND d.IsConfidential = 0 AND d.IsPatientUploaded = 0
+                 AND COALESCE(d.DocumentCategory, '') NOT LIKE '%insurance%'
+                 AND NOT EXISTS (SELECT 1 FROM DischargeSummaries s WHERE s.DocumentId = d.Id AND s.IsDeleted = 0)
+                 AND NOT EXISTS (SELECT 1 FROM PatientImmunizations i WHERE i.CertificateDocumentId = d.Id AND i.IsDeleted = 0)`),
+        ]);
+        return {
+            prescriptions: prescriptions.map((r: any) => ({ id: String(r.Id), date: new Date(r.RecordDate) })),
+            consultations: records.filter((r) => !isVitalsRecord(r) && hasConsultationContent(r)).map((r) => ({ id: r.Id, date: new Date(r.Date) })),
+            notes: notes.map((r: any) => ({ id: Number(r.Id), date: new Date(r.CreatedAt) })),
+            documents: documents.map((r: any) => ({ id: Number(r.Id), date: new Date(r.CreatedAt), category: r.DocumentCategory ?? null })),
+        };
+    }
+
+    /** A prescription saved outside a visit, with its medicines, diagnoses and the clinic's PDF. */
+    async prescription(id: string) {
+        const row = await AppDataSource.getRepository(PatientPrescription).findOne({ where: { Id: id }, relations: { Medications: true, Diagnoses: true } });
+        if (!row) throw new Error(`Prescription ${id} not found.`);
+        if (!row.HospitalId) throw new Error(`Prescription ${id} names no hospital, so no facility can share it.`);
+        const [parties, pdf] = await Promise.all([
+            this.parties(row.PatientId, row.DoctorId, row.HospitalId),
+            row.PdfUrl && /^https:\/\/[^/]+\.blob\.core\.windows\.net\//.test(row.PdfUrl) ? this.tryRead(row.PdfUrl) : Promise.resolve(null),
+        ]);
+        return {
+            row, parties, pdf,
+            medications: (row.Medications ?? []).map((m) => this.medication(m)),
+            diagnoses: (row.Diagnoses ?? []).flatMap((d) => coded(d.Diagnosis, d.DiagnosisConceptId)),
+        };
+    }
+
+    /** A consultation record (a PatientMedicalRecord that is not a vitals check) saved outside a visit. */
+    async consultationRecord(id: string) {
+        const row = await AppDataSource.getRepository(PatientMedicalRecord).findOne({ where: { Id: id } });
+        if (!row) throw new Error(`Medical record ${id} not found.`);
+        if (!row.HospitalId) throw new Error(`Medical record ${id} names no hospital, so no facility can share it.`);
+        return { row, parties: await this.parties(row.PatientId, row.DoctorId, row.HospitalId) };
+    }
+
+    /** A clinical note saved outside a visit. */
+    async clinicalNote(id: number) {
+        const row = await AppDataSource.getRepository(ClinicalNote).findOne({ where: { Id: id } });
+        if (!row) throw new Error(`Clinical note ${id} not found.`);
+        if (!row.HospitalId) throw new Error(`Clinical note ${id} names no hospital, so no facility can share it.`);
+        return { row, parties: await this.parties(row.PatientId, row.DoctorId, Number(row.HospitalId)) };
+    }
+
+    /** A document the clinic uploaded outside a visit, with its file. */
+    async standaloneDocument(id: number) {
+        const row = await AppDataSource.getRepository(MedicalDocument).findOne({ where: { Id: id, IsDeleted: false } });
+        if (!row) throw new Error(`Document ${id} not found.`);
+        const [parties, document] = await Promise.all([this.parties(row.PatientId, row.DoctorId, Number(row.HospitalId)), this.document(id)]);
+        return { parties, document };
     }
 
     private medication(m: { Id: string; Medication: string; ConceptId?: string; Dosage?: string; DurationValue?: number; DurationUnit?: string; FrequencyType?: string; Route?: string; Instructions?: string }): MedicationSource {

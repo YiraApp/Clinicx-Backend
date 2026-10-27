@@ -16,11 +16,17 @@ export interface RecordRef {
     hospitalId?: number | null;
     appointmentId?: number | null;
     prescriptionId?: string | null;
+    /**
+     * An update that named no owner (a partial update by id, such as a bill marked Paid): the rows of
+     * this table updated since [since] are looked up instead.
+     */
+    recentIn?: string | null;
+    since?: Date | null;
 }
 
 export interface RecordOwners {
-    /** The patient and hospital a saved row belongs to, read once its transaction has committed. */
-    owner(ref: RecordRef): Promise<{ patientId: string; hospitalId: number } | null>;
+    /** The patients and hospitals saved rows belong to, read once their transaction has committed. */
+    owners(ref: RecordRef): Promise<Array<{ patientId: string; hospitalId: number }>>;
 }
 
 type Linking = Pick<HipLinkingService, "link" | "notifyChanges">;
@@ -42,8 +48,12 @@ export class AutoLinker {
 
     /** A record was saved. Returns at once and never throws: it runs inside the caller's save. */
     recordSaved(ref: RecordRef): void {
-        const key = JSON.stringify([ref.patientId?.toLowerCase() ?? null, ref.hospitalId ?? null, ref.appointmentId ?? null, ref.prescriptionId ?? null]);
-        this.pending.set(key, ref);
+        const key = ref.recentIn
+            ? `recent|${ref.recentIn}`
+            : JSON.stringify([ref.patientId?.toLowerCase() ?? null, ref.hospitalId ?? null, ref.appointmentId ?? null, ref.prescriptionId ?? null]);
+        // Several unnamed updates to one table: one look-up, from the earliest
+        const earlier = this.pending.get(key)?.since;
+        this.pending.set(key, earlier && ref.since && earlier < ref.since ? { ...ref, since: earlier } : ref);
         this.timer ??= setTimeout(() => this.start(), this.settleMs);
     }
 
@@ -69,9 +79,10 @@ export class AutoLinker {
 
         const due = new Map<string, { hip: (typeof hips)[number]; patientId: string }>();
         for (const ref of refs) {
-            const owner = await this.owners.owner(ref).catch(() => null);
-            const hip = owner && hips.find((h) => h.hospitalId === owner.hospitalId);
-            if (hip) due.set(`${hip.id}|${owner.patientId.toLowerCase()}`, { hip, patientId: owner.patientId });
+            for (const owner of await this.owners.owners(ref).catch(() => [])) {
+                const hip = hips.find((h) => h.hospitalId === owner.hospitalId);
+                if (hip) due.set(`${hip.id}|${owner.patientId.toLowerCase()}`, { hip, patientId: owner.patientId });
+            }
         }
 
         for (const { hip, patientId } of due.values()) {

@@ -78,6 +78,11 @@ export interface VisitVitals {
 }
 
 export interface OpConsultationSource extends RecordParties {
+    /**
+     * What the bundle's ids derive from: the appointment, unless the record stands alone (a
+     * consultation record or a clinical note saved outside a visit), when it is that record's own.
+     */
+    key?: string;
     visit: { id: number; start: Date; end?: Date | null; teleconsultation: boolean };
     chiefComplaints: CodedText[];
     examinationFindings: CodedText[];

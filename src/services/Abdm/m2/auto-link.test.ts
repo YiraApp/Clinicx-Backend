@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { AutoLinker, type RecordRef } from "./auto-link.js";
 import { LinkingError } from "./hip-linking.js";
-import { recordRefOf } from "./record-subscriber.js";
+import { AbdmRecordSubscriber, recordRefOf } from "./record-subscriber.js";
 import type { Hip } from "./m2-store.js";
 
 const OCIMUM: Hip = { id: "IN3610001937", hospitalId: 20, name: "Ocimum dentistry" };
@@ -13,12 +13,20 @@ let notified: Array<[string, string]>;
 let autoLinkHips: Hip[];
 let noAbha: Set<string>;
 
-/** Owners as the database would answer: prescription rx-1 and appointment 7 are the patient's at hospital 20. */
+/**
+ * Owners as the database would answer: prescription rx-1 and appointment 7 are the patient's at
+ * hospital 20, and the bill updated a moment ago is theirs too.
+ */
+let recentLookups: RecordRef[];
 const owners = {
-    async owner(ref: RecordRef) {
-        if (ref.prescriptionId) return ref.prescriptionId === "rx-1" ? { patientId: PATIENT, hospitalId: 20 } : null;
-        if (ref.appointmentId) return ref.appointmentId === 7 ? { patientId: PATIENT, hospitalId: 20 } : null;
-        return ref.patientId && ref.hospitalId ? { patientId: ref.patientId.toLowerCase(), hospitalId: ref.hospitalId } : null;
+    async owners(ref: RecordRef) {
+        if (ref.recentIn) {
+            recentLookups.push(ref);
+            return ref.recentIn === "AppointmentBills" ? [{ patientId: PATIENT, hospitalId: 20 }] : [];
+        }
+        if (ref.prescriptionId) return ref.prescriptionId === "rx-1" ? [{ patientId: PATIENT, hospitalId: 20 }] : [];
+        if (ref.appointmentId) return ref.appointmentId === 7 ? [{ patientId: PATIENT, hospitalId: 20 }] : [];
+        return ref.patientId && ref.hospitalId ? [{ patientId: ref.patientId.toLowerCase(), hospitalId: ref.hospitalId }] : [];
     },
 };
 const linking = {
@@ -35,6 +43,7 @@ const linking = {
 const autoLinker = () => new AutoLinker(owners, { hips: async (o?: { autoLink?: boolean }) => (o?.autoLink ? autoLinkHips : [OCIMUM]) }, linking, 60_000);
 
 beforeEach(() => {
+    recentLookups = [];
     linked = [];
     notified = [];
     autoLinkHips = [OCIMUM];
@@ -81,4 +90,19 @@ test("each record table is read for its owner; other tables are ignored", () => 
     assert.equal(recordRefOf("PatientPrescription", { PatientId: PATIENT }), null, "no hospital and no visit: nowhere to share it from");
     assert.equal(recordRefOf("Users", { Id: PATIENT }), null);
     assert.equal(recordRefOf("Appointments", { UserId: PATIENT, HospitalId: 20 }), null);
+});
+
+test("an update that names no owner (a bill marked Paid by its id) is followed up through the recently updated rows, once", async () => {
+    const linker = autoLinker();
+    const seen: RecordRef[] = [];
+    const subscriber = new AbdmRecordSubscriber((ref) => { seen.push(ref); linker.recordSaved(ref); });
+    subscriber.afterUpdate({ metadata: { tableName: "AppointmentBills" }, entity: { BillStatus: "Paid", PaidAmount: 105 } } as any);
+    subscriber.afterUpdate({ metadata: { tableName: "AppointmentBills" }, entity: { DueAmount: 0 } } as any);
+    subscriber.afterUpdate({ metadata: { tableName: "Appointments" }, entity: { Status: "Completed" } } as any);
+    assert.deepEqual(seen.map((r) => r.recentIn), ["AppointmentBills", "AppointmentBills"], "not a health record table, not followed up");
+    assert.ok(seen[0]!.since instanceof Date);
+
+    await linker.settle();
+    assert.equal(recentLookups.length, 1, "one look-up for the table");
+    assert.deepEqual(linked, [[OCIMUM.id, PATIENT]]);
 });

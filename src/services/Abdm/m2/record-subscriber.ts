@@ -10,8 +10,10 @@ import type { RecordRef } from "./auto-link.js";
 /** Tables whose rows carry PatientId, HospitalId and, for visit records, AppointmentId. */
 const RECORD_TABLES = new Set([
     "PatientMedicalRecord", "PatientPrescription", "PatientClinicalNotes", "MedicalDocuments",
-    "AppointmentBills", "PatientImmunizations", "DischargeSummaries",
+    "AppointmentBills", "PatientImmunizations", "DischargeSummaries", "PostVisitDocuments",
 ]);
+/** An update that names no owner is followed up through the table's recently updated rows. */
+const RECENT_WINDOW_MS = 60_000;
 /** Tables whose rows only name their prescription. */
 const PRESCRIPTION_PARTS = new Set(["PrescriptionMedication", "PrescriptionDiagnosis"]);
 
@@ -38,13 +40,16 @@ export class AbdmRecordSubscriber implements EntitySubscriberInterface<any> {
     }
 
     afterUpdate(event: UpdateEvent<any>) {
-        // An update by criteria carries only the changed columns; the loaded row fills in the rest when there is one.
-        this.seen(event.metadata.tableName, { ...(event.databaseEntity ?? {}), ...(event.entity ?? {}) });
+        // An update by criteria carries only the changed columns; the loaded row fills in the rest when
+        // there is one. When neither names the owner (a bill marked Paid by its id), the table's rows
+        // updated in the last minute are looked up once the save has committed.
+        const table = event.metadata.tableName;
+        this.seen(table, { ...(event.databaseEntity ?? {}), ...(event.entity ?? {}) }, RECORD_TABLES.has(table));
     }
 
-    private seen(table: string, row: any) {
+    private seen(table: string, row: any, followRecent = false) {
         try {
-            const ref = recordRefOf(table, row);
+            const ref = recordRefOf(table, row) ?? (followRecent ? { recentIn: table, since: new Date(Date.now() - RECENT_WINDOW_MS) } : null);
             if (ref) this.onSaved(ref);
         } catch (error: any) {
             // Never fail the save that told us
