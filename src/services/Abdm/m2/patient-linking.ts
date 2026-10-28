@@ -12,7 +12,8 @@ import type { Hip, M2Store, PatientProfile } from "./m2-store.js";
 
 type Gateway = Pick<AbdmGatewayService, "call">;
 export interface OtpSender {
-    sendOTP(to: string, otp: string): Promise<unknown>;
+    /** Texts the linking OTP to a 10 digit Indian mobile on the DLT template registered for it. */
+    sendAbhaLinkOtp(mobile: string, otp: string): Promise<unknown>;
 }
 
 const OTP_MINUTES = 10;
@@ -163,7 +164,7 @@ export class PatientLinkingService {
         const otp = this.newOtp();
         const expiresAt = new Date(this.now().getTime() + OTP_MINUTES * 60_000);
         try {
-            await this.sms.sendOTP(phone, otp);
+            await this.sms.sendAbhaLinkOtp(phone, otp);
         } catch (error: any) {
             console.warn(`[ABDM] link OTP could not be sent: ${error?.message}`);
             return void (await fail("ABDM-9999", "The OTP could not be sent. Please try again."));

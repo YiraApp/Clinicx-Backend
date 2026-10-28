@@ -326,7 +326,7 @@ test("no deep-link SMS for a patient who holds an ABHA, or who has no ten digit 
 // ---------- user-initiated linking
 
 const sent: Array<{ to: string; otp: string }> = [];
-const sms = { sendOTP: async (to: string, otp: string) => { sent.push({ to, otp }); } };
+const sms = { sendAbhaLinkOtp: async (to: string, otp: string) => { sent.push({ to, otp }); } };
 const patientLinking = () => new PatientLinkingService(store, catalog, sms, gateway as any, () => NOW, () => "246810");
 
 test("fuzzy matching: name parts within one edit in five letters, gender and year of birth agreeing", () => {

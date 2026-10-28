@@ -108,6 +108,18 @@ export class SMSService {
     }
 
     /**
+     * The OTP for linking a care context to an ABHA (ABDM user-initiated linking), to an Indian mobile
+     * with or without +91, on the "ABHA OTP" DLT template. The text must match the registered one exactly.
+     */
+    async sendAbhaLinkOtp(mobile: string, otp: string): Promise<any> {
+        const digits = mobile.replace(/\D/g, "").slice(-10);
+        if (digits.length !== 10) throw new Error("Not a 10 digit mobile number.");
+        const templateId = "1707174617963880388";
+        const message = `Your verification code for linking your Care Context with ABHA is ${otp}. \u2014 Powered by Yira.ai.`;
+        return await this.sendSMSWithCustomTemplate(`91${digits}`, message, templateId);
+    }
+
+    /**
      * Sends an OTP specific message.
      * @param to Recipient mobile number
      * @param otp OTP code
