@@ -274,6 +274,8 @@ export class MobileAppointmentService {
         discountAmount?: number;
         includeConsultationFee?: boolean;
         consultationFee?: number;
+        shareRecords?: boolean;
+        grantRecordAccess?: boolean;
     }): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const userRoleRepo = AppDataSource.getRepository(UserRole);
