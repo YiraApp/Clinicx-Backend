@@ -111,7 +111,8 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
             hiType: "OPConsultation",
             source: {
                 ...parties,
-                chiefComplaints: consultations.flatMap((r) => [...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)]),
+                // Complaint and symptoms are one list: the same words in both are one complaint
+                chiefComplaints: distinctCoded(consultations.flatMap((r) => [...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)])),
                 examinationFindings: consultations.flatMap((r) => coded(r.PhysicalExamination, r.PhysicalExaminationConceptId)),
                 vitals: withVitals ? vitalsOf(withVitals) : null,
                 vitalsRecordedAt: withVitals?.Date ?? null,
@@ -294,7 +295,7 @@ export class AbdmHealthRecordService {
                 ...parties,
                 key: `medical-record-${r.Id}`,
                 visit: { id: 0, start: date, end: null, teleconsultation: false },
-                chiefComplaints: [...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)],
+                chiefComplaints: distinctCoded([...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)]),
                 examinationFindings: coded(r.PhysicalExamination, r.PhysicalExaminationConceptId),
                 vitals: Object.values(vitals).some(Boolean) ? vitals : null,
                 vitalsRecordedAt: date,

@@ -197,3 +197,15 @@ test("a visit's records all carry the visit, and its consultation lists the pres
     const op = sources.find((s) => s.hiType === "OPConsultation")!.source as any;
     assert.deepEqual(op.diagnoses.map((d: any) => d.text), ["Dental caries", "Gingivitis"], "the consultation's caries and the prescription's gingivitis, caries once");
 });
+
+test("a complaint written again as a symptom is one complaint; a different symptom is its own", async () => {
+    const consultation = (Symptoms: string) => ({ Id: "mr-1", Type: "Consultation", Date: day, ChiefComplaint: "Fusion of teeth", Symptoms, Diagnosis: "Dental caries" } as any);
+    const complaintsOf = (row: any) => (visitSources(visit({ medicalRecords: [row] })).find((s) => s.hiType === "OPConsultation")!.source as any)
+        .chiefComplaints.map((c: any) => c.text);
+    assert.deepEqual(complaintsOf(consultation("fusion of teeth")), ["Fusion of teeth"]);
+    assert.deepEqual(complaintsOf(consultation("Pain on chewing")), ["Fusion of teeth", "Pain on chewing"]);
+
+    const [own] = await service({ consultationRecord: async () => ({ row: consultation("Fusion of teeth"), parties: fixtureParties }) }).forConsultationRecord("mr-1");
+    const conditions = own!.bundle.entry.map((e: any) => e.resource).filter((r: any) => r.resourceType === "Condition" && r.code?.text === "Fusion of teeth");
+    assert.equal(conditions.length, 1, "a consultation saved on its own lists it once too");
+});

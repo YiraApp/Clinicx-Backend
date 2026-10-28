@@ -1,4 +1,4 @@
-import { abdmGatewayService, type AbdmGatewayService } from "../abdm-gateway.service.js";
+import { AbdmApiError, abdmGatewayService, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import { abdmHealthRecordService, type AbdmHealthRecordService, type HealthRecordBundle } from "../abdm-health-record.service.js";
 import { checksum, decodePublicKey, encrypt, generateKeyMaterial, HieCryptoError } from "../hie-crypto.js";
 import type { HiType } from "../fhir/fhir-common.js";
@@ -26,6 +26,17 @@ const PUSH_TIMEOUT_MS = 60_000;
  * the stored end (…48.060Z). Seen 2026-10-26 on PHR app fetches, which ask for exactly that.
  */
 const STORED_DATE_SLACK_MS = 4;
+
+/** How long to wait before each further try of on-request: three tries in all. */
+const ON_REQUEST_RETRY_MS = [2_000, 5_000];
+
+/**
+ * True when ABDM answered with a failure on its own side, which the same call may get past. The
+ * sandbox answered an on-request with "Runtime Error" on 2026-10-28, and with no second try the PHR
+ * app's fetch of a newly linked visit was lost; the requests before and after it went through.
+ */
+const failedOnAbdmSide = (error: unknown): boolean =>
+    error instanceof AbdmApiError && ((error.kind === "unavailable" && error.status >= 500) || /runtime error/i.test(error.message));
 
 /** The bundles a care context shares, built from its records as they are now; none for a reference that is not one. */
 export const bundlesForReference = async (records: Records, referenceNumber: string): Promise<HealthRecordBundle[]> => {
@@ -67,6 +78,7 @@ export class DataFlowService {
         private readonly gateway: Gateway = abdmGatewayService,
         private readonly now: () => Date = () => new Date(),
         private readonly push: Push = (url, init) => fetch(url, init),
+        private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ) {}
 
     private call(hip: Hip, operation: string, path: string, body: unknown) {
@@ -134,17 +146,36 @@ export class DataFlowService {
         if (created === "duplicate") return;
 
         const refused = await this.refusal(hip, body);
-        await this.call(hip, "data-flow/v3/health-information/hip/on-request", "/api/hiecm/data-flow/v3/health-information/hip/on-request", {
-            hiRequest: { transactionId, sessionStatus: refused ? "ERRORED" : "ACKNOWLEDGED" },
-            ...(refused ? { error: refused } : {}),
-            response: { requestId },
-        });
+        try {
+            await this.acknowledge(hip, {
+                hiRequest: { transactionId, sessionStatus: refused ? "ERRORED" : "ACKNOWLEDGED" },
+                ...(refused ? { error: refused } : {}),
+                response: { requestId },
+            });
+        } catch (error: any) {
+            await this.store.updateTransfer(transactionId, { status: "failed", error: `on-request: ${error?.message ?? "failed"}`, completed: true });
+            throw error;
+        }
         if (refused) {
             await this.store.updateTransfer(transactionId, { status: "refused", error: `${refused.code}: ${refused.message}`, completed: true });
             return;
         }
         await this.store.updateTransfer(transactionId, { status: "acknowledged" });
         await this.transfer(hip, transactionId, body);
+    }
+
+    /** on-request, tried again while ABDM fails on its side: until it lands, nothing can be pushed. */
+    private async acknowledge(hip: Hip, body: object): Promise<void> {
+        for (let attempt = 0; ; attempt++) {
+            try {
+                await this.call(hip, "data-flow/v3/health-information/hip/on-request", "/api/hiecm/data-flow/v3/health-information/hip/on-request", body);
+                return;
+            } catch (error: any) {
+                if (attempt >= ON_REQUEST_RETRY_MS.length || !failedOnAbdmSide(error)) throw error;
+                console.warn(`[ABDM] on-request failed on ABDM's side (${error.message}); trying again`);
+                await this.wait(ON_REQUEST_RETRY_MS[attempt]!);
+            }
+        }
     }
 
     private bundlesFor(context: CareContextRow): Promise<HealthRecordBundle[]> {

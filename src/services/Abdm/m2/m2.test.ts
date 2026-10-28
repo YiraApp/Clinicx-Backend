@@ -596,6 +596,37 @@ test("a request for exactly the consented range is served though the stored date
     assert.equal(gateway.last("/on-request").body.hiRequest.sessionStatus, "ACKNOWLEDGED");
 });
 
+test("on-request is tried again when ABDM fails on its side, and the records are still pushed", async () => {
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.test@sbx" });
+    const waits: number[] = [];
+    let pushed = 0;
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async () => { pushed++; return { ok: true, status: 202 }; }, async (ms) => { waits.push(ms); });
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED"));
+    // As the sandbox answered on 2026-10-28
+    gateway.refuse["/api/hiecm/data-flow/v3/health-information/hip/on-request"] = new AbdmApiError({ status: 500, kind: "unavailable", operation: "x", message: "Runtime Error" });
+
+    await flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial()));
+    const acks = gateway.calls.filter((c) => c.path.endsWith("/on-request"));
+    assert.equal(acks.length, 2);
+    assert.equal(acks[1]!.body.hiRequest.sessionStatus, "ACKNOWLEDGED");
+    assert.deepEqual(waits, [2_000]);
+    assert.equal(pushed, 1);
+    assert.equal(store.transfers[0]!.status, "transferred");
+});
+
+test("on-request refused by ABDM is not tried again, and the transfer is marked failed", async () => {
+    let pushed = 0;
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async () => { pushed++; return { ok: true, status: 202 }; }, async () => {});
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED"));
+    gateway.refuse["/api/hiecm/data-flow/v3/health-information/hip/on-request"] = new AbdmApiError({ status: 400, kind: "rejected", operation: "x", code: "ABDM-1017", message: "Invalid Transaction Id" });
+
+    await assert.rejects(flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial())), /Invalid Transaction Id/);
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("/on-request")).length, 1);
+    assert.equal(pushed, 0);
+    assert.deepEqual([store.transfers[0]!.status, store.transfers[0]!.error], ["failed", "on-request: Invalid Transaction Id"]);
+});
+
 test("expired, revoked, unknown or out-of-range consent is refused on on-request and nothing is pushed", async () => {
     let pushed = 0;
     const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async () => { pushed++; return { ok: true, status: 202 }; });
