@@ -1,0 +1,135 @@
+- generic [ref=f4e2]:
+  - region "Notifications alt+T"
+  - generic [ref=f4e3]:
+    - generic [ref=f4e5]:
+      - generic [ref=f4e6]:
+        - generic [ref=f4e7]:
+          - generic [ref=f4e8] [cursor=pointer]: SS
+          - generic [ref=f4e10]:
+            - heading "[patient]" [level=2] [ref=f4e11]
+            - paragraph [ref=f4e12]: Front Desk
+        - button [ref=f4e13] [cursor=pointer]
+      - button "Hospital Ocimum Dentistry OCM123 Front Desk • Ocimum Dentistry" [ref=f4e16] [cursor=pointer]:
+        - generic [ref=f4e17]: Hospital
+        - generic [ref=f4e22]: Ocimum Dentistry
+        - generic [ref=f4e23]: OCM123
+        - generic [ref=f4e24]:
+          - generic "Front Desk" [ref=f4e25]
+          - generic "Ocimum Dentistry" [ref=f4e27]: • Ocimum Dentistry
+      - button "Search patients... ⌘ K" [ref=f4e31] [cursor=pointer]:
+        - generic [ref=f4e35]: Search patients...
+        - generic [ref=f4e36]:
+          - generic [ref=f4e37]: ⌘
+          - text: K
+      - navigation [ref=f4e38]:
+        - link [ref=f4e40] [cursor=pointer]:
+          - /url: /frontdesk/dashboard
+          - button "Front Dashboard" [ref=f4e41]
+        - link [ref=f4e50] [cursor=pointer]:
+          - /url: "/frontdesk/patients/register  "
+          - button "Patients Registration" [ref=f4e51]
+        - link [ref=f4e60] [cursor=pointer]:
+          - /url: /org/hosp/doctors
+          - button "Hosp Doctors" [ref=f4e61]
+        - link [ref=f4e69] [cursor=pointer]:
+          - /url: /frontdesk/patients/visit-workflow
+          - button "Visit Workflow" [ref=f4e70]
+        - link [ref=f4e76] [cursor=pointer]:
+          - /url: /frontdesk/patients/appointments
+          - button "Appointments" [ref=f4e77]
+        - link [ref=f4e85] [cursor=pointer]:
+          - /url: /org/hosp/patients
+          - button "Hosp Patients" [ref=f4e86]
+        - link [ref=f4e92] [cursor=pointer]:
+          - /url: /org/hosp/treatment-plans
+          - button "Treatment Plans" [ref=f4e93]
+        - link [ref=f4e100] [cursor=pointer]:
+          - /url: /frontdesk/billing
+          - button "Billing" [ref=f4e101]
+        - link [ref=f4e107] [cursor=pointer]:
+          - /url: /org/hosp/settings
+          - button "Settings" [ref=f4e108]
+      - generic [ref=f4e115]:
+        - link [ref=f4e116] [cursor=pointer]:
+          - /url: /settings
+          - button "Settings" [ref=f4e117]
+        - button "Logout" [ref=f4e122] [cursor=pointer]
+    - main [ref=f4e128]:
+      - generic [ref=f4e1261]:
+        - generic [ref=f4e1262]:
+          - button "Back to Patients" [ref=f4e1263] [cursor=pointer]
+          - generic [ref=f4e1267]:
+            - heading "Create Prescription" [level=1] [ref=f4e1268]
+            - paragraph [ref=f4e1269]: Prescribe medications for your patient
+        - generic [ref=f4e1277]:
+          - heading "[patient]" [level=3] [ref=f4e1278]
+          - generic [ref=f4e1279]:
+            - generic [ref=f4e1280]: "Age: 23y"
+            - generic [ref=f4e1281]: "Phone: [redacted]"
+        - generic [ref=f4e1282]:
+          - generic [ref=f4e1283]:
+            - generic [ref=f4e1284]: Diagnosis *
+            - generic [ref=f4e1285]: Search and add diagnoses — press Enter to add custom, click X to remove
+          - generic [ref=f4e1289]:
+            - generic [ref=f4e1514]:
+              - generic [ref=f4e1515]: Gingivitis
+              - button [ref=f4e1516] [cursor=pointer]
+            - textbox "Add more..." [ref=f4e1520]
+            - button [ref=f4e1314] [cursor=pointer]
+        - generic [ref=f4e1292]:
+          - generic [ref=f4e1293]:
+            - generic [ref=f4e1294]: Add Medications
+            - generic [ref=f4e1298]: Search and add medications — press Enter to add custom, click X to remove
+          - generic [ref=f4e1300]:
+            - generic [ref=f4e1301]: Search Medicine
+            - generic [ref=f4e1303]:
+              - generic [ref=f4e1721]:
+                - generic [ref=f4e1722]: Chlorhexidine only product
+                - button [ref=f4e1723] [cursor=pointer]
+              - textbox "Add more..." [ref=f4e1727]
+              - button [ref=f4e1521] [cursor=pointer]
+        - generic [ref=f4e1728]:
+          - generic [ref=f4e1729]:
+            - generic [ref=f4e1730]: Prescribed Medications (1)
+            - generic [ref=f4e1731]: Fill in dosage, frequency, duration and route for each medication
+          - generic [ref=f4e1733]:
+            - generic [ref=f4e1734]:
+              - generic [ref=f4e1739]:
+                - generic [ref=f4e1740]:
+                  - generic [ref=f4e1741]: Chlorhexidine only product
+                  - generic "SNOMED CT 775164006" [ref=f4e1742]: SNOMED CT
+                - paragraph [ref=f4e1783]: 10 mL · Twice daily · for 7 days · Oral · Rinse mouth for 30 seconds, do not swallow
+              - button [ref=f4e1743] [cursor=pointer]
+            - generic [ref=f4e1747]:
+              - generic [ref=f4e1748]:
+                - text: Dosage *
+                - textbox "e.g., 500 mg" [ref=f4e1749]: 10 mL
+              - generic [ref=f4e1750]:
+                - text: Frequency *
+                - button "Twice daily" [ref=f4e1840] [cursor=pointer]
+              - generic [ref=f4e1756]:
+                - text: Duration *
+                - button "7 days" [ref=f4e1879] [cursor=pointer]
+              - generic [ref=f4e1762]:
+                - text: Route *
+                - button "Oral" [ref=f4e1918] [cursor=pointer]
+            - generic [ref=f4e1768]:
+              - text: Instructions
+              - generic [ref=f4e1769]:
+                - button "After food" [ref=f4e1770] [cursor=pointer]
+                - button "Before food" [ref=f4e1771] [cursor=pointer]
+                - button "Empty stomach" [ref=f4e1772] [cursor=pointer]
+                - button "With plenty of water" [ref=f4e1773] [cursor=pointer]
+                - button "Swallow whole" [ref=f4e1774] [cursor=pointer]
+                - button "Avoid alcohol" [ref=f4e1775] [cursor=pointer]
+                - button "May cause drowsiness" [ref=f4e1776] [cursor=pointer]
+                - button "Complete the course" [ref=f4e1777] [cursor=pointer]
+              - textbox "Or type other advice, separated by ;" [active] [ref=f4e1778]: Rinse mouth for 30 seconds, do not swallow
+        - generic [ref=f4e1306]:
+          - generic [ref=f4e1307]:
+            - generic [ref=f4e1308]: Additional Notes
+            - generic [ref=f4e1309]: Any special instructions for the patient or pharmacy
+          - textbox "Enter any additional notes or instructions..." [ref=f4e1311]
+        - generic [ref=f4e1312]:
+          - button "Cancel" [ref=f4e1313] [cursor=pointer]
+          - button "Send Prescription" [ref=f4e1779] [cursor=pointer]

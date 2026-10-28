@@ -1,0 +1,181 @@
+{
+ "skill": "abdm-m2",
+ "set": "M2 Building HIP, NHA, revised 21 October 2026",
+ "run_type": "ui",
+ "entity": "private",
+ "hip_id": "IN3610001937",
+ "callback_url": "https://receive-firms-telecommunications-doe.trycloudflare.com (earlier this run: talented-lip-nationally-wilderness.trycloudflare.com, bond-hub-vacation-raises.trycloudflare.com)",
+ "run_started": "2026-10-28T13:17:13Z",
+ "run_finished": "2026-10-28T18:31:31Z",
+ "client_id": "SBX_002352",
+ "cases": [
+  {
+   "id": "Health_RECORD_CREATION_101",
+   "outcome": "passed",
+   "evidence": "screen",
+   "request_ids": [],
+   "observed": [
+    "ABDM Records: 26 care contexts, all 8 HI types",
+    "NRCES document bundles with SNOMED CT/LOINC codings"
+   ]
+  },
+  {
+   "id": "HIP_INTI_LINK_504",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "00c8e3d1-4aa8-4e21-937f-fe692f88708a",
+    "eb698f25-663b-46ca-9e84-6ef145db724f",
+    "47926fe3-8e13-4b75-ab53-b9b5baceed3a"
+   ],
+   "observed": [
+    "generate-token 202",
+    "on-generate-token linkToken present, response.requestId 00c8e3d1",
+    "WR-5 linked with the stored token, no second generate-token"
+   ]
+  },
+  {
+   "id": "HIP_INTI_LINK_505",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "eb698f25-663b-46ca-9e84-6ef145db724f",
+    "47926fe3-8e13-4b75-ab53-b9b5baceed3a",
+    "800ed08d-86d7-46b8-8fd5-aed664ab5b4c"
+   ],
+   "observed": [
+    "on_carecontext status Successfully Linked care context",
+    "links/context/on-notify acknowledgement.status SUCCESS"
+   ]
+  },
+  {
+   "id": "HIP_INTI_LINK_506",
+   "outcome": "passed",
+   "evidence": "human",
+   "request_ids": [
+    "2dbace9a-b69d-4153-bb15-a7177b585b17",
+    "1534304c-8baa-47bd-b123-a43fe5ecafd2",
+    "a535f7b1-1e96-4100-9c64-10935e640c06"
+   ],
+   "observed": [
+    "PHR app shows the prescription, wellness record and consultation report",
+    "transfers 51-53 DELIVERED"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_601",
+   "outcome": "passed",
+   "evidence": "human",
+   "request_ids": [],
+   "observed": [
+    "tester logged in to the PHR app with the second ABHA"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_602",
+   "outcome": "passed",
+   "evidence": "human",
+   "request_ids": [
+    "17df06aa-b95d-4f33-b2d0-5ba9cbf0677b"
+   ],
+   "observed": [
+    "Ocimum dentistry found and selected in the PHR app"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_603",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "17df06aa-b95d-4f33-b2d0-5ba9cbf0677b"
+   ],
+   "observed": [
+    "discover with transactionId, patient.id, verifiedIdentifiers MOBILE/ABHA_NUMBER/abhaAddress"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_606",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "17df06aa-b95d-4f33-b2d0-5ba9cbf0677b"
+   ],
+   "observed": [
+    "matched by MOBILE; gender and year of birth agree",
+    "on-discover with matchedBy MOBILE and RX-67209C38 accepted"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_604",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "17df06aa-b95d-4f33-b2d0-5ba9cbf0677b",
+    "764fd0a5-cd3f-4b0d-8e1c-038a56341033"
+   ],
+   "observed": [
+    "PHR app lists RX-67209C38",
+    "init selects it with the discover's transactionId"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_605",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "764fd0a5-cd3f-4b0d-8e1c-038a56341033",
+    "44b6d7d6-9720-4573-b350-b65c8cf57e9d"
+   ],
+   "observed": [
+    "on-init DIRECT/MOBILE with link reference",
+    "OTP sent by the HIP",
+    "confirm linkRefNumber matched, token present",
+    "on-confirm with the selected care context only"
+   ]
+  },
+  {
+   "id": "USER_INIT_LINK_607",
+   "outcome": "passed",
+   "evidence": "human",
+   "request_ids": [
+    "188f3727-eeac-44a9-b3ad-c57214b083df",
+    "cfd114d3-02d2-4a4c-bc1a-a354ed3b479c",
+    "1ddc08b0-a32f-45a2-8684-80efc33070c3",
+    "20ae5b76-ded9-4738-8b0f-5a46676b28a5"
+   ],
+   "observed": [
+    "passes 1-2: consent granted, no health-information request from ABDM",
+    "pass 3: transfer 58 RX-67209C38 DELIVERED, shown in the PHR app"
+   ]
+  },
+  {
+   "id": "HIP_INIT_NOTIFY_HIECM",
+   "outcome": "passed",
+   "evidence": "sandbox",
+   "request_ids": [
+    "ee33aa71-2e46-4704-8472-d823408f26bf"
+   ],
+   "observed": [
+    "sms/notify2 202 on save",
+    "on-notify status ACKNOWLEDGED, error null",
+    "SMS with deep link received"
+   ]
+  },
+  {
+   "id": "HIP_INIT_SHARE_CARECONTEXT",
+   "outcome": "conditional-pass",
+   "evidence": "sandbox",
+   "request_ids": [
+    "8b741177-6594-4137-b999-149176c60196",
+    "fa855d87-9ff0-4c50-b124-a076ee45b167"
+   ],
+   "observed": [
+    "consent GRANTED, on-notify OK",
+    "HI request, on-request ACKNOWLEDGED",
+    "push application/fhir+json ECDH Curve25519 -> 2xx",
+    "notify TRANSFERRED, DELIVERED",
+    "PHR app shows the records decrypted"
+   ]
+  }
+ ]
+}

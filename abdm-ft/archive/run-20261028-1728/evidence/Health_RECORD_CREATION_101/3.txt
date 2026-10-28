@@ -1,0 +1,99 @@
+◇ injected env (56) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+--- Azure Environment Debug ---
+Available Env Keys: [
+  ... 38 more items
+]
+◇ injected env (0) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+OP-347 OPConsultation (Bundle.type document, first entry Composition, profile OPConsultRecord): 24 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 371530004 Clinical consultation report
+  Composition.section.code.coding: SNOMED CT 422843007 Chief complaint section
+  Composition.section.code.coding: SNOMED CT 425044008 Physical exam section
+  Composition.section.code.coding: SNOMED CT 721912009 Medication summary document
+  Composition.section.code.coding: SNOMED CT 404684003 Clinical finding
+  Composition.section.code.coding: LOINC 29548-5 Diagnosis Narrative
+  Encounter.diagnosis.use.coding: SNOMED CT 39154008 Clinical diagnosis
+  Condition.code.coding: SNOMED CT 1744008 Fusion of teeth
+  Condition.code.coding: SNOMED CT 21719001 Allergic rhinitis caused by pollen
+  Condition.code.coding: SNOMED CT 186788009 Q fever
+  Observation.code.coding: SNOMED CT 22253000 Pain
+  Observation.code.coding: LOINC 85354-9 Blood pressure panel with all children optional
+  Observation.component.code.coding: LOINC 8480-6 Systolic blood pressure
+  Observation.component.code.coding: LOINC 8462-4 Diastolic blood pressure
+  Observation.code.coding: LOINC 8867-4 Heart rate
+  Observation.code.coding: LOINC 61008-9 Body surface temperature
+  Observation.code.coding: LOINC 29463-7 Body weight
+  Observation.code.coding: LOINC 8302-2 Body height
+  MedicationRequest.medicationCodeableConcept.coding: SNOMED CT 1334521000189100 Dolo 1 g oral tablet
+  MedicationRequest.reasonCode.coding: SNOMED CT 186788009 Q fever
+  MedicationRequest.dosageInstruction.additionalInstruction.coding: SNOMED CT 418639000 Warning. May cause drowsiness
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+OP-347 Prescription (Bundle.type document, first entry Composition, profile PrescriptionRecord): 8 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 440545006 Prescription record
+  Composition.section.code.coding: SNOMED CT 440545006 Prescription record
+  MedicationRequest.medicationCodeableConcept.coding: SNOMED CT 1334521000189100 Dolo 1 g oral tablet
+  MedicationRequest.reasonCode.coding: SNOMED CT 186788009 Q fever
+  MedicationRequest.dosageInstruction.additionalInstruction.coding: SNOMED CT 418639000 Warning. May cause drowsiness
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+  Condition.code.coding: SNOMED CT 186788009 Q fever
+OP-342 OPConsultation (Bundle.type document, first entry Composition, profile OPConsultRecord): 11 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 371530004 Clinical consultation report
+  Composition.section.code.coding: SNOMED CT 721912009 Medication summary document
+  Composition.section.code.coding: LOINC 29548-5 Diagnosis Narrative
+  Encounter.diagnosis.use.coding: SNOMED CT 39154008 Clinical diagnosis
+  Condition.code.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+  MedicationRequest.reasonCode.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+OP-342 Prescription (Bundle.type document, first entry Composition, profile PrescriptionRecord): 9 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 440545006 Prescription record
+  Composition.section.code.coding: SNOMED CT 440545006 Prescription record
+  MedicationRequest.reasonCode.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+  Condition.code.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+OP-342 Invoice (Bundle.type document, first entry Composition, profile InvoiceRecord): 0 SNOMED CT / LOINC codings
+OP-342 ImmunizationRecord (Bundle.type document, first entry Composition, profile ImmunizationRecord): 4 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 41000179103 Immunization record
+  Composition.section.code.coding: SNOMED CT 41000179103 Immunization record
+  Immunization.vaccineCode.coding: SNOMED CT 871742003 Clostridium tetani antigen only vaccine product
+  Immunization.route.coding: SNOMED CT 78421000 Intramuscular route
+OP-344 Invoice (Bundle.type document, first entry Composition, profile InvoiceRecord): 0 SNOMED CT / LOINC codings
+DR-1 DiagnosticReport (Bundle.type document, first entry Composition, profile DiagnosticReportRecord): 3 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 721981007 Diagnostic studies report
+  Composition.section.code.coding: SNOMED CT 721981007 Diagnostic studies report
+  DiagnosticReport.code.coding: LOINC 24325-3 Liver function tests
+DOC-123 DiagnosticReport (Bundle.type document, first entry Composition, profile DiagnosticReportRecord): 3 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 721981007 Diagnostic studies report
+  Composition.section.code.coding: SNOMED CT 721981007 Diagnostic studies report
+  DocumentReference.type.coding: SNOMED CT 419891008 Record artifact
+WR-3 WellnessRecord (Bundle.type document, first entry Composition, profile WellnessRecord): 6 SNOMED CT / LOINC codings
+  Observation.code.coding: LOINC 85354-9 Blood pressure panel with all children optional
+  Observation.component.code.coding: LOINC 8480-6 Systolic blood pressure
+  Observation.component.code.coding: LOINC 8462-4 Diastolic blood pressure
+  Observation.code.coding: LOINC 8867-4 Heart rate
+  Observation.code.coding: LOINC 2708-6 Oxygen saturation in Arterial blood
+  Observation.code.coding: LOINC 61008-9 Body surface temperature
+IM-1 ImmunizationRecord (Bundle.type document, first entry Composition, profile ImmunizationRecord): 4 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 41000179103 Immunization record
+  Composition.section.code.coding: SNOMED CT 41000179103 Immunization record
+  Immunization.route.coding: SNOMED CT 78421000 Intramuscular route
+  ImmunizationRecommendation.recommendation.dateCriterion.code.coding: LOINC 30980-7 Date vaccine due
+IP-4 DischargeSummary (Bundle.type document, first entry Composition, profile DischargeSummaryRecord): 12 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 373942005 Discharge summary
+  Composition.section.code.coding: SNOMED CT 422843007 Chief complaint section
+  Composition.section.code.coding: SNOMED CT 1003642006 Past medical history section
+  Composition.section.code.coding: SNOMED CT 1003640003 History of past procedure section
+  Composition.section.code.coding: SNOMED CT 734163000 Care plan
+  Composition.section.code.coding: SNOMED CT 373942005 Discharge summary
+  Composition.section.code.coding: LOINC 11535-2 Hospital discharge Dx Narrative
+  Encounter.diagnosis.use.coding: SNOMED CT 39154008 Clinical diagnosis
+  CarePlan.category.coding: SNOMED CT 736353004 Inpatient care plan
+  Appointment.serviceType.coding: SNOMED CT 11429006 Consultation
+  Appointment.appointmentType.coding: SNOMED CT 185389009 Follow-up visit
+  DocumentReference.type.coding: SNOMED CT 373942005 Discharge summary
+DOC-127 HealthDocumentRecord (Bundle.type document, first entry Composition, profile HealthDocumentRecord): 3 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 419891008 Record artifact
+  Composition.section.code.coding: SNOMED CT 419891008 Record artifact
+  DocumentReference.type.coding: SNOMED CT 419891008 Record artifact

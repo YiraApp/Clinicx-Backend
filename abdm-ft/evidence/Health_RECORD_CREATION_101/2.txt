@@ -1,0 +1,563 @@
+- generic:
+  - generic:
+    - region "Notifications alt+T"
+    - generic [aria-hidden]:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic: MK
+              - generic:
+                - heading [level=2]: [patient]
+                - paragraph: Healthcare Provider
+            - button
+          - generic:
+            - button:
+              - generic: Hospital
+              - generic: Ocimum Dentistry
+              - generic: OCM123
+              - generic:
+                - generic: Provider
+                - generic: • Ocimum Dentistry
+          - generic:
+            - button:
+              - generic: Search patients...
+              - generic:
+                - generic: ⌘
+                - text: K
+          - navigation:
+            - generic:
+              - link:
+                - /url: /provider/dashboard
+                - button:
+                  - generic: Doc Dashboard
+            - generic:
+              - link:
+                - /url: /provider/appointments
+                - button:
+                  - generic: Appointments
+            - generic:
+              - link:
+                - /url: /provider/patients
+                - button:
+                  - generic: Patients
+            - generic:
+              - link:
+                - /url: /provider/doctor-slots
+                - button:
+                  - generic: Doc Slots
+            - generic:
+              - link:
+                - /url: /abdm/record-request
+                - button:
+                  - generic: ABDM Record Request
+          - generic:
+            - generic:
+              - link:
+                - /url: /settings
+                - button:
+                  - generic: Settings
+              - button:
+                - generic: Logout
+      - generic:
+        - main:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - heading [level=1]: Patient Management
+                  - paragraph: Unified view of patients, medical records, and clinical notes
+                - generic:
+                  - button: Export
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Total Patients
+                        - paragraph: "3"
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Active Cases
+                        - paragraph: "3"
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Critical Cases
+                        - paragraph: "0"
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - paragraph: Medical Records
+                        - paragraph: "0"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - textbox:
+                          - /placeholder: Search by name, ID, phone, or condition...
+                    - generic:
+                      - generic:
+                        - generic:
+                          - button:
+                            - generic: All Status
+                      - generic:
+                        - generic:
+                          - button:
+                            - generic: All Genders
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: 3 Patients
+                    - button
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: Gs
+                                  - generic:
+                                    - generic:
+                                      - heading [level=3]: [patient]
+                                      - generic: active
+                                    - paragraph: "OCM123 | 22y | DOB: 2004-06-08 | Female"
+                                    - paragraph: General Consultation
+                                    - generic:
+                                      - generic:
+                                        - generic: "Total Visits: 2"
+                                        - generic: "Completed Visits: 0"
+                                        - generic: "Last: Oct 27"
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: mk
+                                  - generic:
+                                    - generic:
+                                      - heading [level=3]: [patient]
+                                      - generic: active
+                                    - paragraph: "OCM123 | 24y | DOB: 2002-05-30 | Male"
+                                    - paragraph: General Consultation
+                                    - generic:
+                                      - generic:
+                                        - generic: "Total Visits: 0"
+                                        - generic: "Completed Visits: 0"
+                                        - generic: "Last: Oct 26"
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: CU
+                                  - generic:
+                                    - generic:
+                                      - heading [level=3]: [patient]
+                                      - generic: active
+                                    - paragraph: "OCM123 | 23y | DOB: 2003-03-19 | Male"
+                                    - paragraph: General Consultation
+                                    - generic:
+                                      - generic:
+                                        - generic: "Total Visits: 4"
+                                        - generic: "Completed Visits: 0"
+                                        - generic: "Last: Oct 26"
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic: Rows
+                        - generic:
+                          - button:
+                            - generic: "10"
+                      - generic:
+                        - button [disabled]:
+                          - generic: Previous
+                        - generic:
+                          - button: "1"
+                        - button [disabled]:
+                          - generic: Next
+                      - generic:
+                        - paragraph: Showing 1 to 3 of 3 patients
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: CUT
+                      - generic:
+                        - generic:
+                          - heading [level=2]: [patient]
+                          - generic: active
+                        - paragraph: "OCM123 | 23y | DOB: 2003-03-19 | Male | —"
+                    - button
+                  - generic:
+                    - tablist:
+                      - tab: overview
+                      - tab: Clinical Notes
+                      - tab: Medical Records
+                      - tab: prescriptions
+                      - tab: documents
+                      - tab: appointments
+                      - tab: immunizations
+                      - tab: Discharge Summaries
+                      - tab: Diagnostic Reports
+                      - tab: wellness
+                      - tab [selected]: ABDM Records
+                    - generic:
+                      - tabpanel:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - heading [level=3]: ABDM Records
+                              - paragraph: What this clinic can share with [patient]'s ABHA, and what is linked.
+                            - button: Refresh
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - paragraph: ABHA on record
+                                  - paragraph:
+                                    - text: ABHA number
+                                    - strong: [redacted]
+                                    - text: · ABHA address
+                                    - strong: [redacted]
+                                  - paragraph: "Mobile: [redacted]"
+                              - paragraph: Shared by Ocimum dentistry (ABDM facility ID IN3610001937)
+                              - generic:
+                                - button [disabled]: Link to ABHA now
+                                - button: Send ABHA SMS link to patient
+                              - paragraph: "Link: Every record with health information is linked or being linked."
+                          - generic:
+                            - generic: "26 records:"
+                            - generic: 26 linked to abha
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Wellness record, 28 Oct 2026
+                                      - paragraph: Wellness record · 28 Oct 2026, 05:37 PM · WR-4
+                                      - generic: Wellness record
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 28 Oct 2026, 05:38 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Prescription, 28 Oct 2026
+                                      - paragraph: Prescription · 28 Oct 2026, 05:36 PM · RX-36B468A0-2939-4F43-B8A2-1F53CD7BB8EE
+                                      - generic: Prescription
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 28 Oct 2026, 05:36 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: OPD visit, 28 Oct 2026
+                                      - paragraph: Visit · 28 Oct 2026, 12:00 AM · OP-347
+                                      - generic:
+                                        - generic: OP consultation
+                                        - generic: Prescription
+                                        - generic: Immunization record
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 28 Oct 2026, 11:24 AM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Wellness record, 27 Oct 2026
+                                      - paragraph: Wellness record · 27 Oct 2026, 07:16 PM · WR-3
+                                      - generic: Wellness record
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 07:16 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Health document, 27 Oct 2026
+                                      - paragraph: Document · 27 Oct 2026, 07:12 PM · DOC-127
+                                      - generic: Health document
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 07:13 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Prescription, 27 Oct 2026
+                                      - paragraph: Prescription · 27 Oct 2026, 07:12 PM · RX-9A5B60DB-1F2C-44FC-8F95-9196778DB361
+                                      - generic: Prescription
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 07:13 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Health document, 27 Oct 2026
+                                      - paragraph: Document · 27 Oct 2026, 04:47 PM · DOC-126
+                                      - generic: Health document
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 07:13 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Prescription, 27 Oct 2026
+                                      - paragraph: Prescription · 27 Oct 2026, 02:45 PM · RX-CE661A65-83B0-4F30-83F3-D0B41E9DE833
+                                      - generic: Prescription
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 07:13 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Health document, 27 Oct 2026
+                                      - paragraph: Document · 27 Oct 2026, 02:37 PM · DOC-125
+                                      - generic: Health document
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 02:53 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Prescription, 27 Oct 2026
+                                      - paragraph: Prescription · 27 Oct 2026, 02:37 PM · RX-67221FB5-8B8B-4377-880D-AE30CEF63ACD
+                                      - generic: Prescription
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 02:53 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: OPD visit, 27 Oct 2026
+                                      - paragraph: Visit · 27 Oct 2026, 02:00 PM · OP-344
+                                      - generic: Invoice
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 02:09 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: OPD visit, 27 Oct 2026
+                                      - paragraph: Visit · 27 Oct 2026, 01:26 PM · OP-343
+                                      - generic: Invoice
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 01:27 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Wellness record, 27 Oct 2026
+                                      - paragraph: Wellness record · 27 Oct 2026, 12:41 PM · WR-2
+                                      - generic: Wellness record
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 12:42 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Lab report, 27 Oct 2026
+                                      - paragraph: Diagnostic report · 27 Oct 2026, 11:16 AM · DR-1
+                                      - generic: Diagnostic report
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 27 Oct 2026, 12:41 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Imaging report, 26 Oct 2026
+                                      - paragraph: Document · 26 Oct 2026, 07:01 PM · DOC-123
+                                      - generic: Diagnostic report
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 07:01 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Imaging report, 26 Oct 2026
+                                      - paragraph: Document · 26 Oct 2026, 07:00 PM · DOC-122
+                                      - generic: Diagnostic report
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 07:01 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Imaging report, 26 Oct 2026
+                                      - paragraph: Document · 26 Oct 2026, 06:59 PM · DOC-121
+                                      - generic: Diagnostic report
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 07:01 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: OPD visit, 27 Oct 2026
+                                      - paragraph: Visit · 26 Oct 2026, 05:26 PM · OP-342
+                                      - generic:
+                                        - generic: OP consultation
+                                        - generic: Prescription
+                                        - generic: Invoice
+                                        - generic: Immunization record
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:56 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Consultation record, 26 Oct 2026
+                                      - paragraph: Consultation record · 26 Oct 2026, 06:41 PM · MR-9E2C5BEA-C5A4-49B0-B46D-F5C8A028AB47
+                                      - generic: OP consultation
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:42 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Health document, 26 Oct 2026
+                                      - paragraph: Document · 26 Oct 2026, 06:37 PM · DOC-120
+                                      - generic: Health document
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:38 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Vaccination, 26 Oct 2026
+                                      - paragraph: Immunization · 26 Oct 2026 · IM-1
+                                      - generic: Immunization record
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:37 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Health document, 26 Oct 2026
+                                      - paragraph: Document · 26 Oct 2026, 06:34 PM · DOC-119
+                                      - generic: Health document
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:34 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Prescription, 26 Oct 2026
+                                      - paragraph: Prescription · 26 Oct 2026, 06:34 PM · RX-DA72C635-2D5A-4D9A-BBA0-7FCF9E004C0A
+                                      - generic: Prescription
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:34 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Hospital stay, 26 Oct 2026 to 26 Oct 2026
+                                      - paragraph: Discharge summary · 26 Oct 2026, 06:05 PM · IP-4
+                                      - generic: Discharge summary
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 06:06 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Hospital stay, 26 Oct 2026 to 27 Oct 2026
+                                      - paragraph: Discharge summary · 27 Oct 2026, 10:41 PM · IP-3
+                                      - generic: Discharge summary
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 05:42 PM
+                                    - button: View
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - heading [level=4]: Hospital stay, 27 Oct 2026 to 28 Oct 2026
+                                      - paragraph: Discharge summary · 28 Oct 2026, 05:28 PM · IP-2
+                                      - generic: Discharge summary
+                                  - generic:
+                                    - generic: Linked to ABHA
+                                    - paragraph: Linked 26 Oct 2026, 05:42 PM
+                                    - button: View
+  - dialog [ref=f32e973]:
+    - generic [ref=f32e974]:
+      - heading "OPD visit, 27 Oct 2026" [level=2] [ref=f32e975]
+      - paragraph [ref=f32e976]: Visit · 26 Oct 2026, 05:26 PM · OP-342What the patient's PHR app receives for this record, from the records as they are now.
+    - generic [ref=f32e977]: Building the record…
+    - button "Close" [active] [ref=f32e980] [cursor=pointer]

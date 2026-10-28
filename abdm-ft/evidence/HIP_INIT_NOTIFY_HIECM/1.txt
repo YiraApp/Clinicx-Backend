@@ -1,0 +1,124 @@
+- generic [ref=f48e2]:
+  - region "Notifications alt+T"
+  - generic [ref=f48e3]:
+    - generic [ref=f48e5]:
+      - generic [ref=f48e6]:
+        - generic [ref=f48e7]:
+          - generic [ref=f48e8] [cursor=pointer]: MK
+          - generic [ref=f48e10]:
+            - heading "[patient]" [level=2] [ref=f48e11]
+            - paragraph [ref=f48e12]: Healthcare Provider
+        - button [ref=f48e13] [cursor=pointer]
+      - button "Hospital Ocimum Dentistry OCM123 Provider • Ocimum Dentistry" [ref=f48e16] [cursor=pointer]:
+        - generic [ref=f48e17]: Hospital
+        - generic [ref=f48e22]: Ocimum Dentistry
+        - generic [ref=f48e23]: OCM123
+        - generic [ref=f48e24]:
+          - generic "Provider" [ref=f48e25]
+          - generic "Ocimum Dentistry" [ref=f48e27]: • Ocimum Dentistry
+      - button "Search patients... ⌘ K" [ref=f48e31] [cursor=pointer]:
+        - generic [ref=f48e35]: Search patients...
+        - generic [ref=f48e36]:
+          - generic [ref=f48e37]: ⌘
+          - text: K
+      - navigation [ref=f48e38]:
+        - link [ref=f48e40] [cursor=pointer]:
+          - /url: /provider/dashboard
+          - button "Doc Dashboard" [ref=f48e41]
+        - link [ref=f48e48] [cursor=pointer]:
+          - /url: /provider/appointments
+          - button "Appointments" [ref=f48e49]
+        - link [ref=f48e55] [cursor=pointer]:
+          - /url: /provider/patients
+          - button "Patients" [ref=f48e56]
+        - link [ref=f48e65] [cursor=pointer]:
+          - /url: /provider/doctor-slots
+          - button "Doc Slots" [ref=f48e66]
+        - link [ref=f48e72] [cursor=pointer]:
+          - /url: /abdm/record-request
+          - button "ABDM Record Request" [ref=f48e73]
+      - generic [ref=f48e82]:
+        - link [ref=f48e83] [cursor=pointer]:
+          - /url: /settings
+          - button "Settings" [ref=f48e84]
+        - button "Logout" [ref=f48e89] [cursor=pointer]
+    - main [ref=f48e95]:
+      - generic [ref=f48e394]:
+        - generic [ref=f48e395]:
+          - button "Back to Patients" [ref=f48e396] [cursor=pointer]
+          - generic [ref=f48e400]:
+            - heading "Create Prescription" [level=1] [ref=f48e401]
+            - paragraph [ref=f48e402]: Prescribe medications for your patient
+        - generic [ref=f48e410]:
+          - heading "[patient]" [level=3] [ref=f48e411]
+          - generic [ref=f48e412]:
+            - generic [ref=f48e413]: "Age: 22y"
+            - generic [ref=f48e414]: "Blood: B+"
+            - generic [ref=f48e415]: "Phone: [redacted]"
+        - generic [ref=f48e416]:
+          - generic [ref=f48e417]:
+            - generic [ref=f48e418]: Diagnosis *
+            - generic [ref=f48e419]: Search and add diagnoses — press Enter to add custom, click X to remove
+          - generic [ref=f48e423]:
+            - generic [ref=f48e648]:
+              - generic [ref=f48e649]: Gingivitis
+              - button [ref=f48e650] [cursor=pointer]
+            - textbox "Add more..." [ref=f48e654]
+            - button [ref=f48e448] [cursor=pointer]
+        - generic [ref=f48e426]:
+          - generic [ref=f48e427]:
+            - generic [ref=f48e428]: Add Medications
+            - generic [ref=f48e432]: Search and add medications — press Enter to add custom, click X to remove
+          - generic [ref=f48e434]:
+            - generic [ref=f48e435]: Search Medicine
+            - generic [ref=f48e437]:
+              - generic [ref=f48e855]:
+                - generic [ref=f48e856]: Acetaminophen 500 mg oral tablet
+                - button [ref=f48e857] [cursor=pointer]
+              - textbox "Add more..." [ref=f48e861]
+              - button [ref=f48e655] [cursor=pointer]
+        - generic [ref=f48e862]:
+          - generic [ref=f48e863]:
+            - generic [ref=f48e864]: Prescribed Medications (1)
+            - generic [ref=f48e865]: Fill in dosage, frequency, duration and route for each medication
+          - generic [ref=f48e867]:
+            - generic [ref=f48e868]:
+              - generic [ref=f48e873]:
+                - generic [ref=f48e874]:
+                  - generic [ref=f48e875]: Acetaminophen 500 mg oral tablet
+                  - generic "SNOMED CT 322236009" [ref=f48e876]: SNOMED CT
+                - paragraph [ref=f48e877]: 500 mg · Twice daily · for 3 days · Oral · After food
+              - button [ref=f48e878] [cursor=pointer]
+            - generic [ref=f48e882]:
+              - generic [ref=f48e883]:
+                - text: Dosage *
+                - textbox "e.g., 500 mg" [ref=f48e884]: 500 mg
+              - generic [ref=f48e885]:
+                - text: Frequency *
+                - button "Twice daily" [ref=f48e974] [cursor=pointer]
+              - generic [ref=f48e891]:
+                - text: Duration *
+                - button "3 days" [ref=f48e1013] [cursor=pointer]
+              - generic [ref=f48e897]:
+                - text: Route *
+                - button "Oral" [ref=f48e899] [cursor=pointer]
+            - generic [ref=f48e903]:
+              - text: Instructions
+              - generic [ref=f48e904]:
+                - button "After food" [active] [pressed] [ref=f48e905] [cursor=pointer]
+                - button "Before food" [ref=f48e906] [cursor=pointer]
+                - button "Empty stomach" [ref=f48e907] [cursor=pointer]
+                - button "With plenty of water" [ref=f48e908] [cursor=pointer]
+                - button "Swallow whole" [ref=f48e909] [cursor=pointer]
+                - button "Avoid alcohol" [ref=f48e910] [cursor=pointer]
+                - button "May cause drowsiness" [ref=f48e911] [cursor=pointer]
+                - button "Complete the course" [ref=f48e912] [cursor=pointer]
+              - textbox "Or type other advice, separated by ;" [ref=f48e913]: After food
+        - generic [ref=f48e440]:
+          - generic [ref=f48e441]:
+            - generic [ref=f48e442]: Additional Notes
+            - generic [ref=f48e443]: Any special instructions for the patient or pharmacy
+          - textbox "Enter any additional notes or instructions..." [ref=f48e445]
+        - generic [ref=f48e446]:
+          - button "Cancel" [ref=f48e447] [cursor=pointer]
+          - button "Send Prescription" [ref=f48e914] [cursor=pointer]

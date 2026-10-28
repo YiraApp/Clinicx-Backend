@@ -1,0 +1,146 @@
+{
+ "organisation": "YIRA HEALTH TECH PVT LTD",
+ "product": "ClinicX",
+ "milestone": "M2",
+ "api_version": "V3",
+ "category": "HMIS",
+ "entity_type": "private",
+ "role": "HIP",
+ "executed_by": "Manikanta N",
+ "test_dates": {
+  "start": "2026-10-28",
+  "end": "2026-10-29"
+ },
+ "applications": [
+  {
+   "name": "ClinicX web (HIP IN3610001937, Ocimum dentistry)",
+   "url": "http://localhost:4200/"
+  }
+ ],
+ "environment": {
+  "browser": "Google Chrome (headed, driven through the Playwright MCP server)",
+  "browser_version": "156.0.8078.48",
+  "playwright": "@playwright/mcp 0.0.83",
+  "phr_app": "ABDM sandbox PHR app",
+  "phr_app_version": "Not recorded",
+  "emulator": "None: the tester's Android phone",
+  "model": "claude-opus-5-5",
+  "backend_build": "Clinicx-Backend ABHABang-26-10 at 85ae1bd",
+  "frontend_build": "Clinicx-Frontend at ab5a8a0",
+  "callback_route": "Cloudflare quick tunnel to the local backend, registered as the bridge URL"
+ },
+ "test_data": [
+  {
+   "item": "ABHA address, HIP initiated linking and share (patient HOSP11-2026-0032)",
+   "value": "xxx0319@sbx"
+  },
+  {
+   "item": "ABHA address, user initiated linking (patient OCM123-2026-0013, registered without ABHA)",
+   "value": "xxx0606@sbx"
+  },
+  {
+   "item": "Mobile for user initiated linking and the SMS deep link",
+   "value": "XXXXXX5506"
+  },
+  {
+   "item": "HIP id",
+   "value": "IN3610001937"
+  }
+ ],
+ "document": {
+  "id": "FT-M2",
+  "version": "1.0",
+  "release_date": "2026-10-29",
+  "prepared_by": "Manikanta N, Tester",
+  "reviewed_by": "Not yet reviewed",
+  "approved_by": "Not yet approved",
+  "released_by": "Not yet released",
+  "change_history": [
+   {
+    "version": "1.0",
+    "date": "2026-10-29",
+    "by": "Manikanta N",
+    "change": "First issue"
+   }
+  ],
+  "distribution": [
+   {
+    "name": "Manikanta N",
+    "organisation": "YIRA HEALTH TECH PVT LTD",
+    "role": "Tester"
+   }
+  ]
+ },
+ "team": [
+  {
+   "name": "Manikanta N",
+   "role": "Tester",
+   "qualifications": ""
+  }
+ ],
+ "flows": [
+  {
+   "name": "HIP initiated linking by demographic details",
+   "abha_addresses": [
+    "xxx0319@sbx"
+   ],
+   "hi_types": [
+    "Prescription",
+    "WellnessRecord",
+    "OPConsultation",
+    "Invoice"
+   ]
+  },
+  {
+   "name": "User initiated linking",
+   "abha_addresses": [
+    "xxx0606@sbx"
+   ],
+   "hi_types": [
+    "Prescription"
+   ]
+  },
+  {
+   "name": "SMS notify with deep link",
+   "abha_addresses": [],
+   "hi_types": [
+    "Prescription"
+   ]
+  },
+  {
+   "name": "Data transfer and share",
+   "abha_addresses": [
+    "xxx0319@sbx",
+    "xxx0606@sbx"
+   ],
+   "hi_types": [
+    "Prescription",
+    "WellnessRecord",
+    "OPConsultation"
+   ]
+  }
+ ],
+ "limitations": [
+  "The build under test ran on a local machine; ABDM callbacks reached it through a Cloudflare quick tunnel registered as the bridge URL. The tunnel was replaced twice during the run after the machine slept, and the bridge URL re-registered each time (run log).",
+  "The build does not store the bodies of its outbound replies and pushes (on-discover, on-init, on-confirm, on-notify, on-request, data push, notify); their content is shown by the code and by ABDM accepting them and by what followed.",
+  "ABDM sandbox: one on-discover was answered with 'Runtime Error', and twice no health-information request followed a granted consent (USER_INIT_LINK_607 passes 1 and 2).",
+  "Extra checks outside the set (count mismatch ABDM-1037, wrong OTP, consent revocation) were not run."
+ ],
+ "findings": {
+  "Health_RECORD_CREATION_101": "All 8 HI types are created as NRCES document bundles stored against care contexts, with SNOMED CT and LOINC codes.",
+  "HIP_INTI_LINK_504": "A record save requests a link token when none is held, stores it for six months, and reuses it for the next link.",
+  "HIP_INTI_LINK_505": "Care contexts link automatically on save, and a record added to a linked visit sends the context notify (SUCCESS).",
+  "HIP_INTI_LINK_506": "The linked records were pulled and shown in the PHR app.",
+  "USER_INIT_LINK_601": "The tester logged in to the PHR app with the second ABHA.",
+  "USER_INIT_LINK_602": "Ocimum dentistry is found and selected in the PHR app.",
+  "USER_INIT_LINK_603": "The discover reaches the HIP with the transaction id, patient id and verified identifiers.",
+  "USER_INIT_LINK_606": "The patient is matched by mobile, with gender and year of birth agreeing.",
+  "USER_INIT_LINK_604": "Only unlinked care contexts are returned, and the person selects one to link.",
+  "USER_INIT_LINK_605": "The HIP sends the OTP, verifies it on confirm and links only the selected care context.",
+  "USER_INIT_LINK_607": "The linked prescription was pulled into the PHR app on the third pass; ABDM sent no data request on the first two.",
+  "HIP_INIT_NOTIFY_HIECM": "A new record for a patient without ABHA sends sms/notify2 on its own, and the SMS with the deep link arrives.",
+  "HIP_INIT_SHARE_CARECONTEXT": "Records are shared encrypted on request and shown in the PHR app; there is no screen for stored consents."
+ },
+ "agreed_not_run": {},
+ "recordings": []
+}

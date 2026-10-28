@@ -1,0 +1,123 @@
+- generic [ref=f32e2]:
+  - region "Notifications alt+T"
+  - generic [ref=f32e3]:
+    - generic [ref=f32e5]:
+      - generic [ref=f32e6]:
+        - generic [ref=f32e7]:
+          - generic [ref=f32e8] [cursor=pointer]: MK
+          - generic [ref=f32e10]:
+            - heading "[patient]" [level=2] [ref=f32e11]
+            - paragraph [ref=f32e12]: Healthcare Provider
+        - button [ref=f32e13] [cursor=pointer]
+      - button "Hospital Ocimum Dentistry OCM123 Provider • Ocimum Dentistry" [ref=f32e16] [cursor=pointer]:
+        - generic [ref=f32e17]: Hospital
+        - generic [ref=f32e22]: Ocimum Dentistry
+        - generic [ref=f32e23]: OCM123
+        - generic [ref=f32e24]:
+          - generic "Provider" [ref=f32e25]
+          - generic "Ocimum Dentistry" [ref=f32e27]: • Ocimum Dentistry
+      - button "Search patients... ⌘ K" [ref=f32e31] [cursor=pointer]:
+        - generic [ref=f32e35]: Search patients...
+        - generic [ref=f32e36]:
+          - generic [ref=f32e37]: ⌘
+          - text: K
+      - navigation [ref=f32e38]:
+        - link [ref=f32e40] [cursor=pointer]:
+          - /url: /provider/dashboard
+          - button "Doc Dashboard" [ref=f32e41]
+        - link [ref=f32e48] [cursor=pointer]:
+          - /url: /provider/appointments
+          - button "Appointments" [ref=f32e49]
+        - link [ref=f32e55] [cursor=pointer]:
+          - /url: /provider/patients
+          - button "Patients" [ref=f32e56]
+        - link [ref=f32e65] [cursor=pointer]:
+          - /url: /provider/doctor-slots
+          - button "Doc Slots" [ref=f32e66]
+        - link [ref=f32e72] [cursor=pointer]:
+          - /url: /abdm/record-request
+          - button "ABDM Record Request" [ref=f32e73]
+      - generic [ref=f32e82]:
+        - link [ref=f32e83] [cursor=pointer]:
+          - /url: /settings
+          - button "Settings" [ref=f32e84]
+        - button "Logout" [ref=f32e89] [cursor=pointer]
+    - main [ref=f32e95]:
+      - generic [ref=f32e1070]:
+        - generic [ref=f32e1071]:
+          - button "Back to Patients" [ref=f32e1072] [cursor=pointer]
+          - generic [ref=f32e1076]:
+            - heading "Create Prescription" [level=1] [ref=f32e1077]
+            - paragraph [ref=f32e1078]: Prescribe medications for your patient
+        - generic [ref=f32e1086]:
+          - heading "[patient]" [level=3] [ref=f32e1087]
+          - generic [ref=f32e1088]:
+            - generic [ref=f32e1089]: "Age: 23y"
+            - generic [ref=f32e1090]: "Phone: [redacted]"
+        - generic [ref=f32e1091]:
+          - generic [ref=f32e1092]:
+            - generic [ref=f32e1093]: Diagnosis *
+            - generic [ref=f32e1094]: Search and add diagnoses — press Enter to add custom, click X to remove
+          - generic [ref=f32e1098]:
+            - generic [ref=f32e1323]:
+              - generic [ref=f32e1324]: Dental caries
+              - button [ref=f32e1325] [cursor=pointer]
+            - textbox "Add more..." [ref=f32e1329]
+            - button [ref=f32e1123] [cursor=pointer]
+        - generic [ref=f32e1101]:
+          - generic [ref=f32e1102]:
+            - generic [ref=f32e1103]: Add Medications
+            - generic [ref=f32e1107]: Search and add medications — press Enter to add custom, click X to remove
+          - generic [ref=f32e1109]:
+            - generic [ref=f32e1110]: Search Medicine
+            - generic [ref=f32e1112]:
+              - generic [ref=f32e1530]:
+                - generic [ref=f32e1531]: Amoxicillin 500 mg oral capsule
+                - button [ref=f32e1532] [cursor=pointer]
+              - textbox "Add more..." [ref=f32e1536]
+              - button [ref=f32e1330] [cursor=pointer]
+        - generic [ref=f32e1537]:
+          - generic [ref=f32e1538]:
+            - generic [ref=f32e1539]: Prescribed Medications (1)
+            - generic [ref=f32e1540]: Fill in dosage, frequency, duration and route for each medication
+          - generic [ref=f32e1542]:
+            - generic [ref=f32e1543]:
+              - generic [ref=f32e1548]:
+                - generic [ref=f32e1549]:
+                  - generic [ref=f32e1550]: Amoxicillin 500 mg oral capsule
+                  - generic "SNOMED CT 323510009" [ref=f32e1551]: SNOMED CT
+                - paragraph [ref=f32e1552]: 500 mg · Three times daily · for 5 days · Oral · After food; Complete the course
+              - button [ref=f32e1553] [cursor=pointer]
+            - generic [ref=f32e1557]:
+              - generic [ref=f32e1558]:
+                - text: Dosage *
+                - textbox "e.g., 500 mg" [ref=f32e1559]: 500 mg
+              - generic [ref=f32e1560]:
+                - text: Frequency *
+                - button "Three times daily" [ref=f32e1649] [cursor=pointer]
+              - generic [ref=f32e1566]:
+                - text: Duration *
+                - button "5 days" [ref=f32e1688] [cursor=pointer]
+              - generic [ref=f32e1572]:
+                - text: Route *
+                - button "Oral" [ref=f32e1574] [cursor=pointer]
+            - generic [ref=f32e1578]:
+              - text: Instructions
+              - generic [ref=f32e1579]:
+                - button "After food" [pressed] [ref=f32e1580] [cursor=pointer]
+                - button "Before food" [ref=f32e1581] [cursor=pointer]
+                - button "Empty stomach" [ref=f32e1582] [cursor=pointer]
+                - button "With plenty of water" [ref=f32e1583] [cursor=pointer]
+                - button "Swallow whole" [ref=f32e1584] [cursor=pointer]
+                - button "Avoid alcohol" [ref=f32e1585] [cursor=pointer]
+                - button "May cause drowsiness" [ref=f32e1586] [cursor=pointer]
+                - button "Complete the course" [active] [pressed] [ref=f32e1587] [cursor=pointer]
+              - textbox "Or type other advice, separated by ;" [ref=f32e1588]: After food; Complete the course
+        - generic [ref=f32e1115]:
+          - generic [ref=f32e1116]:
+            - generic [ref=f32e1117]: Additional Notes
+            - generic [ref=f32e1118]: Any special instructions for the patient or pharmacy
+          - textbox "Enter any additional notes or instructions..." [ref=f32e1120]
+        - generic [ref=f32e1121]:
+          - button "Cancel" [ref=f32e1122] [cursor=pointer]
+          - button "Send Prescription" [ref=f32e1589] [cursor=pointer]

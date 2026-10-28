@@ -1,0 +1,312 @@
+- generic:
+  - generic:
+    - region "Notifications alt+T"
+    - generic [aria-hidden]:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic: SS
+              - generic:
+                - heading [level=2]: [patient]
+                - paragraph: Front Desk
+            - button
+          - generic:
+            - button:
+              - generic: Hospital
+              - generic: Ocimum Dentistry
+              - generic: OCM123
+              - generic:
+                - generic: Front Desk
+                - generic: • Ocimum Dentistry
+          - generic:
+            - button:
+              - generic: Search patients...
+              - generic:
+                - generic: ⌘
+                - text: K
+          - navigation:
+            - generic:
+              - link:
+                - /url: /frontdesk/dashboard
+                - button:
+                  - generic: Front Dashboard
+            - generic:
+              - link:
+                - /url: "/frontdesk/patients/register  "
+                - button:
+                  - generic: Patients Registration
+            - generic:
+              - link:
+                - /url: /org/hosp/doctors
+                - button:
+                  - generic: Hosp Doctors
+            - generic:
+              - link:
+                - /url: /frontdesk/patients/visit-workflow
+                - button:
+                  - generic: Visit Workflow
+            - generic:
+              - link:
+                - /url: /frontdesk/patients/appointments
+                - button:
+                  - generic: Appointments
+            - generic:
+              - link:
+                - /url: /org/hosp/patients
+                - button:
+                  - generic: Hosp Patients
+            - generic:
+              - link:
+                - /url: /org/hosp/treatment-plans
+                - button:
+                  - generic: Treatment Plans
+            - generic:
+              - link:
+                - /url: /frontdesk/billing
+                - button:
+                  - generic: Billing
+            - generic:
+              - link:
+                - /url: /org/hosp/settings
+                - button:
+                  - generic: Settings
+          - generic:
+            - generic:
+              - link:
+                - /url: /settings
+                - button:
+                  - generic: Settings
+              - button:
+                - generic: Logout
+      - generic:
+        - main:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - heading [level=1]: Smart Scheduling
+                    - paragraph: AI-powered appointment management
+              - generic:
+                - generic:
+                  - button: List
+                  - button: Calendar
+                - button: New Appointment
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Today's Schedule
+                      - paragraph: "2"
+                      - paragraph: total
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Confirmed
+                      - paragraph: "0"
+                      - paragraph: ready to go
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Payment Pending
+                      - paragraph: "2"
+                      - paragraph: awaiting payment
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - paragraph: Completed
+                      - paragraph: "0"
+                      - paragraph: done
+            - generic:
+              - generic:
+                - generic:
+                  - tablist:
+                    - tab [selected]: Schedule
+                    - tab: Queue
+                    - tab: Teleconsult
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - textbox:
+                          - /placeholder: Search patients...
+                      - generic:
+                        - button:
+                          - generic: All Status
+                      - generic:
+                        - button:
+                          - generic: Today
+              - generic:
+                - generic:
+                  - tabpanel:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - paragraph: 11:00
+                                - paragraph: Oct 28
+                                - paragraph: 30 min
+                              - generic:
+                                - generic: GC
+                                - generic:
+                                  - generic:
+                                    - heading [level=3]: [patient]
+                                    - generic: T#1
+                              - generic:
+                                - button
+                                - button
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - paragraph: 11:15
+                                - paragraph: Oct 28
+                                - paragraph: 30 min
+                              - generic:
+                                - generic: CT
+                                - generic:
+                                  - generic:
+                                    - heading [level=3]: [patient]
+                                    - generic: T#2
+                              - generic:
+                                - button
+                    - generic:
+                      - generic:
+                        - generic: Rows
+                        - generic:
+                          - button:
+                            - generic: "10"
+                      - generic:
+                        - button [disabled]:
+                          - generic: Previous
+                        - generic:
+                          - button: "1"
+                        - button [disabled]:
+                          - generic: Next
+                      - generic:
+                        - paragraph: Showing 1 to 2 of 2 appointments
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: CT
+                      - generic:
+                        - generic:
+                          - heading [level=2]: [patient]
+                          - generic: paymentpending
+                        - paragraph: APT-347 | Male, 23 | N/A
+                        - generic:
+                          - generic: 11:15
+                          - generic: Dr. mani kanta
+                    - button
+                  - generic:
+                    - generic:
+                      - tablist:
+                        - tab: Overview
+                        - tab: Clinical Notes
+                        - tab: Medical Records
+                        - tab: Prescriptions
+                        - tab: Documents
+                        - tab [selected]: Immunizations
+                        - tab: Discharge Summaries
+                        - tab: Diagnostic Reports
+                        - tab: Wellness
+                        - tab: ABDM Records
+                    - generic:
+                      - tabpanel:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - heading [level=3]: Immunizations (2)
+                              - paragraph: Vaccines given at this hospital. Shared with ABDM when linked to the patient's ABHA.
+                            - button: Add Immunization
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - heading [level=4]: Clostridium tetani antigen only vaccine product
+                                        - generic: Dose 1
+                                        - generic:
+                                          - generic: Vaccine (SNOMED)
+                                          - generic: "871742003"
+                                      - paragraph: Given 27 Oct 2026 · Intramuscular · Left deltoid
+                                  - generic:
+                                    - button
+                                    - button
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - heading [level=4]: covid
+                                        - generic: Dose 1
+                                      - paragraph: Given 26 Oct 2026 · Intramuscular · Left upper arm · Dr. mani kanta
+                                      - paragraph: "Manufacturer: covid shield · Lot 321"
+                                      - paragraph: Next dose was due 26 Oct 2026
+                                  - generic:
+                                    - button
+                                    - button
+  - dialog [active] [ref=f12e531]:
+    - generic [ref=f12e532]:
+      - heading "Record immunization" [level=2] [ref=f12e533]
+      - paragraph [ref=f12e534]: For [patient]. Fields marked * are required.
+    - generic [ref=f12e535]:
+      - generic [ref=f12e536]:
+        - generic [ref=f12e537]: Vaccine *
+        - generic [ref=f12e538]:
+          - generic [ref=f12e539]:
+            - textbox "Search vaccine… (e.g., BCG, measles, hepatitis B)" [ref=f12e540]: Hepatitis B virus antigen only vaccine product
+            - generic [ref=f12e541]:
+              - generic [ref=f12e785]: SCT
+              - button [ref=f12e585] [cursor=pointer]
+          - generic [ref=f12e786]:
+            - generic [ref=f12e787]: "871822003"
+            - generic [ref=f12e788]: "FSN: Vaccine product containing only Hepatitis B virus antigen (medicinal product)"
+      - generic [ref=f12e542]:
+        - generic [ref=f12e543]:
+          - text: Date given *
+          - textbox "Date given *" [ref=f12e544]: 2026-10-28
+        - generic [ref=f12e545]:
+          - text: Dose number
+          - spinbutton "Dose number" [ref=f12e546]: "1"
+        - generic [ref=f12e547]:
+          - text: Next dose due
+          - textbox "Next dose due" [ref=f12e548]
+      - generic [ref=f12e549]:
+        - generic [ref=f12e550]:
+          - text: Route
+          - button "Intramuscular" [ref=f12e811] [cursor=pointer]
+        - generic [ref=f12e556]:
+          - text: Site
+          - combobox "Site" [ref=f12e557]
+        - generic [ref=f12e558]:
+          - text: Manufacturer
+          - textbox "Manufacturer" [ref=f12e559]: Serum Institute of India
+        - generic [ref=f12e560]:
+          - text: Lot number
+          - textbox "Lot number" [ref=f12e561]: HB2610
+        - generic [ref=f12e562]:
+          - text: Given by
+          - button "Not recorded" [ref=f12e564] [cursor=pointer]
+        - generic [ref=f12e568]:
+          - text: Certificate
+          - button "None attached" [ref=f12e570] [cursor=pointer]
+          - paragraph [ref=f12e574]: Upload the certificate in the Documents tab first to attach it here.
+      - generic [ref=f12e575]:
+        - text: Notes
+        - textbox "Notes" [ref=f12e576]
+    - generic [ref=f12e577]:
+      - button "Cancel" [ref=f12e578] [cursor=pointer]
+      - button "Record immunization" [ref=f12e579] [cursor=pointer]
+    - button "Close" [ref=f12e580] [cursor=pointer]

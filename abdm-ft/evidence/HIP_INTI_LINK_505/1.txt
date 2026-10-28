@@ -1,0 +1,255 @@
+- generic [ref=f40e2]:
+  - region "Notifications alt+T"
+  - generic [ref=f40e3]:
+    - generic [ref=f40e5]:
+      - generic [ref=f40e6]:
+        - generic [ref=f40e7]:
+          - generic [ref=f40e8] [cursor=pointer]: MK
+          - generic [ref=f40e10]:
+            - heading "[patient]" [level=2] [ref=f40e11]
+            - paragraph [ref=f40e12]: Healthcare Provider
+        - button [ref=f40e13] [cursor=pointer]
+      - button "Hospital Ocimum Dentistry OCM123 Provider • Ocimum Dentistry" [ref=f40e16] [cursor=pointer]:
+        - generic [ref=f40e17]: Hospital
+        - generic [ref=f40e22]: Ocimum Dentistry
+        - generic [ref=f40e23]: OCM123
+        - generic [ref=f40e24]:
+          - generic "Provider" [ref=f40e25]
+          - generic "Ocimum Dentistry" [ref=f40e27]: • Ocimum Dentistry
+      - button "Search patients... ⌘ K" [ref=f40e31] [cursor=pointer]:
+        - generic [ref=f40e35]: Search patients...
+        - generic [ref=f40e36]:
+          - generic [ref=f40e37]: ⌘
+          - text: K
+      - navigation [ref=f40e38]:
+        - link [ref=f40e40] [cursor=pointer]:
+          - /url: /provider/dashboard
+          - button "Doc Dashboard" [ref=f40e41]
+        - link [ref=f40e48] [cursor=pointer]:
+          - /url: /provider/appointments
+          - button "Appointments" [ref=f40e49]
+        - link [ref=f40e55] [cursor=pointer]:
+          - /url: /provider/patients
+          - button "Patients" [ref=f40e56]
+        - link [ref=f40e65] [cursor=pointer]:
+          - /url: /provider/doctor-slots
+          - button "Doc Slots" [ref=f40e66]
+        - link [ref=f40e72] [cursor=pointer]:
+          - /url: /abdm/record-request
+          - button "ABDM Record Request" [ref=f40e73]
+      - generic [ref=f40e82]:
+        - link [ref=f40e83] [cursor=pointer]:
+          - /url: /settings
+          - button "Settings" [ref=f40e84]
+        - button "Logout" [ref=f40e89] [cursor=pointer]
+    - main [ref=f40e95]:
+      - generic [ref=f40e96]:
+        - generic [ref=f40e97]:
+          - generic [ref=f40e109]:
+            - heading "Smart Scheduling" [level=1] [ref=f40e110]
+            - paragraph [ref=f40e111]: AI-powered appointment management
+          - generic [ref=f40e112]:
+            - generic [ref=f40e113]:
+              - button "List" [ref=f40e114] [cursor=pointer]
+              - button "Calendar" [ref=f40e116] [cursor=pointer]
+            - button "New Appointment" [ref=f40e122] [cursor=pointer]
+        - generic [ref=f40e124]:
+          - generic [ref=f40e128]:
+            - paragraph [ref=f40e129]: Selected Schedule
+            - paragraph [ref=f40e130]: "6"
+            - paragraph [ref=f40e131]: total
+          - generic [ref=f40e138]:
+            - paragraph [ref=f40e139]: Confirmed
+            - paragraph [ref=f40e140]: "3"
+            - paragraph [ref=f40e141]: ready to go
+          - generic [ref=f40e149]:
+            - paragraph [ref=f40e150]: Payment Pending
+            - paragraph [ref=f40e151]: "3"
+            - paragraph [ref=f40e152]: awaiting payment
+          - generic [ref=f40e159]:
+            - paragraph [ref=f40e160]: Completed
+            - paragraph [ref=f40e161]: "0"
+            - paragraph [ref=f40e162]: done
+        - generic [ref=f40e167]:
+          - generic [ref=f40e169]:
+            - generic [ref=f40e170]:
+              - generic [ref=f40e171]:
+                - tablist [ref=f40e172]:
+                  - tab "Schedule" [selected] [ref=f40e173] [cursor=pointer]
+                  - tab "Queue" [ref=f40e176] [cursor=pointer]
+                  - tab "Teleconsult" [ref=f40e182] [cursor=pointer]
+                - button "Refresh" [ref=f40e222] [cursor=pointer]
+              - generic [ref=f40e188]:
+                - textbox "Search patients..." [ref=f40e193]
+                - button "All Status" [ref=f40e195] [cursor=pointer]
+                - button "Custom" [ref=f40e920] [cursor=pointer]
+                - generic [ref=f40e922]:
+                  - generic [ref=f40e923]:
+                    - generic [ref=f40e924]:
+                      - paragraph [ref=f40e925]: From
+                      - button "Oct 27, 2026" [ref=f40e1041] [cursor=pointer]
+                    - generic [ref=f40e930]: —
+                    - generic [ref=f40e931]:
+                      - paragraph [ref=f40e932]: To
+                      - button "Oct 28, 2026" [ref=f40e933] [cursor=pointer]
+                  - button "Search" [ref=f40e937] [cursor=pointer]
+            - tabpanel "Schedule" [ref=f40e204]:
+              - generic [ref=f40e205]:
+                - generic [ref=f40e231] [cursor=pointer]:
+                  - generic [ref=f40e232]:
+                    - paragraph [ref=f40e233]: 11:00
+                    - paragraph [ref=f40e234]: Oct 28
+                    - paragraph [ref=f40e235]: 30 min
+                  - generic [ref=f40e237]:
+                    - generic [ref=f40e238]: GC
+                    - generic [ref=f40e241]:
+                      - heading "[patient]" [level=3] [ref=f40e242]
+                      - generic [ref=f40e243]: T#1
+                  - button [ref=f40e264]
+                - generic [ref=f40e273] [cursor=pointer]:
+                  - generic [ref=f40e274]:
+                    - paragraph [ref=f40e275]: 11:15
+                    - paragraph [ref=f40e276]: Oct 28
+                    - paragraph [ref=f40e277]: 30 min
+                  - generic [ref=f40e279]:
+                    - generic [ref=f40e280]: CT
+                    - generic [ref=f40e283]:
+                      - heading "[patient]" [level=3] [ref=f40e284]
+                      - generic [ref=f40e285]: T#2
+                  - button [ref=f40e306]
+                - generic [ref=f40e1045] [cursor=pointer]:
+                  - generic [ref=f40e1046]:
+                    - paragraph [ref=f40e1047]: 09:30
+                    - paragraph [ref=f40e1048]: Oct 27
+                    - paragraph [ref=f40e1049]: 30 min
+                  - generic [ref=f40e1050]:
+                    - generic [ref=f40e1051]: CT
+                    - generic [ref=f40e1054]:
+                      - heading "[patient]" [level=3] [ref=f40e1055]
+                      - generic [ref=f40e1056]: T#1
+                  - button [ref=f40e1058]
+                - generic [ref=f40e1067] [cursor=pointer]:
+                  - generic [ref=f40e1068]:
+                    - paragraph [ref=f40e1069]: 14:00
+                    - paragraph [ref=f40e1070]: Oct 27
+                    - paragraph [ref=f40e1071]: 30 min
+                  - generic [ref=f40e1072]:
+                    - generic [ref=f40e1073]: CT
+                    - generic [ref=f40e1076]:
+                      - heading "[patient]" [level=3] [ref=f40e1077]
+                      - generic [ref=f40e1078]: T#3
+                  - button [ref=f40e1080]
+                - generic [ref=f40e1089] [cursor=pointer]:
+                  - generic [ref=f40e1090]:
+                    - paragraph [ref=f40e1091]: 16:00
+                    - paragraph [ref=f40e1092]: Oct 27
+                    - paragraph [ref=f40e1093]: 30 min
+                  - generic [ref=f40e1094]:
+                    - generic [ref=f40e1095]: CT
+                    - generic [ref=f40e1098]:
+                      - heading "[patient]" [level=3] [ref=f40e1099]
+                      - generic [ref=f40e1100]: T#2
+                  - button [ref=f40e1102]
+                - generic [ref=f40e1111] [cursor=pointer]:
+                  - generic [ref=f40e1112]:
+                    - paragraph [ref=f40e1113]: 19:38
+                    - paragraph [ref=f40e1114]: Oct 27
+                    - paragraph [ref=f40e1115]: 30 min
+                  - generic [ref=f40e1116]:
+                    - generic [ref=f40e1117]: GC
+                    - generic [ref=f40e1120]:
+                      - heading "[patient]" [level=3] [ref=f40e1121]
+                      - generic [ref=f40e1122]: T#4
+                  - button [ref=f40e1124]
+              - generic [ref=f40e213]:
+                - generic [ref=f40e214]:
+                  - generic [ref=f40e1359]: Rows
+                  - button "10" [ref=f40e1361] [cursor=pointer]
+                - generic [ref=f40e215]:
+                  - button "Previous" [disabled]
+                  - button "1" [ref=f40e1366] [cursor=pointer]
+                  - button "Next" [disabled]
+                - paragraph [ref=f40e1367]: Showing 1 to 6 of 6 appointments
+          - tabpanel [ref=f40e1424]:
+            - generic [ref=f40e1425]:
+              - generic [ref=f40e1426]:
+                - generic [ref=f40e1427]:
+                  - button [ref=f40e1428] [cursor=pointer]
+                  - generic [ref=f40e1431]:
+                    - heading "New Medical Record" [level=3] [ref=f40e1432]
+                    - paragraph [ref=f40e1433]: [patient] • 344
+                - button [ref=f40e1434] [cursor=pointer]
+              - generic [ref=f40e1438]:
+                - generic [ref=f40e1439]:
+                  - heading "Patient Information" [level=4] [ref=f40e1440]
+                  - generic [ref=f40e1442]:
+                    - generic [ref=f40e1443]:
+                      - text: Patient
+                      - generic [ref=f40e1444]:
+                        - generic [ref=f40e1445]: CUT
+                        - generic [ref=f40e1446]:
+                          - paragraph [ref=f40e1447]: [patient]
+                          - paragraph [ref=f40e1448]: "ID: APT-344"
+                    - generic [ref=f40e1449]:
+                      - text: Appointment
+                      - generic [ref=f40e1453]:
+                        - paragraph [ref=f40e1454]: 2026-10-27
+                        - paragraph [ref=f40e1455]: 14:00
+                    - generic [ref=f40e1456]:
+                      - text: Visit Type
+                      - button "New Consultation" [ref=f40e1458] [cursor=pointer]
+                - generic [ref=f40e1462]:
+                  - heading "Clinical Information" [level=4] [ref=f40e1463]
+                  - generic [ref=f40e1465]:
+                    - generic [ref=f40e1466]:
+                      - text: Chief Complaint
+                      - generic [ref=f40e1469]:
+                        - generic [ref=f40e1542]:
+                          - generic [ref=f40e1543]: Toothache
+                          - button [ref=f40e1544] [cursor=pointer]
+                        - textbox "Add more..." [ref=f40e1548]
+                        - button [ref=f40e1513] [cursor=pointer]
+                    - generic [ref=f40e1472]:
+                      - generic [ref=f40e1473]:
+                        - text: Symptoms
+                        - textbox "Describe symptoms..." [ref=f40e1477]
+                      - generic [ref=f40e1479]:
+                        - text: Physical Examination
+                        - generic [ref=f40e1482]:
+                          - textbox "Findings from examination..." [ref=f40e1483]: Tender lower right molar on percussion
+                          - button [ref=f40e1549] [cursor=pointer]
+                - generic [ref=f40e1485]:
+                  - generic [ref=f40e1486]: Vital Signs Capture
+                  - generic [ref=f40e1487]:
+                    - generic [ref=f40e1488]:
+                      - text: BP (mmHg)
+                      - textbox "120/80" [ref=f40e1489]
+                    - generic [ref=f40e1490]:
+                      - text: HR (bpm)
+                      - textbox "72" [ref=f40e1491]: "76"
+                    - generic [ref=f40e1492]:
+                      - text: Temp (°C)
+                      - textbox "37.0" [ref=f40e1493]
+                    - generic [ref=f40e1494]:
+                      - text: Weight (kg)
+                      - textbox "70" [ref=f40e1495]
+                    - generic [ref=f40e1496]:
+                      - text: Height (cm)
+                      - textbox "170" [ref=f40e1497]
+                - generic [ref=f40e1498]:
+                  - heading "Diagnosis & Treatment" [level=4] [ref=f40e1499]
+                  - generic [ref=f40e1501]:
+                    - generic [ref=f40e1502]:
+                      - text: Diagnosis
+                      - generic [ref=f40e1505]:
+                        - generic [ref=f40e1690]:
+                          - generic [ref=f40e1691]: Pulpitis
+                          - button [ref=f40e1692] [cursor=pointer]
+                        - textbox "Add more..." [ref=f40e1696]
+                        - button [ref=f40e1553] [cursor=pointer]
+                    - generic [ref=f40e1508]:
+                      - text: Treatment Plan
+                      - textbox "Prescribed medications, tests..." [ref=f40e1509]
+                - generic [ref=f40e1510]:
+                  - button "Cancel" [ref=f40e1511] [cursor=pointer]
+                  - button "Save Medical Record" [ref=f40e1512] [cursor=pointer]

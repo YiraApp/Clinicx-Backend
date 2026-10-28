@@ -1,0 +1,18 @@
+HIP_INIT_SHARE_CARECONTEXT, flow of 2026-10-28 23:45 IST (values that identify the person are not recorded)
+
+1. inbound POST /api/v3/consent/request/hip/notify  REQUEST-ID 8b741177-6594-4137-b999-149176c60196  (exchange 181, 202)
+   notification.status GRANTED; notification.consentDetail.consentId 6b153ccb-fdc0-4915-9cea-cd21c18c8d57; consentDetail.hip.id IN3610001937
+   hiTypes [Prescription, DiagnosticReport, OPConsultation, DischargeSummary, ImmunizationRecord, HealthDocumentRecord, WellnessRecord, Invoice]
+   permission {accessMode VIEW, dateRange 1926-10-28T18:15:15.114Z .. 2026-10-28T18:15:15.114Z, dataEraseAt 2126-10-28T18:15:15.114Z}; purpose PATRQT
+   careContexts [{patientReference 5bfd87da-..., careContextReference WR-2}]
+2. stored: AbdmConsents id 55, consent 6b153ccb, GRANTED, hiTypes, careContexts, dateFrom/dateTo, dataEraseAt, purpose, artefact whole
+   reply: POST /api/hiecm/consent/v3/request/hip/on-notify  {acknowledgement {status OK, consentId 6b153ccb}, response.requestId 8b741177} -> accepted (exchange 181 replied)
+3. inbound POST /api/v3/hip/health-information/request  REQUEST-ID fa855d87-9ff0-4c50-b124-a076ee45b167  (exchange 182, 202)
+   transactionId d0187701-68cd-4f4a-9508-5caefcd8e016; hiRequest.consent.id 6b153ccb; dateRange 1926-10-28T18:15:15.114Z .. 2026-10-28T18:15:15.114Z
+   dataPushUrl https://apissbx.abdm.gov.in/abha/api/v3/patient-hiu/app/v0.5/health-information/transfer; keyMaterial cryptoAlg ECDH, curve curve25519, dhPublicKey present, nonce present
+4. reply: POST /api/hiecm/data-flow/v3/health-information/hip/on-request  {hiRequest {transactionId d0187701, sessionStatus ACKNOWLEDGED}} -> accepted (exchange 182 replied)
+5. push: POST dataPushUrl  {pageNumber 1, pageCount 1, transactionId d0187701, entries[{media application/fhir+json, content <encrypted>, checksum, careContextReference WR-2}], keyMaterial {cryptoAlg ECDH, curve Curve25519, dhPublicKey, nonce}} -> 2xx (transfer 57 result DELIVERED is recorded only on res.ok)
+6. compare: pushed careContextReference WR-2 is in the consent's careContexts [WR-2]; request dateRange equals the consent permission dateRange (inside, inclusive)
+7. notify: POST /api/hiecm/data-flow/v3/health-information/notify  {notifier {type HIP, id IN3610001937}, statusNotification {sessionStatus TRANSFERRED, statusResponses [{WR-2, DELIVERED}]}} -> accepted (transfer 57 status 'transferred' is set only after it); completed 23:45:37
+PHR app (tester, 23:45-23:47): phr-1.png Prescription record (Amoxicillin 500 mg oral capsule, Dental caries, 28 Oct 2026 06:50 PM); phr-2.png and phr-3.png Clinical consultation report of 27-October-2026 (Toothache, examination, BP 120/80, heart rate 76, Pulpitis): decrypted and shown as NRCES document types
+Outbound reply and push bodies are not stored by the build; 2, 4, 5 and 7 are shown by data-flow.ts and by the recorded acceptance and transfer results.

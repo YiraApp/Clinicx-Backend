@@ -1,0 +1,59 @@
+[
+ {
+  "id": "Health_RECORD_CREATION_101",
+  "outcome": "passed",
+  "iterations": 1,
+  "response": "Screen: ABDM Records for the group 2 patient lists 24 care contexts holding all 8 HI types (OP consultation, Prescription, Invoice, Immunization record, Wellness record, Health document, Diagnostic report, Discharge summary); View on OP-342 shows the records built for the PHR app",
+  "remarks": "Build 85ae1bd. Each HI type is an NRCES document bundle (Bundle.type document, Composition first, profiles OPConsultRecord, PrescriptionRecord, InvoiceRecord, ImmunizationRecord, WellnessRecord, HealthDocumentRecord, DiagnosticReportRecord, DischargeSummaryRecord) stored against a care context. SNOMED CT / LOINC codings per bundle: OP-347 OPConsultation 24, Prescription 8; OP-342 ImmunizationRecord 4; DR-1 DiagnosticReport 3 (LOINC); WR-3 WellnessRecord 6 (LOINC); IP-4 DischargeSummary 12; DOC-127 HealthDocumentRecord 3; Invoice 0 (billing codes, as the InvoiceRecord profile binds). Evidence 1-3."
+ },
+ {
+  "id": "HIP_INTI_LINK_504",
+  "outcome": "passed",
+  "iterations": 1,
+  "response": "generate-token 202 (8a4174ab-dd5d-45ad-b631-89084e8a6c07); on-generate-token linkToken present, response.requestId matched, abhaAddress ...0319@sbx; next link 3a39aada-b1d7-4808-8b43-937eadfa8026 used the stored token, no new generate-token",
+  "remarks": "No valid token held (yesterday's cleared at the tester's request): a prescription saved in the UI requested one, stored against the patient and address for six months (expires 2027-04-29). A wellness record saved next (WR-4) linked with no second token request: 0 generate-token after 8a4174ab; one stored token. Screen: RX-36B468A0 and WR-4 'Linked to ABHA'. Evidence 1-3.",
+  "steps": [
+   {
+    "step": 1,
+    "outcome": "passed",
+    "note": "token requested and received, requestId matched"
+   },
+   {
+    "step": 2,
+    "outcome": "passed",
+    "note": "stored against patient and ABHA address, 6 months"
+   },
+   {
+    "step": 3,
+    "outcome": "passed",
+    "note": "reused for WR-4, no second generate-token"
+   }
+  ]
+ },
+ {
+  "id": "HIP_INTI_LINK_505",
+  "outcome": "passed",
+  "iterations": 1,
+  "response": "link/carecontext 202 on save (bc3d404e-053e-42bc-b625-2079b36befec, 3a39aada-b1d7-4808-8b43-937eadfa8026), on_carecontext 'Successfully Linked care context'; link/context/notify 202 (d86055c3-2718-4421-a138-1be10d7f4ff8), on-notify acknowledgement.status SUCCESS; PHR app shows the linked records",
+  "remarks": "Linking ran automatically on save with no click (prescription RX-36B468A0, wellness WR-4). A Hepatitis B immunization added to the linked visit OP-347 sent the context notify on its own. PHR app (tester's screenshots phr-1..3): Wellness record, Prescription record and the OP-347 Immunization record from Ocimum dentistry; transfers 46-48 DELIVERED. Extra check (count mismatch, ABDM-1037) not run: no screen drives it. Evidence 1-2, phr-1..3.",
+  "steps": [
+   {
+    "step": 1,
+    "outcome": "passed",
+    "note": "link initiated with the token on save; Successfully Linked care context"
+   },
+   {
+    "step": 2,
+    "outcome": "passed",
+    "note": "records pulled and visible in the PHR app (tester screenshots); context notify SUCCESS"
+   }
+  ]
+ },
+ {
+  "id": "HIP_INTI_LINK_506",
+  "outcome": "passed",
+  "iterations": 1,
+  "response": "PHR app (tester): Ocimum dentistry Health Record pages for the Wellness record (BP 118/76, heart rate 74, SpO2 98%, weight 68 kg), Prescription record (Chlorhexidine only product, Gingivitis, 28 Oct 2026 05:36 PM) and Immunization record (Hepatitis B virus antigen only vaccine product, lot HB2610, dose 1)",
+  "remarks": "The records linked in HIP_INTI_LINK_504/505 were pulled into the PHR app: health-information requests ab8c7797, eb7f5849, 59f7b659 answered, transfers 46 (RX-36B468A0), 47 (WR-4), 48 (OP-347) DELIVERED. Evidence phr-1..3."
+ }
+]

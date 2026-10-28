@@ -1,0 +1,410 @@
+- generic [ref=f32e2]:
+  - region "Notifications alt+T"
+  - generic [ref=f32e3]:
+    - generic [ref=f32e5]:
+      - generic [ref=f32e6]:
+        - generic [ref=f32e7]:
+          - generic [ref=f32e8] [cursor=pointer]: MK
+          - generic [ref=f32e10]:
+            - heading "[patient]" [level=2] [ref=f32e11]
+            - paragraph [ref=f32e12]: Healthcare Provider
+        - button [ref=f32e13] [cursor=pointer]
+      - button "Hospital Ocimum Dentistry OCM123 Provider • Ocimum Dentistry" [ref=f32e16] [cursor=pointer]:
+        - generic [ref=f32e17]: Hospital
+        - generic [ref=f32e22]: Ocimum Dentistry
+        - generic [ref=f32e23]: OCM123
+        - generic [ref=f32e24]:
+          - generic "Provider" [ref=f32e25]
+          - generic "Ocimum Dentistry" [ref=f32e27]: • Ocimum Dentistry
+      - button "Search patients... ⌘ K" [ref=f32e31] [cursor=pointer]:
+        - generic [ref=f32e35]: Search patients...
+        - generic [ref=f32e36]:
+          - generic [ref=f32e37]: ⌘
+          - text: K
+      - navigation [ref=f32e38]:
+        - link [ref=f32e40] [cursor=pointer]:
+          - /url: /provider/dashboard
+          - button "Doc Dashboard" [ref=f32e41]
+        - link [ref=f32e48] [cursor=pointer]:
+          - /url: /provider/appointments
+          - button "Appointments" [ref=f32e49]
+        - link [ref=f32e55] [cursor=pointer]:
+          - /url: /provider/patients
+          - button "Patients" [ref=f32e56]
+        - link [ref=f32e65] [cursor=pointer]:
+          - /url: /provider/doctor-slots
+          - button "Doc Slots" [ref=f32e66]
+        - link [ref=f32e72] [cursor=pointer]:
+          - /url: /abdm/record-request
+          - button "ABDM Record Request" [ref=f32e73]
+      - generic [ref=f32e82]:
+        - link [ref=f32e83] [cursor=pointer]:
+          - /url: /settings
+          - button "Settings" [ref=f32e84]
+        - button "Logout" [ref=f32e89] [cursor=pointer]
+    - main [ref=f32e95]:
+      - generic [ref=f32e96]:
+        - generic [ref=f32e97]:
+          - generic [ref=f32e98]:
+            - generic [ref=f32e99]:
+              - heading "Patient Management" [level=1] [ref=f32e100]
+              - paragraph [ref=f32e101]: Unified view of patients, medical records, and clinical notes
+            - button "Export" [ref=f32e103] [cursor=pointer]
+          - generic [ref=f32e107]:
+            - generic [ref=f32e111]:
+              - paragraph [ref=f32e112]: Total Patients
+              - paragraph [ref=f32e113]: "3"
+            - generic [ref=f32e120]:
+              - paragraph [ref=f32e121]: Active Cases
+              - paragraph [ref=f32e122]: "3"
+            - generic [ref=f32e128]:
+              - paragraph [ref=f32e129]: Critical Cases
+              - paragraph [ref=f32e130]: "0"
+            - generic [ref=f32e136]:
+              - paragraph [ref=f32e137]: Medical Records
+              - paragraph [ref=f32e138]: "0"
+          - generic [ref=f32e144]:
+            - textbox "Search by name, ID, phone, or condition..." [ref=f32e150]
+            - generic [ref=f32e151]:
+              - button "All Status" [ref=f32e154] [cursor=pointer]
+              - button "All Genders" [ref=f32e160] [cursor=pointer]
+        - generic [ref=f32e164]:
+          - generic [ref=f32e166]:
+            - generic [ref=f32e273]:
+              - generic [ref=f32e274]: 3 Patients
+              - button "Collapse patient list" [ref=f32e275] [cursor=pointer]
+            - generic [ref=f32e170]:
+              - generic [ref=f32e183] [cursor=pointer]:
+                - generic [ref=f32e184]: Gs
+                - generic [ref=f32e186]:
+                  - generic [ref=f32e187]:
+                    - heading "[patient]" [level=3] [ref=f32e188]
+                    - generic [ref=f32e189]: active
+                  - paragraph [ref=f32e190]: "OCM123 | 22y | DOB: 2004-06-08 | Female"
+                  - paragraph [ref=f32e191]: General Consultation
+                  - generic [ref=f32e193]:
+                    - generic [ref=f32e194]: "Total Visits: 2"
+                    - generic [ref=f32e195]: "Completed Visits: 0"
+                    - generic [ref=f32e196]: "Last: Oct 27"
+              - generic [ref=f32e207] [cursor=pointer]:
+                - generic [ref=f32e208]: mk
+                - generic [ref=f32e210]:
+                  - generic [ref=f32e211]:
+                    - heading "[patient]" [level=3] [ref=f32e212]
+                    - generic [ref=f32e213]: active
+                  - paragraph [ref=f32e214]: "OCM123 | 24y | DOB: 2002-05-30 | Male"
+                  - paragraph [ref=f32e215]: General Consultation
+                  - generic [ref=f32e217]:
+                    - generic [ref=f32e218]: "Total Visits: 0"
+                    - generic [ref=f32e219]: "Completed Visits: 0"
+                    - generic [ref=f32e220]: "Last: Oct 26"
+              - generic [ref=f32e231] [cursor=pointer]:
+                - generic [ref=f32e232]: CU
+                - generic [ref=f32e234]:
+                  - generic [ref=f32e235]:
+                    - heading "[patient]" [level=3] [ref=f32e236]
+                    - generic [ref=f32e237]: active
+                  - paragraph [ref=f32e238]: "OCM123 | 23y | DOB: 2003-03-19 | Male"
+                  - paragraph [ref=f32e239]: General Consultation
+                  - generic [ref=f32e241]:
+                    - generic [ref=f32e242]: "Total Visits: 4"
+                    - generic [ref=f32e243]: "Completed Visits: 0"
+                    - generic [ref=f32e244]: "Last: Oct 26"
+            - generic [ref=f32e253]:
+              - generic [ref=f32e254]:
+                - generic [ref=f32e255]: Rows
+                - button "10" [ref=f32e257] [cursor=pointer]
+              - generic [ref=f32e261]:
+                - button "Previous" [disabled]
+                - button "1" [ref=f32e263] [cursor=pointer]
+                - button "Next" [disabled]
+              - paragraph [ref=f32e265]: Showing 1 to 3 of 3 patients
+          - generic [ref=f32e282]:
+            - generic [ref=f32e283]:
+              - generic [ref=f32e284]:
+                - generic [ref=f32e285]: CUT
+                - generic [ref=f32e287]:
+                  - generic [ref=f32e288]:
+                    - heading "[patient]" [level=2] [ref=f32e289]
+                    - generic [ref=f32e290]: active
+                  - paragraph [ref=f32e291]: "OCM123 | 23y | DOB: 2003-03-19 | Male | —"
+              - button [ref=f32e292] [cursor=pointer]
+            - generic [ref=f32e296]:
+              - tablist [ref=f32e297]:
+                - tab "overview" [ref=f32e298] [cursor=pointer]
+                - tab "Clinical Notes" [ref=f32e299] [cursor=pointer]
+                - tab "Medical Records" [ref=f32e300] [cursor=pointer]
+                - tab "prescriptions" [ref=f32e301] [cursor=pointer]
+                - tab "documents" [ref=f32e302] [cursor=pointer]
+                - tab "appointments" [ref=f32e303] [cursor=pointer]
+                - tab "immunizations" [ref=f32e304] [cursor=pointer]
+                - tab "Discharge Summaries" [ref=f32e305] [cursor=pointer]
+                - tab "Diagnostic Reports" [ref=f32e306] [cursor=pointer]
+                - tab "wellness" [ref=f32e307] [cursor=pointer]
+                - tab "ABDM Records" [active] [selected] [ref=f32e308] [cursor=pointer]
+              - tabpanel "ABDM Records" [ref=f32e396]:
+                - generic [ref=f32e400]:
+                  - generic [ref=f32e401]:
+                    - generic [ref=f32e402]:
+                      - heading "ABDM Records" [level=3] [ref=f32e403]
+                      - paragraph [ref=f32e404]: What this clinic can share with [patient]'s ABHA, and what is linked.
+                    - button "Refresh" [ref=f32e405] [cursor=pointer]
+                  - generic [ref=f32e412]:
+                    - generic [ref=f32e418]:
+                      - paragraph [ref=f32e419]: ABHA on record
+                      - paragraph [ref=f32e420]:
+                        - text: ABHA number
+                        - strong [ref=f32e421]: [redacted]
+                        - text: · ABHA address
+                        - strong [ref=f32e422]: [redacted]
+                      - paragraph [ref=f32e423]: "Mobile: [redacted]"
+                    - paragraph [ref=f32e424]: Shared by Ocimum dentistry (ABDM facility ID IN3610001937)
+                    - generic [ref=f32e429]:
+                      - button "Link to ABHA now" [disabled]
+                      - button "Send ABHA SMS link to patient" [ref=f32e430] [cursor=pointer]
+                    - paragraph [ref=f32e435]: "Link: Every record with health information is linked or being linked."
+                  - generic [ref=f32e436]:
+                    - generic [ref=f32e437]: "26 records:"
+                    - generic [ref=f32e438]: 26 linked to abha
+                  - generic [ref=f32e439]:
+                    - generic [ref=f32e442]:
+                      - generic [ref=f32e448]:
+                        - heading "Wellness record, 28 Oct 2026" [level=4] [ref=f32e449]
+                        - paragraph [ref=f32e450]: Wellness record · 28 Oct 2026, 05:37 PM · WR-4
+                        - generic "WellnessRecord" [ref=f32e452]: Wellness record
+                      - generic [ref=f32e453]:
+                        - generic [ref=f32e454]: Linked to ABHA
+                        - paragraph [ref=f32e455]: Linked 28 Oct 2026, 05:38 PM
+                        - button "View" [ref=f32e456] [cursor=pointer]
+                    - generic [ref=f32e462]:
+                      - generic [ref=f32e468]:
+                        - heading "Prescription, 28 Oct 2026" [level=4] [ref=f32e469]
+                        - paragraph [ref=f32e470]: Prescription · 28 Oct 2026, 05:36 PM · RX-36B468A0-2939-4F43-B8A2-1F53CD7BB8EE
+                        - generic "Prescription" [ref=f32e472]
+                      - generic [ref=f32e473]:
+                        - generic [ref=f32e474]: Linked to ABHA
+                        - paragraph [ref=f32e475]: Linked 28 Oct 2026, 05:36 PM
+                        - button "View" [ref=f32e476] [cursor=pointer]
+                    - generic [ref=f32e482]:
+                      - generic [ref=f32e489]:
+                        - heading "OPD visit, 28 Oct 2026" [level=4] [ref=f32e490]
+                        - paragraph [ref=f32e491]: Visit · 28 Oct 2026, 12:00 AM · OP-347
+                        - generic [ref=f32e492]:
+                          - generic "OPConsultation" [ref=f32e493]: OP consultation
+                          - generic "Prescription" [ref=f32e494]
+                          - generic "ImmunizationRecord" [ref=f32e495]: Immunization record
+                      - generic [ref=f32e496]:
+                        - generic [ref=f32e497]: Linked to ABHA
+                        - paragraph [ref=f32e498]: Linked 28 Oct 2026, 11:24 AM
+                        - button "View" [ref=f32e499] [cursor=pointer]
+                    - generic [ref=f32e505]:
+                      - generic [ref=f32e511]:
+                        - heading "Wellness record, 27 Oct 2026" [level=4] [ref=f32e512]
+                        - paragraph [ref=f32e513]: Wellness record · 27 Oct 2026, 07:16 PM · WR-3
+                        - generic "WellnessRecord" [ref=f32e515]: Wellness record
+                      - generic [ref=f32e516]:
+                        - generic [ref=f32e517]: Linked to ABHA
+                        - paragraph [ref=f32e518]: Linked 27 Oct 2026, 07:16 PM
+                        - button "View" [ref=f32e519] [cursor=pointer]
+                    - generic [ref=f32e525]:
+                      - generic [ref=f32e531]:
+                        - heading "Health document, 27 Oct 2026" [level=4] [ref=f32e532]
+                        - paragraph [ref=f32e533]: Document · 27 Oct 2026, 07:12 PM · DOC-127
+                        - generic "HealthDocumentRecord" [ref=f32e535]: Health document
+                      - generic [ref=f32e536]:
+                        - generic [ref=f32e537]: Linked to ABHA
+                        - paragraph [ref=f32e538]: Linked 27 Oct 2026, 07:13 PM
+                        - button "View" [ref=f32e539] [cursor=pointer]
+                    - generic [ref=f32e545]:
+                      - generic [ref=f32e551]:
+                        - heading "Prescription, 27 Oct 2026" [level=4] [ref=f32e552]
+                        - paragraph [ref=f32e553]: Prescription · 27 Oct 2026, 07:12 PM · RX-9A5B60DB-1F2C-44FC-8F95-9196778DB361
+                        - generic "Prescription" [ref=f32e555]
+                      - generic [ref=f32e556]:
+                        - generic [ref=f32e557]: Linked to ABHA
+                        - paragraph [ref=f32e558]: Linked 27 Oct 2026, 07:13 PM
+                        - button "View" [ref=f32e559] [cursor=pointer]
+                    - generic [ref=f32e565]:
+                      - generic [ref=f32e571]:
+                        - heading "Health document, 27 Oct 2026" [level=4] [ref=f32e572]
+                        - paragraph [ref=f32e573]: Document · 27 Oct 2026, 04:47 PM · DOC-126
+                        - generic "HealthDocumentRecord" [ref=f32e575]: Health document
+                      - generic [ref=f32e576]:
+                        - generic [ref=f32e577]: Linked to ABHA
+                        - paragraph [ref=f32e578]: Linked 27 Oct 2026, 07:13 PM
+                        - button "View" [ref=f32e579] [cursor=pointer]
+                    - generic [ref=f32e585]:
+                      - generic [ref=f32e591]:
+                        - heading "Prescription, 27 Oct 2026" [level=4] [ref=f32e592]
+                        - paragraph [ref=f32e593]: Prescription · 27 Oct 2026, 02:45 PM · RX-CE661A65-83B0-4F30-83F3-D0B41E9DE833
+                        - generic "Prescription" [ref=f32e595]
+                      - generic [ref=f32e596]:
+                        - generic [ref=f32e597]: Linked to ABHA
+                        - paragraph [ref=f32e598]: Linked 27 Oct 2026, 07:13 PM
+                        - button "View" [ref=f32e599] [cursor=pointer]
+                    - generic [ref=f32e605]:
+                      - generic [ref=f32e611]:
+                        - heading "Health document, 27 Oct 2026" [level=4] [ref=f32e612]
+                        - paragraph [ref=f32e613]: Document · 27 Oct 2026, 02:37 PM · DOC-125
+                        - generic "HealthDocumentRecord" [ref=f32e615]: Health document
+                      - generic [ref=f32e616]:
+                        - generic [ref=f32e617]: Linked to ABHA
+                        - paragraph [ref=f32e618]: Linked 27 Oct 2026, 02:53 PM
+                        - button "View" [ref=f32e619] [cursor=pointer]
+                    - generic [ref=f32e625]:
+                      - generic [ref=f32e631]:
+                        - heading "Prescription, 27 Oct 2026" [level=4] [ref=f32e632]
+                        - paragraph [ref=f32e633]: Prescription · 27 Oct 2026, 02:37 PM · RX-67221FB5-8B8B-4377-880D-AE30CEF63ACD
+                        - generic "Prescription" [ref=f32e635]
+                      - generic [ref=f32e636]:
+                        - generic [ref=f32e637]: Linked to ABHA
+                        - paragraph [ref=f32e638]: Linked 27 Oct 2026, 02:53 PM
+                        - button "View" [ref=f32e639] [cursor=pointer]
+                    - generic [ref=f32e645]:
+                      - generic [ref=f32e652]:
+                        - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f32e653]
+                        - paragraph [ref=f32e654]: Visit · 27 Oct 2026, 02:00 PM · OP-344
+                        - generic "Invoice" [ref=f32e656]
+                      - generic [ref=f32e657]:
+                        - generic [ref=f32e658]: Linked to ABHA
+                        - paragraph [ref=f32e659]: Linked 27 Oct 2026, 02:09 PM
+                        - button "View" [ref=f32e660] [cursor=pointer]
+                    - generic [ref=f32e666]:
+                      - generic [ref=f32e673]:
+                        - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f32e674]
+                        - paragraph [ref=f32e675]: Visit · 27 Oct 2026, 01:26 PM · OP-343
+                        - generic "Invoice" [ref=f32e677]
+                      - generic [ref=f32e678]:
+                        - generic [ref=f32e679]: Linked to ABHA
+                        - paragraph [ref=f32e680]: Linked 27 Oct 2026, 01:27 PM
+                        - button "View" [ref=f32e681] [cursor=pointer]
+                    - generic [ref=f32e687]:
+                      - generic [ref=f32e693]:
+                        - heading "Wellness record, 27 Oct 2026" [level=4] [ref=f32e694]
+                        - paragraph [ref=f32e695]: Wellness record · 27 Oct 2026, 12:41 PM · WR-2
+                        - generic "WellnessRecord" [ref=f32e697]: Wellness record
+                      - generic [ref=f32e698]:
+                        - generic [ref=f32e699]: Linked to ABHA
+                        - paragraph [ref=f32e700]: Linked 27 Oct 2026, 12:42 PM
+                        - button "View" [ref=f32e701] [cursor=pointer]
+                    - generic [ref=f32e707]:
+                      - generic [ref=f32e712]:
+                        - heading "Lab report, 27 Oct 2026" [level=4] [ref=f32e713]
+                        - paragraph [ref=f32e714]: Diagnostic report · 27 Oct 2026, 11:16 AM · DR-1
+                        - generic "DiagnosticReport" [ref=f32e716]: Diagnostic report
+                      - generic [ref=f32e717]:
+                        - generic [ref=f32e718]: Linked to ABHA
+                        - paragraph [ref=f32e719]: Linked 27 Oct 2026, 12:41 PM
+                        - button "View" [ref=f32e720] [cursor=pointer]
+                    - generic [ref=f32e726]:
+                      - generic [ref=f32e732]:
+                        - heading "Imaging report, 26 Oct 2026" [level=4] [ref=f32e733]
+                        - paragraph [ref=f32e734]: Document · 26 Oct 2026, 07:01 PM · DOC-123
+                        - generic "DiagnosticReport" [ref=f32e736]: Diagnostic report
+                      - generic [ref=f32e737]:
+                        - generic [ref=f32e738]: Linked to ABHA
+                        - paragraph [ref=f32e739]: Linked 26 Oct 2026, 07:01 PM
+                        - button "View" [ref=f32e740] [cursor=pointer]
+                    - generic [ref=f32e746]:
+                      - generic [ref=f32e752]:
+                        - heading "Imaging report, 26 Oct 2026" [level=4] [ref=f32e753]
+                        - paragraph [ref=f32e754]: Document · 26 Oct 2026, 07:00 PM · DOC-122
+                        - generic "DiagnosticReport" [ref=f32e756]: Diagnostic report
+                      - generic [ref=f32e757]:
+                        - generic [ref=f32e758]: Linked to ABHA
+                        - paragraph [ref=f32e759]: Linked 26 Oct 2026, 07:01 PM
+                        - button "View" [ref=f32e760] [cursor=pointer]
+                    - generic [ref=f32e766]:
+                      - generic [ref=f32e772]:
+                        - heading "Imaging report, 26 Oct 2026" [level=4] [ref=f32e773]
+                        - paragraph [ref=f32e774]: Document · 26 Oct 2026, 06:59 PM · DOC-121
+                        - generic "DiagnosticReport" [ref=f32e776]: Diagnostic report
+                      - generic [ref=f32e777]:
+                        - generic [ref=f32e778]: Linked to ABHA
+                        - paragraph [ref=f32e779]: Linked 26 Oct 2026, 07:01 PM
+                        - button "View" [ref=f32e780] [cursor=pointer]
+                    - generic [ref=f32e786]:
+                      - generic [ref=f32e793]:
+                        - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f32e794]
+                        - paragraph [ref=f32e795]: Visit · 26 Oct 2026, 05:26 PM · OP-342
+                        - generic [ref=f32e796]:
+                          - generic "OPConsultation" [ref=f32e797]: OP consultation
+                          - generic "Prescription" [ref=f32e798]
+                          - generic "Invoice" [ref=f32e799]
+                          - generic "ImmunizationRecord" [ref=f32e800]: Immunization record
+                      - generic [ref=f32e801]:
+                        - generic [ref=f32e802]: Linked to ABHA
+                        - paragraph [ref=f32e803]: Linked 26 Oct 2026, 06:56 PM
+                        - button "View" [ref=f32e804] [cursor=pointer]
+                    - generic [ref=f32e810]:
+                      - generic [ref=f32e816]:
+                        - heading "Consultation record, 26 Oct 2026" [level=4] [ref=f32e817]
+                        - paragraph [ref=f32e818]: Consultation record · 26 Oct 2026, 06:41 PM · MR-9E2C5BEA-C5A4-49B0-B46D-F5C8A028AB47
+                        - generic "OPConsultation" [ref=f32e820]: OP consultation
+                      - generic [ref=f32e821]:
+                        - generic [ref=f32e822]: Linked to ABHA
+                        - paragraph [ref=f32e823]: Linked 26 Oct 2026, 06:42 PM
+                        - button "View" [ref=f32e824] [cursor=pointer]
+                    - generic [ref=f32e830]:
+                      - generic [ref=f32e836]:
+                        - heading "Health document, 26 Oct 2026" [level=4] [ref=f32e837]
+                        - paragraph [ref=f32e838]: Document · 26 Oct 2026, 06:37 PM · DOC-120
+                        - generic "HealthDocumentRecord" [ref=f32e840]: Health document
+                      - generic [ref=f32e841]:
+                        - generic [ref=f32e842]: Linked to ABHA
+                        - paragraph [ref=f32e843]: Linked 26 Oct 2026, 06:38 PM
+                        - button "View" [ref=f32e844] [cursor=pointer]
+                    - generic [ref=f32e850]:
+                      - generic [ref=f32e860]:
+                        - heading "Vaccination, 26 Oct 2026" [level=4] [ref=f32e861]
+                        - paragraph [ref=f32e862]: Immunization · 26 Oct 2026 · IM-1
+                        - generic "ImmunizationRecord" [ref=f32e864]: Immunization record
+                      - generic [ref=f32e865]:
+                        - generic [ref=f32e866]: Linked to ABHA
+                        - paragraph [ref=f32e867]: Linked 26 Oct 2026, 06:37 PM
+                        - button "View" [ref=f32e868] [cursor=pointer]
+                    - generic [ref=f32e874]:
+                      - generic [ref=f32e880]:
+                        - heading "Health document, 26 Oct 2026" [level=4] [ref=f32e881]
+                        - paragraph [ref=f32e882]: Document · 26 Oct 2026, 06:34 PM · DOC-119
+                        - generic "HealthDocumentRecord" [ref=f32e884]: Health document
+                      - generic [ref=f32e885]:
+                        - generic [ref=f32e886]: Linked to ABHA
+                        - paragraph [ref=f32e887]: Linked 26 Oct 2026, 06:34 PM
+                        - button "View" [ref=f32e888] [cursor=pointer]
+                    - generic [ref=f32e894]:
+                      - generic [ref=f32e900]:
+                        - heading "Prescription, 26 Oct 2026" [level=4] [ref=f32e901]
+                        - paragraph [ref=f32e902]: Prescription · 26 Oct 2026, 06:34 PM · RX-DA72C635-2D5A-4D9A-BBA0-7FCF9E004C0A
+                        - generic "Prescription" [ref=f32e904]
+                      - generic [ref=f32e905]:
+                        - generic [ref=f32e906]: Linked to ABHA
+                        - paragraph [ref=f32e907]: Linked 26 Oct 2026, 06:34 PM
+                        - button "View" [ref=f32e908] [cursor=pointer]
+                    - generic [ref=f32e914]:
+                      - generic [ref=f32e920]:
+                        - heading "Hospital stay, 26 Oct 2026 to 26 Oct 2026" [level=4] [ref=f32e921]
+                        - paragraph [ref=f32e922]: Discharge summary · 26 Oct 2026, 06:05 PM · IP-4
+                        - generic "DischargeSummary" [ref=f32e924]: Discharge summary
+                      - generic [ref=f32e925]:
+                        - generic [ref=f32e926]: Linked to ABHA
+                        - paragraph [ref=f32e927]: Linked 26 Oct 2026, 06:06 PM
+                        - button "View" [ref=f32e928] [cursor=pointer]
+                    - generic [ref=f32e934]:
+                      - generic [ref=f32e940]:
+                        - heading "Hospital stay, 26 Oct 2026 to 27 Oct 2026" [level=4] [ref=f32e941]
+                        - paragraph [ref=f32e942]: Discharge summary · 27 Oct 2026, 10:41 PM · IP-3
+                        - generic "DischargeSummary" [ref=f32e944]: Discharge summary
+                      - generic [ref=f32e945]:
+                        - generic [ref=f32e946]: Linked to ABHA
+                        - paragraph [ref=f32e947]: Linked 26 Oct 2026, 05:42 PM
+                        - button "View" [ref=f32e948] [cursor=pointer]
+                    - generic [ref=f32e954]:
+                      - generic [ref=f32e960]:
+                        - heading "Hospital stay, 27 Oct 2026 to 28 Oct 2026" [level=4] [ref=f32e961]
+                        - paragraph [ref=f32e962]: Discharge summary · 28 Oct 2026, 05:28 PM · IP-2
+                        - generic "DischargeSummary" [ref=f32e964]: Discharge summary
+                      - generic [ref=f32e965]:
+                        - generic [ref=f32e966]: Linked to ABHA
+                        - paragraph [ref=f32e967]: Linked 26 Oct 2026, 05:42 PM
+                        - button "View" [ref=f32e968] [cursor=pointer]
