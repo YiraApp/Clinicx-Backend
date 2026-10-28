@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { MssqlParameter } from "typeorm/index.js";
 import { HiuError } from "../../services/Abdm/hiu/hiu-enums.js";
 import { errorCodeOf, isTransientSqlError, RecordPurgeError, TRANSIENT_RETRY_DELAYS_MS as RETRY_DELAYS } from "../../services/Abdm/hiu/hiu-db-errors.js";
-import { HiuDataRepository, isDuplicateKeyError, PURGE_SWEEP_BUDGET_MS, toDataRequestRow } from "./hiu-data.repository.js";
+import {
+    HiuDataRepository, isDuplicateKeyError, LARGE_WRITE_LOCK, LARGE_WRITE_LOCK_POLL_MS, LARGE_WRITE_LOCK_WAIT_MS, LargeWriteLockError, PURGE_SWEEP_BUDGET_MS, toDataRequestRow,
+} from "./hiu-data.repository.js";
 
 type Sent = { sql: string; parameters: unknown[] };
 
@@ -12,23 +14,42 @@ type Sent = { sql: string; parameters: unknown[] };
  * throw, or return a promise). Like TypeORM's SqlServerQueryRunner, a statement whose first word is
  * DELETE is answered [recordset, rowsAffected], not the recordset alone. Waits between tries are
  * recorded in [slept], not waited.
+ *
+ * The large-write lock's sessions are stubs too: their statements go to [locked], answered by
+ * [options.lock] (sp_getapplock's result 0, granted, unless it says otherwise), and [trace] has every
+ * session opened, lock statement, release and pool statement (by its first word) in order.
  */
-const repositoryWith = (answer: (sent: Sent) => any, options: { clock?: () => number } = {}) => {
+const repositoryWith = (answer: (sent: Sent) => any, options: { clock?: () => number; lock?: (sent: Sent) => any; release?: () => void } = {}) => {
     const sent: Sent[] = [];
     const slept: number[] = [];
+    const locked: Sent[] = [];
+    const trace: string[] = [];
     const repository = new HiuDataRepository({
         query: async (sql, parameters = []) => {
             const item = { sql, parameters };
             sent.push(item);
+            trace.push(sql.slice(0, sql.indexOf(" ")));
             const result = await answer(item);
             return sql.slice(0, sql.indexOf(" ")) === "DELETE" ? [result, Array.isArray(result) ? result.length : 0] : result;
+        },
+        lockSession: async () => {
+            trace.push("open");
+            return {
+                query: async (sql, parameters = []) => {
+                    const item = { sql, parameters };
+                    locked.push(item);
+                    trace.push("lock");
+                    return options.lock ? await options.lock(item) : [{ Result: 0 }];
+                },
+                release: async () => { trace.push("release"); options.release?.(); },
+            };
         },
         sleep: async (ms) => { slept.push(ms); },
         // The middle of the jitter: each wait is its delay exactly.
         random: () => 0.5,
-        ...options,
+        clock: options.clock,
     });
-    return { repository, sent, slept };
+    return { repository, sent, slept, locked, trace };
 };
 
 const duplicateKey = () => Object.assign(new Error("Violation of UNIQUE KEY constraint"), { driverError: { number: 2627 } });
@@ -287,6 +308,118 @@ test("record deletes share the page stores' queue: a purge waits while a page is
     assert.equal(await purge, 1);
     await page;
     assert.equal(sent[1].sql.slice(0, 6), "DELETE");
+});
+
+test("each large write takes the cross-instance applock on a connection of its own first, and gives it back after", async () => {
+    const { repository, trace, locked } = repositoryWith(() => [{ PagesReceived: 1 }]);
+    await repository.addPage(onePage);
+    assert.deepEqual(trace, ["open", "lock", "SET", "release"]);
+    assert.match(locked[0].sql, /EXEC @result = sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = @1;\s+SELECT @result AS Result;/);
+    assert.deepEqual(locked[0].parameters, ["AbdmHiuLargeWrite", LARGE_WRITE_LOCK_POLL_MS]);
+    assert.equal(LARGE_WRITE_LOCK, "AbdmHiuLargeWrite");
+    assert.ok(LARGE_WRITE_LOCK_POLL_MS < 30_000, "one wait ends well inside requestTimeout");
+
+    // Each row of an artefact's purge is a large write of its own; the stamp after them is not one.
+    let rows = 1;
+    const purge = repositoryWith(({ sql }) => (sql.startsWith("DELETE") ? (rows-- > 0 ? [{ Id: 1 }] : []) : []));
+    assert.equal(await purge.repository.purgeArtefactRecords(2, new Date()), 1);
+    assert.deepEqual(purge.trace, ["open", "lock", "DELETE", "release", "open", "lock", "DELETE", "release", "UPDATE"]);
+
+    // So is each row of the sweep's; the stamp and the name lookup are not.
+    let due = 1;
+    const sweep = repositoryWith(({ sql }) => {
+        if (sql.startsWith("DELETE")) return due-- > 0 ? [{ ArtefactFk: 2, HospitalId: 7 }] : [];
+        if (sql.startsWith("SELECT")) return [{ Id: 2, ConsentArtefactId: "art-2" }];
+        return [];
+    });
+    await sweep.repository.purgeRecords(new Date("2026-10-26T10:00:00.000Z"));
+    assert.deepEqual(sweep.trace, ["open", "lock", "DELETE", "release", "open", "lock", "DELETE", "release", "UPDATE", "SELECT"]);
+});
+
+test("the lock is given back when the write throws, and taken afresh for each try", async () => {
+    const deadlocked = repositoryWith(() => { throw Object.assign(new Error("deadlock"), { code: "EREQUEST", number: 1205 }); });
+    await assert.rejects(deadlocked.repository.addPage(onePage), /deadlock/);
+    assert.deepEqual(deadlocked.trace, Array(RETRY_DELAYS.length + 1).fill(["open", "lock", "SET", "release"]).flat(), "not held while waiting to try again");
+
+    const refused = repositoryWith(() => { throw Object.assign(new Error("Conversion failed"), { code: "EREQUEST", number: 245 }); });
+    await assert.rejects(refused.repository.addPage(onePage), /Conversion failed/);
+    assert.deepEqual(refused.trace, ["open", "lock", "SET", "release"]);
+
+    // A purge's delete that still fails gives it back too.
+    const stuck = repositoryWith(({ sql }) => { if (sql.startsWith("DELETE")) throw timedOut(); return []; });
+    await assert.rejects(stuck.repository.purgeArtefactRecords(2, new Date()), RecordPurgeError);
+    assert.deepEqual(stuck.trace, ["open", "lock", "DELETE", "release", "open", "lock", "DELETE", "release"]);
+
+    // A lock call that loses its connection is given back and tried again, like the write.
+    let drops = 1;
+    const dropped = repositoryWith(() => [{ PagesReceived: 1 }], {
+        lock: () => {
+            if (drops-- > 0) throw Object.assign(new Error("Connection lost"), { code: "ESOCKET" });
+            return [{ Result: 0 }];
+        },
+    });
+    assert.deepEqual(await dropped.repository.addPage(onePage), { duplicate: false, pagesReceived: 1 });
+    assert.deepEqual(dropped.trace, ["open", "lock", "release", "open", "lock", "SET", "release"]);
+    assert.deepEqual(dropped.slept, [RETRY_DELAYS[0]]);
+});
+
+test("a release that fails never replaces the write's answer, and is logged by its code only", async () => {
+    const { repository, trace } = repositoryWith(() => [{ PagesReceived: 3 }], {
+        release: () => { throw Object.assign(new Error("Connection lost to host db.example"), { code: "ESOCKET" }); },
+    });
+    assert.deepEqual(await repository.addPage(onePage), { duplicate: false, pagesReceived: 3 });
+    assert.deepEqual(trace, ["open", "lock", "SET", "release"]);
+    assert.deepEqual(logged, ["[ABDM HIU] large-write lock: release failed (ESOCKET)"]);
+});
+
+test("a write waits for another instance's lock, asking again each poll, and fails without writing once its wait is spent", async () => {
+    let clock = 0;
+    let busy = 2;
+    const waiting = repositoryWith(() => [{ PagesReceived: 1 }], {
+        clock: () => clock,
+        lock: () => {
+            clock += LARGE_WRITE_LOCK_POLL_MS;
+            return [{ Result: busy-- > 0 ? -1 : 1 }];
+        },
+    });
+    assert.deepEqual(await waiting.repository.addPage(onePage), { duplicate: false, pagesReceived: 1 });
+    assert.deepEqual(waiting.trace, ["open", "lock", "lock", "lock", "SET", "release"], "the page is sent only once the lock is held");
+
+    clock = 0;
+    const held = repositoryWith(() => [{ PagesReceived: 1 }], {
+        clock: () => clock,
+        lock: () => {
+            clock += LARGE_WRITE_LOCK_POLL_MS;
+            return [{ Result: -1 }];
+        },
+    });
+    await assert.rejects(held.repository.addPage(onePage), (error: any) =>
+        error instanceof LargeWriteLockError && errorCodeOf(error) === "ELOCKWAIT" && !isTransientSqlError(error));
+    assert.equal(held.locked.length, LARGE_WRITE_LOCK_WAIT_MS / LARGE_WRITE_LOCK_POLL_MS);
+    assert.equal(held.sent.length, 0, "nothing written");
+    assert.deepEqual(held.slept, [], "a wait already spent is not tried again");
+    assert.equal(held.trace.at(-1), "release");
+
+    // Any other refusal (a deadlock victim, a cancelled wait) is not waited out.
+    const refused = repositoryWith(() => [{ PagesReceived: 1 }], { lock: () => [{ Result: -3 }] });
+    await assert.rejects(refused.repository.addPage(onePage), (error: any) => error instanceof LargeWriteLockError && errorCodeOf(error) === "ELOCKREFUSED");
+    assert.deepEqual(refused.trace, ["open", "lock", "release"]);
+});
+
+test("the queue stays in front of the lock: a second write asks for it only once the first has given it back", async () => {
+    let release: () => void = () => {};
+    const first = new Promise<void>((resolve) => { release = resolve; });
+    const { repository, trace } = repositoryWith(async ({ parameters }) => {
+        if (parameters[0] === 9) await first;
+        return [{ PagesReceived: 1 }];
+    });
+    const one = repository.addPage(onePage);
+    const two = repository.addPage({ ...onePage, dataRequestId: 10, pageNumber: 2 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(trace, ["open", "lock", "SET"], "one lock session at a time from this process");
+    release();
+    await Promise.all([one, two]);
+    assert.deepEqual(trace, ["open", "lock", "SET", "release", "open", "lock", "SET", "release"]);
 });
 
 test("an ended artefact's records are deleted one row per statement, each retried, never a granted one's; then it is stamped", async () => {

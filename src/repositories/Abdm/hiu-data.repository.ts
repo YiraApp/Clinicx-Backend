@@ -23,6 +23,16 @@ import type { HiuMaintenanceStore } from "../../services/Abdm/hiu/hiu-maintenanc
 
 export type HiuQuery = (sql: string, parameters?: unknown[]) => Promise<any>;
 
+/**
+ * A connection of the pool kept for the large-write lock, with a transaction open on it that owns the
+ * applock. release() rolls that otherwise empty transaction back, which frees the lock, and gives the
+ * connection back.
+ */
+export interface HiuLockSession {
+    query: HiuQuery;
+    release(): Promise<void>;
+}
+
 /** SQL Server's duplicate-key errors: unique constraint (2627) and unique index (2601). */
 const DUPLICATE_KEY_ERRORS = new Set([2627, 2601]);
 
@@ -40,6 +50,30 @@ export class SerialQueue {
         const result = this.tail.then(task);
         this.tail = result.catch(() => undefined);
         return result;
+    }
+}
+
+/** The applock every instance's large writes share, so they run one at a time on the database. */
+export const LARGE_WRITE_LOCK = "AbdmHiuLargeWrite";
+
+/**
+ * How long one sp_getapplock call waits before it is asked again: well under requestTimeout, so the
+ * wait never times the call out. The write is sent only once the lock is held, on another connection,
+ * so the wait never counts against the write's own requestTimeout either.
+ */
+export const LARGE_WRITE_LOCK_POLL_MS = 5_000;
+
+/** How long a large write waits in all for another instance's to finish before it fails (ELOCKWAIT). */
+export const LARGE_WRITE_LOCK_WAIT_MS = 120_000;
+
+/** A large write that did not get the lock: sp_getapplock's result (-1 is a wait past LARGE_WRITE_LOCK_WAIT_MS). */
+export class LargeWriteLockError extends Error {
+    readonly code: string;
+
+    constructor(readonly result: number) {
+        super(`The large-write lock was not granted (${result})`);
+        this.name = "LargeWriteLockError";
+        this.code = result === -1 ? "ELOCKWAIT" : "ELOCKREFUSED";
     }
 }
 
@@ -158,31 +192,104 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
     /** How every retried statement waits: the delays, the sleep and the jitter (retryTransient). */
     private readonly retry: Omit<RetryOptions, "label">;
     private readonly clock: () => number;
+    /** Opens the connection the large-write lock is held on (HiuLockSession). */
+    private readonly openLockSession: () => Promise<HiuLockSession>;
     /**
      * The large writes (a page's insert, a record's delete) of this process, one at a time: on a small
      * database (Azure SQL Basic) several multi-megabyte writes at once exhaust its log rate, and every
-     * one of them runs past requestTimeout and is rolled back. Per process only: several instances on
-     * one database each keep their own queue (their retries are spread by jitter).
+     * one of them runs past requestTimeout and is rolled back. The queue is per process; the applock
+     * (LARGE_WRITE_LOCK) each write takes behind it makes them one at a time across instances too.
      */
     private readonly largeWrites = new SerialQueue();
 
-    constructor(options: { query?: HiuQuery; sleep?: (ms: number) => Promise<void>; retryDelaysMs?: readonly number[]; random?: () => number; clock?: () => number } = {}) {
+    constructor(options: {
+        query?: HiuQuery;
+        lockSession?: () => Promise<HiuLockSession>;
+        sleep?: (ms: number) => Promise<void>;
+        retryDelaysMs?: readonly number[];
+        random?: () => number;
+        clock?: () => number;
+    } = {}) {
         // The data source is loaded on first use, so importing this module (in a test) opens no database config.
         this.query = options.query ?? (async (sql, parameters) => {
             const { AppDataSource } = await import("../../config/database.js");
             return AppDataSource.query(sql, parameters as any[]);
+        });
+        this.openLockSession = options.lockSession ?? (async () => {
+            const { AppDataSource } = await import("../../config/database.js");
+            // TypeORM's mssql runner keeps one connection only inside a transaction: outside one,
+            // each statement takes any connection of the pool.
+            const runner = AppDataSource.createQueryRunner();
+            try {
+                await runner.connect();
+                await runner.startTransaction();
+            } catch (error) {
+                await runner.release();
+                throw error;
+            }
+            return {
+                query: (sql, parameters) => runner.query(sql, parameters as any[]),
+                release: async () => {
+                    try {
+                        if (runner.isTransactionActive) await runner.rollbackTransaction();
+                    } finally {
+                        await runner.release();
+                    }
+                },
+            };
         });
         this.retry = { delaysMs: options.retryDelaysMs ?? TRANSIENT_RETRY_DELAYS_MS, sleep: options.sleep, random: options.random };
         this.clock = options.clock ?? Date.now;
     }
 
     /**
-     * Runs [work] (given its try number) in this process's queue of large writes, trying it again
-     * after a transient error, which kept nothing (retryTransient). The queue is held while waiting to
-     * try again: the database is what is busy. Never call largeWrite from inside one: it would wait on itself.
+     * Runs [work] (given its try number) in this process's queue of large writes, each try under the
+     * cross-instance lock, trying it again after a transient error, which kept nothing (retryTransient).
+     * The queue is held while waiting to try again: the database is what is busy. The lock is not:
+     * another instance's write may go in meanwhile. Never call largeWrite from inside one: it would
+     * wait on itself.
      */
     private largeWrite<T>(label: string, work: (attempt: number) => Promise<T>): Promise<T> {
-        return this.largeWrites.run(() => retryTransient(work, { ...this.retry, label }));
+        return this.largeWrites.run(() => retryTransient((attempt) => this.withLargeWriteLock(() => work(attempt)), { ...this.retry, label }));
+    }
+
+    /**
+     * Runs [work] (on the pool's connections, autocommit) while LARGE_WRITE_LOCK is held by a
+     * transaction on a connection of its own, as withOpenRequestLock does: the lock holds across
+     * instances until [work] is done, and is given back on every path, the rollback of that otherwise
+     * empty transaction freeing it. A process that dies holding it loses its connection, which frees it.
+     */
+    private async withLargeWriteLock<T>(work: () => Promise<T>): Promise<T> {
+        const session = await this.openLockSession();
+        try {
+            await this.takeLargeWriteLock(session);
+            return await work();
+        } finally {
+            // Never in place of the write's own answer or error: a release that fails lost its
+            // connection, and the lock went with it.
+            await session.release().catch((error) => {
+                console.warn(`[ABDM HIU] large-write lock: release failed (${errorCodeOf(error)})`);
+            });
+        }
+    }
+
+    /**
+     * Asks for LARGE_WRITE_LOCK every LARGE_WRITE_LOCK_POLL_MS until it is granted, for at most
+     * LARGE_WRITE_LOCK_WAIT_MS in all; any refusal other than a wait that ran out is not waited out.
+     */
+    private async takeLargeWriteLock(session: HiuLockSession): Promise<void> {
+        const started = this.clock();
+        for (;;) {
+            const rows = rowsOf(await session.query(
+                `DECLARE @result INT;
+                 EXEC @result = sp_getapplock @Resource = @0, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = @1;
+                 SELECT @result AS Result;`,
+                [LARGE_WRITE_LOCK, LARGE_WRITE_LOCK_POLL_MS],
+            ));
+            const result = Number(rows[0]?.Result);
+            if (result >= 0) return;
+            if (result !== -1 || this.clock() - started >= LARGE_WRITE_LOCK_WAIT_MS) throw new LargeWriteLockError(result);
+        }
     }
 
     // ---- Artefacts ----
@@ -359,9 +466,10 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
             });
             return `(${names.join(", ")})`;
         });
-        // One large write: queued behind the others and tried again after a timeout, which XACT_ABORT
-        // rolled back whole. A try whose commit landed before its answer was lost meets the unique
-        // index on the next try and is reported a duplicate with afterRetry (this call's own page).
+        // One large write: queued behind the others, on every instance, and tried again after a
+        // timeout, which XACT_ABORT rolled back whole. A try whose commit landed before its answer was
+        // lost meets the unique index on the next try and is reported a duplicate with afterRetry
+        // (this call's own page).
         return this.largeWrite(`data push page ${input.pageNumber}`, async (attempt) => {
             try {
                 // XACT_ABORT rolls the whole page back when one entry hits the unique index: a page is stored whole or not at all.

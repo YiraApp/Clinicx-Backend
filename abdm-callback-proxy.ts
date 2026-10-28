@@ -1,8 +1,9 @@
 /**
  * Local development only: lets ABDM's callbacks reach this machine through a tunnel (ngrok)
- * without exposing the rest of the API. Forwards POST /api/v3/hip/... (M1/M2 callbacks) and
- * POST /api/v3/hiu/... (M3 callbacks and the HIPs' data push) to the local backend and answers 404
- * to everything else, so the tunnel never serves patient lists or logins.
+ * without exposing the rest of the API. Forwards POST /api/v3/hip/... (M1/M2 callbacks),
+ * POST /api/v3/hiu/... (M3 callbacks and the HIPs' data push) and M2's four callbacks outside those
+ * (M2_PATHS) to the local backend and answers 404 to everything else, so the tunnel never serves
+ * patient lists or logins.
  *
  *   npx tsx abdm-callback-proxy.ts                 listens on 5055, forwards to http://localhost:5000
  *   ngrok http 5055 --url=https://<your-ngrok-domain>
@@ -18,6 +19,13 @@ import "dotenv/config";
 const target = new URL(process.env.ABDM_CALLBACK_TARGET || `http://localhost:${process.env.PORT || 5000}`);
 const port = Number(process.env.ABDM_CALLBACK_PROXY_PORT || 5055);
 const ALLOWED_PATH = /^\/api\/v3\/(hip|hiu)\/[A-Za-z0-9/_-]+$/;
+/** M2's callbacks outside /hip and /hiu (src/services/Abdm/abdm-callback.service.ts ANSWER_PATHS and REQUEST_PATHS). */
+const M2_PATHS = new Set([
+    "/api/v3/link/on_carecontext",
+    "/api/v3/links/context/on-notify",
+    "/api/v3/patients/sms/on-notify",
+    "/api/v3/consent/request/hip/notify",
+]);
 
 /** A path as it may be logged: a data-push token is a credential, so it is cut out. */
 const loggable = (path: string): string => path.slice(0, 120).replace(/(\/data-push\/)[^/?]*/i, "$1…");
@@ -28,7 +36,7 @@ const server = http.createServer((req, res) => {
     const requestId = String(req.headers["request-id"] || "-");
     const started = Date.now();
 
-    if (req.method !== "POST" || !ALLOWED_PATH.test(path)) {
+    if (req.method !== "POST" || !(ALLOWED_PATH.test(path) || M2_PATHS.has(path))) {
         console.log(`[proxy] refused ${req.method} ${shown}`);
         res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "Not found" }));
         return;
@@ -62,5 +70,5 @@ const server = http.createServer((req, res) => {
 
 // A large push over a slow tunnel may take a while; Node's default 5-minute request timeout stays.
 server.listen(port, () => {
-    console.log(`[proxy] ABDM callbacks on :${port} -> ${target.origin} (only POST /api/v3/hip/... and /api/v3/hiu/...)`);
+    console.log(`[proxy] ABDM callbacks on :${port} -> ${target.origin} (only POST /api/v3/hip/..., /api/v3/hiu/... and M2's ${M2_PATHS.size} other callbacks)`);
 });
