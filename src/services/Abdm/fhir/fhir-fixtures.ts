@@ -109,7 +109,7 @@ export const FIXTURES: { [T in HiType]: RecordSourceFor[T] } = {
             site: "Left deltoid",
             nextDueDate: "2026-11-20",
         }],
-        certificate: { id: "doc-im-1", title: "Vaccination certificate", contentType: "application/pdf", data: pdf, createdAt: at("2026-10-20T11:00:00+05:30") },
+        certificates: [{ id: "doc-im-1", title: "Vaccination certificate", contentType: "application/pdf", data: pdf, createdAt: at("2026-10-20T11:00:00+05:30") }],
     },
     HealthDocumentRecord: {
         ...fixtureParties,

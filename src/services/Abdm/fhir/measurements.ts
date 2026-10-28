@@ -12,24 +12,26 @@ interface Measure {
     section: WellnessSection;
     code: string;
     display: string;
+    /** What the clinic calls it, which the PHR app prints: LOINC's long name says "arterial blood" for a pulse oximeter. */
+    label: string;
     unit: string;
     ucum: string;
 }
 
 const MEASURES: Record<Exclude<WellnessMeasurement["kind"], "bloodPressure">, Measure> = {
-    heartRate: { section: "VitalSigns", code: "8867-4", display: "Heart rate", unit: "beats/minute", ucum: "/min" },
-    respiratoryRate: { section: "VitalSigns", code: "9279-1", display: "Respiratory rate", unit: "breaths/minute", ucum: "/min" },
-    oxygenSaturation: { section: "VitalSigns", code: "2708-6", display: "Oxygen saturation in Arterial blood", unit: "%", ucum: "%" },
-    // ndhm-vital-signs has this one temperature code; the unit says how it was measured.
-    temperature: { section: "VitalSigns", code: "61008-9", display: "Body surface temperature", unit: "°C", ucum: "Cel" },
-    height: { section: "BodyMeasurement", code: "8302-2", display: "Body height", unit: "cm", ucum: "cm" },
-    weight: { section: "BodyMeasurement", code: "29463-7", display: "Body weight", unit: "kg", ucum: "kg" },
-    bmi: { section: "BodyMeasurement", code: "39156-5", display: "Body mass index (BMI) [Ratio]", unit: "kg/m2", ucum: "kg/m2" },
-    steps: { section: "PhysicalActivity", code: "55423-8", display: "Number of steps in unspecified time Pedometer", unit: "steps", ucum: "{steps}" },
-    caloriesBurned: { section: "PhysicalActivity", code: "41981-2", display: "Calories burned", unit: "kcal", ucum: "kcal" },
-    sleepHours: { section: "PhysicalActivity", code: "93832-4", display: "Sleep duration", unit: "h", ucum: "h" },
-    bloodGlucose: { section: "GeneralAssessment", code: "2339-0", display: "Glucose [Mass/volume] in Blood", unit: "mg/dL", ucum: "mg/dL" },
-    fluidIntakeLitres: { section: "GeneralAssessment", code: "8999-5", display: "Fluid intake oral Estimated", unit: "L", ucum: "L" },
+    heartRate: { section: "VitalSigns", code: "8867-4", display: "Heart rate", label: "Heart rate", unit: "beats/minute", ucum: "/min" },
+    respiratoryRate: { section: "VitalSigns", code: "9279-1", display: "Respiratory rate", label: "Respiratory rate", unit: "breaths/minute", ucum: "/min" },
+    // ndhm-vital-signs has these one oxygen and one temperature code; the label says what was measured.
+    oxygenSaturation: { section: "VitalSigns", code: "2708-6", display: "Oxygen saturation in Arterial blood", label: "Oxygen saturation (SpO2)", unit: "%", ucum: "%" },
+    temperature: { section: "VitalSigns", code: "61008-9", display: "Body surface temperature", label: "Body temperature", unit: "°C", ucum: "Cel" },
+    height: { section: "BodyMeasurement", code: "8302-2", display: "Body height", label: "Height", unit: "cm", ucum: "cm" },
+    weight: { section: "BodyMeasurement", code: "29463-7", display: "Body weight", label: "Weight", unit: "kg", ucum: "kg" },
+    bmi: { section: "BodyMeasurement", code: "39156-5", display: "Body mass index (BMI) [Ratio]", label: "BMI", unit: "kg/m2", ucum: "kg/m2" },
+    steps: { section: "PhysicalActivity", code: "55423-8", display: "Number of steps in unspecified time Pedometer", label: "Steps", unit: "steps", ucum: "{steps}" },
+    caloriesBurned: { section: "PhysicalActivity", code: "41981-2", display: "Calories burned", label: "Calories burned", unit: "kcal", ucum: "kcal" },
+    sleepHours: { section: "PhysicalActivity", code: "93832-4", display: "Sleep duration", label: "Sleep", unit: "h", ucum: "h" },
+    bloodGlucose: { section: "GeneralAssessment", code: "2339-0", display: "Glucose [Mass/volume] in Blood", label: "Blood glucose", unit: "mg/dL", ucum: "mg/dL" },
+    fluidIntakeLitres: { section: "GeneralAssessment", code: "8999-5", display: "Fluid intake oral Estimated", label: "Fluid intake", unit: "L", ucum: "L" },
 };
 
 const BLOOD_PRESSURE = { section: "VitalSigns" as const, code: "85354-9", display: "Blood pressure panel with all children optional" };
@@ -113,8 +115,8 @@ export const measurementObservation = (key: string, m: WellnessMeasurement, pati
     const [unit, ucum] = m.kind === "temperature" && m.value > 45 ? ["°F", "[degF]"] : [measure.unit, measure.ucum];
     return {
         ...base,
-        text: narrative(`${measure.display}: ${m.value} ${unit}`),
-        code: { coding: [{ system: LOINC, code: measure.code, display: measure.display }], text: measure.display },
+        text: narrative(`${measure.label}: ${m.value} ${unit}`),
+        code: { coding: [{ system: LOINC, code: measure.code, display: measure.display }], text: measure.label },
         valueQuantity: quantity(m.value, unit, ucum),
     };
 };

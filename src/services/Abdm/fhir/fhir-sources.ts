@@ -54,6 +54,8 @@ export interface RecordParties {
 export interface CodedText {
     text: string;
     conceptId?: string | null;
+    /** When the clinic recorded it, where the record says. */
+    recordedAt?: Date | null;
 }
 
 export interface MedicationSource {
@@ -66,6 +68,8 @@ export interface MedicationSource {
     duration?: string | null;
     route?: string | null;
     instructions?: string | null;
+    /** The prescription's "Additional Notes", which belong to each of its medicines. */
+    prescriptionNotes?: string | null;
 }
 
 export interface DocumentSource {
@@ -94,19 +98,32 @@ export interface OpConsultationSource extends RecordParties {
      */
     key?: string;
     visit: VisitRef;
+    /** When the record was written: its earliest part, or the visit's start. */
+    date?: Date | null;
     chiefComplaints: CodedText[];
     examinationFindings: CodedText[];
     vitals?: VisitVitals | null;
     vitalsRecordedAt?: Date | null;
+    /** Every set of vitals taken at the visit, in order; when given, it stands for vitals. */
+    vitalReadings?: Array<{ vitals: VisitVitals; at: Date }>;
     /** PatientRegistrations.Allergies: free text. */
     allergies?: string | null;
     /** PatientRegistrations.MedicalHistory: free text. */
     medicalHistory?: string | null;
     diagnoses: CodedText[];
     procedures: CodedText[];
+    /** The consultation's "Treatment Plan": what the doctor plans, not a procedure done. */
+    treatmentPlans?: string[];
     medications: MedicationSource[];
     authoredOn?: Date | null;
+    /**
+     * The visit's prescriptions, each with its own date, diagnoses and prescriber; when given, its
+     * medicines stand for medications, each treating its own prescription's diagnoses.
+     */
+    prescriptions?: Array<{ date: Date; diagnoses: CodedText[]; medications: MedicationSource[]; practitioner?: PractitionerSource | null; notes?: string | null }>;
     notes: string[];
+    /** When each note was written, by index; the visit's start where not given. */
+    noteTimes?: Array<Date | null>;
     followUp?: Date | null;
     documents: DocumentSource[];
 }
@@ -180,6 +197,8 @@ export interface WellnessSource extends RecordParties {
     key: string;
     date: Date;
     measurements: WellnessMeasurement[];
+    /** WellnessRecords.Notes. */
+    notes?: string | null;
 }
 
 export interface InvoiceSource extends RecordParties {
@@ -195,6 +214,8 @@ export interface InvoiceSource extends RecordParties {
         cgst: number;
         sgst: number;
         igst: number;
+        /** AppointmentBills.GstAmount: the GST charged on the bill. */
+        gst?: number;
         items: Array<{
             id: string;
             /** AppointmentBillItems.ItemType: Consultation, TreatmentPlan, Custom. */
@@ -223,8 +244,11 @@ export interface ImmunizationSource extends RecordParties {
         site?: string | null;
         nextDueDate?: Date | string | null;
         notes?: string | null;
+        /** The doctor the clinic recorded as giving it ("Given by"); none when not recorded. */
+        performer?: PractitionerSource | null;
     }>;
-    certificate?: DocumentSource | null;
+    /** Each certificate uploaded for these vaccines, once. */
+    certificates?: DocumentSource[];
 }
 
 export interface DischargeSummarySource extends RecordParties {
@@ -240,6 +264,8 @@ export interface DischargeSummarySource extends RecordParties {
         investigations?: string | null;
         procedures: CodedText[];
         medications: MedicationSource[];
+        /** The linked prescription's diagnoses: what its medicines treat when the summary names none. */
+        prescriptionDiagnoses?: CodedText[];
         carePlan?: string | null;
         followUp?: Date | null;
         disposition?: string | null;

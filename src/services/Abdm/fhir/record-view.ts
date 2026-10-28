@@ -138,6 +138,7 @@ const lines = (r: any, resolve: Resolve): string[] => {
                 text(r.vaccineCode) ?? "Vaccine",
                 r.protocolApplied?.[0]?.doseNumberPositiveInt ? `dose ${r.protocolApplied[0].doseNumberPositiveInt}` : null,
                 day(r.occurrenceDateTime),
+                r.manufacturer?.display ? `manufacturer ${r.manufacturer.display}` : null,
                 r.lotNumber ? `lot ${r.lotNumber}` : null,
             ])];
         case "ImmunizationRecommendation":
@@ -177,10 +178,13 @@ const attachmentsOf = (bundle: FhirBundle, fallbackTitle: string): RecordViewAtt
         if (!a) return;
         out.push({ title: a.title || title || fallbackTitle, contentType: a.contentType ?? null, bytes: typeof a.size === "number" ? a.size : base64Bytes(a.data) });
     };
+    // An imaging report's image is both its Media and its presented form: one file
+    const presented = new Set((bundle.entry as Array<{ resource: any }>).flatMap(({ resource: r }) =>
+        r.resourceType === "DiagnosticReport" ? (r.presentedForm ?? []).map((a: any) => a.data) : []));
     for (const { resource: r } of bundle.entry as Array<{ resource: any }>) {
         if (r.resourceType === "DocumentReference") (r.content ?? []).forEach((c: any) => add(c.attachment, r.description));
         else if (r.resourceType === "DiagnosticReport") (r.presentedForm ?? []).forEach((a: any) => add(a, text(r.code)));
-        else if (r.resourceType === "Media") add(r.content);
+        else if (r.resourceType === "Media" && !presented.has(r.content?.data)) add(r.content);
         else if (r.resourceType === "Binary") add({ contentType: r.contentType, data: r.data }, `${fallbackTitle} (signed copy)`);
     }
     return out;

@@ -1,4 +1,4 @@
-import { SNOMED, UCUM } from "./fhir-common.js";
+import { SNOMED, UCUM, isNegativeStatement } from "./fhir-common.js";
 import type { MedicationSource } from "./fhir-sources.js";
 
 /**
@@ -6,7 +6,8 @@ import type { MedicationSource } from "./fhir-sources.js";
  * "1-0-1 (Morning & Night)", "Once daily", "Every 8 hours", "SOS"; "7 days" or a number of "Days";
  * "650 mg"; "Oral"; "After food". A PHR app shows frequency, duration, dose, route, method and
  * instructions from these elements, and "NA" when only the sentence is there. What can't be read is
- * left to the text, never guessed.
+ * left to the text, never guessed. The ABHA app prints the sentence as the medicine's bullet, each
+ * coded instruction's display, and every timing element it finds, "null" for a missing one.
  */
 
 type Timing = { repeat: Record<string, unknown> };
@@ -93,7 +94,6 @@ export const routeOf = (route?: string | null) => {
 // Additional dosage instructions (SNOMED CT 419492006) for the advice the prescription form offers
 const INSTRUCTIONS: Array<[RegExp, string, string]> = [
     [/(after|with)\s+(food|meals?)/, "311504000", "With or after food"],
-    [/before\s+(food|meals?)/, "311501008", "Half to one hour before food"],
     [/empty\s+stomach/, "717154004", "Take on an empty stomach"],
     [/with (plenty of )?water/, "419303009", "With plenty of water"],
     [/swallow(ed)? whole|do not (chew|crush)/, "418693002", "Swallow whole"],
@@ -103,7 +103,11 @@ const INSTRUCTIONS: Array<[RegExp, string, string]> = [
     [/under the tongue/, "419529008", "Dissolved under the tongue"],
 ];
 
-/** One piece of advice ("After food") as its SNOMED CT instruction, or as words when it isn't one. */
+/**
+ * One piece of advice ("After food") as its SNOMED CT instruction, or as words when it isn't one.
+ * "Before food" has no instruction that says only that ("Half to one hour before food" adds a time
+ * the doctor didn't give), so it stays words.
+ */
 export const instructionOf = (instructions?: string | null) => {
     const text = (instructions ?? "").trim();
     if (!text) return null;
@@ -116,40 +120,67 @@ export const instructionsOf = (instructions?: string | null) =>
     (instructions ?? "").split(/[;\n]|\.\s/).map((part) => instructionOf(part.replace(/\.$/, ""))).filter((x): x is NonNullable<typeof x> => x !== null);
 
 // How the dose is taken, from the dosing instruction imperatives FHIR's administration-method value set
-// draws on (SNOMED CT 422096002), where the route and the form say it plainly
-const METHODS: Array<[RegExp, string, string]> = [
+// draws on (SNOMED CT 422096002), where the medicine's form or the route says it plainly. A method
+// with no code here goes as words: a guessed code would pass validation and be untrue.
+type Method = [RegExp, string | null, string];
+const FORMS: Method[] = [
     [/chewable/, "419747000", "Chew"],
     [/lozenge/, "420045007", "Suck"],
+    [/\bspray\b/, null, "Spray"],
+    [/\bdrops?\b/, "421538008", "Instill"],
+];
+const ROUTE_METHODS: Method[] = [
     [/^(oral|by mouth|po)\b/, "421521009", "Swallow"],
     [/intravenous|\biv\b|intramuscular|\bim\b|subcutaneous|\bsc\b|injection/, "422145002", "Inject"],
     [/topical|cutaneous|cream|ointment|gel\b/, "417924000", "Apply"],
     [/inhal/, "421134003", "Inhale"],
     [/eye|ophthalmic|ear\b|otic/, "421538008", "Instill"],
     [/rectal|vaginal|suppositor|pessary/, "421257003", "Insert"],
+    [/\bspray\b/, null, "Spray"],
 ];
+// Under the tongue the form decides: a tablet or film dissolves there, a spray is sprayed
+const SUBLINGUAL: Method = [/\b(tablet|tab|film|wafer)s?\b/, null, "Dissolve"];
 
 /** The method for a medicine and its route ("Swallow" for an oral tablet); null when neither says. */
 export const methodOf = (route?: string | null, medicine?: string | null) => {
     const name = (medicine ?? "").toLowerCase();
-    const byForm = METHODS.slice(0, 2).find(([re]) => re.test(name));
-    const known = byForm ?? METHODS.slice(2).find(([re]) => re.test((route ?? "").trim().toLowerCase()));
-    return known ? { coding: [{ system: SNOMED, code: known[1], display: known[2] }], text: known[2] } : null;
+    const r = (route ?? "").trim().toLowerCase();
+    const oral = /^(oral|by mouth|po)\b/.test(r);
+    // Drops by mouth are swallowed, not instilled
+    const known = FORMS.find(([re, , display]) => re.test(name) && !(display === "Instill" && oral))
+        ?? (/sublingual/.test(r) ? (SUBLINGUAL[0].test(name) ? SUBLINGUAL : undefined) : ROUTE_METHODS.find(([re]) => re.test(r)));
+    if (!known) return null;
+    return known[1] ? { coding: [{ system: SNOMED, code: known[1], display: known[2] }], text: known[2] } : { text: known[2] };
 };
 
-/** The FHIR Dosage for a prescription line: the sentence always, each element it can read beside it. */
+/** "for 5 days" for a number of days; a duration in words ("Continuous") as it was written. */
+const durationWords = (duration?: string | null) => {
+    const d = duration?.trim();
+    if (!d) return null;
+    return /^\d/.test(d) ? `for ${d}` : d.toLowerCase();
+};
+
+/**
+ * The FHIR Dosage for a prescription line: the sentence always, with the clinic's own advice after
+ * it, and each element it can read beside it. Timing goes only with a frequency and a period, which
+ * the ABHA app prints as "Frequency(null)" otherwise; the words are in the sentence either way.
+ */
 export const dosageOf = (m: MedicationSource) => {
-    const sentence = [m.dosage, m.frequency, m.duration ? `for ${m.duration}` : null].map((part) => part?.trim()).filter(Boolean).join(", ");
+    const sentence = [m.dosage, m.frequency, durationWords(m.duration)].map((part) => part?.trim()).filter(Boolean).join(", ");
+    // "No" typed as advice is none, not a word to print after the dose
+    const advice = isNegativeStatement(m.instructions) ? undefined : m.instructions?.trim().replace(/\.$/, "");
     const timing = timingOf(m.frequency);
     const bounds = durationOf(m.duration);
     const dose = doseOf(m.dosage);
     const route = routeOf(m.route);
     const method = methodOf(m.route, m.name);
-    const instructions = instructionsOf(m.instructions);
+    const coded = instructionsOf(m.instructions).filter((i) => "coding" in i);
     const repeat = { ...(timing?.timing?.repeat ?? {}), ...(bounds ? { boundsDuration: bounds } : {}) };
     return {
-        text: sentence || "Dosage not recorded",
-        ...(instructions.length ? { additionalInstruction: instructions, patientInstruction: m.instructions!.trim() } : {}),
-        ...(Object.keys(repeat).length ? { timing: { repeat } } : {}),
+        text: [sentence, advice].filter(Boolean).join(". ") || "Dosage not recorded",
+        ...(coded.length ? { additionalInstruction: coded } : {}),
+        ...(advice ? { patientInstruction: m.instructions!.trim() } : {}),
+        ...("frequency" in repeat && "period" in repeat ? { timing: { repeat } } : {}),
         ...(timing?.asNeeded ? { asNeededBoolean: true } : {}),
         ...(route ? { route } : {}),
         ...(method ? { method } : {}),

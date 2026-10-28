@@ -55,11 +55,11 @@ export const ref = (resource: FhirResource, display?: string) => ({
     ...(display ? { display } : {}),
 });
 
-/** What a person calls a resource: the words of its code, medicine, vaccine or title. */
+/** What a person calls a resource: the words of its code, medicine, vaccine, file or title. */
 export const displayOf = (r: FhirResource): string => {
     const x = r as any;
-    const words = [x.code?.text, x.medicationCodeableConcept?.text, x.vaccineCode?.text, x.type?.text, x.title, x.description,
-        x.code?.coding?.[0]?.display, r.resourceType].find((w) => typeof w === "string" && w.trim());
+    const words = [x.code?.text, x.medicationCodeableConcept?.text, x.vaccineCode?.text, x.content?.[0]?.attachment?.title, x.type?.text, x.title,
+        x.description, x.recommendation?.[0]?.description, x.code?.coding?.[0]?.display, r.resourceType].find((w) => typeof w === "string" && w.trim());
     return String(words).trim();
 };
 
@@ -100,12 +100,60 @@ export const fhirDate = (value: Date | string): string => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
+/** The shape of a SNOMED CT concept id. The clinic's pickers save typed words under made-up ids ("custom-…"). */
+export const SNOMED_ID = /^\d{6,18}$/;
+
 /** A SNOMED CT concept when the record carries one, its words always. Never a code the data lacks. */
 export const concept = (item: CodedText | string, system = SNOMED) => {
     const text = (typeof item === "string" ? item : item.text).trim();
-    const code = typeof item === "string" ? null : item.conceptId?.trim() || null;
+    const id = typeof item === "string" ? null : item.conceptId?.trim() || null;
+    const code = id && (system !== SNOMED || SNOMED_ID.test(id)) ? id : null;
     return code ? { coding: [{ system, code, display: text }], text } : { text };
 };
+
+/**
+ * Words and the concepts picked for them, as the clinic's chip fields store them: "Toothache, Fever"
+ * with "27355003,386661006", one concept per chip, then any words typed after the chips. A made-up
+ * id is dropped and its words kept; when the ids can't be paired with the words, the words go alone.
+ */
+export const codedText = (text?: string | null, conceptIds?: string | null): CodedText[] => {
+    const words = text?.trim();
+    if (!words) return [];
+    const ids = (conceptIds ?? "").split(",").map((i) => i.trim()).filter(Boolean);
+    if (ids.length <= 1) return [{ text: words, conceptId: ids[0] && SNOMED_ID.test(ids[0]) ? ids[0] : null }];
+    const parts = words.split(", ").map((t) => t.trim()).filter(Boolean);
+    if (ids.length > parts.length) return [{ text: words, conceptId: null }];
+    const chips = ids.map((id, i) => ({ text: parts[i]!, conceptId: SNOMED_ID.test(id) ? id : null }));
+    const typed = parts.slice(ids.length).join(", ");
+    return typed ? [...chips, { text: typed, conceptId: null }] : chips;
+};
+
+const words = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
+
+/** The same concept: the same SNOMED CT id, or the same words. */
+export const sameConcept = (a: CodedText, b: CodedText): boolean =>
+    words(a.text) === words(b.text) || (Boolean(a.conceptId) && a.conceptId === b.conceptId);
+
+/** Each concept once, the coded one kept when the same words come with and without a code. */
+export const distinctCoded = <T extends CodedText>(items: T[]): T[] => {
+    const out: T[] = [];
+    for (const c of items) {
+        const i = out.findIndex((o) => sameConcept(o, c));
+        if (i < 0) out.push(c);
+        else if (!out[i]!.conceptId && c.conceptId) out[i] = c;
+    }
+    return out;
+};
+
+/** Whether [text] already says [words], as whole words, ignoring case, spacing and punctuation: "Ice" is not in "Twice daily". */
+export const mentions = (text: string | null | undefined, words: string | null | undefined): boolean => {
+    const plain = (t: string | null | undefined) => ` ${(t ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+    return plain(words).trim() !== "" && plain(text).includes(plain(words));
+};
+
+/** "No", "nil", "none": the clinic recorded that there is nothing, which is not a finding called "no". */
+export const isNegativeStatement = (text?: string | null): boolean =>
+    /^(no|nil|nill|none|nothing|no history|no significant history|not significant|no complaints?)\.?$/i.test((text ?? "").trim());
 
 const meta = (profile: string) => ({ profile: [NRCES + profile] });
 
@@ -168,11 +216,17 @@ export const organizationResource = (o: OrganizationSource): FhirResource => ({
     } : {}),
 });
 
+// Where the patient went, most specific first: "discharged to rehab" is rehabilitation, not home
 const DISPOSITIONS: Array<[RegExp, string, string]> = [
-    [/against|lama|dama/, "aadvice", "Left against advice"],
+    [/against|\blama\b|\bdama\b/, "aadvice", "Left against advice"],
     [/expired|death|died|deceased/, "exp", "Expired"],
+    [/rehab/, "rehab", "Rehabilitation"],
+    [/skilled nursing|\bsnf\b|nursing (home|facility)/, "snf", "Skilled nursing facility"],
+    [/psychiatr/, "psy", "Psychiatric hospital"],
+    [/hospice/, "hosp", "Hospice"],
+    [/long[- ]term care/, "long", "Long-term care"],
     [/transfer|refer|other (hospital|facility)/, "other-hcf", "Other healthcare facility"],
-    [/home|discharged/, "home", "Home"],
+    [/\bhome\b|^discharged\.?$/, "home", "Home"],
 ];
 const dispositionOf = (text: string) => {
     const known = DISPOSITIONS.find(([re]) => re.test(text.toLowerCase()));
@@ -228,6 +282,17 @@ export const conditionResource = (key: string, item: CodedText, patient: FhirRes
     recordedDate: fhirDateTime(recordedAt),
 });
 
+// "No allergies" as the SNOMED CT situations NRCES's own examples state it with; whole values only,
+// so "no penicillin" stays an allergy to penicillin
+const NO_ALLERGY = { code: "716186003", display: "No known allergy", text: "No known allergies" };
+const NO_DRUG_ALLERGY = { code: "409137002", display: "No known drug allergy", text: "No known drug allergies" };
+const allergyCode = (typed: string) => {
+    const t = typed.trim().toLowerCase().replace(/\.$/, "");
+    const none = /^(no|nil|nill|none|nka|no allerg(y|ies)|no known allerg(y|ies))$/.test(t) ? NO_ALLERGY
+        : /^(nkda|no known drug allerg(y|ies)|no drug allerg(y|ies))$/.test(t) ? NO_DRUG_ALLERGY : null;
+    return none ? { coding: [{ system: SNOMED, code: none.code, display: none.display }], text: none.text } : { text: typed };
+};
+
 export const allergyResource = (key: string, text: string, patient: FhirResource, recorder: FhirResource, recordedAt?: Date): FhirResource => ({
     resourceType: "AllergyIntolerance",
     id: resourceId("AllergyIntolerance", key),
@@ -236,7 +301,7 @@ export const allergyResource = (key: string, text: string, patient: FhirResource
     // ait-1: clinicalStatus is required; allergies on the patient's record are current ones
     clinicalStatus: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical", code: "active", display: "Active" }] },
     verificationStatus: { coding: [{ system: "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification", code: "confirmed", display: "Confirmed" }] },
-    code: { text },
+    code: allergyCode(text),
     ...(recordedAt ? { recordedDate: fhirDateTime(recordedAt) } : {}),
     patient: ref(patient, "Patient"),
     recorder: ref(recorder, "Practitioner"),
@@ -288,6 +353,8 @@ export const medicationRequestResource = (
         requester: ref(requester, "Practitioner"),
         // The diagnosis it treats, as words and code (which a PHR app shows) and as the Condition itself
         ...(reasons.length ? { reasonCode: reasons.map((r) => r.code), reasonReference: reasons.map((r) => ref(r, "Condition")) } : {}),
+        // The prescription's own notes, unless the desk already wrote them into this medicine's advice
+        ...(m.prescriptionNotes?.trim() && !isNegativeStatement(m.prescriptionNotes) && !mentions(m.instructions, m.prescriptionNotes) ? { note: [{ text: m.prescriptionNotes.trim() }] } : {}),
         // The sentence as written, with frequency, duration, dose and route as elements wherever the words are clear
         dosageInstruction: [dosage],
     };
@@ -328,7 +395,7 @@ export const documentReferenceResource = (doc: DocumentSource, patient: FhirReso
     text: narrative(`${doc.title} (${doc.contentType})`),
     status: "current",
     docStatus: "final",
-    type: { coding: [{ system: SNOMED, ...(type ?? { code: "419891008", display: "Record artifact" }) }], text: type ? doc.title : doc.category || doc.title },
+    type: { coding: [{ system: SNOMED, ...(type ?? { code: "419891008", display: "Record artifact" }) }], text: type ? type.display : doc.category || doc.title },
     subject: ref(patient, "Patient"),
     date: fhirDateTime(doc.createdAt),
     content: [{
@@ -411,8 +478,11 @@ export const documentBundle = (c: CompositionInput, resources: FhirResource[], n
     };
 };
 
-/** A Composition section; code is the SNOMED code NRCES fixes for the slice, where it fixes one. */
-export const section = (title: string, entries: FhirResource[], code?: { code: string; display: string }, text?: string) => ({
+/**
+ * A Composition section; code is the SNOMED code NRCES fixes for the slice, where it fixes one, or
+ * another system's for a section after the slices.
+ */
+export const section = (title: string, entries: FhirResource[], code?: { system?: string; code: string; display: string }, text?: string) => ({
     title,
     ...(code ? { code: { coding: [{ system: SNOMED, ...code }] } } : {}),
     ...(text ? { text: narrative(text) } : {}),

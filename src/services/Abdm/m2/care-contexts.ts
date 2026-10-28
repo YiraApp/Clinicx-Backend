@@ -53,10 +53,16 @@ export const patientReference = (userId: string): string => userId.toLowerCase()
 export class CareContextCatalog {
     constructor(
         private readonly store: M2Store,
-        private readonly records: Pick<AbdmHealthRecordRepository, "visit" | "standaloneRecordIds" | "standaloneRecords" | "dischargeSummary" | "immunization" | "vitalsRecord"> = abdmHealthRecordRepository,
+        private readonly records: Pick<AbdmHealthRecordRepository, "visit" | "standaloneRecordIds" | "standaloneRecords" | "dischargeSummary" | "immunization" | "vitalsRecord">
+            & Partial<Pick<AbdmHealthRecordRepository, "documentDate">> = abdmHealthRecordRepository,
     ) {}
 
-    /** Recomputes what each care context at this facility holds from the records, keeps link state, and returns them all. */
+    /**
+     * Recomputes what each care context at this facility holds from the records, keeps link state, and
+     * returns them: every one the records still make, and any already linked. One the records no
+     * longer make (a file that turned out to be another record's) is not offered or linked again; a
+     * linked one keeps its link, re-dated where its record's time is now read right.
+     */
     async refresh(hip: Hip, patientUserId: string): Promise<CareContextRow[]> {
         const seeds: CareContextSeed[] = [];
         const seed = (kind: CareContextKind, sourceId: string | number, recordDate: Date, display: string, hiTypes: HiType[]) => {
@@ -104,7 +110,19 @@ export class CareContextCatalog {
         }
 
         await this.store.upsertCareContexts(seeds);
-        return this.store.careContexts(patientReference(patientUserId), hip.id);
+        const current = new Set(seeds.map((s) => s.referenceNumber));
+        const rows = (await this.store.careContexts(patientReference(patientUserId), hip.id))
+            .filter((c) => current.has(c.referenceNumber) || c.linkStatus === "linked");
+        const redated: CareContextSeed[] = [];
+        for (const c of rows) {
+            if (current.has(c.referenceNumber) || c.kind !== "document" || !this.records.documentDate) continue;
+            const date = await this.records.documentDate(Number(c.sourceId));
+            if (!date || date.getTime() === new Date(c.recordDate).getTime()) continue;
+            redated.push({ hipId: c.hipId, referenceNumber: c.referenceNumber, patientUserId: c.patientUserId, hospitalId: c.hospitalId, kind: c.kind, sourceId: c.sourceId, recordDate: date, display: c.display, hiTypes: c.hiTypes });
+            c.recordDate = date;
+        }
+        if (redated.length) await this.store.upsertCareContexts(redated);
+        return rows;
     }
 }
 

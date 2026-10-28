@@ -1,4 +1,4 @@
-import { FhirSourceError, type FhirBundle, type HiType } from "./fhir/fhir-common.js";
+import { FhirSourceError, codedText, distinctCoded, fhirDate, type FhirBundle, type HiType } from "./fhir/fhir-common.js";
 import { BUILDERS, type RecordSourceFor } from "./fhir/health-records.js";
 import type { CodedText, DiagnosticKind, DocumentSource, RecordParties, VisitVitals, WellnessMeasurement } from "./fhir/fhir-sources.js";
 import { visitVitalsToMeasurements } from "./fhir/measurements.js";
@@ -37,30 +37,38 @@ export const diagnosticKind = (category?: string | null): DiagnosticKind | null 
 const vitalsOf = (r: PatientMedicalRecord): VisitVitals => ({
     bloodPressure: r.BloodPressure, heartRate: r.HeartRate, temperature: r.Temperature, weight: r.Weight, height: r.Height, spo2: r.SpO2,
 });
-const coded = (text?: string | null, conceptId?: string | null): CodedText[] =>
-    text?.trim() ? [{ text: text.trim(), conceptId: conceptId?.trim() || null }] : [];
+const hasVitals = (r: PatientMedicalRecord) => Boolean(r.BloodPressure || r.HeartRate || r.Temperature || r.Weight || r.Height || r.SpO2);
 
-/** Each concept once: the same words (or the same code) recorded twice in a visit is one condition. */
-const distinctCoded = (items: CodedText[]): CodedText[] => {
-    const seen = new Set<string>();
-    return items.filter((c) => {
-        const key = c.conceptId || c.text.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+/** What one field of a record names, each concept dated when the record was saved. */
+const recordedIn = (at: Date, text?: string | null, conceptIds?: string | null): CodedText[] =>
+    codedText(text, conceptIds).map((c) => ({ ...c, recordedAt: at }));
+
+/** The earliest of these times: a record is dated by its first part, which may come before the slot it was booked for. */
+const earliest = (...dates: Array<Date | string | null | undefined>): Date =>
+    new Date(Math.min(...dates.map((d) => (d ? new Date(d).getTime() : NaN)).filter((t) => !Number.isNaN(t))));
+
+/** A date the clinic keeps without a time ("2026-10-20"), as the start of that day here. */
+const startOfDay = (d: Date | string): Date => {
+    const [y, m, day] = fhirDate(d).split("-").map(Number);
+    return new Date(y!, m! - 1, day!);
 };
 
-const prescriptionSource = (parties: RecordParties, p: VisitRecords["prescriptions"][number], fallbackDate: Date): SourceOf => ({
+type VisitPrescription = VisitRecords["prescriptions"][number];
+const prescriptionDate = (p: VisitPrescription, fallback: Date): Date => p.row.Date ?? p.row.CreatedAt ?? fallback;
+
+/** [reasons]: the diagnoses its medicines treat, its own unless it names none. */
+const prescriptionSource = (parties: RecordParties, p: VisitPrescription, fallbackDate: Date, reasons: CodedText[] = p.diagnoses): SourceOf => ({
     hiType: "Prescription",
     source: {
         ...parties,
+        // Its prescriber, when another of the hospital's doctors wrote it
+        ...(p.practitioner ? { practitioner: p.practitioner } : {}),
         prescription: {
             id: p.row.Id,
             number: p.row.PrescriptionNumber ?? null,
-            date: p.row.Date ?? p.row.CreatedAt ?? fallbackDate,
+            date: prescriptionDate(p, fallbackDate),
             notes: p.row.Notes ?? null,
-            diagnoses: p.diagnoses,
+            diagnoses: distinctCoded(reasons),
             medications: p.medications,
             signedCopy: p.pdf ? { contentType: "application/pdf", data: p.pdf } : null,
         },
@@ -76,6 +84,9 @@ const documentSource = (parties: RecordParties, d: DocumentSource, key: string):
 };
 
 const INVOICEABLE = new Set(["Pending", "PartiallyPaid", "Paid"]);
+/** Issued: a bill with an invoice number. One still numbered DFT- has not been through Generate Invoice. */
+const issuedBill = (b: { BillStatus: string; BillNumber?: string | null }) =>
+    INVOICEABLE.has(b.BillStatus) && Boolean(b.BillNumber) && !b.BillNumber!.startsWith("DFT-");
 
 /**
  * When a visit's records start: the appointment, or an earlier record made for it (a bill paid in
@@ -86,10 +97,11 @@ export const visitRecordDate = (v: VisitRecords): Date => {
     const dates = [
         v.appointment.start,
         ...v.medicalRecords.map((r) => r.Date),
+        ...v.notes.map((n) => n.at),
         ...v.prescriptions.map((p) => p.row.Date ?? p.row.CreatedAt),
         ...v.documents.map((d) => d.createdAt),
         ...v.bills.map((b) => b.CreatedAt),
-        ...v.immunizations.map((i) => i.AdministeredOn),
+        ...v.immunizations.map((i) => (i.AdministeredOn ? startOfDay(i.AdministeredOn) : null)),
     ].map((d) => (d ? new Date(d) : null)).filter((d): d is Date => d !== null && !Number.isNaN(d.getTime()));
     return new Date(Math.min(...dates.map((d) => d.getTime())));
 };
@@ -98,41 +110,56 @@ export const visitRecordDate = (v: VisitRecords): Date => {
 export const visitSources = (v: VisitRecords): SourceOf[] => {
     const out: SourceOf[] = [];
     const visitKey = `appointment-${v.appointment.id}`;
-    const visit = { id: v.appointment.id, start: v.appointment.start, end: v.appointment.end, teleconsultation: v.appointment.teleconsultation };
+    const slot = v.appointment.start;
+    const visit = { id: v.appointment.id, start: slot, end: v.appointment.end, teleconsultation: v.appointment.teleconsultation };
     // Every record of the visit carries it, so they share one encounter
     const parties = { ...v.parties, visit };
     const consultations = v.medicalRecords.filter((r) => !isVitalsRecord(r));
     const vitalsChecks = v.medicalRecords.filter(isVitalsRecord);
+    const at = (r: PatientMedicalRecord) => new Date(r.Date);
+    // A prescription treats its own diagnoses, or, when it names none, the consultation's
+    const consultationDiagnoses = distinctCoded(consultations.flatMap((r) => recordedIn(at(r), r.Diagnosis, r.DiagnosisConceptId)));
+    const reasonsOf = (p: VisitPrescription): CodedText[] =>
+        p.diagnoses.length ? distinctCoded(p.diagnoses.map((d) => ({ ...d, recordedAt: prescriptionDate(p, slot) }))) : consultationDiagnoses;
+    const prescribed = v.prescriptions.filter((p) => p.medications.length);
 
     if (consultations.length || v.notes.length || v.prescriptions.length) {
-        const withVitals = consultations.find((r) => r.BloodPressure || r.HeartRate || r.Temperature || r.Weight || r.Height || r.SpO2);
+        const withVitals = consultations.filter(hasVitals);
         const followUps = consultations.map((r) => r.FollowUpDate).filter((d): d is Date => Boolean(d));
         out.push({
             hiType: "OPConsultation",
             source: {
                 ...parties,
+                date: earliest(slot, ...consultations.map(at), ...v.prescriptions.map((p) => prescriptionDate(p, slot)), ...v.notes.map((n) => n.at)),
                 // Complaint and symptoms are one list: the same words in both are one complaint
-                chiefComplaints: distinctCoded(consultations.flatMap((r) => [...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)])),
-                examinationFindings: consultations.flatMap((r) => coded(r.PhysicalExamination, r.PhysicalExaminationConceptId)),
-                vitals: withVitals ? vitalsOf(withVitals) : null,
-                vitalsRecordedAt: withVitals?.Date ?? null,
+                chiefComplaints: distinctCoded(consultations.flatMap((r) => [
+                    ...recordedIn(at(r), r.ChiefComplaint, r.ChiefComplaintConceptId), ...recordedIn(at(r), r.Symptoms, r.SymptomConceptId),
+                ])),
+                examinationFindings: distinctCoded(consultations.flatMap((r) => recordedIn(at(r), r.PhysicalExamination, r.PhysicalExaminationConceptId))),
+                vitals: withVitals[0] ? vitalsOf(withVitals[0]) : null,
+                vitalsRecordedAt: withVitals[0] ? at(withVitals[0]) : null,
+                vitalReadings: withVitals.map((r) => ({ vitals: vitalsOf(r), at: at(r) })),
                 allergies: v.registration.allergies,
                 medicalHistory: v.registration.medicalHistory,
-                // The consultation's diagnoses and its prescriptions', which the medicines are for
-                diagnoses: distinctCoded([...consultations.flatMap((r) => coded(r.Diagnosis, r.DiagnosisConceptId)), ...v.prescriptions.flatMap((p) => p.diagnoses)]),
-                procedures: consultations.flatMap((r) => coded(r.Treatment, r.TreatmentConceptId)),
-                medications: v.prescriptions.flatMap((p) => p.medications),
-                authoredOn: v.prescriptions[0]?.row.Date ?? null,
-                notes: v.notes,
+                // The consultation's diagnoses and its prescriptions' (one without medicines too), which the medicines are for
+                diagnoses: distinctCoded([...consultationDiagnoses, ...v.prescriptions.flatMap(reasonsOf)]),
+                procedures: [],
+                treatmentPlans: consultations.map((r) => r.Treatment?.trim()).filter((t): t is string => Boolean(t)),
+                medications: prescribed.flatMap((p) => p.medications),
+                // Every prescription of the visit: one without medicines still has its notes
+                prescriptions: v.prescriptions.map((p) => ({
+                    date: prescriptionDate(p, slot), diagnoses: reasonsOf(p), medications: p.medications, practitioner: p.practitioner ?? null, notes: p.row.Notes ?? null,
+                })),
+                authoredOn: v.prescriptions[0] ? prescriptionDate(v.prescriptions[0], slot) : null,
+                notes: v.notes.map((n) => n.text),
+                noteTimes: v.notes.map((n) => n.at),
                 followUp: followUps.length ? new Date(Math.max(...followUps.map((d) => new Date(d).getTime()))) : null,
                 documents: [],
             },
         });
     }
 
-    for (const p of v.prescriptions) {
-        if (p.medications.length) out.push(prescriptionSource(parties, p, v.appointment.start));
-    }
+    for (const p of prescribed) out.push(prescriptionSource(parties, p, slot, reasonsOf(p)));
 
     const healthDocuments = [];
     for (const d of v.documents) {
@@ -143,18 +170,18 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
     if (healthDocuments.length) {
         out.push({
             hiType: "HealthDocumentRecord",
-            source: { ...parties, key: `${visitKey}:documents`, date: v.appointment.start, title: "Health documents", documents: healthDocuments },
+            source: { ...parties, key: `${visitKey}:documents`, date: earliest(slot, ...healthDocuments.map((d) => d.createdAt)), title: "Health documents", documents: healthDocuments },
         });
     }
 
-    const measurements: WellnessMeasurement[] = vitalsChecks.flatMap((r) => visitVitalsToMeasurements(vitalsOf(r), new Date(r.Date)));
+    const measurements: WellnessMeasurement[] = vitalsChecks.flatMap((r) => visitVitalsToMeasurements(vitalsOf(r), at(r)));
     if (measurements.length) {
-        out.push({ hiType: "WellnessRecord", source: { ...parties, key: `${visitKey}:wellness`, date: v.appointment.start, measurements } });
+        out.push({ hiType: "WellnessRecord", source: { ...parties, key: `${visitKey}:wellness`, date: earliest(slot, ...vitalsChecks.map(at)), measurements } });
     }
 
     for (const b of v.bills) {
         // Only an issued bill with items is an invoice: a care context never claims one it can't build
-        if (!INVOICEABLE.has(b.BillStatus) || !(b.BillItems ?? []).length) continue;
+        if (!issuedBill(b) || !(b.BillItems ?? []).length) continue;
         out.push({
             hiType: "Invoice",
             source: {
@@ -165,7 +192,7 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
                     date: b.CreatedAt,
                     status: b.BillStatus,
                     subTotal: Number(b.SubTotal), discount: Number(b.DiscountAmount), total: Number(b.TotalAmount),
-                    cgst: Number(b.CgstAmount), sgst: Number(b.SgstAmount), igst: Number(b.IgstAmount),
+                    cgst: Number(b.CgstAmount), sgst: Number(b.SgstAmount), igst: Number(b.IgstAmount), gst: Number(b.GstAmount ?? 0),
                     items: (b.BillItems ?? []).map((i) => ({
                         id: i.AppointmentBillItemId, type: i.ItemType, name: i.ItemName, quantity: Number(i.Quantity),
                         unitPrice: Number(i.UnitPrice), discount: Number(i.DiscountAmount), gstAmount: Number(i.GstAmount), total: Number(i.TotalAmount),
@@ -176,21 +203,24 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
     }
 
     if (v.immunizations.length) {
-        const certificate = v.immunizations.map((i) => i.CertificateDocumentId && v.certificates.get(i.CertificateDocumentId)).find(Boolean) || null;
+        // Each vaccine's certificate, each file once
+        const certificateIds = [...new Set(v.immunizations.map((i) => i.CertificateDocumentId).filter((id): id is number => Boolean(id)))];
         out.push({
             hiType: "ImmunizationRecord",
             source: {
                 ...parties,
                 key: `${visitKey}:immunizations`,
-                date: v.appointment.start,
+                // Dated when the vaccines were given, which can be before the slot; a dose given long ago dates nothing later
+                date: earliest(slot, new Date(Math.max(...v.immunizations.map((i) => startOfDay(i.AdministeredOn).getTime())))),
                 immunizations: v.immunizations.map((i) => ({
                     id: `patient-immunization-${i.Id}`,
                     vaccine: { text: i.VaccineName, conceptId: i.VaccineConceptId },
                     date: i.AdministeredOn,
                     doseNumber: i.DoseNumber, lotNumber: i.LotNumber, manufacturer: i.Manufacturer, route: i.Route, site: i.Site,
                     nextDueDate: i.NextDueDate, notes: i.Notes,
+                    performer: (i.DoctorId && v.givenBy?.get(i.DoctorId.toLowerCase())) || null,
                 })),
-                certificate,
+                certificates: certificateIds.map((id) => v.certificates.get(id)).filter((d): d is DocumentSource => Boolean(d)),
             },
         });
     }
@@ -221,7 +251,7 @@ export class AbdmHealthRecordService {
 
     /** A Final discharge summary; a draft is not shared. */
     async forDischargeSummary(id: number): Promise<HealthRecordBundle[]> {
-        const { summary: s, parties, medications, document } = await this.records.dischargeSummary(id);
+        const { summary: s, parties, medications, prescriptionDiagnoses, document } = await this.records.dischargeSummary(id);
         if (s.Status !== "Final") return [];
         return this.build([{
             hiType: "DischargeSummary",
@@ -239,6 +269,7 @@ export class AbdmHealthRecordService {
                     investigations: s.Investigations,
                     procedures: parseList(s.Procedures),
                     medications,
+                    prescriptionDiagnoses: prescriptionDiagnoses ?? [],
                     carePlan: s.CarePlan,
                     followUp: s.FollowUpDate ?? null,
                     disposition: s.Disposition,
@@ -264,15 +295,17 @@ export class AbdmHealthRecordService {
             source: {
                 ...parties,
                 key: `immunization-${i.Id}`,
-                date: new Date(i.AdministeredOn),
+                date: startOfDay(i.AdministeredOn),
                 immunizations: [{
                     id: `patient-immunization-${i.Id}`,
                     vaccine: { text: i.VaccineName, conceptId: i.VaccineConceptId },
                     date: i.AdministeredOn,
                     doseNumber: i.DoseNumber, lotNumber: i.LotNumber, manufacturer: i.Manufacturer, route: i.Route, site: i.Site,
                     nextDueDate: i.NextDueDate, notes: i.Notes,
+                    // The record's author is the "Given by" doctor when one was recorded, the facility's staff otherwise
+                    performer: i.DoctorId && parties.practitioner.id.toLowerCase() === i.DoctorId.toLowerCase() ? parties.practitioner : null,
                 }],
-                certificate: (i.CertificateDocumentId && certificates.get(i.CertificateDocumentId)) || null,
+                certificates: [i.CertificateDocumentId ? certificates.get(i.CertificateDocumentId) : undefined].filter((d): d is DocumentSource => Boolean(d)),
             },
         }]);
     }
@@ -295,12 +328,13 @@ export class AbdmHealthRecordService {
                 ...parties,
                 key: `medical-record-${r.Id}`,
                 visit: { id: 0, start: date, end: null, teleconsultation: false },
-                chiefComplaints: distinctCoded([...coded(r.ChiefComplaint, r.ChiefComplaintConceptId), ...coded(r.Symptoms, r.SymptomConceptId)]),
-                examinationFindings: coded(r.PhysicalExamination, r.PhysicalExaminationConceptId),
+                chiefComplaints: distinctCoded([...recordedIn(date, r.ChiefComplaint, r.ChiefComplaintConceptId), ...recordedIn(date, r.Symptoms, r.SymptomConceptId)]),
+                examinationFindings: distinctCoded(recordedIn(date, r.PhysicalExamination, r.PhysicalExaminationConceptId)),
                 vitals: Object.values(vitals).some(Boolean) ? vitals : null,
                 vitalsRecordedAt: date,
-                diagnoses: coded(r.Diagnosis, r.DiagnosisConceptId),
-                procedures: coded(r.Treatment, r.TreatmentConceptId),
+                diagnoses: distinctCoded(recordedIn(date, r.Diagnosis, r.DiagnosisConceptId)),
+                procedures: [],
+                treatmentPlans: r.Treatment?.trim() ? [r.Treatment.trim()] : [],
                 medications: [],
                 notes: [],
                 followUp: r.FollowUpDate ?? null,
@@ -388,7 +422,7 @@ export class AbdmHealthRecordService {
         add("bloodGlucose", w.BloodGlucose);
         add("fluidIntakeLitres", w.FluidIntakeLitres);
         if (!measurements.length) return [];
-        return this.build([{ hiType: "WellnessRecord", source: { ...parties, key: `wellness-record-${w.Id}`, date: at, measurements } }]);
+        return this.build([{ hiType: "WellnessRecord", source: { ...parties, key: `wellness-record-${w.Id}`, date: at, measurements, notes: w.Notes ?? null } }]);
     }
 
     private build(sources: SourceOf[], hiTypes?: HiType[]): HealthRecordBundle[] {

@@ -141,6 +141,40 @@ test("care contexts: one per visit and per stay, referenced so they resolve back
     assert.equal(store.contexts[0]!.linkStatus, "linked", "a refresh keeps link state");
 });
 
+test("a care context the records no longer make is not offered or linked again; a linked one stays, re-dated", async () => {
+    const d = new Date("2026-10-26T10:00:00+05:30");
+    standalone = { ...noStandalone(), documents: [{ id: 40, date: d, category: "Clinical" }, { id: 41, date: d, category: "Clinical" }, { id: 42, date: d, category: "Clinical" }] };
+    await catalog.refresh(hip, PATIENT);
+    const row = (ref: string) => store.contexts.find((c) => c.referenceNumber === ref)!;
+    row("DOC-40").linkStatus = "linked";
+    row("DOC-41").linkStatus = "linking";
+    // The three uploads turn out to be another record's file: the records stop making them
+    standalone = noStandalone();
+    const corrected = new Date("2026-10-26T15:30:00+05:30");
+    const redating = new CareContextCatalog(store, { ...records, documentDate: async () => corrected } as any);
+    const refs = (await redating.refresh(hip, PATIENT)).map((c) => c.referenceNumber);
+    assert.ok(refs.includes("DOC-40"), "a linked one keeps its link");
+    assert.ok(!refs.includes("DOC-41") && !refs.includes("DOC-42"), "neither offered nor picked up again mid-link");
+    assert.equal(row("DOC-40").recordDate.getTime(), corrected.getTime());
+});
+
+test("a token request in flight for a care context the records no longer make is still the patient's: no second request", async () => {
+    const d = new Date("2026-10-26T10:00:00+05:30");
+    // The patient's other care contexts are linked already: the upload is the only one waiting on the token
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) c.linkStatus = "linked";
+    standalone = { ...noStandalone(), documents: [{ id: 40, date: d, category: "Clinical" }] };
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    await linking.link(hip, PATIENT);
+    assert.equal(store.contexts.find((c) => c.referenceNumber === "DOC-40")!.linkStatus, "awaiting-token");
+    const asked = gateway.calls.filter((c) => c.path.endsWith("generate-token")).length;
+    // The upload becomes a Final report's file before the token comes back: the report is linked under the same request
+    standalone = { ...noStandalone(), reports: [{ id: 7, date: d, category: "Lab" }] };
+    await linking.link(hip, PATIENT);
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("generate-token")).length, asked, "no duplicate token request (ABDM-1092)");
+    assert.equal(store.contexts.find((c) => c.referenceNumber === "DR-7")!.linkStatus, "awaiting-token");
+});
+
 test("each record saved outside a visit is a care context of its own, shared as its HI type, displayed without its content", async () => {
     const d = new Date("2026-10-26T10:00:00+05:30");
     standalone = {

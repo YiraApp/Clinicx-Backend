@@ -89,7 +89,11 @@ export class HipLinkingService {
             await this.sendLink(hip, patient, token.token, pending);
             return { queued: pending.length, status: "linking" };
         }
-        const asked = contexts.find((c) => c.linkStatus === "awaiting-token" && c.linkRequestId)?.linkRequestId;
+        // A token request still in flight, for any of the patient's care contexts: refresh() leaves out one
+        // the records no longer make, but its request is still the patient's
+        const now = this.now().getTime();
+        const asked = (await this.store.careContexts(patientReference(userId), hip.id)).find((c) => c.linkStatus === "awaiting-token" && c.linkRequestId
+            && now - (this.inFlight.get(c.linkRequestId) ?? -Infinity) < ANSWER_WAIT_MS)?.linkRequestId;
         if (asked) {
             // A token asked for moments ago is still on its way: these wait for it too. Asking again
             // for the same patient is refused as a duplicate (ABDM-1092).

@@ -285,9 +285,10 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
 
     // 7. Update or Insert into MedicalDocuments archive
     try {
+        // Only this prescription's own archive row: matching any document of the visit overwrote a clinic upload's file
         const existingDocs = await AppDataSource.query(
-            "SELECT TOP 1 Id FROM MedicalDocuments WHERE (FileName LIKE @0 OR AppointmentId = @1) AND PatientId = @2",
-            [`%${prescription.Id}%`, Number(prescription.AppointmentId) || -1, String(patientId)]
+            "SELECT TOP 1 Id FROM MedicalDocuments WHERE FileName = @0 AND PatientId = @1",
+            [`Prescription_${prescription.Id}.pdf`, String(patientId)]
         );
 
         if (existingDocs && existingDocs.length > 0) {

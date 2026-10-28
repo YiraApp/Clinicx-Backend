@@ -48,7 +48,7 @@ test("an invoice lists each charge with discount and tax, then the total and whe
 
 test("an immunization shows the dose given and the next one due", () => {
     const items = section(view("ImmunizationRecord"), "Immunization record");
-    assert.equal(items[0], "Tetanus toxoid vaccine · dose 1 · 20 Oct 2026 · lot TT-2026-001");
+    assert.equal(items[0], "Tetanus toxoid vaccine · dose 1 · 20 Oct 2026 · manufacturer Test Biologicals · lot TT-2026-001");
     assert.equal(items[1], "Next dose of Tetanus toxoid vaccine · due 20 Nov 2026");
 });
 
