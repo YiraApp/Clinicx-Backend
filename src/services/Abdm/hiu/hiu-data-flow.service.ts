@@ -14,6 +14,7 @@ import {
 } from "./fidelius-crypto.js";
 import { atRestKeysFromConfig, open, seal, type AtRestKeys } from "./hiu-at-rest.js";
 import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, type HiuAudit } from "./hiu-audit.js";
+import { errorCodeOf, retryTransient } from "./hiu-db-errors.js";
 // Type-only: the shared staff and callback shapes live with the consent service; no runtime cycle.
 import type { CallbackHeaders, HealthInformationRequester, StaffContext } from "./hiu-consent.service.js";
 import {
@@ -188,6 +189,8 @@ export interface HiuDataStore {
     failUnansweredRequest(id: number, input: { at: Date; error: string }): Promise<boolean>;
     /** Adds [bytes] to the transfer's BytesReceived only while the total stays within [maxBytes]. */
     reserveBytes(id: number, bytes: number, maxBytes: number): Promise<boolean>;
+    /** Gives back [bytes] reserved for a page that could not be stored (never below zero). */
+    releaseBytes(id: number, bytes: number): Promise<void>;
     findDataRequest(id: number): Promise<HiuDataRequestRow | null>;
     findDataRequestByHiRequestId(hiRequestId: string): Promise<HiuDataRequestRow | null>;
     findDataRequestByTokenHash(pushTokenHash: string): Promise<HiuDataRequestRow | null>;
@@ -206,9 +209,11 @@ export interface HiuDataStore {
      * Stores a page's entries and adds one to PagesReceived in one transaction, only while the
      * artefact is GRANTED with its records not purged and the transfer is open (key held, notify
      * unclaimed); otherwise nothing is stored and [closed] is true. A page already stored (the
-     * unique index on DataRequestFk, PageNumber, EntryIndex) changes nothing.
+     * unique index on DataRequestFk, PageNumber, EntryIndex) changes nothing. Page stores run one at a
+     * time and are tried again after a timeout or deadlock; one that still fails throws. [afterRetry]
+     * marks a duplicate met by a retry: an earlier try of this same call stored it, its answer lost.
      */
-    addPage(input: { dataRequestId: number; artefactFk: number; hospitalId: number; pageNumber: number; records: NewHiuRecord[] }): Promise<{ duplicate: boolean; closed?: boolean; pagesReceived: number }>;
+    addPage(input: { dataRequestId: number; artefactFk: number; hospitalId: number; pageNumber: number; records: NewHiuRecord[] }): Promise<{ duplicate: boolean; closed?: boolean; pagesReceived: number; afterRetry?: boolean }>;
     /** Sets NotifiedAt where it is still NULL. True for exactly one caller. */
     claimNotify(id: number, at: Date, notifyRequestId: string): Promise<boolean>;
     /** Each stored entry of a transfer (page markers excluded): its sealed reference and whether it decrypted and verified. */
@@ -251,6 +256,8 @@ export interface HiuDataFlowDeps {
     pushBaseUrl?: () => Promise<string>;
     /** Runs a page's processing after acceptPush has answered. Tests pass one they can await. */
     runInBackground?: (task: () => Promise<void>) => void;
+    /** How a retried database read waits; tests pass one that does not. */
+    sleep?: (ms: number) => Promise<void>;
 }
 
 /** Path our dataPushUrl carries, after the push base (deploymentPushBaseUrl). The token follows. */
@@ -358,6 +365,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
     private readonly settings: () => HiuDataFlowSettings;
     private readonly pushBaseUrl: () => Promise<string>;
     private readonly runInBackground: (task: () => Promise<void>) => void;
+    private readonly sleep: ((ms: number) => Promise<void>) | undefined;
 
     constructor(deps: HiuDataFlowDeps) {
         this.store = deps.store;
@@ -369,6 +377,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
         this.settings = deps.settings ?? defaultSettings;
         this.pushBaseUrl = deps.pushBaseUrl ?? deploymentPushBaseUrl;
         this.runInBackground = deps.runInBackground ?? defaultBackground;
+        this.sleep = deps.sleep;
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -640,6 +649,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
             entries: body.entries as any[],
             peerPublicKeyValue: body.keyMaterial.dhPublicKey.keyValue as string,
             peerNonce: body.keyMaterial.nonce as string,
+            reservedBytes: bytes,
         };
         this.runInBackground(() => this.processPage(row.id, transactionId, page));
         return { accepted: true, status: 202 };
@@ -673,7 +683,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
     private async processPage(
         dataRequestId: number,
         transactionId: string,
-        page: { pageNumber: number; pageCount: number; entries: any[]; peerPublicKeyValue: string; peerNonce: string },
+        page: { pageNumber: number; pageCount: number; entries: any[]; peerPublicKeyValue: string; peerNonce: string; reservedBytes: number },
     ): Promise<void> {
         const label = `transactionId=${transactionId} page ${page.pageNumber} of ${page.pageCount}`;
         const keys = this.atRestKeys();
@@ -683,6 +693,8 @@ export class HiuDataFlowService implements HealthInformationRequester {
             return;
         }
         if (await this.store.hasPage(row.id, page.pageNumber)) {
+            // Another copy of this page was stored first; this copy's bytes go back.
+            await this.store.releaseBytes(row.id, page.reservedBytes).catch(() => undefined);
             console.log(`[ABDM HIU] data push ${label}: duplicate page ignored`);
             return;
         }
@@ -733,10 +745,49 @@ export class HiuDataFlowService implements HealthInformationRequester {
         });
         privateKey.fill(0);
 
+        const auditBase = {
+            hospitalId: row.hospitalId,
+            consentRequestId: artefact?.consentRequestId ?? null,
+            artefactId: artefact?.consentArtefactId ?? null,
+            transactionId,
+        };
+
         // A page with no entries still counts toward pageCount: it is stored as a marker row.
         const toStore = records.length > 0 ? records : [{ entryIndex: -1, careContextReference: null, media: null, checksumOk: false, content: null, deleteAt }];
-        const stored = await this.store.addPage({ dataRequestId: row.id, artefactFk: row.artefactFk, hospitalId: row.hospitalId, pageNumber: page.pageNumber, records: toStore });
-        if (stored.duplicate) {
+        let stored: Awaited<ReturnType<HiuDataStore["addPage"]>>;
+        try {
+            stored = await this.store.addPage({ dataRequestId: row.id, artefactFk: row.artefactFk, hospitalId: row.hospitalId, pageNumber: page.pageNumber, records: toStore });
+        } catch (error: any) {
+            // Tried again already (addPage retries a timeout or a deadlock). Its last try may still have
+            // committed with the answer lost: a page that is in is taken as stored.
+            let present: boolean | null;
+            try {
+                present = await retryTransient(() => this.store.hasPage(row.id, page.pageNumber), { label: "page check", sleep: this.sleep });
+            } catch {
+                present = null;
+            }
+            if (present === null) {
+                // Unknown whether it was stored: its bytes stay counted, and the transfer's window
+                // settles it (complete if every page turns out to be in).
+                await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.PAGE_STORE_FAILED, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail: `page ${page.pageNumber} of ${page.pageCount}: ${errorCodeOf(error)}, outcome unknown` });
+                console.error(`[ABDM HIU] data push ${label}: page store failed (${errorCodeOf(error)}) and could not be checked; left to the transfer's window`);
+                return;
+            }
+            if (!present) {
+                // The HIP had its 202 and does not send the page again, so the transfer is left to its
+                // window; the page's bytes go back.
+                const code = errorCodeOf(error);
+                await this.store.releaseBytes(row.id, page.reservedBytes).catch(() => undefined);
+                await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.PAGE_STORE_FAILED, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail: `page ${page.pageNumber} of ${page.pageCount}: ${code}` });
+                console.error(`[ABDM HIU] data push ${label}: page could not be stored (${code}); dropped`);
+                return;
+            }
+            stored = { duplicate: true, afterRetry: true, pagesReceived: 0 };
+        }
+        if (stored.duplicate && !stored.afterRetry) {
+            // Another copy of this page (the HIP sending it again) was stored first; that copy settles
+            // the transfer, and this one's bytes go back.
+            await this.store.releaseBytes(row.id, page.reservedBytes).catch(() => undefined);
             console.log(`[ABDM HIU] data push ${label}: duplicate page ignored`);
             return;
         }
@@ -745,21 +796,16 @@ export class HiuDataFlowService implements HealthInformationRequester {
             console.warn(`[ABDM HIU] data push ${label}: transfer closed while the page was processed; page dropped`);
             return;
         }
-
-        const auditBase = {
-            hospitalId: row.hospitalId,
-            consentRequestId: artefact?.consentRequestId ?? null,
-            artefactId: artefact?.consentArtefactId ?? null,
-            transactionId,
-        };
         const detail = `page ${page.pageNumber} of ${page.pageCount}, ${records.length} entries, ${failed} failed${notJson ? `, ${notJson} not JSON` : ""}`;
         await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.PAGE_RECEIVED, outcome: failed ? HIU_AUDIT_OUTCOMES.FAILED : HIU_AUDIT_OUTCOMES.OK, detail });
         if (failed) {
             await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DECRYPT_FAIL, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail: `page ${page.pageNumber}: ${failed} of ${records.length} entries` });
         }
-        console.log(`[ABDM HIU] data push ${label}: ${records.length} entries, ${failed} failed; ${stored.pagesReceived} of ${page.pageCount} pages in`);
+        // Stored by a try whose answer was lost: the count is read back.
+        const pagesReceived = stored.afterRetry ? ((await this.store.findDataRequest(row.id))?.pagesReceived ?? 0) : stored.pagesReceived;
+        console.log(`[ABDM HIU] data push ${label}: ${records.length} entries, ${failed} failed; ${pagesReceived} of ${page.pageCount} pages in`);
 
-        if (stored.pagesReceived >= page.pageCount) {
+        if (pagesReceived >= page.pageCount) {
             await this.completeTransfer(row.id, "complete");
         }
     }
@@ -780,13 +826,16 @@ export class HiuDataFlowService implements HealthInformationRequester {
      * health-information/notify: RECEIVED when every stored entry decrypted and verified, else
      * FAILED; hiStatus per care context, with granted care contexts that sent nothing ERRORED.
      */
-    private async completeTransfer(dataRequestId: number, reason: "complete" | "timeout"): Promise<void> {
+    private async completeTransfer(dataRequestId: number, asked: "complete" | "timeout"): Promise<void> {
         const notifyRequestId = randomUUID();
         const now = new Date(this.clock());
         if (!(await this.store.claimNotify(dataRequestId, now, notifyRequestId))) return;
 
         const row = await this.store.findDataRequest(dataRequestId);
         if (!row) return;
+        // Every page in, though the page that completed it never settled the transfer (its store's
+        // answer was lost): its window passing is not a timeout.
+        const reason = asked === "timeout" && row.pageCount !== null && row.pagesReceived >= row.pageCount ? "complete" : asked;
         const artefact = await this.store.findArtefact(row.artefactFk);
         const keys = this.atRestKeys();
         const settings = this.settings();
@@ -896,7 +945,11 @@ export class HiuDataFlowService implements HealthInformationRequester {
 
         // Content only up to a fixed size per answer: the rest is read one record at a time.
         const rows = await this.store.listRecords(artefact.id, now, HIU_RECORDS_RESPONSE_MAX_BYTES);
-        if (rows.length === 0) return { available: false, artefactId: artefact.id, reason: "NOT_RECEIVED" };
+        if (rows.length === 0) {
+            // Nothing readable: the artefact may have ended between the check above and the read.
+            const again = await this.readableArtefact(ctx, artefactDbId);
+            return "view" in again ? again.view : { available: false, artefactId: artefact.id, reason: "NOT_RECEIVED" };
+        }
         const records = this.recordViews(artefact, rows, keys);
         const omitted = records.filter((record) => record.contentOmitted).length;
 

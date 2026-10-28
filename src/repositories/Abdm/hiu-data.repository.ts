@@ -1,5 +1,6 @@
 import { MssqlParameter } from "typeorm/index.js";
 import { HiuError, type SessionStatus } from "../../services/Abdm/hiu/hiu-enums.js";
+import { errorCodeOf, RecordPurgeError, retryTransient, sqlErrorNumber, TRANSIENT_RETRY_DELAYS_MS, type RetryOptions } from "../../services/Abdm/hiu/hiu-db-errors.js";
 import type {
     HiuDataArtefact,
     HiuDataRequestChanges,
@@ -25,19 +26,42 @@ export type HiuQuery = (sql: string, parameters?: unknown[]) => Promise<any>;
 /** SQL Server's duplicate-key errors: unique constraint (2627) and unique index (2601). */
 const DUPLICATE_KEY_ERRORS = new Set([2627, 2601]);
 
-const sqlErrorNumber = (error: any): number =>
-    Number(error?.number ?? error?.driverError?.number ?? error?.originalError?.info?.number ?? error?.driverError?.originalError?.info?.number);
-
 export const isDuplicateKeyError = (error: any): boolean => DUPLICATE_KEY_ERRORS.has(sqlErrorNumber(error));
 
 /** Raised by addPage's own THROW when the artefact or the transfer closed before the page was stored. */
 export const PAGE_CLOSED_ERROR = 50_001;
 const isPageClosedError = (error: any): boolean => sqlErrorNumber(error) === PAGE_CLOSED_ERROR;
 
+/** Runs tasks one at a time, in the order they were queued; a task that fails does not stop the next. */
+export class SerialQueue {
+    private tail: Promise<unknown> = Promise.resolve();
+
+    run<T>(task: () => Promise<T>): Promise<T> {
+        const result = this.tail.then(task);
+        this.tail = result.catch(() => undefined);
+        return result;
+    }
+}
+
+/** How long one sweep keeps deleting due records; the rest wait for the next sweep. */
+export const PURGE_SWEEP_BUDGET_MS = 40_000;
+
+/** Ids bound in one IN list, well under SQL Server's 2100 parameters. */
+const ID_CHUNK = 500;
+
 /** A JS Date bound as datetime2(3), so milliseconds survive (a bare Date binds as DATETIME). */
 const at = (date: Date | null | undefined): unknown => (date ? new MssqlParameter(new Date(date), "datetime2", 3) : null);
 
 const rowsOf = (result: any): any[] => (Array.isArray(result) ? result : []);
+
+/**
+ * The OUTPUT rows of a statement that starts with DELETE: TypeORM's SqlServerQueryRunner answers
+ * those with [recordset, rowsAffected] instead of the recordset alone.
+ */
+const deletedRowsOf = (result: any): any[] =>
+    Array.isArray(result) && result.length === 2 && typeof result[1] === "number" && (Array.isArray(result[0]) || result[0] === undefined)
+        ? (result[0] ?? [])
+        : rowsOf(result);
 
 const dateOrNull = (value: unknown): Date | null => (value ? new Date(value as any) : null);
 
@@ -119,18 +143,46 @@ const SHOWN_TRANSFER = `SELECT TOP 1 dr.Id FROM AbdmHiuDataRequests dr
                    AND EXISTS (SELECT 1 FROM AbdmHiuRecords x WHERE x.DataRequestFk = dr.Id AND x.EntryIndex >= 0)
                  ORDER BY CASE WHEN dr.SessionStatus = 'RECEIVED' THEN 0 ELSE 1 END, dr.Id DESC`;
 
+/**
+ * The artefact (@0) still GRANTED and not purged, checked in the same statement that reads content:
+ * an artefact ends before its records are deleted, so a read that passed the service's check just
+ * before a revocation committed still returns nothing.
+ */
+const STILL_READABLE = `EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts g WHERE g.Id = @0 AND g.Status = 'GRANTED' AND g.RecordsPurgedAt IS NULL)`;
+
 /** Columns one record insert binds; 100 entries a page keeps a page well under SQL Server's 2100 parameters. */
 const RECORD_COLUMNS = ["DataRequestFk", "ArtefactFk", "HospitalId", "PageNumber", "EntryIndex", "CareContextReference", "Media", "ChecksumOk", "Content", "DeleteAt", "ReceivedAt"];
 
 export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
     private readonly query: HiuQuery;
+    /** How every retried statement waits: the delays, the sleep and the jitter (retryTransient). */
+    private readonly retry: Omit<RetryOptions, "label">;
+    private readonly clock: () => number;
+    /**
+     * The large writes (a page's insert, a record's delete) of this process, one at a time: on a small
+     * database (Azure SQL Basic) several multi-megabyte writes at once exhaust its log rate, and every
+     * one of them runs past requestTimeout and is rolled back. Per process only: several instances on
+     * one database each keep their own queue (their retries are spread by jitter).
+     */
+    private readonly largeWrites = new SerialQueue();
 
-    constructor(options: { query?: HiuQuery } = {}) {
+    constructor(options: { query?: HiuQuery; sleep?: (ms: number) => Promise<void>; retryDelaysMs?: readonly number[]; random?: () => number; clock?: () => number } = {}) {
         // The data source is loaded on first use, so importing this module (in a test) opens no database config.
         this.query = options.query ?? (async (sql, parameters) => {
             const { AppDataSource } = await import("../../config/database.js");
             return AppDataSource.query(sql, parameters as any[]);
         });
+        this.retry = { delaysMs: options.retryDelaysMs ?? TRANSIENT_RETRY_DELAYS_MS, sleep: options.sleep, random: options.random };
+        this.clock = options.clock ?? Date.now;
+    }
+
+    /**
+     * Runs [work] (given its try number) in this process's queue of large writes, trying it again
+     * after a transient error, which kept nothing (retryTransient). The queue is held while waiting to
+     * try again: the database is what is busy. Never call largeWrite from inside one: it would wait on itself.
+     */
+    private largeWrite<T>(label: string, work: (attempt: number) => Promise<T>): Promise<T> {
+        return this.largeWrites.run(() => retryTransient(work, { ...this.retry, label }));
     }
 
     // ---- Artefacts ----
@@ -210,6 +262,14 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
         return rows.length === 1;
     }
 
+    async releaseBytes(id: number, bytes: number): Promise<void> {
+        await this.query(
+            `UPDATE AbdmHiuDataRequests SET BytesReceived = CASE WHEN BytesReceived > @1 THEN BytesReceived - @1 ELSE 0 END
+             WHERE Id = @0`,
+            [id, bytes],
+        );
+    }
+
     async updateDataRequest(id: number, changes: HiuDataRequestChanges): Promise<void> {
         const sets: string[] = [];
         const parameters: unknown[] = [id];
@@ -285,7 +345,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
         return rows.length > 0;
     }
 
-    async addPage(input: { dataRequestId: number; artefactFk: number; hospitalId: number; pageNumber: number; records: NewHiuRecord[] }): Promise<{ duplicate: boolean; closed?: boolean; pagesReceived: number }> {
+    async addPage(input: { dataRequestId: number; artefactFk: number; hospitalId: number; pageNumber: number; records: NewHiuRecord[] }): Promise<{ duplicate: boolean; closed?: boolean; pagesReceived: number; afterRetry?: boolean }> {
         const parameters: unknown[] = [input.dataRequestId, input.artefactFk];
         const receivedAt = new Date();
         const values = input.records.map((record) => {
@@ -299,32 +359,45 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
             });
             return `(${names.join(", ")})`;
         });
-        try {
-            // XACT_ABORT rolls the whole page back when one entry hits the unique index: a page is stored whole or not at all.
-            // The page is stored only while the artefact is GRANTED and not purged, and the transfer is open,
-            // checked inside the transaction: the artefact row is locked first (endArtefact takes the same
-            // row first), so a revocation, a lapse or a timeout either waits for this page, and then deletes
-            // or reports it, or wins, and the page is dropped (THROW, rolled back).
-            const rows = rowsOf(await this.query(
-                `SET XACT_ABORT ON;
-                 BEGIN TRANSACTION;
-                 IF NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts WITH (UPDLOCK, HOLDLOCK)
-                                WHERE Id = @1 AND Status = 'GRANTED' AND RecordsPurgedAt IS NULL)
-                     THROW ${PAGE_CLOSED_ERROR}, 'The consent artefact is no longer granted.', 1;
-                 UPDATE AbdmHiuDataRequests SET PagesReceived = PagesReceived + 1 OUTPUT inserted.PagesReceived
-                 WHERE Id = @0 AND NotifiedAt IS NULL AND SessionStatus IN ('REQUESTED', 'RECEIVING') AND PrivateKey IS NOT NULL;
-                 IF @@ROWCOUNT = 0
-                     THROW ${PAGE_CLOSED_ERROR}, 'The transfer has ended.', 1;
-                 INSERT INTO AbdmHiuRecords (${RECORD_COLUMNS.join(", ")}) VALUES ${values.join(", ")};
-                 COMMIT TRANSACTION;`,
-                parameters,
-            ));
-            return { duplicate: false, pagesReceived: Number(rows[0]?.PagesReceived) || 0 };
-        } catch (error) {
-            if (isDuplicateKeyError(error)) return { duplicate: true, pagesReceived: 0 };
-            if (isPageClosedError(error)) return { duplicate: false, closed: true, pagesReceived: 0 };
-            throw error;
-        }
+        // One large write: queued behind the others and tried again after a timeout, which XACT_ABORT
+        // rolled back whole. A try whose commit landed before its answer was lost meets the unique
+        // index on the next try and is reported a duplicate with afterRetry (this call's own page).
+        return this.largeWrite(`data push page ${input.pageNumber}`, async (attempt) => {
+            try {
+                // XACT_ABORT rolls the whole page back when one entry hits the unique index: a page is stored whole or not at all.
+                // The page is kept only while the artefact is GRANTED and not purged, and the transfer is open,
+                // checked inside the transaction after the insert: no lock on the artefact row is held while
+                // megabytes are written, so a revocation (endArtefact) never waits on one for long. At the
+                // check the artefact row is locked (UPDLOCK, HOLDLOCK) until COMMIT: a revocation, a lapse or
+                // a timeout either commits first, and the page is dropped (THROW, rolled back), or waits for
+                // this commit, and the page is then deleted with the rest (purgeArtefactRecords) or reported.
+                // First a check that takes no lock (row versions, under read committed snapshot): a page
+                // that waited in the queue while its artefact ended or its transfer closed is dropped
+                // before megabytes are written and rolled back.
+                const rows = rowsOf(await this.query(
+                    `SET XACT_ABORT ON;
+                     IF NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts WHERE Id = @1 AND Status = 'GRANTED' AND RecordsPurgedAt IS NULL)
+                        OR NOT EXISTS (SELECT 1 FROM AbdmHiuDataRequests WHERE Id = @0 AND NotifiedAt IS NULL AND SessionStatus IN ('REQUESTED', 'RECEIVING') AND PrivateKey IS NOT NULL)
+                         THROW ${PAGE_CLOSED_ERROR}, 'The consent artefact or the transfer has ended.', 1;
+                     BEGIN TRANSACTION;
+                     INSERT INTO AbdmHiuRecords (${RECORD_COLUMNS.join(", ")}) VALUES ${values.join(", ")};
+                     IF NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts WITH (UPDLOCK, HOLDLOCK)
+                                    WHERE Id = @1 AND Status = 'GRANTED' AND RecordsPurgedAt IS NULL)
+                         THROW ${PAGE_CLOSED_ERROR}, 'The consent artefact is no longer granted.', 1;
+                     UPDATE AbdmHiuDataRequests SET PagesReceived = PagesReceived + 1 OUTPUT inserted.PagesReceived
+                     WHERE Id = @0 AND NotifiedAt IS NULL AND SessionStatus IN ('REQUESTED', 'RECEIVING') AND PrivateKey IS NOT NULL;
+                     IF @@ROWCOUNT = 0
+                         THROW ${PAGE_CLOSED_ERROR}, 'The transfer has ended.', 1;
+                     COMMIT TRANSACTION;`,
+                    parameters,
+                ));
+                return { duplicate: false, pagesReceived: Number(rows[0]?.PagesReceived) || 0 };
+            } catch (error) {
+                if (isDuplicateKeyError(error)) return { duplicate: true, pagesReceived: 0, afterRetry: attempt > 1 };
+                if (isPageClosedError(error)) return { duplicate: false, closed: true, pagesReceived: 0 };
+                throw error;
+            }
+        });
     }
 
     async listEntryOutcomes(dataRequestId: number): Promise<{ careContextReference: string | null; ok: boolean }[]> {
@@ -350,6 +423,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
                  FROM AbdmHiuRecords
                  WHERE ArtefactFk = @0 AND EntryIndex >= 0 AND (DeleteAt IS NULL OR DeleteAt > @1)
                    AND DataRequestFk = (${SHOWN_TRANSFER})
+                   AND ${STILL_READABLE}
              ) r
              ORDER BY DataRequestFk, PageNumber, EntryIndex, Id`,
             [artefactDbId, at(now), maxContentBytes],
@@ -362,37 +436,123 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
             `SELECT Id, DataRequestFk, PageNumber, EntryIndex, CareContextReference, Media, ChecksumOk, Content, ReceivedAt, DeleteAt
              FROM AbdmHiuRecords
              WHERE Id = @0 AND ArtefactFk = @1 AND EntryIndex >= 0 AND (DeleteAt IS NULL OR DeleteAt > @2)
-               AND DataRequestFk = (${SHOWN_TRANSFER.replace(/@0/g, "@1")})`,
+               AND DataRequestFk = (${SHOWN_TRANSFER.replace(/@0/g, "@1")})
+               AND ${STILL_READABLE.replace(/@0/g, "@1")}`,
             [recordId, artefactDbId, at(now)],
         ));
         return rows[0] ? toRecordRow(rows[0]) : null;
+    }
+
+    // ---- Purging ----
+
+    /**
+     * Deletes the stored records of an artefact that is no longer GRANTED, one row per statement (each
+     * a large write), then sets RecordsPurgedAt once none is left. Returns how many it deleted. A
+     * GRANTED artefact's records are never touched. When a delete still fails after its tries it
+     * throws a RecordPurgeError carrying the count so far; the sweep (purgeRecords) deletes the rest.
+     */
+    async purgeArtefactRecords(artefactFk: number, when: Date): Promise<number> {
+        let deleted = 0;
+        for (;;) {
+            let rows: any[];
+            try {
+                rows = deletedRowsOf(await this.largeWrite("record delete", () => this.query(
+                    `DELETE TOP (1) rec
+                     OUTPUT deleted.Id
+                     FROM AbdmHiuRecords rec
+                     INNER JOIN AbdmHiuConsentArtefacts a ON a.Id = rec.ArtefactFk
+                     WHERE rec.ArtefactFk = @0 AND a.Status <> 'GRANTED'`,
+                    [artefactFk],
+                )));
+            } catch (error) {
+                throw new RecordPurgeError(deleted, error);
+            }
+            if (rows.length === 0) break;
+            deleted += rows.length;
+        }
+        try {
+            // Safe to repeat: it changes nothing once stamped, or while a record is left.
+            await retryTransient(() => this.query(
+                `UPDATE AbdmHiuConsentArtefacts SET RecordsPurgedAt = @1
+                 WHERE Id = @0 AND Status <> 'GRANTED' AND RecordsPurgedAt IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM AbdmHiuRecords WHERE ArtefactFk = @0)`,
+                [artefactFk, at(when)],
+            ), { ...this.retry, label: "purge stamp" });
+        } catch (error) {
+            // Every record went; only the stamp failed, and the sweep's stamp sets it later.
+            throw new RecordPurgeError(deleted, error);
+        }
+        return deleted;
     }
 
     // ---- Maintenance ----
 
     async purgeRecords(now: Date): Promise<{ artefactFk: number; hospitalId: number; consentArtefactId: string | null; count: number }[]> {
         // Due: past DeleteAt, or the artefact is past its dataEraseAt or no longer GRANTED (revoked, lapsed).
-        const rows = rowsOf(await this.query(
-            `SET XACT_ABORT ON;
-             DECLARE @purged TABLE (ArtefactFk INT, HospitalId INT);
-             DELETE rec
-             OUTPUT deleted.ArtefactFk, deleted.HospitalId INTO @purged
-             FROM AbdmHiuRecords rec
-             INNER JOIN AbdmHiuConsentArtefacts a ON a.Id = rec.ArtefactFk
-             WHERE rec.DeleteAt <= @0 OR a.DataEraseAt <= @0 OR a.Status <> 'GRANTED';
-             UPDATE a SET RecordsPurgedAt = @0
-             FROM AbdmHiuConsentArtefacts a
-             WHERE a.Id IN (SELECT ArtefactFk FROM @purged) AND a.RecordsPurgedAt IS NULL;
-             SELECT p.ArtefactFk, p.HospitalId, a.ConsentArtefactId, COUNT(*) AS Purged
-             FROM @purged p LEFT JOIN AbdmHiuConsentArtefacts a ON a.Id = p.ArtefactFk
-             GROUP BY p.ArtefactFk, p.HospitalId, a.ConsentArtefactId;`,
-            [at(now)],
-        ));
-        return rows.map((row) => ({
-            artefactFk: Number(row.ArtefactFk),
-            hospitalId: Number(row.HospitalId),
-            consentArtefactId: row.ConsentArtefactId ?? null,
-            count: Number(row.Purged) || 0,
+        // One row per statement, for at most PURGE_SWEEP_BUDGET_MS: the rest wait for the next sweep.
+        // A delete that still fails stops this sweep's deleting; what it deleted is still stamped and reported.
+        const started = this.clock();
+        const purged = new Map<number, { hospitalId: number; count: number }>();
+        while (this.clock() - started < PURGE_SWEEP_BUDGET_MS) {
+            let rows: any[];
+            try {
+                rows = deletedRowsOf(await this.largeWrite("record delete", () => this.query(
+                    `DELETE TOP (1) rec
+                     OUTPUT deleted.ArtefactFk, deleted.HospitalId
+                     FROM AbdmHiuRecords rec
+                     INNER JOIN AbdmHiuConsentArtefacts a ON a.Id = rec.ArtefactFk
+                     WHERE rec.DeleteAt <= @0 OR a.DataEraseAt <= @0 OR a.Status <> 'GRANTED'`,
+                    [at(now)],
+                )));
+            } catch (error) {
+                console.error(`[ABDM HIU] maintenance: a record delete failed (${errorCodeOf(error)}); the next sweep goes on`);
+                break;
+            }
+            if (rows.length === 0) break;
+            for (const row of rows) {
+                const artefactFk = Number(row.ArtefactFk);
+                if (!Number.isInteger(artefactFk)) continue;
+                const entry = purged.get(artefactFk) ?? { hospitalId: Number(row.HospitalId), count: 0 };
+                entry.count += 1;
+                purged.set(artefactFk, entry);
+            }
+        }
+
+        // Stamped once none is left, whether this sweep or an artefact's own purge (one interrupted
+        // before its stamp) deleted the last: every ended artefact, and every one past its dataEraseAt.
+        // Neither this nor the names below may lose the counts: a failure is logged and the counts
+        // are still returned (the next sweep stamps).
+        const retry = this.retry;
+        try {
+            await retryTransient(() => this.query(
+                `UPDATE a SET RecordsPurgedAt = @0
+                 FROM AbdmHiuConsentArtefacts a
+                 WHERE a.RecordsPurgedAt IS NULL AND (a.Status <> 'GRANTED' OR a.DataEraseAt <= @0)
+                   AND NOT EXISTS (SELECT 1 FROM AbdmHiuRecords r WHERE r.ArtefactFk = a.Id)`,
+                [at(now)],
+            ), { ...retry, label: "purge stamp" });
+        } catch (error) {
+            console.error(`[ABDM HIU] maintenance: the purge stamp failed (${errorCodeOf(error)}); the next sweep sets it`);
+        }
+        const ids = [...purged.keys()];
+        const names = new Map<number, string | null>();
+        for (let start = 0; start < ids.length; start += ID_CHUNK) {
+            const chunk = ids.slice(start, start + ID_CHUNK);
+            try {
+                const rows = rowsOf(await retryTransient(() => this.query(
+                    `SELECT Id, ConsentArtefactId FROM AbdmHiuConsentArtefacts WHERE Id IN (${chunk.map((_, index) => `@${index}`).join(", ")})`,
+                    chunk,
+                ), { ...retry, label: "purge names" }));
+                for (const row of rows) names.set(Number(row.Id), row.ConsentArtefactId ?? null);
+            } catch (error) {
+                console.error(`[ABDM HIU] maintenance: artefact ids for the purge audit could not be read (${errorCodeOf(error)})`);
+            }
+        }
+        return ids.map((artefactFk) => ({
+            artefactFk,
+            hospitalId: purged.get(artefactFk)!.hospitalId,
+            consentArtefactId: names.get(artefactFk) ?? null,
+            count: purged.get(artefactFk)!.count,
         }));
     }
 

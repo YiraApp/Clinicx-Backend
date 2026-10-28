@@ -5,6 +5,7 @@ import type { AbdmFacilityDirectory, Hiu } from "../abdm-facilities.service.js";
 import { AbdmApiError, abdmGatewayService, isOutcomeUnknown, normalizeAbdmCode, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import { atRestKeysFromConfig, seal, type AtRestKeys } from "./hiu-at-rest.js";
 import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, notifyAuditEvent, type HiuAudit } from "./hiu-audit.js";
+import { errorCodeOf, RecordPurgeError } from "./hiu-db-errors.js";
 import { deploymentPushBaseUrl } from "./hiu-data-flow.service.js";
 import {
     HIU_ACCESS_MODES,
@@ -289,10 +290,18 @@ export interface HiuConsentStore {
     /** Stores the granted terms only on the first on-fetch (FetchedAt null) while the artefact is GRANTED; false otherwise. */
     saveFetchedDetail(artefactId: number, detail: FetchedDetail): Promise<boolean>;
     /**
-     * Ends an artefact: sets [status], deletes its AbdmHiuRecords rows, nulls PrivateKey on its data
-     * requests, drops its sealed care contexts and sets RecordsPurgedAt. Returns the records deleted.
+     * Ends an artefact that is still GRANTED, in one short transaction (tried again on a timeout or
+     * deadlock): sets [status], nulls PrivateKey on its data requests and drops its sealed care
+     * contexts, so its records can no longer be read or added to. True when this call ended it; false
+     * when it had already ended. What was stored is deleted afterwards (purgeRecords).
      */
-    endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED", at: Date): Promise<number>;
+    endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED", at: Date): Promise<boolean>;
+    /**
+     * Deletes an ended artefact's AbdmHiuRecords rows, a row at a time, and sets RecordsPurgedAt once
+     * none is left (also when there were none). Returns how many it deleted; throws (a RecordPurgeError
+     * with the count so far) when it could not finish: the maintenance sweep deletes the rest.
+     */
+    purgeRecords(artefactId: number, at: Date): Promise<number>;
     /** Audit rows of this hospital tied to the request by consent request id, our REQUEST-IDs or its artefacts. */
     listEvents(input: { hospitalId: number; consentRequestId: string | null; requestIds: string[]; artefactIds: string[] }): Promise<{ at: Date; event: string; outcome: string }[]>;
 }
@@ -903,8 +912,9 @@ export class HiuConsentService {
                 return;
             }
             await this.record(row, HIU_AUDIT_EVENTS.ON_STATUS, status, { requestId });
-            await this.applyStatus(row, status, null);
+            const ended = await this.applyStatus(row, status, null);
             console.log(`[ABDM HIU] on-status REQUEST-ID=${requestId} request=${row.id} ${status}`);
+            await this.purgeEnded(row, ended, status);
         });
     }
 
@@ -968,6 +978,7 @@ export class HiuConsentService {
                 return;
             }
 
+            const ended: { row: ConsentRequestRow; artefacts: ArtefactRow[] }[] = [];
             for (const row of rows) {
                 await this.record(row, notifyAuditEvent(status), HIU_AUDIT_OUTCOMES.OK, {
                     requestId: notifyRequestId,
@@ -980,11 +991,14 @@ export class HiuConsentService {
                     // stored already ended, so it is never fetched and nothing is received under it.
                     await this.store.addArtefacts({ consentRequestFk: row.id, hospitalId: row.hospitalId, consentArtefactIds: artefactIds, at: new Date(this.clock()), status });
                 }
-                await this.applyStatus(row, status, artefactIds);
+                ended.push({ row, artefacts: await this.applyStatus(row, status, artefactIds) });
             }
             console.log(`[ABDM HIU] notify REQUEST-ID=${notifyRequestId ?? "-"} ${status} request=${rows.map((row) => row.id).join(",")} artefacts=${artefactIds.length}`);
 
             await this.acknowledge(rows[0]!, notifyRequestId, artefactIds);
+
+            // The records of what was revoked or lapsed: access already stopped and ABDM has its answer.
+            for (const item of ended) await this.purgeEnded(item.row, item.artefacts, status);
 
             if (status === "GRANTED") {
                 for (const row of rows) await this.fetchArtefacts(row);
@@ -1031,9 +1045,10 @@ export class HiuConsentService {
             await this.record(row, HIU_AUDIT_EVENTS.ON_FETCH, status, { artefactId: artefact.consentArtefactId, requestId });
 
             if (status !== "GRANTED") {
-                await this.endArtefacts(row, [artefact], status);
+                const ended = await this.endArtefacts([artefact], status);
                 await this.recompute(row);
                 console.log(`[ABDM HIU] on-fetch REQUEST-ID=${requestId} artefact=${artefact.consentArtefactId} ${status}`);
+                await this.purgeEnded(row, ended, status);
                 return;
             }
             if (!detail) {
@@ -1147,45 +1162,77 @@ export class HiuConsentService {
      * carried; null from on-status. Never moves a request backwards: REQUESTED only from SENDING (or
      * a FAILED init that ABDM accepted after all), DENIED only before any grant.
      */
-    private async applyStatus(row: ConsentRequestRow, status: NotifyConsentStatus, named: string[] | null): Promise<void> {
+    private async applyStatus(row: ConsentRequestRow, status: NotifyConsentStatus, named: string[] | null): Promise<ArtefactRow[]> {
         const artefacts = await this.store.listArtefacts(row.id);
         switch (status) {
             case "REQUESTED":
                 if (row.status === "SENDING" || (row.status === "FAILED" && row.consentRequestId)) await this.setStatus(row, "REQUESTED");
-                return;
+                return [];
             case "GRANTED":
                 if (artefacts.length > 0) await this.recompute(row);
                 else if (row.status === "SENDING" || row.status === "REQUESTED" || row.status === "FAILED") await this.setStatus(row, "GRANTED");
-                return;
+                return [];
             case "DENIED":
                 if (artefacts.length === 0) await this.setStatus(row, "DENIED");
                 else console.warn(`[ABDM HIU] DENIED for request=${row.id}, which already has artefacts; ignored`);
-                return;
+                return [];
             case "EXPIRED":
             case "REVOKED": {
                 if (artefacts.length === 0) {
                     await this.setStatus(row, status);
-                    return;
+                    return [];
                 }
                 const targets = named && named.length > 0 ? artefacts.filter((artefact) => named.includes(artefact.consentArtefactId)) : artefacts;
-                await this.endArtefacts(row, targets, status);
+                const ended = await this.endArtefacts(targets, status);
                 await this.recompute(row);
-                return;
+                return ended;
             }
         }
     }
 
-    /** Ends each still-granted artefact and deletes what was received under it. */
-    private async endArtefacts(row: ConsentRequestRow, artefacts: ArtefactRow[], status: "REVOKED" | "EXPIRED" | "DENIED"): Promise<void> {
+    /**
+     * Ends each still-granted artefact, each in a short transaction: from then on nothing under it
+     * can be read or stored. Returns the ones it ended, whose records purgeEnded then deletes.
+     */
+    private async endArtefacts(artefacts: ArtefactRow[], status: "REVOKED" | "EXPIRED" | "DENIED"): Promise<ArtefactRow[]> {
+        const ended: ArtefactRow[] = [];
         for (const artefact of artefacts) {
             if (artefact.status !== "GRANTED") continue;
-            const deleted = await this.store.endArtefact(artefact.id, status, new Date(this.clock()));
+            if (!(await this.store.endArtefact(artefact.id, status, new Date(this.clock())))) {
+                // Already ended meanwhile (another handler); its records are that handler's, or the sweep's.
+                console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} already ended; ${status} not applied`);
+                continue;
+            }
             artefact.status = status;
-            await this.record(row, HIU_AUDIT_EVENTS.RECORD_PURGED, HIU_AUDIT_OUTCOMES.OK, {
-                artefactId: artefact.consentArtefactId,
-                detail: `${status}: ${deleted} records`,
-            });
-            console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}; ${deleted} records deleted`);
+            ended.push(artefact);
+            console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}`);
+        }
+        return ended;
+    }
+
+    /**
+     * Deletes what was received under artefacts just ended. Run after their status is committed, and
+     * for a notify after its acknowledgement: on a small database deleting megabytes takes a while
+     * and must hold up neither. A failure is audited and left to the maintenance sweep.
+     */
+    private async purgeEnded(row: ConsentRequestRow, ended: ArtefactRow[], status: string): Promise<void> {
+        for (const artefact of ended) {
+            try {
+                const deleted = await this.store.purgeRecords(artefact.id, new Date(this.clock()));
+                await this.record(row, HIU_AUDIT_EVENTS.RECORD_PURGED, HIU_AUDIT_OUTCOMES.OK, {
+                    artefactId: artefact.consentArtefactId,
+                    detail: `${status}: ${deleted} records`,
+                });
+                console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}; ${deleted} records deleted`);
+            } catch (error: any) {
+                const deleted = error instanceof RecordPurgeError ? error.deleted : 0;
+                const code = errorCodeOf(error instanceof RecordPurgeError ? error.failure : error);
+                await this.record(row, HIU_AUDIT_EVENTS.RECORD_PURGED, HIU_AUDIT_OUTCOMES.FAILED, {
+                    artefactId: artefact.consentArtefactId,
+                    detail: `${status}: ${deleted} records, then ${code}; the sweep deletes the rest`,
+                });
+                console.error(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}; ${deleted} records deleted, then ${code}; the sweep deletes the rest`);
+            }
         }
     }
 

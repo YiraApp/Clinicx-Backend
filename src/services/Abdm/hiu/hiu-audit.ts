@@ -57,6 +57,8 @@ export const HIU_AUDIT_EVENTS = {
     PAGE_RECEIVED: "PAGE_RECEIVED",
     /** An entry failed to decrypt or its checksum did not match. */
     DECRYPT_FAIL: "DECRYPT_FAIL",
+    /** A data push page was accepted but could not be stored, after its retries (detail: "page n of m: code"). */
+    PAGE_STORE_FAILED: "PAGE_STORE_FAILED",
     /** A transfer passed its window without every page. */
     TRANSFER_TIMEOUT: "TRANSFER_TIMEOUT",
     /** health-information/notify sent (outcome RECEIVED or FAILED). */

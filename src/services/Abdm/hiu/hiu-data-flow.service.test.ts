@@ -51,6 +51,14 @@ let storedBeforeCall: boolean[];
 let bytesReceived: Map<number, number>;
 /** The content budget the last listRecords was given. */
 let listBudgets: number[];
+/**
+ * Per page number: an error addPage throws; "lost-answer", stored then reported a duplicate by a
+ * retry; or "lost-last-answer", stored then thrown (the last try committed, its answer lost).
+ */
+let pageStoreFault: ((pageNumber: number) => Error | "lost-answer" | "lost-last-answer" | null) | null;
+/** hasPage fails (the database still unreachable after a page store's last try); set by the store when hasPageFaultAfterStore. */
+let hasPageFault: boolean;
+let hasPageFaultAfterStore: boolean;
 
 /** Like the repository's SHOWN_TRANSFER: the latest RECEIVED transfer holding entries, else the latest holding entries. */
 const shownTransfer = (artefactFk: number): number | undefined => {
@@ -85,6 +93,9 @@ const store: HiuDataStore = {
         bytesReceived.set(id, total);
         return true;
     },
+    async releaseBytes(id, bytes) {
+        bytesReceived.set(id, Math.max(0, (bytesReceived.get(id) ?? 0) - bytes));
+    },
     async findDataRequest(id) { const row = requests.find((r) => r.id === id); return row ? { ...row } : null; },
     async findDataRequestByHiRequestId(hiRequestId) { const row = requests.find((r) => r.hiRequestId === hiRequestId); return row ? { ...row } : null; },
     async findDataRequestByTokenHash(hash) { const row = requests.find((r) => r.pushTokenHash === hash); return row ? { ...row } : null; },
@@ -101,10 +112,24 @@ const store: HiuDataStore = {
         if (row.sessionStatus === "REQUESTED") row.sessionStatus = "RECEIVING";
         return true;
     },
-    async hasPage(dataRequestId, pageNumber) { return records.some((r) => r.dataRequestFk === dataRequestId && r.pageNumber === pageNumber); },
+    async hasPage(dataRequestId, pageNumber) {
+        if (hasPageFault) throw Object.assign(new Error("Connection lost"), { code: "EREQUEST", number: 40613 });
+        return records.some((r) => r.dataRequestFk === dataRequestId && r.pageNumber === pageNumber);
+    },
     async addPage({ dataRequestId, artefactFk, hospitalId, pageNumber, records: page }) {
         // A database round trip: other pages can interleave here.
         await new Promise((resolve) => setImmediate(resolve));
+        // The repository's last try failing (after its retries), or committing with its answer lost.
+        const fault = pageStoreFault?.(pageNumber);
+        if (fault === "lost-answer" || fault === "lost-last-answer") {
+            pageStoreFault = null;
+            await store.addPage({ dataRequestId, artefactFk, hospitalId, pageNumber, records: page });
+            // A retry met the unique index; or the last try's answer was lost and addPage threw.
+            if (fault === "lost-answer") return { duplicate: true, pagesReceived: 0, afterRetry: true };
+            if (hasPageFaultAfterStore) hasPageFault = true;
+            throw Object.assign(new Error("Timeout: Request failed to complete in 30000ms"), { code: "ETIMEOUT" });
+        }
+        if (fault) throw fault;
         // Checked inside the transaction, like the repository: the artefact still granted, the transfer still open.
         const artefact = artefacts.get(artefactFk);
         const row = requests.find((r) => r.id === dataRequestId)!;
@@ -178,6 +203,7 @@ const makeService = () => new HiuDataFlowService({
     settings: () => settings,
     pushBaseUrl: async () => pushBase,
     runInBackground: (task) => { tasks.push(task()); },
+    sleep: async () => {},
 });
 
 /** Waits for every background page, including work those pages start. */
@@ -260,6 +286,9 @@ beforeEach(() => {
     storedBeforeCall = [];
     bytesReceived = new Map();
     listBudgets = [];
+    pageStoreFault = null;
+    hasPageFault = false;
+    hasPageFaultAfterStore = false;
     settings = { transferWindowMinutes: 20 };
     pushBase = "https://clinic.example.org";
     logged = [];
@@ -843,6 +872,101 @@ test("a push that beats on-request adopts its transaction id", async () => {
     // The late on-request is a repeat and changes nothing.
     await service.onRequest({ hiRequest: { transactionId: TRANSACTION, sessionStatus: "REQUESTED" }, response: { requestId: requests[0].hiRequestId } }, { requestId: "cb", hiuId: HIU, timestamp: null });
     assert.equal(requests[0].sessionStatus, "RECEIVED");
+});
+
+test("a page that still cannot be stored after its retries is audited, its bytes given back, and the rest of the transfer still lands", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    pageStoreFault = (pageNumber) => (pageNumber === 1 ? Object.assign(new Error("Timeout: Request failed to complete in 30000ms"), { code: "ETIMEOUT" }) : null);
+    const lost = hipPage(1, 2, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]);
+    assert.equal((await service.acceptPush(token, lost)).status, 202);
+    await settle();
+    assert.equal(bytesReceived.get(1), 0, "the failed page's bytes are given back");
+    assert.equal(requests[0].pagesReceived, 0);
+    const failed = audits.filter((event) => event.event === "PAGE_STORE_FAILED");
+    assert.deepEqual(failed.map((event) => [event.outcome, event.detail, event.transactionId]), [["FAILED", "page 1 of 2: ETIMEOUT", TRANSACTION]]);
+    assert.ok(!logged.some((line) => line.includes("Timeout:")), "the driver's message is never logged");
+    assert.ok(logged.some((line) => line.includes("page 1 of 2: page could not be stored (ETIMEOUT); dropped")));
+
+    pageStoreFault = null;
+    assert.equal((await service.acceptPush(token, hipPage(2, 2, [{ reference: "CC-B", content: JSON.stringify(bundle("b")) }]))).status, 202);
+    await settle();
+    assert.equal(requests[0].pagesReceived, 1);
+    assert.equal(notifies().length, 0, "the transfer waits for its window: the HIP had its 202 for page 1");
+});
+
+for (const fault of ["lost-answer", "lost-last-answer"] as const) {
+    test(`a page whose store committed but whose answer was lost (${fault}) is taken as stored and completes the transfer`, async () => {
+        const service = makeService();
+        await openTransfer(service);
+        const token = pushTokenOf();
+        await service.acceptPush(token, hipPage(1, 2, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]));
+        await settle();
+        const reserved = bytesReceived.get(1);
+        pageStoreFault = (pageNumber) => (pageNumber === 2 ? fault : null);
+        await service.acceptPush(token, hipPage(2, 2, [{ reference: "CC-B", content: JSON.stringify(bundle("b")) }]));
+        await settle();
+        assert.equal(requests[0].pagesReceived, 2);
+        assert.ok(bytesReceived.get(1)! > reserved!, "its bytes stay counted");
+        assert.ok(!audits.some((event) => event.event === "PAGE_STORE_FAILED"));
+        assert.deepEqual(audits.filter((event) => event.event === "PAGE_RECEIVED").map((event) => event.detail), [
+            "page 1 of 2, 1 entries, 0 failed",
+            "page 2 of 2, 1 entries, 0 failed",
+        ]);
+        assert.equal(notifies().length, 1);
+        assert.equal((notifies()[0].body as any).notification.statusNotification.sessionStatus, "RECEIVED");
+        assert.equal(requests[0].sessionStatus, "RECEIVED");
+    });
+}
+
+test("a page store whose outcome cannot be checked keeps its bytes, and a transfer whose pages all arrived completes at its window", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    await service.acceptPush(token, hipPage(1, 2, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]));
+    await settle();
+    const before = bytesReceived.get(1)!;
+    pageStoreFault = (pageNumber) => (pageNumber === 2 ? "lost-last-answer" : null);
+    hasPageFaultAfterStore = true;
+    await service.acceptPush(token, hipPage(2, 2, [{ reference: "CC-B", content: JSON.stringify(bundle("b")) }]));
+    await settle();
+    hasPageFault = false;
+    assert.equal(requests[0].pagesReceived, 2, "the last try committed");
+    assert.ok(bytesReceived.get(1)! > before, "its bytes stay counted");
+    assert.deepEqual(audits.filter((event) => event.event === "PAGE_STORE_FAILED").map((event) => event.detail), ["page 2 of 2: ETIMEOUT, outcome unknown"]);
+    assert.equal(notifies().length, 0);
+
+    // The window passes: every page is in, so it is reported received, not timed out.
+    now += 21 * 60_000;
+    await service.failTransfer(requests[0].id);
+    assert.equal(notifies().length, 1);
+    assert.equal((notifies()[0].body as any).notification.statusNotification.sessionStatus, "RECEIVED");
+    assert.ok(!audits.some((event) => event.event === "TRANSFER_TIMEOUT"));
+});
+
+test("records asked for while the consent ends answer with why, not 'not received'", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]));
+    await settle();
+    // The revocation commits after the service's check and before the read (the read sees no rows).
+    const racing: HiuDataStore = { ...store, async listRecords() { artefacts.set(1, { ...artefacts.get(1)!, status: "REVOKED" }); return []; } };
+    const raced = new HiuDataFlowService({ store: racing, audit, gateway, clock: () => now, crypto, atRestKeys: () => KEYS, settings: () => settings, pushBaseUrl: async () => pushBase });
+    assert.deepEqual(await raced.records(STAFF, 1), { available: false, artefactId: 1, reason: "REVOKED" });
+});
+
+test("a second copy of a page stored by the first gives its bytes back", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const page = hipPage(1, 2, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]);
+    await service.acceptPush(token, page);
+    await service.acceptPush(token, page);
+    const both = bytesReceived.get(1)!;
+    await settle();
+    assert.equal(requests[0].pagesReceived, 1);
+    assert.equal(bytesReceived.get(1), both / 2);
 });
 
 test("a page with no entries still counts toward pageCount", async () => {

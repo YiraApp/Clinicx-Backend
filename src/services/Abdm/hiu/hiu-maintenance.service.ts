@@ -6,7 +6,8 @@ import type { HiuDataFlowService } from "./hiu-data-flow.service.js";
  * The HIU's housekeeping sweep (plan sections 5, 10 and 13 S7), run once a minute:
  *
  *   1. Delete stored records past their DeleteAt (the artefact's dataEraseAt), and every record of
- *      an artefact that is no longer GRANTED (revoked or lapsed), and stamp RecordsPurgedAt.
+ *      an artefact that is no longer GRANTED (revoked or lapsed, or whose own purge stopped part
+ *      way), one row at a time within a time budget, and stamp RecordsPurgedAt once none is left.
  *   2. Set our ephemeral private key to NULL once it passes KeyExpiresAt or its transfer ended.
  *   3. Fail transfers past their window with one health-information/notify FAILED.
  *   4. Close transfers whose notify was claimed but never settled (a crash in between).
@@ -20,7 +21,10 @@ import type { HiuDataFlowService } from "./hiu-data-flow.service.js";
  */
 
 export interface HiuMaintenanceStore {
-    /** Deletes due records and stamps their artefacts. One entry per artefact that lost records. */
+    /**
+     * Deletes due records, one row per statement for a bounded time (the rest wait for the next
+     * sweep), and stamps their artefacts once none is left. One entry per artefact that lost records.
+     */
     purgeRecords(now: Date): Promise<{ artefactFk: number; hospitalId: number; consentArtefactId: string | null; count: number }[]>;
     /** NULLs every private key past KeyExpiresAt or on a RECEIVED/FAILED transfer. Returns how many. */
     clearPrivateKeys(now: Date): Promise<number>;

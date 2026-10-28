@@ -5,6 +5,7 @@ import { AbdmFacilityDirectory } from "../abdm-facilities.service.js";
 import { AbdmApiError, type AbdmCall } from "../abdm-gateway.service.js";
 import { atRestKeysFrom, open } from "./hiu-at-rest.js";
 import type { HiuAuditEventInput } from "./hiu-audit.js";
+import { RecordPurgeError } from "./hiu-db-errors.js";
 import { HiuError } from "./hiu-enums.js";
 import {
     ConsentInitUnansweredError,
@@ -56,6 +57,12 @@ let touchedAt: Map<number, number>;
 /** The open-request lock: each key's queue of waiting raises. */
 let locks: Map<string, Promise<unknown>>;
 let requesterFault: boolean;
+/** endArtefact and purgeRecords, in the order the service called them. */
+let purgeLog: string[];
+/** Thrown by purgeRecords (after deleting one row), as a delete still timing out after its tries would. */
+let purgeFault: Error | null;
+/** Artefacts another handler ends (as the given status) just before this one's END_ARTEFACT runs. */
+let endedElsewhere: Map<number, "REVOKED" | "EXPIRED">;
 let service: HiuConsentService;
 
 const patients = new Map([
@@ -181,10 +188,29 @@ const store: HiuConsentStore = {
         return true;
     },
     async endArtefact(id, status, at) {
+        // Status, key and care contexts only, and only while GRANTED: the records stay until purgeRecords.
+        privateKeys.set(id, null);
+        const artefact = artefacts.find((a) => a.id === id)!;
+        if (endedElsewhere.has(id)) Object.assign(artefact, { status: endedElsewhere.get(id), statusAt: at });
+        if (artefact.status !== "GRANTED") return false;
+        Object.assign(artefact, { status, statusAt: at });
+        purgeLog.push(`end ${id}`);
+        return true;
+    },
+    async purgeRecords(id, at) {
+        // What the caller had already sent (the acknowledgement) and saw ended when the purge began.
+        purgeLog.push(`purge ${id} after ${pathsCalled().at(-1) ?? "-"} (${artefacts.find((a) => a.id === id)!.status})`);
+        const artefact = artefacts.find((a) => a.id === id)!;
+        if (artefact.status === "GRANTED") return 0;
+        if (purgeFault) {
+            // One row went before the failure; the rest stay for the sweep.
+            const index = records.findIndex((record) => record.artefactFk === id);
+            if (index >= 0) records.splice(index, 1);
+            throw new RecordPurgeError(index >= 0 ? 1 : 0, purgeFault);
+        }
         const before = records.length;
         records = records.filter((record) => record.artefactFk !== id);
-        privateKeys.set(id, null);
-        Object.assign(artefacts.find((a) => a.id === id)!, { status, statusAt: at, recordsPurgedAt: at });
+        if (!artefact.recordsPurgedAt) artefact.recordsPurgedAt = at;
         return before - records.length;
     },
     async listEvents({ hospitalId, consentRequestId, requestIds, artefactIds }) {
@@ -282,6 +308,9 @@ beforeEach(() => {
     requested = [];
     gatewayFault = null;
     requesterFault = false;
+    purgeLog = [];
+    purgeFault = null;
+    endedElsewhere = new Map();
     fetchAttempts = new Map();
     touchedAt = new Map();
     locks = new Map();
@@ -776,6 +805,59 @@ test("REVOKED blocks the named artefact and deletes its records; the request bec
     assert.equal(pathsCalled().filter((path) => path === "fetch").length, fetchesBefore);
 });
 
+test("REVOKED commits the artefact's end and acknowledges ABDM before its records are deleted", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    const [a] = artefacts;
+    records.push({ artefactFk: a!.id }, { artefactFk: a!.id });
+
+    await notify("REVOKED", [ARTEFACT_A], "revoke-1", null);
+    // Ended (access stops), then the request's status, then on-notify, and only then the delete.
+    assert.deepEqual(purgeLog, [`end ${a!.id}`, `purge ${a!.id} after request/hiu/on-notify (REVOKED)`]);
+    assert.equal(row.status, "REVOKED");
+    assert.deepEqual(records, []);
+    assert.ok(a!.recordsPurgedAt);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => [event.artefactId, event.outcome, event.detail]), [
+        [ARTEFACT_A, "OK", "REVOKED: 2 records"],
+    ]);
+});
+
+test("an artefact another handler ended first is neither overwritten nor purged twice; the notify is still acknowledged", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    const [a] = artefacts;
+    records.push({ artefactFk: a!.id });
+    endedElsewhere.set(a!.id, "EXPIRED");
+    await notify("REVOKED", [ARTEFACT_A], "revoke-1", null);
+    assert.equal(a!.status, "EXPIRED", "the first ending stands");
+    assert.deepEqual(purgeLog, [], "this handler deletes nothing: the other one (or the sweep) does");
+    assert.equal(row.status, "EXPIRED");
+    assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }], response: { requestId: "revoke-1" } });
+});
+
+test("a revocation whose records cannot all be deleted still stands, is acknowledged, and leaves the rest to the sweep", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    const [a] = artefacts;
+    records.push({ artefactFk: a!.id }, { artefactFk: a!.id });
+    purgeFault = Object.assign(new Error("Timeout: Request failed to complete in 30000ms"), { code: "ETIMEOUT" });
+
+    await notify("REVOKED", [ARTEFACT_A], "revoke-1", null);
+    assert.equal(a!.status, "REVOKED");
+    assert.equal(row.status, "REVOKED");
+    assert.equal(privateKeys.get(a!.id), null);
+    assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }], response: { requestId: "revoke-1" } });
+    assert.ok(audits.some((event) => event.event === "ON_NOTIFY_SENT" && event.outcome === "OK"));
+    assert.equal(records.length, 1, "what the purge did not reach waits for the sweep");
+    assert.equal(a!.recordsPurgedAt, null);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => [event.outcome, event.detail]), [
+        ["FAILED", "REVOKED: 1 records, then ETIMEOUT; the sweep deletes the rest"],
+    ]);
+    assert.ok(!audits.some((event) => String(event.detail ?? "").includes("Timeout:")), "the driver's message is never recorded");
+    const detail = await service.detail(ctx, row.id);
+    assert.deepEqual(detail.artefacts.map((artefact) => artefact.stage), ["BLOCKED"]);
+});
+
 test("a REVOKED or EXPIRED notify naming artefacts never stored keeps their ids, already ended, and fetches nothing", async () => {
     const row = await raised();
     // The GRANTED notify was lost: no artefact is stored yet.
@@ -853,10 +935,12 @@ test("on-fetch reads dataEraseAt inside permission too, and asks for nothing onc
 test("on-fetch that is not GRANTED blocks the artefact and asks for nothing", async () => {
     const row = await raised();
     await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    records.push({ artefactFk: artefacts[0]!.id }, { artefactFk: artefacts[1]!.id });
     await service.onFetch({ ...onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), consent: { status: "REVOKED", consentDetail: null, signature: "" } }, headers("f"));
     assert.equal(artefacts[0]!.status, "REVOKED");
     assert.equal(row.status, "PARTLY_REVOKED");
     assert.deepEqual(requested, []);
+    assert.deepEqual(records, [{ artefactFk: artefacts[1]!.id }], "the revoked artefact's records are deleted, the other's kept");
 });
 
 test("an on-fetch arriving after a revocation stores nothing on the revoked artefact and asks for nothing", async () => {

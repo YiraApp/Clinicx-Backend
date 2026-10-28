@@ -8,6 +8,22 @@ import type { ConsentRequestRow } from "../../services/Abdm/hiu/hiu-consent.serv
 
 export type HiuConsentQuery = (sql: string, parameters?: unknown[]) => Promise<any>;
 
+/**
+ * Ends an artefact (@0) as @1 at @2, only while it is still GRANTED: its status, its sealed care
+ * contexts and its transfers' private keys, in one short transaction, the artefact row first (the row
+ * a page store locks before it commits). Answers Changed: 1 when this call ended it, 0 when it had
+ * already ended (another handler, or this call's own earlier try whose answer was lost). Small writes
+ * only, so it commits at once even on a small database: the artefact's records are deleted afterwards,
+ * a row at a time (purgeArtefactRecords), never in here.
+ */
+export const END_ARTEFACT = `SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+UPDATE AbdmHiuConsentArtefacts SET Status = @1, StatusAt = @2, CareContexts = NULL, UpdatedAt = @2 WHERE Id = @0 AND Status = 'GRANTED';
+DECLARE @changed INT = @@ROWCOUNT;
+UPDATE AbdmHiuDataRequests SET PrivateKey = NULL WHERE ArtefactFk = @0;
+COMMIT TRANSACTION;
+SELECT @changed AS Changed;`;
+
 /** Roles.Id of the Patient role (as patient-registration.service and the patient list use it). */
 export const PATIENT_ROLE_ID = "4FC67429-28AE-4106-93EF-436228282ED0";
 

@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARTEFACT_RECORD_COUNT, findPatientIn, PATIENT_ROLE_ID, SELECT_REQUEST, toRequestRow } from "./hiu-consent.sql.js";
+import { ARTEFACT_RECORD_COUNT, END_ARTEFACT, findPatientIn, PATIENT_ROLE_ID, SELECT_REQUEST, toRequestRow } from "./hiu-consent.sql.js";
+
+test("ending an artefact is one short transaction, artefact row first, that deletes no records", () => {
+    assert.match(END_ARTEFACT, /^SET XACT_ABORT ON;\s+BEGIN TRANSACTION;/);
+    // Only a GRANTED artefact is ended, and the batch says whether this call ended it.
+    assert.match(END_ARTEFACT, /DECLARE @changed INT = @@ROWCOUNT;/);
+    assert.match(END_ARTEFACT, /COMMIT TRANSACTION;\s+SELECT @changed AS Changed;$/);
+    const artefact = END_ARTEFACT.indexOf("UPDATE AbdmHiuConsentArtefacts SET Status = @1, StatusAt = @2, CareContexts = NULL, UpdatedAt = @2 WHERE Id = @0 AND Status = 'GRANTED';");
+    const keys = END_ARTEFACT.indexOf("UPDATE AbdmHiuDataRequests SET PrivateKey = NULL WHERE ArtefactFk = @0;");
+    assert.ok(artefact > 0 && artefact < keys, "the artefact row (the one a page store locks) first");
+    // Deleting megabytes in here is what ran past the timeout and rolled the revocation back.
+    assert.ok(!/DELETE|AbdmHiuRecords/i.test(END_ARTEFACT));
+});
 
 type Sent = { sql: string; parameters: unknown[] };
 

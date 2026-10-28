@@ -1,13 +1,13 @@
-import { In, IsNull, MssqlParameter } from "typeorm/index.js";
+import { In, MssqlParameter } from "typeorm/index.js";
 import { AppDataSource } from "../../config/database.js";
 import { HiuError } from "../../services/Abdm/hiu/hiu-enums.js";
 import { HiuConsentRequest } from "../../models/Abdm/hiu-consent-request.model.js";
 import { HiuConsentArtefact } from "../../models/Abdm/hiu-consent-artefact.model.js";
-import { HiuDataRequest } from "../../models/Abdm/hiu-data-request.model.js";
-import { HiuRecord } from "../../models/Abdm/hiu-record.model.js";
+import { hiuDataRepository } from "./hiu-data.repository.js";
 import { User } from "../../models/Account/user.model.js";
 import type { ArtefactStatus } from "../../services/Abdm/hiu/hiu-enums.js";
-import { ARTEFACT_RECORD_COUNT, findPatientIn, jsonList, SELECT_REQUEST, toRequestRow } from "./hiu-consent.sql.js";
+import { ARTEFACT_RECORD_COUNT, END_ARTEFACT, findPatientIn, jsonList, SELECT_REQUEST, toRequestRow } from "./hiu-consent.sql.js";
+import { retryTransient } from "../../services/Abdm/hiu/hiu-db-errors.js";
 import type {
     ArtefactRow,
     ArtefactWithTransfer,
@@ -342,19 +342,17 @@ export class HiuConsentRepository implements HiuConsentStore {
         return (result.affected ?? 0) > 0;
     }
 
-    async endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED", at: Date): Promise<number> {
-        return AppDataSource.transaction(async (manager) => {
-            // The artefact row first: its lock is what a page being stored (addPage) checks under, so
-            // the two serialise and no page lands after the records are deleted.
-            await manager.getRepository(HiuConsentArtefact).update(artefactId, { Status: status, StatusAt: at, CareContexts: null, UpdatedAt: at });
-            const deleted = await manager.getRepository(HiuRecord).delete({ ArtefactFk: artefactId });
-            await manager.getRepository(HiuDataRequest).update({ ArtefactFk: artefactId }, { PrivateKey: null });
-            await manager.getRepository(HiuConsentArtefact).update(
-                { Id: artefactId, RecordsPurgedAt: IsNull() },
-                { RecordsPurgedAt: at },
-            );
-            return deleted.affected ?? 0;
-        });
+    async endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED", when: Date): Promise<boolean> {
+        // One short batch, tried again on a timeout or deadlock (it ends a GRANTED artefact only).
+        const rows = await retryTransient(
+            () => AppDataSource.query(END_ARTEFACT, [artefactId, status, at(when)]),
+            { label: "artefact end" },
+        );
+        return Number(rows?.[0]?.Changed) === 1;
+    }
+
+    async purgeRecords(artefactId: number, when: Date): Promise<number> {
+        return hiuDataRepository.purgeArtefactRecords(artefactId, when);
     }
 
     async listEvents(input: { hospitalId: number; consentRequestId: string | null; requestIds: string[]; artefactIds: string[] }): Promise<{ at: Date; event: string; outcome: string }[]> {
