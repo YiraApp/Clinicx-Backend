@@ -14,7 +14,11 @@ export class HospitalSettingsController {
             }
 
             const settings = await hospitalSettingsService.getSettings(hospitalId);
-            return res.json(ApiResponse.success(settings, "Hospital settings retrieved successfully."));
+            const bookingNotificationEmails = (process.env.BOOKING_NOTIFICATION_EMAILS || "").trim();
+            return res.json(ApiResponse.success({
+                ...settings,
+                bookingNotificationEmails
+            }, "Hospital settings retrieved successfully."));
         } catch (error: any) {
             console.error("Error retrieving hospital settings:", error);
             return res.status(500).json(ApiResponse.error(error.message || "Failed to retrieve hospital settings."));
@@ -39,7 +43,11 @@ export class HospitalSettingsController {
             };
 
             const updated = await hospitalSettingsService.saveSettings(hospitalId, req.body, userContext);
-            return res.json(ApiResponse.success(updated, "Hospital settings and audit history saved successfully."));
+            const bookingNotificationEmails = (process.env.BOOKING_NOTIFICATION_EMAILS || "").trim();
+            return res.json(ApiResponse.success({
+                ...updated,
+                bookingNotificationEmails
+            }, "Hospital settings and audit history saved successfully."));
         } catch (error: any) {
             console.error("Error updating hospital settings:", error);
             return res.status(500).json(ApiResponse.error(error.message || "Failed to save hospital settings."));

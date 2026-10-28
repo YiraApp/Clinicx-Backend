@@ -68,6 +68,13 @@ export class HospitalSetting {
     @Column({ type: "int", default: 20 })
     BookingAfterDocumentMinutes: number; // Follow-up delay in minutes (default: 20)
 
+    // ── Patient & Notification Flags ──
+    @Column({ type: "bit", default: false })
+    EnableEmployeeId: boolean; // Show Employee ID in patient registration
+
+    @Column({ type: "bit", default: false })
+    SendInfoMailToYira: boolean; // Send notification email to Yira (operations@yira.ai, contact@yira.ai)
+
     // ── Extensible Future Flags (JSON) ──
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     AdditionalFlags?: string | null; // Stores future dynamic flags as JSON: { [flagKey: string]: any }

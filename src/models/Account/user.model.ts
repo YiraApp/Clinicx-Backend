@@ -105,6 +105,9 @@ export class User {
     @Column({ type: "nvarchar", length: 100, nullable: true })
     TokenNumber?: string | null;
 
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    EmployeeId?: string | null;
+
 
 
     @Column({ type: "nvarchar", length: 200, nullable: true })

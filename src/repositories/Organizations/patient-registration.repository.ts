@@ -55,7 +55,7 @@ export class PatientRegistrationRepository {
 
         if (filters.search) {
             query.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search OR u.EmployeeId LIKE :search OR pr.EmployeeId LIKE :search)",
                 { search: `%${filters.search}%` }
             );
         }
@@ -169,7 +169,7 @@ export class PatientRegistrationRepository {
 
         if (filters.search) {
             statsQuery.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search OR u.EmployeeId LIKE :search OR pr.EmployeeId LIKE :search)",
                 { search: `%${filters.search}%` }
             );
         }
@@ -217,6 +217,7 @@ export class PatientRegistrationRepository {
                 allergies: pr.Allergies,
                 medicalHistory: pr.MedicalHistory,
                 tokenNumber: pr.TokenNumber || pr.User?.TokenNumber || null,
+                employeeId: pr.EmployeeId || pr.User?.EmployeeId || null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,
                 insuranceStatus: ins?.Status ?? null,

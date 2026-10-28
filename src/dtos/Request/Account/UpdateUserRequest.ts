@@ -23,6 +23,7 @@ export interface UpdateUserRequest {
     BloodGroup?: string | undefined;
     TokenNumber?: string | undefined;
     Token?: string | undefined;
+    EmployeeId?: string | undefined;
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;

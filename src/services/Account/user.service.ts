@@ -92,6 +92,7 @@ export class UserService implements IUserService {
         if (data.Height) newUser.Height = data.Height;
         if (data.Weight) newUser.Weight = data.Weight;
         if (data.TokenNumber || (data as any).Token) newUser.TokenNumber = data.TokenNumber || (data as any).Token;
+        if (data.EmployeeId || (data as any).employeeId) newUser.EmployeeId = data.EmployeeId || (data as any).employeeId;
 
         newUser.Status = true;
         newUser.IsDeleted = false;
@@ -221,6 +222,7 @@ export class UserService implements IUserService {
                 CountryCode: data.CountryCode,
                 DateOfBirth: data.DateOfBirth,
                 BloodGroup: data.BloodGroup,
+                EmployeeId: data.EmployeeId || (data as any).employeeId,
                 Relation: data.Relation || "Other",
                 ParentUserId: data.ParentUserId,
                 IsPrimary: false
@@ -246,6 +248,7 @@ export class UserService implements IUserService {
                     CountryCode: data.CountryCode,
                     DateOfBirth: data.DateOfBirth,
                     BloodGroup: data.BloodGroup,
+                    EmployeeId: data.EmployeeId || (data as any).employeeId,
                     Relation: data.Relation || "Admin",
                     IsPrimary: true
                 } as any, true);
@@ -311,6 +314,9 @@ export class UserService implements IUserService {
                     console.warn("[UserService] Could not auto-generate token for patient:", tokenErr);
                 }
             }
+        }
+        if (data.EmployeeId !== undefined || (data as any).employeeId !== undefined) {
+            user.EmployeeId = data.EmployeeId || (data as any).employeeId || null;
         }
 
         // 4. Update addresses
@@ -496,6 +502,7 @@ export class UserService implements IUserService {
             lastName: primaryUser.LastName,
             email: primaryUser.Email,
             phoneNumber: primaryUser.PhoneNumber,
+            employeeId: primaryUser.EmployeeId || null,
             roles: roles.map(r => ({
                 roleId: r.RoleId,
                 roleName: r.Role?.RoleName || r.RoleId,
@@ -1027,6 +1034,7 @@ export class UserService implements IUserService {
             email: primaryMember.Email,
             gender: primaryMember.Gender,
             dateOfBirth: primaryMember.DateOfBirth,
+            employeeId: primaryMember.EmployeeId || null,
             relation: (primaryMember.Relation && primaryMember.Relation.toLowerCase() !== "self") ? primaryMember.Relation : "Self",
             isPrimary: primaryMember.IsPrimary,
             relations: childMembers.map((member: User) => ({
@@ -1038,6 +1046,7 @@ export class UserService implements IUserService {
                 email: member.Email,
                 gender: member.Gender,
                 dateOfBirth: member.DateOfBirth,
+                employeeId: member.EmployeeId || null,
                 relation: (member.Relation && member.Relation.toLowerCase() !== "self") ? member.Relation : (member.IsPrimary ? "Self" : "Dependent"),
                 isPrimary: member.IsPrimary
             }))

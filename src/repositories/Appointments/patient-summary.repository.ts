@@ -125,9 +125,11 @@ export class PatientSummaryRepository {
                 pincode: addr?.Pincode || "",
                 emergencyContactName: user.EmergencyContactName,
                 emergencyContactPhone: user.EmergencyContactPhone,
-                tokenNumber: registration?.TokenNumber || user.TokenNumber || null
+                tokenNumber: registration?.TokenNumber || user.TokenNumber || null,
+                employeeId: user.EmployeeId || registration?.EmployeeId || null
             },
             tokenNumber: registration?.TokenNumber || user.TokenNumber || null,
+            employeeId: user.EmployeeId || registration?.EmployeeId || null,
             allergies,
             conditions,
             insurance: insurance

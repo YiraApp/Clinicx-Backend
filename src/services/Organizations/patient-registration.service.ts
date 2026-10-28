@@ -52,6 +52,154 @@ export class PatientRegistrationService {
         }
     }
 
+    /**
+     * Sends an email notification to Yira operations when a patient is registered,
+     * if SendInfoMailToYira is enabled for the hospital.
+     */
+    async sendPatientRegistrationYiraNotification(params: {
+        user: any;
+        registration: any;
+        hospitalId: number;
+        organizationId?: number;
+        patientFields?: any;
+    }): Promise<void> {
+        const { user, registration, hospitalId, organizationId, patientFields } = params;
+
+        // Configurable recipient email list from .env BOOKING_NOTIFICATION_EMAILS
+        const defaultEmails = ["operations@yira.ai", "contact@yira.ai"];
+        const envEmails = process.env.BOOKING_NOTIFICATION_EMAILS
+            ? process.env.BOOKING_NOTIFICATION_EMAILS.split(",").map((e: string) => e.trim()).filter(Boolean)
+            : [];
+        const recipients = envEmails.length > 0 ? envEmails : defaultEmails;
+
+        if (recipients.length === 0) {
+            console.warn("[Patient Registration Yira Notification] No recipient emails configured.");
+            return;
+        }
+
+        let hospitalName = "Clinic";
+        let hospitalCode = "";
+        try {
+            const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
+            const hospital = await hospitalRepository.findById(Number(hospitalId));
+            if (hospital?.Name) hospitalName = hospital.Name;
+            if (hospital?.HospitalCode) hospitalCode = hospital.HospitalCode;
+        } catch (e) {}
+
+        const patientFullName = `${user?.FirstName || ""} ${user?.LastName || ""}`.trim() || patientFields?.firstName || "N/A";
+        const patientPhone = user?.PhoneNumber || patientFields?.phone || "N/A";
+        const patientEmail = user?.Email && !user.Email.includes("@yira.ai") ? user.Email : (patientFields?.email || "Not provided");
+        const patientGender = user?.Gender || patientFields?.gender || "Not specified";
+        const patientDob = user?.DateOfBirth || patientFields?.dateOfBirth || "Not specified";
+        const tokenNumber = registration?.TokenNumber || user?.TokenNumber || "N/A";
+        const employeeId = registration?.EmployeeId || user?.EmployeeId || patientFields?.employeeId || patientFields?.EmployeeId || null;
+
+        const subject = `New Patient Registered: ${patientFullName} | Token: ${tokenNumber} | ${hospitalName}`;
+
+        const htmlBody = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>New Patient Registration Notification</title>
+<style>
+body { margin:0; padding:0; background:#f4f6fb; font-family: 'Segoe UI', Arial, sans-serif; }
+table { border-collapse:collapse; width:100%; }
+.container { max-width:520px; margin:30px auto; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.08); }
+.header { background: #1a23d8; background: linear-gradient(120deg, #1a23d8 0%, #3f5bff 40%, #6f8dff 100%); padding:22px 20px; text-align:center; color:#ffffff; }
+.logo-3d { display:inline-block; padding:4px; border-radius:20px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); }
+.logo-3d img { width:70px; display:block; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); }
+.header h2 { margin:10px 0 0; font-size:20px; font-weight:600; color:#ffffff; }
+.content { padding:25px; color:#333333; font-size:14px; line-height:1.6; }
+.content h1 { text-align:center; font-size:20px; color:#1920d9; margin: 0 0 10px 0; }
+.highlight { background:#f1f3ff; border-left:4px solid #1920d9; padding:12px 16px; border-radius:6px; margin:15px 0; font-size:13px; color:#1e293b; }
+.token-card { background:#f1f3ff; border:2px dashed #1920d9; border-radius:8px; padding:14px 18px; text-align:center; margin:15px 0; }
+.details { background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px; }
+.details-title { font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px; }
+.details p { margin:6px 0; font-size:13px; }
+.footer { background:#f4f6fb; text-align:center; padding:16px 20px; font-size:11px; color:#777; border-top:1px solid #eeeeee; }
+</style>
+</head>
+<body style="margin:0; padding:0; background:#f4f6fb; font-family: 'Segoe UI', Arial, sans-serif;">
+<table class="container" style="max-width:520px; margin:30px auto; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.08); border-collapse:collapse; width:100%;">
+    <tr>
+        <td class="header" bgcolor="#1a23d8" style="background:#1a23d8; background: linear-gradient(120deg, #1a23d8 0%, #3f5bff 40%, #6f8dff 100%); padding:22px 20px; text-align:center; color:#ffffff;">
+            <div class="logo-3d" style="display:inline-block; padding:4px; border-radius:20px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);">
+                <img src="https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" style="width:70px; display:block; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));" alt="Yira" />
+            </div>
+            <h2 style="margin:10px 0 0; font-size:20px; font-weight:600; color:#ffffff;">Yira Health Tech</h2>
+            <div style="font-size:12px; opacity:0.92; color:#ffffff;">Patient Registration Notification</div>
+        </td>
+    </tr>
+    <tr>
+        <td class="content" style="padding:25px; color:#333333; font-size:14px; line-height:1.6;">
+            <h1 style="text-align:center; font-size:20px; color:#1920d9; margin: 0 0 10px 0;">New Patient Registered</h1>
+            
+            <div class="highlight" style="background:#f1f3ff; border-left:4px solid #1920d9; padding:12px 16px; border-radius:6px; margin:15px 0; font-size:13px; color:#1e293b;">
+                A new patient has been registered at <strong>${hospitalName}</strong>. Details are summarized below:
+            </div>
+
+            <!-- Token Highlight Card -->
+            <div class="token-card" style="background:#f1f3ff; border:2px dashed #1920d9; border-radius:8px; padding:14px 18px; text-align:center; margin:15px 0;">
+                <div style="font-size:11px; font-weight:700; color:#1920d9; text-transform:uppercase; letter-spacing:0.5px;">Hospital Token Number</div>
+                <div style="font-size:26px; font-weight:800; color:#1920d9; margin:4px 0;">${tokenNumber}</div>
+                <div style="font-size:12px; color:#555555;">Facility: <strong>${hospitalName}</strong> ${hospitalCode ? `(#${hospitalCode})` : ""}</div>
+            </div>
+
+            <!-- Patient Details -->
+            <div class="details" style="background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px;">
+                <div class="details-title" style="font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">
+                    Patient Information
+                </div>
+                <p style="margin:6px 0; font-size:13px;"><strong>Patient Name:</strong> ${patientFullName}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Mobile Number:</strong> <a href="tel:${patientPhone}" style="color:#1920d9; text-decoration:none;">${patientPhone}</a></p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Email Address:</strong> ${patientEmail}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Gender & DOB:</strong> ${patientGender} / ${patientDob}</p>
+                ${employeeId ? `<p style="margin:6px 0; font-size:13px;"><strong>Employee ID:</strong> <span style="color:#1920d9; font-weight:700;">${employeeId}</span></p>` : ""}
+                <p style="margin:6px 0; font-size:13px;"><strong>Token Number:</strong> <span style="color:#1920d9; font-weight:700;">${tokenNumber}</span></p>
+            </div>
+
+            <!-- Facility Details -->
+            <div class="details" style="background:#fafafa; border:1px solid #eeeeee; border-radius:8px; padding:16px; margin-top:15px;">
+                <div class="details-title" style="font-size:13px; font-weight:700; color:#1920d9; text-transform:uppercase; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">
+                    Facility Details
+                </div>
+                <p style="margin:6px 0; font-size:13px;"><strong>Hospital / Facility:</strong> ${hospitalName}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Hospital ID:</strong> #${hospitalId}</p>
+                <p style="margin:6px 0; font-size:13px;"><strong>Registered At:</strong> ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</p>
+            </div>
+
+            <p style="margin-top:25px; font-size:13px; color:#555555;">
+                Regards,<br />
+                <strong style="color:#1920d9;">Yira Health Tech Team</strong>
+            </p>
+        </td>
+    </tr>
+    <tr>
+        <td class="footer" style="background:#f4f6fb; text-align:center; padding:16px 20px; font-size:11px; color:#777; border-top:1px solid #eeeeee;">
+            &copy; 2026 Yira Health Tech Pvt Ltd. <br/>
+            Building the future of digital healthcare with Clinicx.
+        </td>
+    </tr>
+</table>
+</body>
+</html>
+        `.trim();
+
+        try {
+            const { mailService } = await import("../Mail/mail.service.js");
+            await mailService.sendMail({
+                to: recipients.join(", "),
+                subject,
+                body: htmlBody
+            });
+            console.log(`[Patient Registration Yira Notification] Notification sent to: [${recipients.join(", ")}] for patient ${patientFullName} (Token: ${tokenNumber})`);
+        } catch (err: any) {
+            console.error(`[Patient Registration Yira Notification] Email sending error:`, err?.message || err);
+        }
+    }
+
 
     // In-memory FIFO lock queue and sequence cache to prevent concurrent race conditions
     private static tokenLockChains = new Map<string, Promise<any>>();
@@ -81,7 +229,7 @@ export class PatientRegistrationService {
             });
     }
 
-    async getNextTokenNumber(hospitalId?: number): Promise<{ tokenNumber: string; hospitalId: number; hospitalCode: string; currentMaxSequence: number; nextSequence: number }> {
+    async getNextTokenNumber(hospitalId?: number, reserve: boolean = false): Promise<{ tokenNumber: string; hospitalId: number; hospitalCode: string; currentMaxSequence: number; nextSequence: number }> {
         const { hospitalRepository } = await import("../../repositories/Organizations/hospital.repository.js");
         const { defaultOrganizationRepository } = await import("../../repositories/Organizations/default-organization.repository.js");
         const { AppDataSource } = await import("../../config/database.js");
@@ -141,35 +289,47 @@ export class PatientRegistrationService {
                 }
             }
 
-            // 4. Check in-memory sequence cache (or Redis) to ensure in-flight allocations are respected
-            let inMemorySeq = PatientRegistrationService.sequenceCache.get(lockKey) || 0;
-            try {
-                const { redisService } = await import("../Common/redis.service.js");
-                const redisSeq = await redisService.get<number>(`token_seq:${lockKey}`);
-                if (redisSeq && redisSeq > inMemorySeq) {
-                    inMemorySeq = redisSeq;
-                }
-            } catch { /* Redis fail-safe */ }
+            let nextSeq = maxDbSeq + 1;
 
-            const trueCurrentMax = Math.max(maxDbSeq, inMemorySeq);
-            const nextSeq = trueCurrentMax + 1;
+            if (reserve) {
+                // Check in-memory sequence cache (or Redis) to ensure in-flight allocations are respected
+                let inMemorySeq = PatientRegistrationService.sequenceCache.get(lockKey) || 0;
+                try {
+                    const { redisService } = await import("../Common/redis.service.js");
+                    const redisSeq = await redisService.get<number>(`token_seq:${lockKey}`);
+                    if (redisSeq && redisSeq > inMemorySeq) {
+                        inMemorySeq = redisSeq;
+                    }
+                } catch { /* Redis fail-safe */ }
 
-            // Update in-memory sequence cache and Redis immediately for concurrent requests
-            PatientRegistrationService.sequenceCache.set(lockKey, nextSeq);
-            try {
-                const { redisService } = await import("../Common/redis.service.js");
-                await redisService.set(`token_seq:${lockKey}`, nextSeq, 86400);
-            } catch { /* Redis fail-safe */ }
+                const trueCurrentMax = Math.max(maxDbSeq, inMemorySeq);
+                nextSeq = trueCurrentMax + 1;
+
+                // Update in-memory sequence cache and Redis immediately for concurrent requests
+                PatientRegistrationService.sequenceCache.set(lockKey, nextSeq);
+                try {
+                    const { redisService } = await import("../Common/redis.service.js");
+                    await redisService.set(`token_seq:${lockKey}`, nextSeq, 86400);
+                } catch { /* Redis fail-safe */ }
+            } else {
+                // Preview mode (read-only for UI display):
+                // Do NOT advance sequence. If cache or Redis is ahead of DB due to previous unused previews, sync back to maxDbSeq.
+                PatientRegistrationService.sequenceCache.set(lockKey, maxDbSeq);
+                try {
+                    const { redisService } = await import("../Common/redis.service.js");
+                    await redisService.set(`token_seq:${lockKey}`, maxDbSeq, 86400);
+                } catch { /* Redis fail-safe */ }
+            }
 
             const tokenNumber = `${prefix}-${year}-${String(nextSeq).padStart(4, "0")}`;
 
-            console.log(`[TokenSequence] Hospital: ${prefix} (ID ${targetHospId}) | Year: ${year} | Current Max Sequence: ${trueCurrentMax} | Assigned Next Token: ${tokenNumber}`);
+            console.log(`[TokenSequence] Hospital: ${prefix} (ID ${targetHospId}) | Year: ${year} | DB Max Sequence: ${maxDbSeq} | Next Token: ${tokenNumber} (reserve: ${reserve})`);
 
             return {
                 tokenNumber,
                 hospitalId: targetHospId,
                 hospitalCode: prefix,
-                currentMaxSequence: trueCurrentMax,
+                currentMaxSequence: maxDbSeq,
                 nextSequence: nextSeq
             };
         });
@@ -218,7 +378,7 @@ export class PatientRegistrationService {
             if (existingUser?.TokenNumber) {
                 registration.TokenNumber = existingUser.TokenNumber;
             } else {
-                const nextTokenData = await this.getNextTokenNumber(effectiveHospitalId);
+                const nextTokenData = await this.getNextTokenNumber(effectiveHospitalId, true);
                 registration.TokenNumber = nextTokenData.tokenNumber;
             }
         }
@@ -229,6 +389,23 @@ export class PatientRegistrationService {
 
         if (registration.TokenNumber) {
             await userRepository.updateUser(userId, { TokenNumber: registration.TokenNumber });
+            const parts = String(registration.TokenNumber).trim().split("-");
+            const seqStr = parts[parts.length - 1];
+            const num = parseInt(seqStr, 10);
+            if (!isNaN(num)) {
+                const prefixPart = parts.slice(0, parts.length - 1).join("-");
+                PatientRegistrationService.sequenceCache.set(prefixPart, num);
+                try {
+                    const { redisService } = await import("../Common/redis.service.js");
+                    await redisService.set(`token_seq:${prefixPart}`, num, 86400);
+                } catch { /* Redis fail-safe */ }
+            }
+        }
+
+        if (patientFields.employeeId !== undefined || patientFields.EmployeeId !== undefined) {
+            const empId = patientFields.employeeId || patientFields.EmployeeId || null;
+            registration.EmployeeId = empId;
+            await userRepository.updateUser(userId, { EmployeeId: empId });
         }
 
         // 2. Handle Insurance Details
@@ -301,6 +478,26 @@ export class PatientRegistrationService {
                 }
             } catch (err) {
                 console.error("[WhatsApp clinic_reg] Background trigger error:", err);
+            }
+        })();
+
+        // Send info notification email to Yira if SendInfoMailToYira is enabled for this hospital
+        (async () => {
+            try {
+                const { hospitalSettingsService } = await import("./hospital-settings.service.js");
+                const settings = await hospitalSettingsService.getSettings(effectiveHospitalId);
+                if (settings?.SendInfoMailToYira) {
+                    const u = await userRepository.findById(userId);
+                    await this.sendPatientRegistrationYiraNotification({
+                        user: u,
+                        registration,
+                        hospitalId: effectiveHospitalId,
+                        organizationId: effectiveOrgId,
+                        patientFields
+                    });
+                }
+            } catch (notifyErr) {
+                console.error("[Patient Registration Yira Notification] Background check error:", notifyErr);
             }
         })();
 
@@ -551,6 +748,8 @@ export class PatientRegistrationService {
                 insuranceStatus: ins?.Status ?? null,
                 allergies: reg?.Allergies || p.allergies || null,
                 medicalHistory: reg?.MedicalHistory || p.medicalHistory || null,
+                employeeId: reg?.EmployeeId || p.employeeId || null,
+                tokenNumber: reg?.TokenNumber || p.tokenNumber || null,
             };
         });
 
@@ -741,6 +940,7 @@ export class PatientRegistrationService {
                     status: u.Status,
                     bloodGroup: u.BloodGroup,
                     tokenNumber,
+                    employeeId: u.EmployeeId || null,
                     isRegisteredAtHospital,
                     action: isRegisteredAtHospital ? "already_registered" : "register_to_hospital"
                 });

@@ -441,8 +441,19 @@ export class AppointmentService {
             (appointment as any).appointmentNumber = appointment.AppointmentNumber;
         }
 
-        // Email Notification: Send booking alert ONLY for appointments booked via the public page (/book-appointment)
-        if (data.createdBy === "DefaultOrgPublicBooking") {
+        // Email Notification: Send booking alert if booked via public page OR if SendInfoMailToYira is enabled for this hospital
+        let hospitalSendMail = false;
+        try {
+            if (data.hospitalId) {
+                const { hospitalSettingsService } = await import("../Organizations/hospital-settings.service.js");
+                const settings = await hospitalSettingsService.getSettings(data.hospitalId);
+                hospitalSendMail = Boolean(settings?.SendInfoMailToYira);
+            }
+        } catch (settingsErr) {
+            // Ignore settings fetch error
+        }
+
+        if (data.createdBy === "DefaultOrgPublicBooking" || hospitalSendMail) {
             try {
                 await this.sendPublicBookingNotificationEmail({
                     appointment,
@@ -451,7 +462,7 @@ export class AppointmentService {
                     assignedToken
                 });
             } catch (notifyErr: any) {
-                console.error("[Public Booking Notification] Failed to send email notification:", notifyErr?.message || notifyErr);
+                console.error("[Booking Notification to Yira] Failed to send email notification:", notifyErr?.message || notifyErr);
             }
         }
 
