@@ -1,0 +1,9 @@
+RX-9A5B60DB-1F2C-44FC-8F95-9196778DB361 Prescription (document bundle, profile PrescriptionRecord): 8 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 440545006 Prescription record
+  Composition.section.code.coding: SNOMED CT 440545006 Prescription record
+  MedicationRequest.medicationCodeableConcept.coding: SNOMED CT 323510009 Amoxicillin 500 mg oral capsule
+  MedicationRequest.reasonCode.coding: SNOMED CT 80967001 Dental caries
+  MedicationRequest.dosageInstruction.additionalInstruction.coding: SNOMED CT 311504000 With or after food
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+  Condition.code.coding: SNOMED CT 80967001 Dental caries

@@ -1,0 +1,191 @@
+- generic [ref=f4e612]:
+  - generic [ref=f4e614]:
+    - generic [ref=f4e615]:
+      - generic [ref=f4e621]:
+        - heading "Health document, 27 Oct 2026" [level=4] [ref=f4e622]
+        - paragraph [ref=f4e623]: Document · 27 Oct 2026, 11:17 AM · DOC-126
+        - generic "HealthDocumentRecord" [ref=f4e625]: Health document
+      - generic [ref=f4e626]:
+        - generic [ref=f4e627]: Link failed
+        - button "View" [ref=f4e628] [cursor=pointer]
+    - paragraph [ref=f4e632]: ABDM did not answer in time. Link again.
+  - generic [ref=f4e636]:
+    - generic [ref=f4e637]:
+      - generic [ref=f4e643]:
+        - heading "Prescription, 27 Oct 2026" [level=4] [ref=f4e644]
+        - paragraph [ref=f4e645]: Prescription · 27 Oct 2026, 09:15 AM · RX-CE661A65-83B0-4F30-83F3-D0B41E9DE833
+        - generic "Prescription" [ref=f4e647]
+      - generic [ref=f4e648]:
+        - generic [ref=f4e649]: Link failed
+        - button "View" [ref=f4e650] [cursor=pointer]
+    - paragraph [ref=f4e654]: ABDM did not answer in time. Link again.
+  - generic [ref=f4e659]:
+    - generic [ref=f4e665]:
+      - heading "Health document, 27 Oct 2026" [level=4] [ref=f4e666]
+      - paragraph [ref=f4e667]: Document · 27 Oct 2026, 09:07 AM · DOC-125
+      - generic "HealthDocumentRecord" [ref=f4e669]: Health document
+    - generic [ref=f4e670]:
+      - generic [ref=f4e671]: Linked to ABHA
+      - paragraph [ref=f4e672]: Linked 27 Oct 2026, 02:53 PM
+      - button "View" [ref=f4e673] [cursor=pointer]
+  - generic [ref=f4e679]:
+    - generic [ref=f4e685]:
+      - heading "Prescription, 27 Oct 2026" [level=4] [ref=f4e686]
+      - paragraph [ref=f4e687]: Prescription · 27 Oct 2026, 09:07 AM · RX-67221FB5-8B8B-4377-880D-AE30CEF63ACD
+      - generic "Prescription" [ref=f4e689]
+    - generic [ref=f4e690]:
+      - generic [ref=f4e691]: Linked to ABHA
+      - paragraph [ref=f4e692]: Linked 27 Oct 2026, 02:53 PM
+      - button "View" [ref=f4e693] [cursor=pointer]
+  - generic [ref=f4e699]:
+    - generic [ref=f4e706]:
+      - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f4e707]
+      - paragraph [ref=f4e708]: Visit · 27 Oct 2026, 02:00 PM · OP-344
+      - generic "Invoice" [ref=f4e710]
+    - generic [ref=f4e711]:
+      - generic [ref=f4e712]: Linked to ABHA
+      - paragraph [ref=f4e713]: Linked 27 Oct 2026, 02:09 PM
+      - button "View" [ref=f4e714] [cursor=pointer]
+  - generic [ref=f4e720]:
+    - generic [ref=f4e727]:
+      - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f4e728]
+      - paragraph [ref=f4e729]: Visit · 27 Oct 2026, 01:26 PM · OP-343
+      - generic "Invoice" [ref=f4e731]
+    - generic [ref=f4e732]:
+      - generic [ref=f4e733]: Linked to ABHA
+      - paragraph [ref=f4e734]: Linked 27 Oct 2026, 01:27 PM
+      - button "View" [ref=f4e735] [cursor=pointer]
+  - generic [ref=f4e741]:
+    - generic [ref=f4e747]:
+      - heading "Wellness record, 27 Oct 2026" [level=4] [ref=f4e748]
+      - paragraph [ref=f4e749]: Wellness record · 27 Oct 2026, 12:41 PM · WR-2
+      - generic "WellnessRecord" [ref=f4e751]: Wellness record
+    - generic [ref=f4e752]:
+      - generic [ref=f4e753]: Linked to ABHA
+      - paragraph [ref=f4e754]: Linked 27 Oct 2026, 12:42 PM
+      - button "View" [ref=f4e755] [cursor=pointer]
+  - generic [ref=f4e761]:
+    - generic [ref=f4e766]:
+      - heading "Lab report, 27 Oct 2026" [level=4] [ref=f4e767]
+      - paragraph [ref=f4e768]: Diagnostic report · 27 Oct 2026, 11:16 AM · DR-1
+      - generic "DiagnosticReport" [ref=f4e770]: Diagnostic report
+    - generic [ref=f4e771]:
+      - generic [ref=f4e772]: Linked to ABHA
+      - paragraph [ref=f4e773]: Linked 27 Oct 2026, 12:41 PM
+      - button "View" [ref=f4e774] [cursor=pointer]
+  - generic [ref=f4e780]:
+    - generic [ref=f4e786]:
+      - heading "Imaging report, 26 Oct 2026" [level=4] [ref=f4e787]
+      - paragraph [ref=f4e788]: Document · 26 Oct 2026, 01:31 PM · DOC-123
+      - generic "DiagnosticReport" [ref=f4e790]: Diagnostic report
+    - generic [ref=f4e791]:
+      - generic [ref=f4e792]: Linked to ABHA
+      - paragraph [ref=f4e793]: Linked 26 Oct 2026, 07:01 PM
+      - button "View" [ref=f4e794] [cursor=pointer]
+  - generic [ref=f4e800]:
+    - generic [ref=f4e806]:
+      - heading "Imaging report, 26 Oct 2026" [level=4] [ref=f4e807]
+      - paragraph [ref=f4e808]: Document · 26 Oct 2026, 01:30 PM · DOC-122
+      - generic "DiagnosticReport" [ref=f4e810]: Diagnostic report
+    - generic [ref=f4e811]:
+      - generic [ref=f4e812]: Linked to ABHA
+      - paragraph [ref=f4e813]: Linked 26 Oct 2026, 07:01 PM
+      - button "View" [ref=f4e814] [cursor=pointer]
+  - generic [ref=f4e820]:
+    - generic [ref=f4e826]:
+      - heading "Imaging report, 26 Oct 2026" [level=4] [ref=f4e827]
+      - paragraph [ref=f4e828]: Document · 26 Oct 2026, 01:29 PM · DOC-121
+      - generic "DiagnosticReport" [ref=f4e830]: Diagnostic report
+    - generic [ref=f4e831]:
+      - generic [ref=f4e832]: Linked to ABHA
+      - paragraph [ref=f4e833]: Linked 26 Oct 2026, 07:01 PM
+      - button "View" [ref=f4e834] [cursor=pointer]
+  - generic [ref=f4e840]:
+    - generic [ref=f4e847]:
+      - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f4e848]
+      - paragraph [ref=f4e849]: Visit · 26 Oct 2026, 05:26 PM · OP-342
+      - generic [ref=f4e850]:
+        - generic "OPConsultation" [ref=f4e851]: OP consultation
+        - generic "Prescription" [ref=f4e852]
+        - generic "HealthDocumentRecord" [ref=f4e853]: Health document
+        - generic "Invoice" [ref=f4e854]
+    - generic [ref=f4e855]:
+      - generic [ref=f4e856]: Linked to ABHA
+      - paragraph [ref=f4e857]: Linked 26 Oct 2026, 06:56 PM
+      - button "View" [ref=f4e858] [cursor=pointer]
+  - generic [ref=f4e864]:
+    - generic [ref=f4e870]:
+      - heading "Consultation record, 26 Oct 2026" [level=4] [ref=f4e871]
+      - paragraph [ref=f4e872]: Consultation record · 26 Oct 2026, 01:11 PM · MR-9E2C5BEA-C5A4-49B0-B46D-F5C8A028AB47
+      - generic "OPConsultation" [ref=f4e874]: OP consultation
+    - generic [ref=f4e875]:
+      - generic [ref=f4e876]: Linked to ABHA
+      - paragraph [ref=f4e877]: Linked 26 Oct 2026, 06:42 PM
+      - button "View" [ref=f4e878] [cursor=pointer]
+  - generic [ref=f4e884]:
+    - generic [ref=f4e890]:
+      - heading "Health document, 26 Oct 2026" [level=4] [ref=f4e891]
+      - paragraph [ref=f4e892]: Document · 26 Oct 2026, 01:07 PM · DOC-120
+      - generic "HealthDocumentRecord" [ref=f4e894]: Health document
+    - generic [ref=f4e895]:
+      - generic [ref=f4e896]: Linked to ABHA
+      - paragraph [ref=f4e897]: Linked 26 Oct 2026, 06:38 PM
+      - button "View" [ref=f4e898] [cursor=pointer]
+  - generic [ref=f4e904]:
+    - generic [ref=f4e914]:
+      - heading "Vaccination, 26 Oct 2026" [level=4] [ref=f4e915]
+      - paragraph [ref=f4e916]: Immunization · 26 Oct 2026 · IM-1
+      - generic "ImmunizationRecord" [ref=f4e918]: Immunization record
+    - generic [ref=f4e919]:
+      - generic [ref=f4e920]: Linked to ABHA
+      - paragraph [ref=f4e921]: Linked 26 Oct 2026, 06:37 PM
+      - button "View" [ref=f4e922] [cursor=pointer]
+  - generic [ref=f4e928]:
+    - generic [ref=f4e934]:
+      - heading "Health document, 26 Oct 2026" [level=4] [ref=f4e935]
+      - paragraph [ref=f4e936]: Document · 26 Oct 2026, 01:04 PM · DOC-119
+      - generic "HealthDocumentRecord" [ref=f4e938]: Health document
+    - generic [ref=f4e939]:
+      - generic [ref=f4e940]: Linked to ABHA
+      - paragraph [ref=f4e941]: Linked 26 Oct 2026, 06:34 PM
+      - button "View" [ref=f4e942] [cursor=pointer]
+  - generic [ref=f4e948]:
+    - generic [ref=f4e954]:
+      - heading "Prescription, 26 Oct 2026" [level=4] [ref=f4e955]
+      - paragraph [ref=f4e956]: Prescription · 26 Oct 2026, 01:04 PM · RX-DA72C635-2D5A-4D9A-BBA0-7FCF9E004C0A
+      - generic "Prescription" [ref=f4e958]
+    - generic [ref=f4e959]:
+      - generic [ref=f4e960]: Linked to ABHA
+      - paragraph [ref=f4e961]: Linked 26 Oct 2026, 06:34 PM
+      - button "View" [ref=f4e962] [cursor=pointer]
+  - generic [ref=f4e968]:
+    - generic [ref=f4e974]:
+      - heading "Hospital stay, 26 Oct 2026 to 26 Oct 2026" [level=4] [ref=f4e975]
+      - paragraph [ref=f4e976]: Discharge summary · 26 Oct 2026, 06:05 PM · IP-4
+      - generic "DischargeSummary" [ref=f4e978]: Discharge summary
+    - generic [ref=f4e979]:
+      - generic [ref=f4e980]: Linked to ABHA
+      - paragraph [ref=f4e981]: Linked 26 Oct 2026, 06:06 PM
+      - button "View" [ref=f4e982] [cursor=pointer]
+  - generic [ref=f4e987]:
+    - generic [ref=f4e988]:
+      - generic [ref=f4e994]:
+        - heading "Hospital stay, 26 Oct 2026 to 27 Oct 2026" [level=4] [ref=f4e995]
+        - paragraph [ref=f4e996]: Discharge summary · 27 Oct 2026, 10:41 PM · IP-3
+        - generic "DischargeSummary" [ref=f4e998]: Discharge summary
+      - generic [ref=f4e999]:
+        - generic [ref=f4e1000]: Linked to ABHA
+        - paragraph [ref=f4e1001]: Linked 26 Oct 2026, 05:42 PM
+        - button "View" [ref=f4e1002] [cursor=pointer]
+    - paragraph [ref=f4e1006]: Dated in the future (27 Oct 2026, 10:41 PM). ABDM shares a record only for dates the patient's consent covers, so this one won't reach the PHR app until then. Correct the discharge date in Discharge Summaries.
+  - generic [ref=f4e1010]:
+    - generic [ref=f4e1011]:
+      - generic [ref=f4e1017]:
+        - heading "Hospital stay, 27 Oct 2026 to 28 Oct 2026" [level=4] [ref=f4e1018]
+        - paragraph [ref=f4e1019]: Discharge summary · 28 Oct 2026, 05:28 PM · IP-2
+        - generic "DischargeSummary" [ref=f4e1021]: Discharge summary
+      - generic [ref=f4e1022]:
+        - generic [ref=f4e1023]: Linked to ABHA
+        - paragraph [ref=f4e1024]: Linked 26 Oct 2026, 05:42 PM
+        - button "View" [ref=f4e1025] [cursor=pointer]
+    - paragraph [ref=f4e1029]: Dated in the future (28 Oct 2026, 05:28 PM). ABDM shares a record only for dates the patient's consent covers, so this one won't reach the PHR app until then. Correct the discharge date in Discharge Summaries.

@@ -1,0 +1,56 @@
+OP-342 OPConsultation (document bundle, profile OPConsultRecord): 10 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 371530004 Clinical consultation report
+  Composition.section.code.coding: SNOMED CT 721912009 Medication summary document
+  Encounter.diagnosis.use.coding: SNOMED CT 39154008 Clinical diagnosis
+  Condition.code.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+  MedicationRequest.reasonCode.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+OP-342 Prescription (document bundle, profile PrescriptionRecord): 9 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 440545006 Prescription record
+  Composition.section.code.coding: SNOMED CT 440545006 Prescription record
+  MedicationRequest.reasonCode.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+  MedicationRequest.dosageInstruction.route.coding: SNOMED CT 26643006 Oral route
+  MedicationRequest.dosageInstruction.method.coding: SNOMED CT 421521009 Swallow
+  Condition.code.coding: SNOMED CT 773624006 Primary ameloblastic carcinoma
+OP-342 HealthDocumentRecord (document bundle, profile HealthDocumentRecord): 3 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 419891008 Record artifact
+  Composition.section.code.coding: SNOMED CT 419891008 Record artifact
+  DocumentReference.type.coding: SNOMED CT 419891008 Record artifact
+OP-342 Invoice (document bundle, profile InvoiceRecord): 0 SNOMED CT / LOINC codings
+DR-1 DiagnosticReport (document bundle, profile DiagnosticReportRecord): 3 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 721981007 Diagnostic studies report
+  Composition.section.code.coding: SNOMED CT 721981007 Diagnostic studies report
+  DiagnosticReport.code.coding: LOINC 24325-3 Liver function tests
+WR-2 WellnessRecord (document bundle, profile WellnessRecord): 15 SNOMED CT / LOINC codings
+  Observation.code.coding: LOINC 85354-9 Blood pressure panel with all children optional
+  Observation.component.code.coding: LOINC 8480-6 Systolic blood pressure
+  Observation.component.code.coding: LOINC 8462-4 Diastolic blood pressure
+  Observation.code.coding: LOINC 8867-4 Heart rate
+  Observation.code.coding: LOINC 9279-1 Respiratory rate
+  Observation.code.coding: LOINC 2708-6 Oxygen saturation in Arterial blood
+  Observation.code.coding: LOINC 61008-9 Body surface temperature
+  Observation.code.coding: LOINC 8302-2 Body height
+  Observation.code.coding: LOINC 29463-7 Body weight
+  Observation.code.coding: LOINC 39156-5 Body mass index (BMI) [Ratio]
+  Observation.code.coding: LOINC 55423-8 Number of steps in unspecified time Pedometer
+  Observation.code.coding: LOINC 41981-2 Calories burned
+  Observation.code.coding: LOINC 93832-4 Sleep duration
+  Observation.code.coding: LOINC 2339-0 Glucose [Mass/volume] in Blood
+  Observation.code.coding: LOINC 8999-5 Fluid intake oral Estimated
+IM-1 ImmunizationRecord (document bundle, profile ImmunizationRecord): 4 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 41000179103 Immunization record
+  Composition.section.code.coding: SNOMED CT 41000179103 Immunization record
+  Immunization.route.coding: SNOMED CT 78421000 Intramuscular route
+  ImmunizationRecommendation.recommendation.dateCriterion.code.coding: LOINC 30980-7 Date vaccine due
+IP-4 DischargeSummary (document bundle, profile DischargeSummaryRecord): 10 SNOMED CT / LOINC codings
+  Composition.type.coding: SNOMED CT 373942005 Discharge summary
+  Composition.section.code.coding: SNOMED CT 422843007 Chief complaint section
+  Composition.section.code.coding: SNOMED CT 425044008 Physical exam section
+  Composition.section.code.coding: SNOMED CT 1003642006 Past medical history section
+  Composition.section.code.coding: SNOMED CT 1003640003 History of past procedure section
+  Composition.section.code.coding: SNOMED CT 734163000 Care plan
+  Composition.section.code.coding: SNOMED CT 373942005 Discharge summary
+  Encounter.diagnosis.use.coding: SNOMED CT 39154008 Clinical diagnosis
+  CarePlan.category.coding: SNOMED CT 736353004 Inpatient care plan
+  DocumentReference.type.coding: SNOMED CT 373942005 Discharge summary

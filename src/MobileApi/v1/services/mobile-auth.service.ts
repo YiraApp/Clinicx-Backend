@@ -240,6 +240,7 @@ export class MobileAuthService {
         }
 
         // Allow registration/re-activation if user does not exist or was soft-deleted/deactivated
+        // Signup resends hit this same endpoint, so always refresh the latest open OTP row instead of adding a new one
         const otpResult = await otpService.sendOTP(
             cleanPhone,
             OTPPurpose.VERIFICATION,
@@ -247,6 +248,7 @@ export class MobileAuthService {
             undefined,
             undefined,
             undefined,
+            true,
             true
         );
 

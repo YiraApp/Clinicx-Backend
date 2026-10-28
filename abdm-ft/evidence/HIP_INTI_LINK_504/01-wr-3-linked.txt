@@ -1,0 +1,9 @@
+- generic [ref=f8e2197]:
+  - generic [ref=f8e2203]:
+    - heading "Wellness record, 27 Oct 2026" [level=4] [ref=f8e2204]
+    - paragraph [ref=f8e2205]: Wellness record · 27 Oct 2026, 07:16 PM · WR-3
+    - generic "WellnessRecord" [ref=f8e2207]: Wellness record
+  - generic [ref=f8e2208]:
+    - generic [ref=f8e2209]: Linked to ABHA
+    - paragraph [ref=f8e2210]: Linked 27 Oct 2026, 07:16 PM
+    - button "View" [ref=f8e2211] [cursor=pointer]

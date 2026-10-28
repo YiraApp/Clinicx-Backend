@@ -111,7 +111,7 @@ export const login = async (req: Request, res: Response) => {
  */
 export const sendOTP = async (req: Request, res: Response) => {
     const { identity, countryCode, isResend, resend } = req.body;
-    const isResendFlag = isResend === true || resend === true;
+    const isResendFlag = String(isResend) === "true" || String(resend) === "true";
     try {
         if (!identity) {
             return res.status(400).json({

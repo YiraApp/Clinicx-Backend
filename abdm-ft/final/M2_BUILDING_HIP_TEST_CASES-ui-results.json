@@ -1,0 +1,59 @@
+[
+ {
+  "id": "Health_RECORD_CREATION_101",
+  "outcome": "passed",
+  "iterations": 1,
+  "response": "Screen: ABDM Records lists care contexts holding all 8 HI types (OP consultation, Prescription, Diagnostic report, Discharge summary, Immunization record, Health document, Wellness record, Invoice); View shows the FHIR-built records",
+  "remarks": "Each HI type is an NRCES document bundle stored against a care context (OP-342, DR-1, WR-2, IM-1, IP-4). Clinical elements carry SNOMED CT and LOINC codes; a prescription saved in this run codes the medicine as SNOMED CT 323510009. Evidence 01-10."
+ },
+ {
+  "id": "HIP_INTI_LINK_504",
+  "outcome": "passed",
+  "iterations": 1,
+  "response": "generate-token 202 (2aa13a9d-a040-45e5-b288-842609b83db8); on-generate-token linkToken present, response.requestId matched, abhaAddress ...0319@sbx; next link 7f5e46e6-94a9-4b51-80e9-cfaf1cf242bb used the stored token, no new generate-token",
+  "remarks": "No valid token held (cleared before the run): a prescription save requested one, stored against the patient and address for six months (expires 2027-04-28). A wellness record saved next linked with no second token request. Screen: WR-3 Linked to ABHA.",
+  "steps": [
+   {
+    "step": 1,
+    "outcome": "passed",
+    "note": "token requested and received, requestId matched"
+   },
+   {
+    "step": 2,
+    "outcome": "passed",
+    "note": "stored against patient and ABHA address, 6 months"
+   },
+   {
+    "step": 3,
+    "outcome": "passed",
+    "note": "reused, no second generate-token"
+   }
+  ]
+ },
+ {
+  "id": "HIP_INTI_LINK_505",
+  "outcome": "needs-human",
+  "iterations": 1,
+  "response": "link/carecontext 202 (f3416e5d-1884-4879-8b84-944dd1a1c054), on_carecontext 'Successfully Linked care context'; link/context/notify 202 (98a9f16f-7236-4aa8-b874-391b38932a86), on-notify acknowledgement SUCCESS",
+  "remarks": "Needs tester: PHR app pull and screenshot (sheet step 2), asked at readiness and at the case; the tester cannot pull records in the PHR app in this run. Linking ran automatically on save with no click.",
+  "steps": [
+   {
+    "step": 1,
+    "outcome": "passed",
+    "note": "link initiated with the token on save; Successfully Linked care context"
+   },
+   {
+    "step": 2,
+    "outcome": "needs-human",
+    "note": "PHR app pull (tester cannot in this run); context notify SUCCESS observed"
+   }
+  ]
+ },
+ {
+  "id": "HIP_INTI_LINK_506",
+  "outcome": "needs-human",
+  "iterations": 1,
+  "response": "",
+  "remarks": "Needs tester: PHR app 'Pull Records' for Ocimum dentistry and a screenshot, asked at the case; the tester cannot pull records in the PHR app in this run."
+ }
+]

@@ -41,7 +41,8 @@ export class OTPService {
         templateCode?: string,
         customData?: Record<string, any>,
         channel?: "sms" | "whatsapp",
-        isMobile?: boolean
+        isMobile?: boolean,
+        isResend?: boolean
     ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
         // Detect if contact is email or phone
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -100,7 +101,7 @@ export class OTPService {
         }
 
         // Create OTP record in repository
-        const { otp, sessionId, expiryTime, contactType, message } = await userOTPRepository.sendOTP(finalContact, purpose, finalCountryCode);
+        const { otp, sessionId, expiryTime, contactType, message } = await userOTPRepository.sendOTP(finalContact, purpose, finalCountryCode, isResend);
 
         // Map purpose to default template if not provided
         let emailTemplate = templateCode;
@@ -184,7 +185,8 @@ export class OTPService {
 
     /**
      * Resends OTP to a contact (Email or Mobile).
-     * This marks any existing unexpired OTPs for this contact as expired before sending a new one.
+     * The latest open UserOTP row for this contact and purpose is updated with the new OTP
+     * (same SessionId); a new row is created only if there is none.
      */
     async resendOTP(
         contact: string,
@@ -193,22 +195,7 @@ export class OTPService {
         channel?: "sms" | "whatsapp",
         isMobile?: boolean
     ): Promise<{ sessionId: string, contactType: OTPType, message: string }> {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        const isEmail = emailRegex.test(contact);
-
-        let lookupContact = contact;
-        if (!isEmail) {
-            lookupContact = this.normalizeMobileContact(contact, countryCode).finalContact;
-        }
-
-        // Find existing unexpired OTP and mark it as expired
-        const existingOTP = await userOTPRepository.findLatestByContact(lookupContact);
-        if (existingOTP && existingOTP.SessionId) {
-            await userOTPRepository.markAsExpired(existingOTP.SessionId);
-        }
-
-        // Send a new OTP
-        return await this.sendOTP(contact, purpose, countryCode, undefined, undefined, channel, isMobile);
+        return await this.sendOTP(contact, purpose, countryCode, undefined, undefined, channel, isMobile, true);
     }
 
     /**

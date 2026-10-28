@@ -1,0 +1,59 @@
+- dialog [ref=f4e1033]:
+  - generic [ref=f4e1034]:
+    - heading "OPD visit, 27 Oct 2026" [level=2] [ref=f4e1035]
+    - paragraph [ref=f4e1036]: Visit · 26 Oct 2026, 05:26 PM · OP-342What the patient's PHR app receives for this record, from the records as they are now.
+  - generic [ref=f4e1037]:
+    - generic [ref=f4e1039]:
+      - generic [ref=f4e1040]:
+        - generic [ref=f4e1041]:
+          - heading "Consultation report" [level=4] [ref=f4e1042]
+          - paragraph [ref=f4e1043]: 27 Oct 2026, 09:30 AM · mani kanta
+        - generic "OPConsultation" [ref=f4e1044]: OP consultation
+      - generic [ref=f4e1045]:
+        - paragraph [ref=f4e1046]: Medications
+        - list [ref=f4e1047]:
+          - listitem [ref=f4e1048]: Acetaminophen 500 mg oral tablet — 500 mg, 1-0-0 (Morning), for 5 days (for Primary ameloblastic carcinoma)
+          - listitem [ref=f4e1049]: Dolo 500 mg oral tablet — 500 mg, 1-0-0 (Morning), for 7 days (for Primary ameloblastic carcinoma)
+    - generic [ref=f4e1051]:
+      - generic [ref=f4e1052]:
+        - generic [ref=f4e1053]:
+          - heading "Prescription record" [level=4] [ref=f4e1054]
+          - paragraph [ref=f4e1055]: 27 Oct 2026, 07:34 AM · mani kanta
+        - generic "Prescription" [ref=f4e1056]
+      - generic [ref=f4e1057]:
+        - paragraph [ref=f4e1058]: Prescription record
+        - list [ref=f4e1059]:
+          - listitem [ref=f4e1060]: Acetaminophen 500 mg oral tablet — 500 mg, 1-0-0 (Morning), for 5 days (for Primary ameloblastic carcinoma)
+          - listitem [ref=f4e1061]: Dolo 500 mg oral tablet — 500 mg, 1-0-0 (Morning), for 7 days (for Primary ameloblastic carcinoma)
+      - generic [ref=f4e1062]:
+        - paragraph [ref=f4e1063]: Files
+        - paragraph [ref=f4e1064]:
+          - generic [ref=f4e1068]: Prescription record (signed copy)
+          - generic [ref=f4e1069]: PDF · 13 KB
+    - generic [ref=f4e1071]:
+      - generic [ref=f4e1072]:
+        - generic [ref=f4e1073]:
+          - heading "Health documents" [level=4] [ref=f4e1074]
+          - paragraph [ref=f4e1075]: 27 Oct 2026, 09:30 AM · mani kanta
+        - generic "HealthDocumentRecord" [ref=f4e1076]: Health document
+      - generic [ref=f4e1077]:
+        - paragraph [ref=f4e1078]: Health Document
+        - list [ref=f4e1079]:
+          - listitem [ref=f4e1080]: Mediscan Ai _ Prescription Scanner And Medicine Guidance System _ by Abhishekreddyvelugati _ Medium · Clinical · 27 Oct 2026
+      - generic [ref=f4e1081]:
+        - paragraph [ref=f4e1082]: Files
+        - paragraph [ref=f4e1083]:
+          - generic [ref=f4e1087]: Mediscan Ai _ Prescription Scanner And Medicine Guidance System _ by Abhishekreddyvelugati _ Medium
+          - generic [ref=f4e1088]: PDF · 13 KB
+    - generic [ref=f4e1090]:
+      - generic [ref=f4e1091]:
+        - generic [ref=f4e1092]:
+          - heading "Invoice INV-000001-7603" [level=4] [ref=f4e1093]
+          - paragraph [ref=f4e1094]: 26 Oct 2026, 05:26 PM · mani kanta
+        - generic "Invoice" [ref=f4e1095]
+      - generic [ref=f4e1096]:
+        - paragraph [ref=f4e1097]: Invoice
+        - list [ref=f4e1098]:
+          - listitem [ref=f4e1099]: "Consultation Fee: ₹105"
+          - listitem [ref=f4e1100]: Total ₹105 · Paid
+  - button "Close" [active] [ref=f4e1101] [cursor=pointer]

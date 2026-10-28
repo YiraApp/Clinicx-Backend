@@ -1,0 +1,14 @@
+- generic [ref=f12e1244]:
+  - generic [ref=f12e1251]:
+    - heading "OPD visit, 27 Oct 2026" [level=4] [ref=f12e1252]
+    - paragraph [ref=f12e1253]: Visit · 26 Oct 2026, 05:26 PM · OP-342
+    - generic [ref=f12e1254]:
+      - generic "OPConsultation" [ref=f12e1255]: OP consultation
+      - generic "Prescription" [ref=f12e1256]
+      - generic "HealthDocumentRecord" [ref=f12e1257]: Health document
+      - generic "Invoice" [ref=f12e1258]
+      - generic "ImmunizationRecord" [ref=f12e1259]: Immunization record
+  - generic [ref=f12e1260]:
+    - generic [ref=f12e1261]: Linked to ABHA
+    - paragraph [ref=f12e1262]: Linked 26 Oct 2026, 06:56 PM
+    - button "View" [ref=f12e1263] [cursor=pointer]

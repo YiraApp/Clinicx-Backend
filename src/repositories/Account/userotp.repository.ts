@@ -22,9 +22,11 @@ export class UserOTPRepository {
      * Creates and saves a new OTP record for any contact type
      * @param contact Email or phone number
      * @param purpose Purpose of OTP (from OTPPurpose enum)
+     * @param isResend When true, overwrites the latest open OTP row for this contact and purpose
+     *                 (same SessionId) instead of inserting a new row
      * @returns OTP, sessionId, expiryTime, contactType, and message
      */
-    async sendOTP(contact: string, purpose: OTPPurpose = OTPPurpose.VERIFICATION, countryCode?: string): Promise<{ 
+    async sendOTP(contact: string, purpose: OTPPurpose = OTPPurpose.VERIFICATION, countryCode?: string, isResend: boolean = false): Promise<{
         otp: string, 
         sessionId: string, 
         expiryTime: Date, 
@@ -37,26 +39,37 @@ export class UserOTPRepository {
         // Generate random 6-digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         
-        // Generate unique session ID to prevent OTP reuse across sessions
-        const sessionId = uuidv4();
-        
         // Set expiry time to 10 minutes from now to prevent old OTP usage
         const expiryTime = new Date(Date.now() + 10 * 60 * 1000);
 
-        const userOTP = new UserOTP();
-        userOTP.Contact = contact;
+        // On resend, keep the latest OTP in the same row so the table always holds the current OTP
+        const existingOTP = isResend
+            ? await this.repo.findOne({
+                where: { Contact: contact, Purpose: purpose, IsExpired: false },
+                order: { CreatedDate: "DESC" }
+            })
+            : null;
+
+        const userOTP = existingOTP ?? new UserOTP();
+        if (!existingOTP) {
+            // Generate unique session ID to prevent OTP reuse across sessions
+            userOTP.SessionId = uuidv4();
+            userOTP.Contact = contact;
+            userOTP.OTPType = contactType;
+            userOTP.Purpose = purpose;
+            userOTP.CreatedBy = "SYSTEM";
+        } else {
+            userOTP.UpdatedDate = new Date();
+        }
         userOTP.OTP = otp;
-        userOTP.SessionId = sessionId;
-        userOTP.OTPType = contactType;
-        userOTP.Purpose = purpose;
         userOTP.ExpiryTime = expiryTime;
         userOTP.IsExpired = false;
         userOTP.AttemptCount = 0;
         userOTP.CountryCode = countryCode ?? null;
-        userOTP.CreatedBy = "SYSTEM";
         userOTP.UpdatedBy = "SYSTEM";
 
         await this.repo.save(userOTP);
+        const sessionId = userOTP.SessionId as string;
 
         const contactLabel = contactType === OTPType.EMAIL ? 'email' : 'phone number';
         return { 
