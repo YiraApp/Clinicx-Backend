@@ -47,8 +47,15 @@ const consentRow = (r: any): ConsentRow => ({
     dateFrom: r.DateFrom ? new Date(r.DateFrom) : null, dateTo: r.DateTo ? new Date(r.DateTo) : null,
     dataEraseAt: r.DataEraseAt ? new Date(r.DataEraseAt) : null, purpose: r.Purpose ?? null,
 });
+/**
+ * A column the database stamped with GETDATE(), as UTC ISO text. The driver reads DATETIME as the
+ * app's local time, but GETDATE() is the database server's clock (UTC on Azure SQL): read as is, it
+ * would show 5h30 early in India. Read with serverTime.
+ */
+const utcText = (column: string) => `CONVERT(varchar(23), DATEADD(MINUTE, -DATEPART(TZOFFSET, SYSDATETIMEOFFSET()), ${column}), 126) AS ${column}`;
+const serverTime = (text: string | null | undefined): Date | null => (text ? new Date(`${text}Z`) : null);
 /** What staff may see of a consent: never the Artefact or the Signature. */
-const CONSENT_VIEW_COLUMNS = `ConsentId, HipId, Status, PatientAbhaAddress, HiuId, HiTypes, CareContexts, DateFrom, DateTo, DataEraseAt, Purpose, CreatedAt, UpdatedAt`;
+const CONSENT_VIEW_COLUMNS = `ConsentId, HipId, Status, PatientAbhaAddress, HiuId, HiTypes, CareContexts, DateFrom, DateTo, DataEraseAt, Purpose, ${utcText("CreatedAt")}, ${utcText("UpdatedAt")}`;
 
 const PATIENT_COLUMNS =`u.Id, u.FirstName, u.LastName, u.Gender, CONVERT(varchar(10), u.DateOfBirth, 23) AS DateOfBirth, u.PhoneNumber, u.AbhaNumber, u.AbhaAddress`;
 const patient = (r: any): PatientProfile => ({
@@ -232,11 +239,11 @@ export class AbdmM2Repository implements M2Store, HipConsentLedger {
     async consentsFor(hipId: string, patientReference: string): Promise<StoredHipConsent[]> {
         // The JSON is matched as text, then each care context exactly: no reliance on OPENJSON's compatibility level
         const rows = await q(
-            `SELECT ${CONSENT_VIEW_COLUMNS} FROM AbdmConsents WHERE HipId = @0 AND CareContexts LIKE '%' + @1 + '%' ORDER BY CreatedAt DESC`,
+            `SELECT ${CONSENT_VIEW_COLUMNS} FROM AbdmConsents WHERE HipId = @0 AND CareContexts LIKE '%' + @1 + '%' ORDER BY AbdmConsents.CreatedAt DESC`,
             [hipId, patientReference],
         );
         return rows
-            .map((r) => ({ ...consentRow(r), createdAt: new Date(r.CreatedAt), updatedAt: r.UpdatedAt ? new Date(r.UpdatedAt) : null }))
+            .map((r) => ({ ...consentRow(r), createdAt: serverTime(r.CreatedAt)!, updatedAt: serverTime(r.UpdatedAt) }))
             .filter((c) => c.careContexts.some((cc) => String(cc?.patientReference ?? "").toLowerCase() === patientReference));
     }
 
@@ -245,13 +252,13 @@ export class AbdmM2Repository implements M2Store, HipConsentLedger {
         const placeholders = consentIds.map((_, i) => `@${i + 1}`).join(", ");
         // Never the push URL: it carries the requester's push token
         const rows = await q(
-            `SELECT TransactionId, ConsentId, Status, Results, Error, CreatedAt, CompletedAt FROM AbdmDataTransfers
-             WHERE HipId = @0 AND ConsentId IN (${placeholders}) ORDER BY CreatedAt DESC`,
+            `SELECT TransactionId, ConsentId, Status, Results, Error, ${utcText("CreatedAt")}, ${utcText("CompletedAt")} FROM AbdmDataTransfers
+             WHERE HipId = @0 AND ConsentId IN (${placeholders}) ORDER BY AbdmDataTransfers.CreatedAt DESC`,
             [hipId, ...consentIds],
         );
         return rows.map((r) => ({
             transactionId: r.TransactionId, consentId: r.ConsentId, status: r.Status, results: json<unknown>(r.Results, null),
-            error: r.Error ?? null, createdAt: new Date(r.CreatedAt), completedAt: r.CompletedAt ? new Date(r.CompletedAt) : null,
+            error: r.Error ?? null, createdAt: serverTime(r.CreatedAt)!, completedAt: serverTime(r.CompletedAt),
         }));
     }
 

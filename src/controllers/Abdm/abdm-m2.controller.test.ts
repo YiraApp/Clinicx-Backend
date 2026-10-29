@@ -228,7 +228,8 @@ test("the consent query is for the HIP and the patient, never selects the artefa
     const row = (consentId: string, careContexts: unknown) => ({
         ConsentId: consentId, HipId: HIP.id, Status: "GRANTED", PatientAbhaAddress: ABHA, HiuId: "IN3610000099", HiTypes: '["Prescription"]',
         CareContexts: JSON.stringify(careContexts), DateFrom: "2025-01-01T00:00:00Z", DateTo: "2026-10-28T00:00:00Z", DataEraseAt: "2026-12-31T00:00:00Z",
-        Purpose: "CAREMGT", CreatedAt: "2026-10-28T09:00:00Z", UpdatedAt: null,
+        // GETDATE() stamps, as the query returns them: UTC text with no zone (style 126)
+        Purpose: "CAREMGT", CreatedAt: "2026-10-28T09:00:00.120", UpdatedAt: "2026-10-28T10:30:00",
     });
     const sent = answering(() => [
         row("c-mine", [{ patientReference: PATIENT, careContextReference: "VISIT-101" }]),
@@ -238,17 +239,31 @@ test("the consent query is for the HIP and the patient, never selects the artefa
     const consents = await new AbdmM2Repository().consentsFor(HIP.id, PATIENT);
     assert.deepEqual(consents.map((c) => c.consentId), ["c-mine"]);
     assert.deepEqual(consents[0]!.hiTypes, ["Prescription"]);
-    assert.equal(consents[0]!.createdAt.toISOString(), "2026-10-28T09:00:00.000Z");
+    assert.equal(consents[0]!.createdAt.toISOString(), "2026-10-28T09:00:00.120Z");
+    assert.equal(consents[0]!.updatedAt?.toISOString(), "2026-10-28T10:30:00.000Z");
     assert.equal(sent.length, 1);
     assert.deepEqual(sent[0]!.params, [HIP.id, PATIENT]);
     assert.match(sent[0]!.sql, /FROM AbdmConsents WHERE HipId = @0/);
     assert.doesNotMatch(sent[0]!.sql, /\*|Artefact|Signature/);
 });
 
+test("GETDATE() stamps are read as UTC by the database's own offset, not as the app's local time", async () => {
+    const sent = answering(() => []);
+    const repository = new AbdmM2Repository();
+    await repository.consentsFor(HIP.id, PATIENT);
+    await repository.transfersFor(HIP.id, ["c-1"]);
+    const utc = (column: string) => new RegExp(`CONVERT\\(varchar\\(23\\), DATEADD\\(MINUTE, -DATEPART\\(TZOFFSET, SYSDATETIMEOFFSET\\(\\)\\), ${column}\\), 126\\) AS ${column}`);
+    for (const column of ["CreatedAt", "UpdatedAt"]) assert.match(sent[0]!.sql, utc(column));
+    for (const column of ["CreatedAt", "CompletedAt"]) assert.match(sent[1]!.sql, utc(column));
+    // Ordered by the stored column, not by the text alias
+    assert.match(sent[0]!.sql, /ORDER BY AbdmConsents\.CreatedAt DESC/);
+    assert.match(sent[1]!.sql, /ORDER BY AbdmDataTransfers\.CreatedAt DESC/);
+});
+
 test("the transfer query is for the HIP and the consents, and never selects the push URL", async () => {
     const sent = answering(() => [{
         TransactionId: "t-1", ConsentId: "c-1", Status: "transferred", Results: '[{"careContextReference":"VISIT-101","hiStatus":"DELIVERED"}]',
-        Error: null, CreatedAt: "2026-10-28T09:05:00Z", CompletedAt: "2026-10-28T09:05:10Z",
+        Error: null, CreatedAt: "2026-10-28T09:05:00", CompletedAt: "2026-10-28T09:05:10.5",
     }]);
     const repository = new AbdmM2Repository();
     const transfers = await repository.transfersFor(HIP.id, ["c-1", "c-2"]);
@@ -256,7 +271,8 @@ test("the transfer query is for the HIP and the consents, and never selects the 
     assert.match(sent[0]!.sql, /ConsentId IN \(@1, @2\)/);
     assert.doesNotMatch(sent[0]!.sql, /\*|DataPushUrl/);
     assert.deepEqual(transfers[0]!.results, [{ careContextReference: "VISIT-101", hiStatus: "DELIVERED" }]);
-    assert.equal(transfers[0]!.completedAt?.toISOString(), "2026-10-28T09:05:10.000Z");
+    assert.equal(transfers[0]!.createdAt.toISOString(), "2026-10-28T09:05:00.000Z");
+    assert.equal(transfers[0]!.completedAt?.toISOString(), "2026-10-28T09:05:10.500Z");
     assert.deepEqual(await repository.transfersFor(HIP.id, []), []);
     assert.equal(sent.length, 1, "no query for no consents");
 });
