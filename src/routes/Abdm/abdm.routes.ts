@@ -2,6 +2,7 @@ import { Router } from "express";
 import { abhaEnrolmentController, abhaShareCallback } from "../../controllers/Abdm/abha-enrolment.controller.js";
 import { staffJwtMiddleware, systemAdminOnly } from "../../middlewares/staff-jwt.middleware.js";
 import { abdmHiuAccess } from "../../middlewares/abdm-hiu-access.middleware.js";
+import { abdmHospitalStaff } from "../../middlewares/abdm-hospital-staff.middleware.js";
 import { hiuRouter } from "./hiu.routes.js";
 import { abdmHealthRecordController } from "../../controllers/Abdm/abdm-health-record.controller.js";
 import { abdmM2Controller } from "../../controllers/Abdm/abdm-m2.controller.js";
@@ -28,14 +29,15 @@ abdmRouter.get("/health-records/discharge-summaries/:id", hr.dischargeSummary.bi
 abdmRouter.get("/health-records/immunizations/:id", hr.immunization.bind(hr));
 abdmRouter.get("/health-records/vitals/:id", hr.vitals.bind(hr));
 
-// M2: a patient's care contexts and their link state; linking and the deep-link SMS
+// M2: a patient's care contexts and their link state; linking and the deep-link SMS. Each acts for
+// the hospital in x-hospital-id: only staff with a role there (abdmHospitalStaff, on every M2 patient route).
 const m2 = abdmM2Controller;
-abdmRouter.get("/patients/:userId/care-contexts", m2.careContexts.bind(m2));
-abdmRouter.get("/patients/:userId/care-contexts/:reference", m2.careContextView.bind(m2));
+abdmRouter.get("/patients/:userId/care-contexts", abdmHospitalStaff, m2.careContexts.bind(m2));
+abdmRouter.get("/patients/:userId/care-contexts/:reference", abdmHospitalStaff, m2.careContextView.bind(m2));
 // M2: the consents ABDM notified this HIP of for the patient, and what was pushed under each (read-only)
-abdmRouter.get("/patients/:userId/consents", m2.consents.bind(m2));
-abdmRouter.post("/patients/:userId/link", m2.link.bind(m2));
-abdmRouter.post("/patients/:userId/sms-notify", m2.smsNotify.bind(m2));
+abdmRouter.get("/patients/:userId/consents", abdmHospitalStaff, m2.consents.bind(m2));
+abdmRouter.post("/patients/:userId/link", abdmHospitalStaff, m2.link.bind(m2));
+abdmRouter.post("/patients/:userId/sms-notify", abdmHospitalStaff, m2.smsNotify.bind(m2));
 
 // M1: create or retrieve an ABHA with an Aadhaar OTP
 abdmRouter.post("/enrolment/otp", c.requestOtp.bind(c));
