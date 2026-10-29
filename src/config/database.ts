@@ -103,6 +103,17 @@ if (missingVars.length > 0) {
     throw new Error(`Database configuration missing for: ${missingVars.join(", ")}. Please check your Azure Application Settings.`);
 }
 
+/**
+ * How long one statement may run, in ms (DB_REQUEST_TIMEOUT_MS, default 30 s). At least 20 s: the
+ * applock waits run under it (15 s for an open request, 5 s a poll for a large write) and must end
+ * first. The HIU's large writes take their own, longer limit (ABDM_HIU_LARGE_WRITE_TIMEOUT_MS,
+ * hiu-data.repository.ts).
+ */
+const requestTimeout = (() => {
+    const value = Number(process.env.DB_REQUEST_TIMEOUT_MS);
+    return Number.isFinite(value) && value >= 20_000 ? value : 30_000;
+})();
+
 export const AppDataSource = new DataSource({
     type: "mssql",
     host: process.env.DB_HOST,
@@ -161,12 +172,12 @@ export const AppDataSource = new DataSource({
         WellnessRecord
     ],
     connectionTimeout: 30000,
-    requestTimeout: 30000,
+    requestTimeout,
     extra: {
         encrypt: true,
         trustServerCertificate: true,
         connectionTimeout: 30000,
-        requestTimeout: 30000,
+        requestTimeout,
     },
 });
 

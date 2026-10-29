@@ -131,6 +131,16 @@ export const abdmConfig = {
         return names.length > 0 ? names : ["Provider", "Hospital Admin"];
     },
 
+    /**
+     * How long one large HIU write (a data push page's insert, a record's delete) may run, in ms. A
+     * multi-megabyte write on a small database (Azure SQL Basic) can take well past the app's own
+     * statement limit while the log is busy; at least 30 s, default 120 s.
+     */
+    get hiuLargeWriteTimeoutMs(): number {
+        const value = Number(env("ABDM_HIU_LARGE_WRITE_TIMEOUT_MS"));
+        return Number.isFinite(value) && value >= 30_000 ? value : 120_000;
+    },
+
     /** Minutes a health-information transfer may take before it is notified FAILED. */
     get hiuTransferWindowMinutes(): number {
         const value = Number(env("ABDM_HIU_TRANSFER_WINDOW_MINUTES"));

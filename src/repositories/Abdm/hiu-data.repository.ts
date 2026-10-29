@@ -1,4 +1,5 @@
 import { MssqlParameter } from "typeorm/index.js";
+import { abdmConfig } from "../../config/abdm.config.js";
 import { HiuError, type SessionStatus } from "../../services/Abdm/hiu/hiu-enums.js";
 import { errorCodeOf, RecordPurgeError, retryTransient, sqlErrorNumber, TRANSIENT_RETRY_DELAYS_MS, type RetryOptions } from "../../services/Abdm/hiu/hiu-db-errors.js";
 import type {
@@ -63,8 +64,13 @@ export const LARGE_WRITE_LOCK = "AbdmHiuLargeWrite";
  */
 export const LARGE_WRITE_LOCK_POLL_MS = 5_000;
 
-/** How long a large write waits in all for another instance's to finish before it fails (ELOCKWAIT). */
-export const LARGE_WRITE_LOCK_WAIT_MS = 120_000;
+/**
+ * How long a large write waits in all for another instance's to finish before it fails (ELOCKWAIT),
+ * at least: the wait is stretched to one large write's limit (hiuLargeWriteTimeoutMs) plus a minute
+ * when that is longer, so a waiting instance outlasts the write it waits for.
+ */
+export const LARGE_WRITE_LOCK_WAIT_MS = 180_000;
+const largeWriteLockWaitMs = (): number => Math.max(LARGE_WRITE_LOCK_WAIT_MS, abdmConfig.hiuLargeWriteTimeoutMs + 60_000);
 
 /** A large write that did not get the lock: sp_getapplock's result (-1 is a wait past LARGE_WRITE_LOCK_WAIT_MS). */
 export class LargeWriteLockError extends Error {
@@ -98,6 +104,39 @@ const deletedRowsOf = (result: any): any[] =>
         : rowsOf(result);
 
 const dateOrNull = (value: unknown): Date | null => (value ? new Date(value as any) : null);
+
+/**
+ * Runs one statement on the pool with its own requestTimeout ([timeoutMs()], read on every call):
+ * mssql's per-request override, which TypeORM's query does not pass. Parameters bind as TypeORM binds
+ * them (@0, @1, ...; an MssqlParameter as its SQL type), and the answer is shaped as TypeORM's: the
+ * recordset, or [recordset, rowsAffected] for a statement that starts with DELETE. Errors are mssql's
+ * own (code, number), which hiu-db-errors reads as it reads TypeORM's.
+ */
+export const timedQuery = (timeoutMs: () => number): HiuQuery => async (sql, parameters = []) => {
+    const { AppDataSource } = await import("../../config/database.js");
+    const driver: any = AppDataSource.driver;
+    const pool = await driver.obtainMasterConnection();
+    // Only for its parameter mapping (MssqlParameter -> mssql type); never connected.
+    const runner: any = AppDataSource.createQueryRunner();
+    try {
+        // Never shorter than the pool's own limit (DB_REQUEST_TIMEOUT_MS may be set higher).
+        const requestTimeout = Math.max(timeoutMs(), Number(driver.options?.requestTimeout) || 0);
+        const request = new driver.mssql.Request(pool, { requestTimeout });
+        parameters.forEach((parameter, index) => {
+            if (parameter instanceof MssqlParameter) {
+                const type = runner.mssqlParameterToNativeParameter(parameter);
+                if (type) request.input(String(index), type, parameter.value);
+                else request.input(String(index), parameter.value);
+            } else {
+                request.input(String(index), parameter);
+            }
+        });
+        const raw = await request.query(sql);
+        return sql.slice(0, sql.indexOf(" ")) === "DELETE" ? [raw.recordset, raw.rowsAffected?.[0]] : raw.recordset;
+    } finally {
+        await runner.release();
+    }
+};
 
 const DATA_REQUEST_COLUMNS = `Id, HiRequestId, TransactionId, ArtefactFk, HospitalId, DateFrom, DateTo, PushTokenHash, PrivateKey, Nonce,
     KeyExpiresAt, TransferDeadline, SessionStatus, PageCount, PagesReceived, CareContextStatus, NotifiedAt, NotifyRequestId,
@@ -189,6 +228,12 @@ const RECORD_COLUMNS = ["DataRequestFk", "ArtefactFk", "HospitalId", "PageNumber
 
 export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
     private readonly query: HiuQuery;
+    /**
+     * The large writes' own statements (a page's insert, a record's delete), with the longer
+     * hiuLargeWriteTimeoutMs: on Azure SQL Basic a multi-megabyte insert can run past the app's 30 s
+     * while the log is busy, and a page that times out twice is lost (the HIP had its 202).
+     */
+    private readonly largeQuery: HiuQuery;
     /** How every retried statement waits: the delays, the sleep and the jitter (retryTransient). */
     private readonly retry: Omit<RetryOptions, "label">;
     private readonly clock: () => number;
@@ -204,6 +249,8 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
 
     constructor(options: {
         query?: HiuQuery;
+        /** The large writes' statements; defaults to [query] when one is given (tests), else timedQuery. */
+        largeQuery?: HiuQuery;
         lockSession?: () => Promise<HiuLockSession>;
         sleep?: (ms: number) => Promise<void>;
         retryDelaysMs?: readonly number[];
@@ -215,6 +262,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
             const { AppDataSource } = await import("../../config/database.js");
             return AppDataSource.query(sql, parameters as any[]);
         });
+        this.largeQuery = options.largeQuery ?? (options.query ? this.query : timedQuery(() => abdmConfig.hiuLargeWriteTimeoutMs));
         this.openLockSession = options.lockSession ?? (async () => {
             const { AppDataSource } = await import("../../config/database.js");
             // TypeORM's mssql runner keeps one connection only inside a transaction: outside one,
@@ -288,7 +336,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
             ));
             const result = Number(rows[0]?.Result);
             if (result >= 0) return;
-            if (result !== -1 || this.clock() - started >= LARGE_WRITE_LOCK_WAIT_MS) throw new LargeWriteLockError(result);
+            if (result !== -1 || this.clock() - started >= largeWriteLockWaitMs()) throw new LargeWriteLockError(result);
         }
     }
 
@@ -482,7 +530,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
                 // First a check that takes no lock (row versions, under read committed snapshot): a page
                 // that waited in the queue while its artefact ended or its transfer closed is dropped
                 // before megabytes are written and rolled back.
-                const rows = rowsOf(await this.query(
+                const rows = rowsOf(await this.largeQuery(
                     `SET XACT_ABORT ON;
                      IF NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts WHERE Id = @1 AND Status = 'GRANTED' AND RecordsPurgedAt IS NULL)
                         OR NOT EXISTS (SELECT 1 FROM AbdmHiuDataRequests WHERE Id = @0 AND NotifiedAt IS NULL AND SessionStatus IN ('REQUESTED', 'RECEIVING') AND PrivateKey IS NOT NULL)
@@ -564,7 +612,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
         for (;;) {
             let rows: any[];
             try {
-                rows = deletedRowsOf(await this.largeWrite("record delete", () => this.query(
+                rows = deletedRowsOf(await this.largeWrite("record delete", () => this.largeQuery(
                     `DELETE TOP (1) rec
                      OUTPUT deleted.Id
                      FROM AbdmHiuRecords rec
@@ -604,7 +652,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
         while (this.clock() - started < PURGE_SWEEP_BUDGET_MS) {
             let rows: any[];
             try {
-                rows = deletedRowsOf(await this.largeWrite("record delete", () => this.query(
+                rows = deletedRowsOf(await this.largeWrite("record delete", () => this.largeQuery(
                     `DELETE TOP (1) rec
                      OUTPUT deleted.ArtefactFk, deleted.HospitalId
                      FROM AbdmHiuRecords rec

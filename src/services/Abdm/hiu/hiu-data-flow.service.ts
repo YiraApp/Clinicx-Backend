@@ -877,7 +877,8 @@ export class HiuDataFlowService implements HealthInformationRequester {
         const error = sessionStatus === "RECEIVED"
             ? null
             : reason === "timeout"
-              ? `The provider did not send every page within ${settings.transferWindowMinutes} minutes (${row.pagesReceived} of ${row.pageCount ?? "?"} received).`
+              // Not "the provider did not send": a page that arrived and could not be stored counts here too.
+              ? `Only ${row.pagesReceived} of ${row.pageCount ?? "?"} pages were received and stored within ${settings.transferWindowMinutes} minutes.`
               : entryOk
                 ? "Some entries could not be decrypted or failed their checksum."
                 : "No entry could be decrypted and verified.";
@@ -912,7 +913,10 @@ export class HiuDataFlowService implements HealthInformationRequester {
                     notification: {
                         consentId: artefact?.consentArtefactId ?? "",
                         transactionId: row.transactionId,
-                        doneAt: abdmDateTime(now),
+                        // "The date at which the transaction was initiated": our health-information
+                        // request. Never the moment of sending: a server clock a second fast puts that in
+                        // ABDM's future, which ABDM refuses ("Done At should be present or past date time").
+                        doneAt: abdmDateTime(row.createdAt),
                         notifier: { type: "HIU", id: hiuId },
                         statusNotification: {
                             sessionStatus,
@@ -926,7 +930,11 @@ export class HiuDataFlowService implements HealthInformationRequester {
             console.log(`[ABDM HIU] health-information/notify transactionId=${row.transactionId} ${sessionStatus} REQUEST-ID=${notifyRequestId}`);
         } catch (error: any) {
             const code = error instanceof AbdmApiError ? error.code : null;
-            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId: notifyRequestId, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail: code });
+            // ABDM's own words beside the code (ABDM-9999 is a catch-all), or alone when its answer
+            // carried no code ({message, timestamp}, a field's message, plain text); digits masked.
+            const message = error instanceof AbdmApiError && error.message ? String(error.message).replace(/\d{6,}/g, "[digits]").slice(0, 200) : "";
+            const detail = code && message ? `${code}: ${message}` : code || message || null;
+            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId: notifyRequestId, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail });
             console.error(`[ABDM HIU] health-information/notify transactionId=${row.transactionId} not sent: ${code ?? error?.kind ?? "error"}`);
         }
     }

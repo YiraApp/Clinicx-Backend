@@ -442,6 +442,45 @@ for (const [name, error] of [
     });
 }
 
+test("the notify's doneAt is when the transaction was initiated (our request), never the moment of sending", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    // The pages arrive later, and the clock is read again when the notify goes out.
+    now = T0 + 90_000;
+    await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("op-1")) }]));
+    await settle();
+    const [sent] = notifies();
+    assert.equal((sent.body as any).notification.doneAt, new Date(T0).toISOString());
+});
+
+test("a notify ABDM refuses is audited with its code and ABDM's message, digits masked", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    gatewayFault = (call) => {
+        if (!call.path.endsWith("/health-information/notify")) return;
+        throw new AbdmApiError({ status: 400, kind: "rejected", operation: "x", code: "ABDM-9999", message: "Done At should be present or past date time 12345678" });
+    };
+    await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("op-1")) }]));
+    await settle();
+    const row = audits.find((event) => event.event === "DATA_NOTIFY_SENT")!;
+    assert.equal(row.outcome, "FAILED");
+    assert.equal(row.detail, "ABDM-9999: Done At should be present or past date time [digits]");
+});
+
+test("a notify ABDM refuses with no code is audited with ABDM's message alone", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    gatewayFault = (call) => {
+        if (!call.path.endsWith("/health-information/notify")) return;
+        throw new AbdmApiError({ status: 500, kind: "unavailable", operation: "x", code: null, message: "Runtime Error" });
+    };
+    await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("op-1")) }]));
+    await settle();
+    const row = audits.find((event) => event.event === "DATA_NOTIFY_SENT")!;
+    assert.equal(row.outcome, "FAILED");
+    assert.equal(row.detail, "Runtime Error");
+});
+
 test("a request with no answer and no on-request is closed by its window without a notify", async () => {
     gatewayFault = () => { throw hiTimeout(); };
     const service = makeService();

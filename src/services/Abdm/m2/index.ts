@@ -40,5 +40,6 @@ export const m2CallbackHandlers: Record<string, CallbackHandler> = {
     "/api/v3/hip/link/care-context/init": async ({ requestId, headers, body }) => patientLinkingService.onLinkInit(await facility(headers), requestId, body),
     "/api/v3/hip/link/care-context/confirm": async ({ requestId, headers, body }) => patientLinkingService.onLinkConfirm(await facility(headers), requestId, body),
     "/api/v3/consent/request/hip/notify": async ({ requestId, headers, body }) => dataFlowService.onConsentNotify(await facility(headers), requestId, body),
-    "/api/v3/hip/health-information/request": async ({ requestId, headers, body }) => dataFlowService.onHealthInformationRequest(await facility(headers), requestId, body),
+    "/api/v3/hip/health-information/request": async ({ requestId, headers, body }) =>
+        dataFlowService.onHealthInformationRequest(await facility(headers), requestId, body, headers["timestamp"]),
 };

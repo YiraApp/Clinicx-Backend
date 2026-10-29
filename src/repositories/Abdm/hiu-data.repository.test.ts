@@ -422,6 +422,28 @@ test("the queue stays in front of the lock: a second write asks for it only once
     assert.deepEqual(trace, ["open", "lock", "SET", "release", "open", "lock", "SET", "release"]);
 });
 
+test("a page's insert and the record deletes run on the large-write query (its own, longer timeout); every other statement on the usual one", async () => {
+    const usual: string[] = [];
+    const large: string[] = [];
+    const repository = new HiuDataRepository({
+        query: async (sql) => { usual.push(sql.slice(0, sql.indexOf(" "))); return sql.startsWith("DELETE") ? [[], 0] : []; },
+        largeQuery: async (sql) => {
+            large.push(sql.slice(0, sql.indexOf(" ")));
+            if (sql.startsWith("DELETE")) return [[], 0];
+            return [{ PagesReceived: 1 }];
+        },
+        lockSession: async () => ({ query: async () => [{ Result: 0 }], release: async () => undefined }),
+        sleep: async () => undefined,
+        random: () => 0.5,
+    });
+    assert.deepEqual(await repository.addPage(onePage), { duplicate: false, pagesReceived: 1 });
+    assert.equal(await repository.purgeArtefactRecords(2, new Date("2026-10-29T09:00:00.000Z")), 0);
+    await repository.purgeRecords(new Date("2026-10-29T09:00:00.000Z"));
+    assert.deepEqual(large, ["SET", "DELETE", "DELETE"], "the page insert and both purges' deletes");
+    assert.ok(!usual.includes("SET") && !usual.includes("DELETE"), "no large write on the usual query");
+    assert.ok(usual.includes("UPDATE"), "the purge stamp stays on the usual query");
+});
+
 test("an ended artefact's records are deleted one row per statement, each retried, never a granted one's; then it is stamped", async () => {
     let remaining = 3;
     let timeouts = 1;

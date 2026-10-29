@@ -4,7 +4,7 @@ import { AbdmApiError } from "../abdm-gateway.service.js";
 import { CareContextCatalog, byHiType, careContextDisplay, parseCareContextReference } from "./care-contexts.js";
 import { HipLinkingService, LinkingError, tokenExpiry } from "./hip-linking.js";
 import { PatientLinkingService, looksLikeSamePerson } from "./patient-linking.js";
-import { DataFlowService } from "./data-flow.js";
+import { abdmSentAt, DataFlowService } from "./data-flow.js";
 import type { CareContextRow, CareContextSeed, ConsentRow, LinkRequestRow, LinkStatePatch, M2Store, PatientProfile, TransferRow } from "./m2-store.js";
 import { decrypt, generateKeyMaterial } from "../hie-crypto.js";
 import { fixtureParties } from "../fhir/fhir-fixtures.js";
@@ -546,6 +546,42 @@ test("a consent for an address the patient does not hold gets nothing", async ()
     assert.equal(pushes.length, 0);
     const statuses = gateway.last("/health-information/notify").body.notification.statusNotification.statusResponses;
     assert.ok(statuses.every((s: any) => s.hiStatus === "ERRORED"));
+});
+
+test("the HIP's notify carries doneAt as the request's arrival, not the moment it is sent", async () => {
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.test@sbx" });
+    // A clock that moves a second each time it is read.
+    let tick = NOW.getTime();
+    const clock = () => new Date((tick += 1_000));
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, clock, async () => ({ ok: true, status: 202 }));
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED"));
+    const arrival = tick + 1_000;
+    await flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial()));
+    const notify = gateway.last("/health-information/notify").body.notification;
+    assert.equal(notify.doneAt, new Date(arrival).toISOString());
+    assert.ok(new Date(notify.doneAt).getTime() < tick, "earlier than the clock at sending");
+});
+
+test("with ABDM's TIMESTAMP on the request, doneAt is ABDM's time, even when nothing is pushed and the server clock runs ahead", async () => {
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.test@sbx" });
+    // The server clock is 0.8 s ahead of ABDM's and the notify follows at once: our arrival time would be in ABDM's future.
+    const sentByAbdm = new Date(NOW.getTime() - 50);
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => new Date(NOW.getTime() + 800), async () => ({ ok: true, status: 202 }));
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED", { patient: { id: "stranger@sbx" } }));
+    await flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial()), sentByAbdm.toISOString());
+    const notify = gateway.last("/health-information/notify").body.notification;
+    assert.equal(notify.statusNotification.sessionStatus, "FAILED", "nothing was pushed");
+    assert.equal(notify.doneAt, sentByAbdm.toISOString());
+});
+
+test("ABDM's TIMESTAMP reads as UTC without a zone; a missing, unreadable or later one gives way to the server's time", () => {
+    const now = new Date("2026-10-29T16:50:26.095Z");
+    assert.equal(abdmSentAt("2026-10-29T16:50:25.123Z", now).toISOString(), "2026-10-29T16:50:25.123Z");
+    assert.equal(abdmSentAt("2026-10-29T16:50:25.123", now).toISOString(), "2026-10-29T16:50:25.123Z");
+    assert.equal(abdmSentAt("2026-10-29T22:20:25.123+05:30", now).toISOString(), "2026-10-29T16:50:25.123Z");
+    for (const header of [undefined, "", "not a time", "2026-10-29T16:50:27.000Z"]) assert.equal(abdmSentAt(header, now), now);
 });
 
 test("a health information request on a granted consent is acknowledged, encrypted, pushed and reported", async () => {

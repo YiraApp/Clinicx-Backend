@@ -38,6 +38,18 @@ const ON_REQUEST_RETRY_MS = [2_000, 5_000];
 const failedOnAbdmSide = (error: unknown): boolean =>
     error instanceof AbdmApiError && ((error.kind === "unavailable" && error.status >= 500) || /runtime error/i.test(error.message));
 
+/**
+ * When ABDM sent a request, from its TIMESTAMP header: ABDM's clock, so a server clock running ahead
+ * of ABDM's cannot put a time taken from it in ABDM's future. A header with no zone is UTC, as ABDM
+ * writes it. `now` when the header is missing, unreadable or later than `now`.
+ */
+export const abdmSentAt = (header: string | undefined, now: Date): Date => {
+    const text = String(header ?? "").trim();
+    if (!text) return now;
+    const at = new Date(/(?:z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`);
+    return Number.isFinite(at.getTime()) && at.getTime() <= now.getTime() ? at : now;
+};
+
 /** The bundles a care context shares, built from its records as they are now; none for a reference that is not one. */
 export const bundlesForReference = async (records: Records, referenceNumber: string): Promise<HealthRecordBundle[]> => {
     const parsed = parseCareContextReference(referenceNumber);
@@ -137,7 +149,14 @@ export class DataFlowService {
     }
 
     /** health-information request → on-request, then (when acknowledged) the transfer and notify. */
-    async onHealthInformationRequest(hip: Hip, requestId: string, body: any): Promise<void> {
+    async onHealthInformationRequest(hip: Hip, requestId: string, body: any, timestamp?: string): Promise<void> {
+        // When ABDM initiated the transaction, by its own TIMESTAMP: the notify's doneAt (see transfer).
+        // Our arrival time would still be in ABDM's future on a fast server clock when nothing is pushed.
+        const now = this.now();
+        const initiatedAt = abdmSentAt(timestamp, now);
+        if (timestamp && initiatedAt === now) {
+            console.warn(`[ABDM] health-information/request TIMESTAMP "${String(timestamp).slice(0, 40)}" is unreadable or after the server clock; doneAt uses the server clock`);
+        }
         const transactionId = String(body?.transactionId ?? "");
         const consentId = String(body?.hiRequest?.consent?.id ?? "");
         const created = await this.store.createTransfer({
@@ -161,7 +180,7 @@ export class DataFlowService {
             return;
         }
         await this.store.updateTransfer(transactionId, { status: "acknowledged" });
-        await this.transfer(hip, transactionId, body);
+        await this.transfer(hip, transactionId, body, initiatedAt);
     }
 
     /** on-request, tried again while ABDM fails on its side: until it lands, nothing can be pushed. */
@@ -183,7 +202,7 @@ export class DataFlowService {
     }
 
     /** Builds, encrypts and pushes what the consent covers, one page per care context, then notifies ABDM. */
-    async transfer(hip: Hip, transactionId: string, body: any): Promise<StatusResponse[]> {
+    async transfer(hip: Hip, transactionId: string, body: any, initiatedAt: Date = this.now()): Promise<StatusResponse[]> {
         const hi = body.hiRequest;
         const consent = (await this.store.consent(String(hi.consent.id)))!;
         const from = new Date(Math.max(new Date(hi.dateRange.from).getTime(), consent.dateFrom?.getTime() ?? -Infinity));
@@ -274,7 +293,9 @@ export class DataFlowService {
             notification: {
                 consentId: consent.consentId,
                 transactionId,
-                doneAt: this.now().toISOString(),
+                // "The date at which the transaction was initiated", not the moment of sending: a
+                // server clock a second fast puts that in ABDM's future, and ABDM refuses it.
+                doneAt: initiatedAt.toISOString(),
                 notifier: { type: "HIP", id: hip.id },
                 statusNotification: { sessionStatus: delivered ? "TRANSFERRED" : "FAILED", hipId: hip.id, statusResponses: statuses },
             },
