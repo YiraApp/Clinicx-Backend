@@ -137,19 +137,13 @@
    "figure": 23,
    "case": "HIP_INIT_SHARE_CARECONTEXT",
    "step": 1,
-   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-1.png"
+   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/1.png"
   },
   {
    "figure": 24,
    "case": "HIP_INIT_SHARE_CARECONTEXT",
    "step": 2,
-   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-2.png"
-  },
-  {
-   "figure": 25,
-   "case": "HIP_INIT_SHARE_CARECONTEXT",
-   "step": 3,
-   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-3.png"
+   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-1.png"
   }
  ]
 }

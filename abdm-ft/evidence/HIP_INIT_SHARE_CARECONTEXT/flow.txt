@@ -1,0 +1,28 @@
+HIP_INIT_SHARE_CARECONTEXT, rerun of 2026-10-29 on backend db30fa2 / frontend feb708f (values that identify the person are not recorded)
+
+Why a rerun: the 2026-10-28 pass (archive/HIP_INIT_SHARE_CARECONTEXT-20261028-old-build, build 85ae1bd / ab5a8a0) met the Expected Result, but ClinicX had no screen for the stored consent, so it was recorded CONDITIONAL PASS. Backend 0326320 and a5a4dca with frontend feb708f added the Consents section to the patient's ABDM Records tab; db30fa2 corrected its received and sent times (they showed 5h30 early).
+Set-up: the overnight quick tunnel was gone (NXDOMAIN). New quick tunnel https://distribute-dimensions-dining-tim.trycloudflare.com; an outside POST reached the callback handler (401 unsigned); PATCH /api/hiecm/gateway/v3/bridge/url -> 202 (REQUEST-ID fc702a49-0fe4-40cb-a63b-6cb84e2d784d); ABDM reads back the new URL, bridge SBX_002352 active, IN3610001937 on it as HIP (REQUEST-ID 718225df-3a54-446a-906e-67edd03040e0).
+
+Pass 1, 08:35 IST, backend a5a4dca: consent notify fafde174-9888-43de-9d81-d4123409a05d GRANTED, consent 9f19a26c-9db6-4adf-9a90-18c4bf951eec for WR-2; HI request ce7ffdde-ebf8-4a39-b3e3-a85424337473, transaction 2288a728-e6e8-4218-bb66-d88a7643f0e8; transfer 59 WR-2 DELIVERED. The Consents section showed this consent with its times 5h30 early; fixed in db30fa2 and the case run again. Its PHR screenshot is in archive/HIP_INIT_SHARE_CARECONTEXT-20261029-0835-pre-fix.
+
+Pass 2, 08:50 IST, backend db30fa2 (the recorded pass):
+1. inbound POST /api/v3/consent/request/hip/notify  REQUEST-ID 8b0b8f8b-2d65-4296-9c59-6865556cd787  (exchange 187, 03:20:34Z)
+   notification.status GRANTED; notification.consentDetail.consentId 023332f4-9b5f-4b6a-aca8-6ee94071e65a; consentDetail.hip.id IN3610001937
+   hiTypes [Prescription, DiagnosticReport, OPConsultation, DischargeSummary, ImmunizationRecord, HealthDocumentRecord, WellnessRecord, Invoice]; purpose PATRQT
+   permission {accessMode VIEW, dateRange 1926-10-29T03:20:29.484Z .. 2026-10-29T03:20:29.484Z, dataEraseAt 2126-10-29T03:20:29.484Z}
+   careContexts [{patientReference 5bfd87da-..., careContextReference RX-D7CD5098-48DE-47D2-B9CD-FBCECACA52C6}]
+2. stored: AbdmConsents id 58, consent 023332f4, GRANTED, hiTypes, careContexts, dateFrom/dateTo, dataEraseAt, purpose, artefact whole
+   reply: POST /api/hiecm/consent/v3/request/hip/on-notify  {acknowledgement {status OK, consentId 023332f4}, response.requestId 8b0b8f8b} -> accepted (exchange 187 replied: the handler ends without error only when the gateway accepts the on-notify)
+   Screen (1.png, 1.txt): Patients > the patient > ABDM Records > Consents, first card: "Self Requested", "Received 29 Oct 2026, 08:50 AM", "Granted",
+   HI types "Prescription, Diagnostic report, OP consultation, Discharge summary, Immunization record, Health document, Wellness record, Invoice",
+   "Records dated 29 Oct 1926 to 29 Oct 2026", "Expiry 29 Oct 2126, 08:50 AM", "Records covered (1) Prescription, 28 Oct 2026 · RX-D7CD5098-48DE-47D2-B9CD-FBCECACA52C6",
+   "Consent ID 023332f4-9b5f-4b6a-aca8-6ee94071e65a"
+3. inbound POST /api/v3/hip/health-information/request  REQUEST-ID 7a34c022-ec56-46d6-a0dc-2fc139eb86c6  (exchange 188, 03:20:35Z)
+   transactionId a5f7b891-c47e-4cab-af34-fa5150623de9; hiRequest.consent.id 023332f4; dateRange 1926-10-29T03:20:29.484Z .. 2026-10-29T03:20:29.484Z
+   dataPushUrl https://apissbx.abdm.gov.in/abha/api/v3/patient-hiu/app/v0.5/health-information/transfer; keyMaterial cryptoAlg ECDH, curve curve25519, dhPublicKey present, nonce present
+4. reply: POST /api/hiecm/data-flow/v3/health-information/hip/on-request  {hiRequest {transactionId a5f7b891, sessionStatus ACKNOWLEDGED}} -> accepted (exchange 188 replied)
+5. push: POST dataPushUrl  {pageNumber 1, pageCount 1, transactionId a5f7b891, entries[{media application/fhir+json, content <encrypted>, checksum, careContextReference RX-D7CD5098-48DE-47D2-B9CD-FBCECACA52C6}], keyMaterial {cryptoAlg ECDH, curve Curve25519, dhPublicKey, nonce}} -> 2xx (transfer 60 result DELIVERED is recorded only on res.ok)
+6. compare: pushed careContextReference RX-D7CD5098-48DE-47D2-B9CD-FBCECACA52C6 is in the consent's careContexts [RX-D7CD5098-48DE-47D2-B9CD-FBCECACA52C6]; request dateRange equals the consent permission dateRange (inside, inclusive)
+7. notify: POST /api/hiecm/data-flow/v3/health-information/notify  {notifier {type HIP, id IN3610001937}, statusNotification {sessionStatus TRANSFERRED, statusResponses [{RX-D7CD5098-48DE-47D2-B9CD-FBCECACA52C6, DELIVERED}]}} -> accepted (transfer 60 status 'transferred' is set only after it); shown on screen as "29 Oct 2026, 08:50 AM · Sent · 1 delivered, 0 errored"
+PHR app (tester, 08:50): phr-1.png Health Record from Ocimum dentistry, Prescription record (MedicationRequest: Amoxicillin 500 mg oral capsule, Dental caries, authored 28 Oct 2026 06:50 PM) and its Binary: decrypted and shown as the NRCES Prescription record document type
+Outbound reply and push bodies are not stored by the build; 2, 4, 5 and 7 are shown by data-flow.ts and by the recorded acceptance and transfer results.

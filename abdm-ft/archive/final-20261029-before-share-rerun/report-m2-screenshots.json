@@ -1,0 +1,155 @@
+{
+ "report": "report-m2",
+ "figures": [
+  {
+   "figure": 1,
+   "case": "Health_RECORD_CREATION_101",
+   "step": 1,
+   "file": "abdm-ft/evidence/Health_RECORD_CREATION_101/1.png"
+  },
+  {
+   "figure": 2,
+   "case": "Health_RECORD_CREATION_101",
+   "step": 2,
+   "file": "abdm-ft/evidence/Health_RECORD_CREATION_101/2.png"
+  },
+  {
+   "figure": 3,
+   "case": "HIP_INTI_LINK_504",
+   "step": 1,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_504/1.png"
+  },
+  {
+   "figure": 4,
+   "case": "HIP_INTI_LINK_504",
+   "step": 2,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_504/2.png"
+  },
+  {
+   "figure": 5,
+   "case": "HIP_INTI_LINK_504",
+   "step": 3,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_504/3.png"
+  },
+  {
+   "figure": 6,
+   "case": "HIP_INTI_LINK_505",
+   "step": 1,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_505/1.png"
+  },
+  {
+   "figure": 7,
+   "case": "HIP_INTI_LINK_505",
+   "step": 2,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_505/2.png"
+  },
+  {
+   "figure": 8,
+   "case": "HIP_INTI_LINK_505",
+   "step": 3,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_505/phr-1.png"
+  },
+  {
+   "figure": 9,
+   "case": "HIP_INTI_LINK_505",
+   "step": 4,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_505/phr-2.png"
+  },
+  {
+   "figure": 10,
+   "case": "HIP_INTI_LINK_505",
+   "step": 5,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_505/phr-3.png"
+  },
+  {
+   "figure": 11,
+   "case": "HIP_INTI_LINK_505",
+   "step": 6,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_505/phr-4.png"
+  },
+  {
+   "figure": 12,
+   "case": "HIP_INTI_LINK_506",
+   "step": 1,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_506/phr-1.png"
+  },
+  {
+   "figure": 13,
+   "case": "HIP_INTI_LINK_506",
+   "step": 2,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_506/phr-2.png"
+  },
+  {
+   "figure": 14,
+   "case": "HIP_INTI_LINK_506",
+   "step": 3,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_506/phr-3.png"
+  },
+  {
+   "figure": 15,
+   "case": "HIP_INTI_LINK_506",
+   "step": 4,
+   "file": "abdm-ft/evidence/HIP_INTI_LINK_506/phr-4.png"
+  },
+  {
+   "figure": 16,
+   "case": "USER_INIT_LINK_602",
+   "step": 1,
+   "file": "abdm-ft/evidence/USER_INIT_LINK_602/phr-1.png"
+  },
+  {
+   "figure": 17,
+   "case": "USER_INIT_LINK_604",
+   "step": 1,
+   "file": "abdm-ft/evidence/USER_INIT_LINK_604/phr-1.png"
+  },
+  {
+   "figure": 18,
+   "case": "USER_INIT_LINK_605",
+   "step": 1,
+   "file": "abdm-ft/evidence/USER_INIT_LINK_605/phr-1.png"
+  },
+  {
+   "figure": 19,
+   "case": "USER_INIT_LINK_605",
+   "step": 2,
+   "file": "abdm-ft/evidence/USER_INIT_LINK_605/phr-3-linked-record.png"
+  },
+  {
+   "figure": 20,
+   "case": "USER_INIT_LINK_607",
+   "step": 1,
+   "file": "abdm-ft/evidence/USER_INIT_LINK_607/phr-1.png"
+  },
+  {
+   "figure": 21,
+   "case": "HIP_INIT_NOTIFY_HIECM",
+   "step": 1,
+   "file": "abdm-ft/evidence/HIP_INIT_NOTIFY_HIECM/1.png"
+  },
+  {
+   "figure": 22,
+   "case": "HIP_INIT_NOTIFY_HIECM",
+   "step": 2,
+   "file": "abdm-ft/evidence/HIP_INIT_NOTIFY_HIECM/sms.png"
+  },
+  {
+   "figure": 23,
+   "case": "HIP_INIT_SHARE_CARECONTEXT",
+   "step": 1,
+   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-1.png"
+  },
+  {
+   "figure": 24,
+   "case": "HIP_INIT_SHARE_CARECONTEXT",
+   "step": 2,
+   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-2.png"
+  },
+  {
+   "figure": 25,
+   "case": "HIP_INIT_SHARE_CARECONTEXT",
+   "step": 3,
+   "file": "abdm-ft/evidence/HIP_INIT_SHARE_CARECONTEXT/phr-3.png"
+  }
+ ]
+}

@@ -25,8 +25,8 @@
   "phr_app_version": "Not recorded",
   "emulator": "None: the tester's Android phone",
   "model": "claude-opus-5-5",
-  "backend_build": "Clinicx-Backend ABHABang-26-10 at 85ae1bd",
-  "frontend_build": "Clinicx-Frontend at ab5a8a0",
+  "backend_build": "Clinicx-Backend ABHABang-26-10 at 85ae1bd; HIP_INIT_SHARE_CARECONTEXT re-run at db30fa2",
+  "frontend_build": "Clinicx-Frontend at ab5a8a0; HIP_INIT_SHARE_CARECONTEXT re-run at feb708f",
   "callback_route": "Cloudflare quick tunnel to the local backend, registered as the bridge URL"
  },
  "test_data": [
@@ -124,7 +124,8 @@
   "The build under test ran on a local machine; ABDM callbacks reached it through a Cloudflare quick tunnel registered as the bridge URL. The tunnel was replaced twice during the run after the machine slept, and the bridge URL re-registered each time (run log).",
   "The build does not store the bodies of its outbound replies and pushes (on-discover, on-init, on-confirm, on-notify, on-request, data push, notify); their content is shown by the code and by ABDM accepting them and by what followed.",
   "ABDM sandbox: one on-discover was answered with 'Runtime Error', and twice no health-information request followed a granted consent (USER_INIT_LINK_607 passes 1 and 2).",
-  "Extra checks outside the set (count mismatch ABDM-1037, wrong OTP, consent revocation) were not run."
+  "Extra checks outside the set (count mismatch ABDM-1037, wrong OTP, consent revocation) were not run.",
+  "HIP_INIT_SHARE_CARECONTEXT was re-run on 2026-10-29 on backend db30fa2 / frontend feb708f, after a read-only Consents view was added. Backend changes since 85ae1bd are only that view (0326320, db30fa2) and a hospital-role check on the staff ABDM patient routes (a5a4dca); the linking, data-flow, FHIR, gateway and crypto code the other 12 cases ran on is unchanged. Frontend feb708f adds the view to the ABDM Records tab and also carries the M1/M3 commits merged at 00:13 on 2026-10-29 (HIU record request pages and the shared calendar), none of which touches the ABDM Records tab or the linking screens. The quick tunnel was replaced and the bridge URL re-registered for the re-run."
  ],
  "findings": {
   "Health_RECORD_CREATION_101": "All 8 HI types are created as NRCES document bundles stored against care contexts, with SNOMED CT and LOINC codes.",
@@ -139,7 +140,7 @@
   "USER_INIT_LINK_605": "The HIP sends the OTP, verifies it on confirm and links only the selected care context.",
   "USER_INIT_LINK_607": "The linked prescription was pulled into the PHR app on the third pass; ABDM sent no data request on the first two.",
   "HIP_INIT_NOTIFY_HIECM": "A new record for a patient without ABHA sends sms/notify2 on its own, and the SMS with the deep link arrives.",
-  "HIP_INIT_SHARE_CARECONTEXT": "Records are shared encrypted on request and shown in the PHR app; there is no screen for stored consents."
+  "HIP_INIT_SHARE_CARECONTEXT": "Records are shared encrypted on request and shown in the PHR app, and ClinicX shows each stored consent against the patient with its HI types, date range, purpose and expiry."
  },
  "agreed_not_run": {},
  "recordings": []

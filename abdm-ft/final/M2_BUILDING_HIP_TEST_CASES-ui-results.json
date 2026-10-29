@@ -100,10 +100,10 @@
  },
  {
   "id": "HIP_INIT_SHARE_CARECONTEXT",
-  "outcome": "conditional-pass",
-  "iterations": 1,
-  "response": "consent notify 8b741177-6594-4137-b999-149176c60196 GRANTED, consent 6b153ccb, hip IN3610001937; on-notify OK accepted; HI request fa855d87-9ff0-4c50-b124-a076ee45b167 (dataPushUrl, keyMaterial ECDH curve25519 with nonce); on-request ACKNOWLEDGED accepted; push of WR-2 as application/fhir+json with ECDH/Curve25519 keyMaterial -> 2xx; notify TRANSFERRED with WR-2 DELIVERED accepted (transfer 57); PHR app shows the records decrypted as Prescription record and Clinical consultation report",
-  "remarks": "Expected Result met: records received in the PHR app, decrypted with the HIP's public key and nonce, in NRCES document types (tester's screenshots phr-1..3; records also delivered by transfers 51 and 53 this run). Pushed care contexts are within the consent's and the request date range equals the consent's. Condition: ClinicX has no screen that shows the stored consent (HI types, date range, purpose, expiry); it is stored whole in AbdmConsents only. Outbound bodies are not stored by the build. Extra check (revocation) not run. Evidence 1.txt, phr-1..3."
+  "outcome": "passed",
+  "iterations": 2,
+  "response": "consent notify 8b0b8f8b-2d65-4296-9c59-6865556cd787 GRANTED, consent 023332f4, hip IN3610001937; on-notify OK accepted; HI request 7a34c022-ec56-46d6-a0dc-2fc139eb86c6 (transaction a5f7b891, dataPushUrl, keyMaterial ECDH curve25519 with nonce); on-request ACKNOWLEDGED accepted; push of RX-D7CD5098 as application/fhir+json with ECDH/Curve25519 keyMaterial -> 2xx; notify TRANSFERRED with RX-D7CD5098 DELIVERED accepted (transfer 60); Screen: ABDM Records > Consents shows the consent Granted, Self Requested, its 8 HI types, Records dated 29 Oct 1926 to 29 Oct 2026, Expiry 29 Oct 2126, 1 delivered; PHR app shows the Prescription record decrypted",
+  "remarks": "Expected Result met on backend db30fa2 / frontend feb708f: the record was received in the PHR app, decrypted, as the NRCES Prescription record (phr-1). ClinicX shows the stored consent against the patient under ABDM Records > Consents, with its HI types, date range, purpose and expiry and what was sent under it (1). The pushed care context is within the consent's, and the request date range equals the consent's. Re-run on 2026-10-29: the 2026-10-28 pass on 85ae1bd was a conditional pass because no screen showed the stored consent; the Consents view was added since. Pass 1 (08:35) met the exit condition, but the view showed its times 5h30 early; fixed in db30fa2 and pass 2 (08:50) recorded. Outbound bodies are not stored by the build. Extra check (revocation) not run. Evidence 1.png, 1.txt, flow.txt, phr-1.png."
  },
  {
   "id": "USER_INIT_LINK_605",
