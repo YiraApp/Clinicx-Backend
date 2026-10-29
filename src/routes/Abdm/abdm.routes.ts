@@ -32,6 +32,8 @@ abdmRouter.get("/health-records/vitals/:id", hr.vitals.bind(hr));
 const m2 = abdmM2Controller;
 abdmRouter.get("/patients/:userId/care-contexts", m2.careContexts.bind(m2));
 abdmRouter.get("/patients/:userId/care-contexts/:reference", m2.careContextView.bind(m2));
+// M2: the consents ABDM notified this HIP of for the patient, and what was pushed under each (read-only)
+abdmRouter.get("/patients/:userId/consents", m2.consents.bind(m2));
 abdmRouter.post("/patients/:userId/link", m2.link.bind(m2));
 abdmRouter.post("/patients/:userId/sms-notify", m2.smsNotify.bind(m2));
 

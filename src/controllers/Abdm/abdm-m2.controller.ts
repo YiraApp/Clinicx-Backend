@@ -9,11 +9,12 @@ import { abdmHealthRecordService } from "../../services/Abdm/abdm-health-record.
 import { bundlesForReference } from "../../services/Abdm/m2/data-flow.js";
 import { recordView } from "../../services/Abdm/fhir/record-view.js";
 import { FhirSourceError } from "../../services/Abdm/fhir/fhir-common.js";
+import { HipConsentsService } from "../../services/Abdm/m2/hip-consents.js";
 
 /**
- * Staff view of a patient's ABDM care contexts, and the two things staff can start: linking and the
- * SMS. All of it is for the hospital the staff member is working at (X-Hospital-Id), as that
- * hospital's ABDM facility.
+ * Staff view of a patient's ABDM care contexts and the consents to share them, and the two things
+ * staff can start: linking and the SMS. All of it is for the hospital the staff member is working
+ * at (X-Hospital-Id), as that hospital's ABDM facility.
  */
 
 const STATUS: Record<AbdmErrorKind, number> = { rejected: 422, "not-configured": 503, timeout: 504, credentials: 502, unavailable: 502, integration: 502 };
@@ -45,6 +46,8 @@ const hipFor = async (req: Request) => {
 };
 
 export class AbdmM2Controller {
+    constructor(private readonly hipConsents = new HipConsentsService(abdmM2Repository, abdmFacilities)) {}
+
     async careContexts(req: Request, res: Response) {
         try {
             const patient = await abdmM2Repository.patient(userId(req));
@@ -99,6 +102,18 @@ export class AbdmM2Controller {
             // The record can't be shared as it stands (a Final report with no conclusion, say): say what is missing
             if (error instanceof FhirSourceError) return res.status(422).json(ApiResponse.error(error.message, { kind: "record" }));
             if (/not found/i.test(error?.message ?? "")) return res.status(404).json(ApiResponse.error(error.message));
+            return sendError(res, error);
+        }
+    }
+
+    /** The consents ABDM notified this hospital's HIP of for the patient, and the transfers under each. */
+    async consents(req: Request, res: Response) {
+        res.setHeader("Cache-Control", "no-store");
+        try {
+            const found = await this.hipConsents.forPatient(hospitalId(req), userId(req));
+            if (!found) return res.status(404).json(ApiResponse.error("Patient not found."));
+            return res.json(ApiResponse.success(found));
+        } catch (error) {
             return sendError(res, error);
         }
     }

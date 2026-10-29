@@ -4,6 +4,7 @@ import type {
     CareContextRow, CareContextSeed, ConsentRow, LinkRequestRow, LinkStatePatch, M2Store, PatientProfile, TransferRow,
 } from "../../services/Abdm/m2/m2-store.js";
 import type { RecordOwners, RecordRef } from "../../services/Abdm/m2/auto-link.js";
+import type { HipConsentLedger, StoredHipConsent, StoredHipTransfer } from "../../services/Abdm/m2/hip-consents.js";
 
 /** M2's state on SQL Server: the AbdmCareContexts, AbdmLinkTokens, AbdmLinkRequests, AbdmConsents and AbdmDataTransfers tables. */
 
@@ -40,7 +41,16 @@ const careContext = (r: any): CareContextRow => ({
     createdAt: r.CreatedAt ? new Date(r.CreatedAt) : null,
 });
 
-const PATIENT_COLUMNS = `u.Id, u.FirstName, u.LastName, u.Gender, CONVERT(varchar(10), u.DateOfBirth, 23) AS DateOfBirth, u.PhoneNumber, u.AbhaNumber, u.AbhaAddress`;
+const consentRow = (r: any): ConsentRow => ({
+    consentId: r.ConsentId, hipId: r.HipId, status: r.Status, patientAbhaAddress: r.PatientAbhaAddress ?? null, hiuId: r.HiuId ?? null,
+    hiTypes: json<HiType[]>(r.HiTypes, []), careContexts: json(r.CareContexts, []),
+    dateFrom: r.DateFrom ? new Date(r.DateFrom) : null, dateTo: r.DateTo ? new Date(r.DateTo) : null,
+    dataEraseAt: r.DataEraseAt ? new Date(r.DataEraseAt) : null, purpose: r.Purpose ?? null,
+});
+/** What staff may see of a consent: never the Artefact or the Signature. */
+const CONSENT_VIEW_COLUMNS = `ConsentId, HipId, Status, PatientAbhaAddress, HiuId, HiTypes, CareContexts, DateFrom, DateTo, DataEraseAt, Purpose, CreatedAt, UpdatedAt`;
+
+const PATIENT_COLUMNS =`u.Id, u.FirstName, u.LastName, u.Gender, CONVERT(varchar(10), u.DateOfBirth, 23) AS DateOfBirth, u.PhoneNumber, u.AbhaNumber, u.AbhaAddress`;
 const patient = (r: any): PatientProfile => ({
     userId: String(r.Id).toLowerCase(),
     name: [r.FirstName, r.LastName].map((p: string | null) => p?.trim()).filter(Boolean).join(" ") || "Patient",
@@ -51,7 +61,7 @@ const patient = (r: any): PatientProfile => ({
     abhaAddress: r.AbhaAddress ?? null,
 });
 
-export class AbdmM2Repository implements M2Store {
+export class AbdmM2Repository implements M2Store, HipConsentLedger {
     async patient(userId: string): Promise<PatientProfile | null> {
         const rows = await q(`SELECT ${PATIENT_COLUMNS} FROM Users u WHERE u.Id = @0 AND u.IsDeleted = 0`, [userId]);
         return rows[0] ? patient(rows[0]) : null;
@@ -216,12 +226,33 @@ export class AbdmM2Repository implements M2Store {
 
     async consent(consentId: string): Promise<ConsentRow | null> {
         const r = (await q(`SELECT * FROM AbdmConsents WHERE ConsentId = @0`, [consentId]))[0];
-        return r ? {
-            consentId: r.ConsentId, hipId: r.HipId, status: r.Status, patientAbhaAddress: r.PatientAbhaAddress ?? null, hiuId: r.HiuId ?? null,
-            hiTypes: json<HiType[]>(r.HiTypes, []), careContexts: json(r.CareContexts, []),
-            dateFrom: r.DateFrom ? new Date(r.DateFrom) : null, dateTo: r.DateTo ? new Date(r.DateTo) : null,
-            dataEraseAt: r.DataEraseAt ? new Date(r.DataEraseAt) : null, purpose: r.Purpose ?? null,
-        } : null;
+        return r ? consentRow(r) : null;
+    }
+
+    async consentsFor(hipId: string, patientReference: string): Promise<StoredHipConsent[]> {
+        // The JSON is matched as text, then each care context exactly: no reliance on OPENJSON's compatibility level
+        const rows = await q(
+            `SELECT ${CONSENT_VIEW_COLUMNS} FROM AbdmConsents WHERE HipId = @0 AND CareContexts LIKE '%' + @1 + '%' ORDER BY CreatedAt DESC`,
+            [hipId, patientReference],
+        );
+        return rows
+            .map((r) => ({ ...consentRow(r), createdAt: new Date(r.CreatedAt), updatedAt: r.UpdatedAt ? new Date(r.UpdatedAt) : null }))
+            .filter((c) => c.careContexts.some((cc) => String(cc?.patientReference ?? "").toLowerCase() === patientReference));
+    }
+
+    async transfersFor(hipId: string, consentIds: string[]): Promise<StoredHipTransfer[]> {
+        if (!consentIds.length) return [];
+        const placeholders = consentIds.map((_, i) => `@${i + 1}`).join(", ");
+        // Never the push URL: it carries the requester's push token
+        const rows = await q(
+            `SELECT TransactionId, ConsentId, Status, Results, Error, CreatedAt, CompletedAt FROM AbdmDataTransfers
+             WHERE HipId = @0 AND ConsentId IN (${placeholders}) ORDER BY CreatedAt DESC`,
+            [hipId, ...consentIds],
+        );
+        return rows.map((r) => ({
+            transactionId: r.TransactionId, consentId: r.ConsentId, status: r.Status, results: json<unknown>(r.Results, null),
+            error: r.Error ?? null, createdAt: new Date(r.CreatedAt), completedAt: r.CompletedAt ? new Date(r.CompletedAt) : null,
+        }));
     }
 
     async createTransfer(t: TransferRow): Promise<"created" | "duplicate"> {
