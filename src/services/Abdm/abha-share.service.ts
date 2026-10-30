@@ -74,7 +74,7 @@ export interface ShareVisits {
 /** What Scan and Share reads and writes in the clinic database. */
 export interface AbhaShareStore {
     findShareByRequestId(requestId: string): Promise<ShareRow | null>;
-    createShare(row: Omit<ShareRow, "id" | "createdAt">): Promise<number>;
+    createShare(row: Omit<ShareRow, "id">): Promise<number>;
     updateShare(id: number, changes: Partial<Omit<ShareRow, "id" | "createdAt">>): Promise<void>;
     /** The newest share for this patient at this counter whose token is still valid. */
     findActiveShare(input: { userId: string; hospitalId: number; counterId: string; now: Date }): Promise<ShareRow | null>;
@@ -308,7 +308,7 @@ export class AbhaShareService {
      * the share). A visit is a run of the patient's queue entries here whose tokens overlap: a scan
      * while one of their tokens is still valid, at any counter, joins that visit; one after every
      * token ran out starts a new visit, named by its first entry. When each token was issued is read
-     * from its expiry (the database stamps CreatedAt with its own clock).
+     * from its expiry: CreatedAt is when the share arrived, and a repeat keeps the first token's expiry.
      */
     private async openVisit(requestId: string, shareId: number, userId: string, hospitalId: number): Promise<string | null> {
         if (!this.visits) return null;
@@ -356,6 +356,9 @@ export class AbhaShareService {
                 status: "RECEIVED",
                 matchType: null,
                 error: null,
+                // From JS, as ExpiresAt is: the driver reads a datetime as this server's time (useUTC=false),
+                // and the column's GETDATE() default is the database's UTC clock, 5:30 behind it.
+                createdAt: new Date(this.clock()),
             });
         } catch (error) {
             if (await this.store.findShareByRequestId(requestId).catch(() => null)) return null;

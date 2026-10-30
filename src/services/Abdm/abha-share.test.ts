@@ -35,7 +35,7 @@ let byAbha: Map<string, string>;
 let byAddress: Map<string, string[]>;
 let demographicMatches: string[];
 /** Set to make createShare fail, as the database would. */
-let createShareFault: ((row: Omit<ShareRow, "id" | "createdAt">) => void) | null;
+let createShareFault: ((row: Omit<ShareRow, "id">) => void) | null;
 let failNextOnShare: boolean;
 let service: AbhaShareService;
 let createFails: boolean;
@@ -48,7 +48,7 @@ const store: AbhaShareStore = {
     async createShare(row) {
         createShareFault?.(row);
         const id = rows.length + 1;
-        rows.push({ ...row, id, createdAt: new Date(now) });
+        rows.push({ ...row, id });
         return id;
     },
     async updateShare(id, changes) { Object.assign(rows.find((row) => row.id === id)!, changes); },
@@ -351,12 +351,19 @@ test("a repeat scan whose answer fails still adds no queue entry", async () => {
 
 test("a duplicate delivery that loses the REQUEST-ID to a concurrent one is not answered twice", async () => {
     createShareFault = (row) => {
-        rows.push({ ...row, id: 99, createdAt: new Date(now) });
+        rows.push({ ...row, id: 99 });
         throw new Error("Violation of UNIQUE KEY constraint UX_AbhaProfileShares_RequestId");
     };
     await share("req-1");
     assert.equal(onShares.length, 0);
     assert.equal(created.length, 0);
+});
+
+test("a share is stamped from this server's clock, the one its token's expiry comes from", async () => {
+    // The column's default is the database's UTC clock: the live queue showed a 14:16 scan as 08:46.
+    now = Date.parse("2026-10-30T08:46:37Z");
+    await share("req-1");
+    assert.equal(rows[0].createdAt.getTime(), now);
 });
 
 test("the counter QR code opens the PHR share page for this HIP and counter", () => {

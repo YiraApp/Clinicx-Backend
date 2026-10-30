@@ -66,8 +66,8 @@ export class AbhaShareRepository implements AbhaShareStore {
         return share ? toRow(share) : null;
     }
 
-    async createShare(row: Omit<ShareRow, "id" | "createdAt">): Promise<number> {
-        const saved = await this.shares.save(this.shares.create(toColumns(row)));
+    async createShare(row: Omit<ShareRow, "id">): Promise<number> {
+        const saved = await this.shares.save(this.shares.create({ ...toColumns(row), CreatedAt: row.createdAt }));
         return saved.Id;
     }
 
