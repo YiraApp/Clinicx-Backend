@@ -45,6 +45,10 @@ const startServer = async () => {
         const { medSenseService } = await import("./services/Appointments/medsense.service.js");
         medSenseService.startScheduler(60);
 
+        // Start API log retention scheduler (deletes logs older than 3 months, runs at midnight IST)
+        const { apiLogRetentionService } = await import("./services/Logs/apilog-retention.service.js");
+        apiLogRetentionService.startScheduler();
+
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });
