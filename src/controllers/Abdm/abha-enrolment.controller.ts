@@ -13,13 +13,19 @@ import { abhaShareRepository } from "../../repositories/Abdm/abha-share.reposito
 import { shareQueueHospital } from "./share-queue-access.js";
 import { AbdmBridgeService, BridgeUrlError } from "../../services/Abdm/abdm-bridge.service.js";
 import { abdmFacilities, FacilityClashError, FacilityError, hiuIdOf, scanShareHipIdOf } from "../../services/Abdm/abdm-facilities.service.js";
-import { autoLinker } from "../../services/Abdm/m2/index.js";
+import { autoLinker, careContextCatalog } from "../../services/Abdm/m2/index.js";
 
 // One session store: a journey verified by create, verify or find can then show its card and link a patient.
 const abhaSessions = new AbhaSessionStore();
 const abhaEnrolmentService = new AbhaEnrolmentService(abhaRepository, undefined, undefined, undefined, abhaSessions);
 const abhaLoginService = new AbhaLoginService(abhaRepository, abhaSessions);
-const abhaShareService = new AbhaShareService(abhaShareRepository);
+// A Scan and Share opens the visit's care context at the hospital's HIP (SHARE_PATIENT_PROFILE_702).
+const abhaShareService = new AbhaShareService(abhaShareRepository, undefined, undefined, undefined, {
+    opened: async (visit) => {
+        const hip = await abdmFacilities.hip(visit.hospitalId);
+        return hip ? careContextCatalog.openShareVisit(hip, visit) : null;
+    },
+});
 const abdmBridgeService = new AbdmBridgeService(abhaRepository);
 
 /** What the desk is told beside ABDM's own message, which is always passed on unchanged. */
@@ -296,6 +302,9 @@ export class AbhaEnrolmentController {
                 identifier: req.body?.identifier,
                 otpSystem: req.body?.otpSystem,
                 staffUserId: staffUserId(req),
+                consent: req.body?.consent,
+                hospitalId: headerNumber(req, "x-hospital-id"),
+                organizationId: headerNumber(req, "x-org-id"),
             });
             return res.json(ApiResponse.success(result, result.message));
         } catch (error) {
@@ -342,6 +351,24 @@ export class AbhaEnrolmentController {
     async requestFindOtp(req: Request, res: Response) {
         try {
             const result = await abhaLoginService.requestFindOtp({ sessionId: req.body?.sessionId, staffUserId: staffUserId(req), index: Number(req.body?.index) });
+            return res.json(ApiResponse.success(result, result.message));
+        } catch (error) {
+            return sendError(res, error);
+        }
+    }
+
+    async requestMobileUpdateLoginOtp(req: Request, res: Response) {
+        try {
+            const result = await abhaLoginService.requestMobileUpdateLoginOtp({ sessionId: req.body?.sessionId, staffUserId: staffUserId(req), otpSystem: req.body?.otpSystem });
+            return res.json(ApiResponse.success(result, result.message));
+        } catch (error) {
+            return sendError(res, error);
+        }
+    }
+
+    async verifyMobileUpdateLoginOtp(req: Request, res: Response) {
+        try {
+            const result = await abhaLoginService.verifyMobileUpdateLoginOtp({ sessionId: req.body?.sessionId, staffUserId: staffUserId(req), otp: req.body?.otp });
             return res.json(ApiResponse.success(result, result.message));
         } catch (error) {
             return sendError(res, error);

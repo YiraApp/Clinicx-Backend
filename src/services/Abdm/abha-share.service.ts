@@ -63,6 +63,14 @@ export interface ShareRow {
     createdAt: Date;
 }
 
+/**
+ * Opens the visit's care context under the patient (SHARE_PATIENT_PROFILE_702). Returns its
+ * reference, or null when there is nothing to open (no HIP at the hospital, or already open).
+ */
+export interface ShareVisits {
+    opened(visit: { hospitalId: number; userId: string; shareId: number; at: Date }): Promise<string | null>;
+}
+
 /** What Scan and Share reads and writes in the clinic database. */
 export interface AbhaShareStore {
     findShareByRequestId(requestId: string): Promise<ShareRow | null>;
@@ -74,6 +82,8 @@ export interface AbhaShareStore {
     maxTokenToday(input: { hospitalId: number; counterId: string; since: Date }): Promise<number>;
     /** The queue entries since [since], newest first: every share except a REPEAT. */
     listShares(input: { hospitalId: number; since: Date; counterId?: string }): Promise<ShareRow[]>;
+    /** One patient's queue entries at the hospital since [since], every one (no cap), any order; no REPEAT. */
+    listPatientShares(input: { hospitalId: number; userId: string; since: Date }): Promise<ShareRow[]>;
     /** [abhaNumber] is the dashed form; a number stored as 14 bare digits matches too. */
     findPatientIdByAbhaNumber(abhaNumber: string): Promise<string | null>;
     /** Live patients holding the shared ABHA address and no other ABHA number. */
@@ -118,6 +128,7 @@ export class AbhaShareService {
     private readonly gateway: Pick<AbdmGatewayService, "call">;
     private readonly clock: () => number;
     private readonly facilities: Pick<AbdmFacilityDirectory, "byScanShareHipId">;
+    private readonly visits: ShareVisits | null;
     /** The tail of each (hospital, counter) token allocation chain. */
     private readonly tokenLocks = new Map<string, Promise<void>>();
 
@@ -126,11 +137,13 @@ export class AbhaShareService {
         gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService,
         clock: () => number = Date.now,
         facilities: Pick<AbdmFacilityDirectory, "byScanShareHipId"> = abdmFacilities,
+        visits: ShareVisits | null = null,
     ) {
         this.store = store;
         this.gateway = gateway;
         this.clock = clock;
         this.facilities = facilities;
+        this.visits = visits;
     }
 
     /** Validates ABDM's share body before we answer it. Throws an AbhaJourneyError for a share we must refuse. */
@@ -241,7 +254,7 @@ export class AbhaShareService {
 
             // One allocation at a time per counter, so two patients scanning together never share a number.
             // Keyed without case: the database compares counter ids that way, so OPD1 and opd1 are one queue.
-            const { tokenNumber, expiry, repeat } = await this.withTokenLock(`${hospitalId}|${counterId.toUpperCase()}`, async () => {
+            const { tokenNumber, expiry, repeat, repeatOf } = await this.withTokenLock(`${hospitalId}|${counterId.toUpperCase()}`, async () => {
                 // Same patient, same counter, token still valid: that token again, and no new queue entry.
                 const now = this.clock();
                 const active = userId ? await this.store.findActiveShare({ userId, hospitalId, counterId, now: new Date(now) }) : null;
@@ -256,7 +269,7 @@ export class AbhaShareService {
                     expiresAt,
                     status: active ? "REPEAT" : matchType === "AMBIGUOUS" ? "REVIEW" : "REGISTERED",
                 });
-                return { tokenNumber, expiry: expiryForAbdm(expiresAt, now), repeat: Boolean(active) };
+                return { tokenNumber, expiry: expiryForAbdm(expiresAt, now), repeat: Boolean(active), repeatOf: active?.id ?? null };
             });
             repeated = repeat;
 
@@ -271,7 +284,10 @@ export class AbhaShareService {
             if (!repeat && matchType !== "AMBIGUOUS") {
                 await this.store.updateShare(id, { status: "ACKNOWLEDGED" });
             }
-            console.log(`[ABDM] Share REQUEST-ID=${requestId} counter=${counterId} match=${matchType} token=${tokenNumber}${repeat ? " (repeat)" : ""}`);
+            // A rescan belongs to the entry it repeats: should that visit's care context have failed to
+            // open, it is opened now (opening is insert only, so an open one is left as it is).
+            const careContext = userId && matchType !== "AMBIGUOUS" ? await this.openVisit(requestId, repeatOf ?? id, userId, hospitalId) : null;
+            console.log(`[ABDM] Share REQUEST-ID=${requestId} counter=${counterId} match=${matchType} token=${tokenNumber}${repeat ? " (repeat)" : ""}${careContext ? ` care context ${careContext}` : ""}`);
         } catch (error: any) {
             const reason = String(error?.message || error).slice(0, 500);
             console.error(`[ABDM] Share REQUEST-ID=${requestId} failed: ${reason}`);
@@ -284,6 +300,38 @@ export class AbhaShareService {
                 error: { code: "ABDM-9999", message: "The facility could not register this share. Please ask at the counter." },
                 response: { requestId },
             }).catch((ackError: any) => console.error(`[ABDM] on-share for REQUEST-ID=${requestId} failed too: ${ackError?.message}`));
+        }
+    }
+
+    /**
+     * The visit's care context under the patient, after the answer to ABDM (it never delays or fails
+     * the share). A visit is a run of the patient's queue entries here whose tokens overlap: a scan
+     * while one of their tokens is still valid, at any counter, joins that visit; one after every
+     * token ran out starts a new visit, named by its first entry. When each token was issued is read
+     * from its expiry (the database stamps CreatedAt with its own clock).
+     */
+    private async openVisit(requestId: string, shareId: number, userId: string, hospitalId: number): Promise<string | null> {
+        if (!this.visits) return null;
+        try {
+            const now = this.clock();
+            const lifetime = abdmConfig.shareTokenExpiry * 60_000;
+            const entries = (await this.store.listPatientShares({ hospitalId, userId, since: startOfToday(now) }))
+                .filter((row) => row.userId?.toLowerCase() === userId.toLowerCase()
+                    && (row.status === "REGISTERED" || row.status === "ACKNOWLEDGED") && row.expiresAt !== null)
+                .sort((a, b) => a.id - b.id);
+            let visit = shareId;
+            let liveUntil = -Infinity;
+            for (const entry of entries) {
+                const expires = new Date(entry.expiresAt!).getTime();
+                if (expires - lifetime >= liveUntil) visit = entry.id;
+                liveUntil = Math.max(liveUntil, expires);
+                if (entry.id === shareId) break;
+            }
+            if (!entries.some((entry) => entry.id === shareId)) visit = shareId;
+            return await this.visits.opened({ hospitalId, userId, shareId: visit, at: new Date(now) });
+        } catch (error: any) {
+            console.warn(`[ABDM] Share REQUEST-ID=${requestId}: the visit's care context was not opened: ${String(error?.message || error).slice(0, 200)}`);
+            return null;
         }
     }
 

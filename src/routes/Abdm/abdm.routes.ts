@@ -60,7 +60,9 @@ abdmRouter.post("/login/select-account", c.selectAccount.bind(c));
 abdmRouter.post("/find/search", c.findByMobile.bind(c));
 abdmRouter.post("/find/otp", c.requestFindOtp.bind(c));
 
-// M1: update the mobile on a verified ABHA profile
+// M1: update the mobile on a verified ABHA profile (after an ABHA-address login, verify the ABHA number first)
+abdmRouter.post("/profile/mobile/abha-login/otp", c.requestMobileUpdateLoginOtp.bind(c));
+abdmRouter.post("/profile/mobile/abha-login/verify", c.verifyMobileUpdateLoginOtp.bind(c));
 abdmRouter.post("/profile/mobile/otp", c.requestProfileMobileOtp.bind(c));
 abdmRouter.post("/profile/mobile/verify", c.verifyProfileMobileOtp.bind(c));
 

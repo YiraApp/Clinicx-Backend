@@ -9,8 +9,11 @@ export type { Hip };
  * AbdmM2Repository implements it on SQL Server; tests use an in-memory one.
  */
 
-/** A visit, or a record saved outside one, which is then a care context of its own. */
-export type CareContextKind = "visit" | "discharge" | "immunization" | "vitals" | "prescription" | "consultation" | "note" | "document" | "report" | "wellness";
+/**
+ * A visit, or a record saved outside one, which is then a care context of its own. "share": the
+ * visit a Scan and Share opened at the counter, before anything is recorded in it.
+ */
+export type CareContextKind = "visit" | "discharge" | "immunization" | "vitals" | "prescription" | "consultation" | "note" | "document" | "report" | "wellness" | "share";
 export type LinkStatus = "not-linked" | "awaiting-token" | "linking" | "linked" | "failed";
 
 export interface CareContextSeed {

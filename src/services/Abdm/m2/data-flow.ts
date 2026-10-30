@@ -73,6 +73,8 @@ export const bundlesForReference = async (records: Records, referenceNumber: str
         case "document": return records.forDocument(Number(parsed.sourceId));
         case "report": return records.forDiagnosticReport(Number(parsed.sourceId));
         case "wellness": return records.forWellnessRecord(Number(parsed.sourceId));
+        // A visit a Scan and Share opened holds no record of its own.
+        case "share": return [];
     }
 };
 

@@ -4,7 +4,7 @@ import { AbdmApiError } from "../abdm-gateway.service.js";
 import { CareContextCatalog, byHiType, careContextDisplay, parseCareContextReference } from "./care-contexts.js";
 import { HipLinkingService, LinkingError, tokenExpiry } from "./hip-linking.js";
 import { PatientLinkingService, looksLikeSamePerson } from "./patient-linking.js";
-import { abdmSentAt, DataFlowService } from "./data-flow.js";
+import { abdmSentAt, bundlesForReference, DataFlowService } from "./data-flow.js";
 import type { CareContextRow, CareContextSeed, ConsentRow, LinkRequestRow, LinkStatePatch, M2Store, PatientProfile, TransferRow } from "./m2-store.js";
 import { decrypt, generateKeyMaterial } from "../hie-crypto.js";
 import { fixtureParties } from "../fhir/fhir-fixtures.js";
@@ -200,6 +200,30 @@ test("each record saved outside a visit is a care context of its own, shared as 
     assert.deepEqual(byRef["WR-3"], ["wellness", "Wellness record, 26 Oct 2026", ["WellnessRecord"]]);
     assert.deepEqual(parseCareContextReference("DOC-41"), { kind: "document", sourceId: "41" });
     assert.deepEqual(parseCareContextReference("RX-6a1f-rx"), { kind: "prescription", sourceId: "6a1f-rx" });
+});
+
+test("a Scan and Share opens the visit's care context under the patient, once, and it stays listed with nothing to link (702)", async () => {
+    const at = new Date("2026-10-30T05:40:00Z");
+    assert.equal(await catalog.openShareVisit(hip, { shareId: 42, userId: PATIENT.toUpperCase(), at }), "SS-42");
+    const [opened] = store.contexts;
+    assert.deepEqual(
+        { ref: opened!.referenceNumber, kind: opened!.kind, sourceId: opened!.sourceId, patient: opened!.patientUserId, hiTypes: opened!.hiTypes, link: opened!.linkStatus },
+        { ref: "SS-42", kind: "share", sourceId: "42", patient: PATIENT, hiTypes: [], link: "not-linked" },
+    );
+    assert.equal(opened!.display, careContextDisplay("share", at));
+    assert.ok(/^OPD visit, /.test(opened!.display), "the visit and its date only");
+
+    // Insert only: opening it again writes nothing over it.
+    opened!.display = "kept";
+    assert.equal(await catalog.openShareVisit(hip, { shareId: 42, userId: PATIENT, at: new Date() }), null);
+    assert.equal(store.contexts.length, 1);
+    assert.equal(store.contexts[0]!.display, "kept");
+
+    // No record makes it, yet the patient's list keeps it; it resolves to no bundle and is never linked empty.
+    const listed = await catalog.refresh(hip, PATIENT);
+    assert.ok(listed.some((c) => c.referenceNumber === "SS-42"), "listed beside the care contexts the records make");
+    assert.deepEqual(parseCareContextReference("SS-42"), { kind: "share", sourceId: "42" });
+    assert.deepEqual(await bundlesForReference(records as any, "SS-42"), []);
 });
 
 test("byHiType: one patient entry per HI type, with its care contexts and their count", () => {

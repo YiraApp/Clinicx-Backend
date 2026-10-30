@@ -6,6 +6,8 @@ import {
     AADHAAR_INVALID_MESSAGE,
     AbhaJourneyError,
     OTP_MAX_RESENDS,
+    assertConsent,
+    consentRecord,
     OTP_RESEND_COOLDOWN_MS,
     assertCanResend,
     findLinkedPatient,
@@ -15,6 +17,7 @@ import {
     textOrNull,
     toProfileSummary,
     withCertificateCheck,
+    type AbhaConsentInput,
     type AbhaEnrolmentStore,
     type LinkedPatient,
 } from "./abha-enrolment.service.js";
@@ -50,6 +53,11 @@ export type LoginResult =
         linkedPatient: LinkedPatient | null;
         /** An ABHA-address login's token cannot update the profile mobile. */
         canUpdateMobile: boolean;
+        /**
+         * An ABHA-address login whose profile carries the ABHA number: the mobile can be updated
+         * once the patient also verifies that number (requestMobileUpdateLoginOtp).
+         */
+        mobileUpdateNeedsAbhaLogin: boolean;
     }
     | { status: "choose-account"; message: string; accounts: LoginAccount[] };
 
@@ -81,14 +89,14 @@ const NO_ABHA_CODE = "ABDM-1114";
 const OTP_SYSTEM_FOR_METHOD: Record<string, LoginOtpSystem> = { MOBILE_OTP: "abdm", AADHAAR_OTP: "aadhaar" };
 
 export class AbhaLoginService {
-    private readonly store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses">;
+    private readonly store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses" | "saveConsent" | "staffName">;
     private readonly gateway: Pick<AbdmGatewayService, "call">;
     private readonly crypto: Pick<AbdmCryptoService, "encrypt" | "invalidate">;
     private readonly clock: () => number;
     private readonly sessions: AbhaSessionStore;
 
     constructor(
-        store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses">,
+        store: Pick<AbhaEnrolmentStore, "findPatientByAbhaNumber" | "findPatientByAbhaAddresses" | "saveConsent" | "staffName">,
         sessions: AbhaSessionStore,
         gateway: Pick<AbdmGatewayService, "call"> = abdmGatewayService,
         crypto: Pick<AbdmCryptoService, "encrypt" | "invalidate"> = abdmCryptoService,
@@ -133,8 +141,19 @@ export class AbhaLoginService {
         };
     }
 
-    /** Sends the login OTP for an ABHA number, an ABHA address or an Aadhaar number. */
-    async requestLoginOtp(input: { method: LoginMethod; identifier: string; otpSystem?: LoginOtpSystem; staffUserId: string }): Promise<OtpSent> {
+    /**
+     * Sends the login OTP for an ABHA number, an ABHA address or an Aadhaar number. An Aadhaar number
+     * goes to ABDM only after the patient's consent, recorded first, as on Create (VRFY_ABHA_401).
+     */
+    async requestLoginOtp(input: {
+        method: LoginMethod;
+        identifier: string;
+        otpSystem?: LoginOtpSystem;
+        staffUserId: string;
+        consent?: AbhaConsentInput;
+        hospitalId?: number | null;
+        organizationId?: number | null;
+    }): Promise<OtpSent> {
         const otpSystem: LoginOtpSystem = input.method === "aadhaar" ? "aadhaar" : input.otpSystem === "aadhaar" ? "aadhaar" : "abdm";
         const verifyCheck = otpSystem === "aadhaar" ? "aadhaar-verify" : "mobile-verify";
 
@@ -151,6 +170,7 @@ export class AbhaLoginService {
         } else if (input.method === "aadhaar") {
             const aadhaar = String(input.identifier ?? "");
             if (!/^\d{12}$/.test(aadhaar)) throw new AbhaJourneyError(400, "validation", AADHAAR_INVALID_MESSAGE, { field: "identifier" });
+            assertConsent(input.consent);
             identifier = aadhaar;
             loginHint = "aadhaar";
             scope = ["abha-login", "aadhaar-verify"];
@@ -166,6 +186,15 @@ export class AbhaLoginService {
         }
         this.assertConfigured("login/request/otp");
 
+        const consentId = input.method === "aadhaar" && input.consent
+            ? await this.store.saveConsent(consentRecord(input.consent, {
+                staffUserId: input.staffUserId,
+                staffName: await this.store.staffName(input.staffUserId),
+                hospitalId: input.hospitalId ?? null,
+                organizationId: input.organizationId ?? null,
+                agreedAt: new Date(this.clock()),
+            }))
+            : null;
         const requestPath = family === "phr" ? PHR_LOGIN_REQUEST : ABHA_LOGIN_REQUEST;
         const requestBody = { scope, loginHint, loginId: await this.crypto.encrypt(identifier), otpSystem };
         const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
@@ -178,6 +207,7 @@ export class AbhaLoginService {
         const session = this.sessions.create({
             staffUserId: input.staffUserId,
             flow: "verify",
+            consentId,
             txnId: this.requireTxnId(response.txnId, "login/request/otp"),
             loginAbhaAddress: family === "phr" ? identifier : null,
             login: {
@@ -405,11 +435,98 @@ export class AbhaLoginService {
     }
 
     /**
-     * VRFY_ABHA_101/201: when the clinic's record holds a different mobile, the desk may update the
-     * ABHA profile's mobile. Only an ABHA number, Aadhaar or mobile login's token can do this.
+     * VRFY_ABHA_102/202 step 5: ABDM updates the profile mobile only with an ABHA-number login's
+     * token, so after an ABHA-address login the desk first verifies the ABHA number the address's
+     * profile carries, by the OTP method it chooses. Taken from the session, never from the request.
+     * A repeat for the same method resends on the same transaction, under the shared resend rule.
+     */
+    async requestMobileUpdateLoginOtp(input: { sessionId: string; staffUserId: string; otpSystem?: LoginOtpSystem }): Promise<OtpSent> {
+        const session = requireSession(this.sessions, input.sessionId, input.staffUserId);
+        if (!session.verified) throw new AbhaJourneyError(409, "state", "Verify the ABHA first.");
+        if (session.tokenKind !== "phr") throw new AbhaJourneyError(409, "state", "This ABHA's mobile can be updated without another OTP.");
+        const abhaNumber = normalizeAbhaNumber(session.abhaNumber);
+        if (!abhaNumber) throw new AbhaJourneyError(409, "state", "This ABHA address has no ABHA number, so its mobile can't be changed here.");
+        const otpSystem: LoginOtpSystem = input.otpSystem === "aadhaar" ? "aadhaar" : "abdm";
+
+        const pending = session.mobileLogin;
+        const resend = pending !== null && pending.requestBody.otpSystem === otpSystem;
+        if (resend) assertCanResend(pending.otp, this.clock());
+        const scope = ["abha-login", otpSystem === "aadhaar" ? "aadhaar-verify" : "mobile-verify"];
+        const requestBody = resend ? pending.requestBody : { scope, loginHint: "abha-number", loginId: await this.crypto.encrypt(abhaNumber), otpSystem };
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
+            operation: `profile/login/request/otp (abha-number, ${otpSystem}, before a mobile update)`,
+            method: "POST",
+            path: ABHA_LOGIN_REQUEST,
+            body: resend ? { ...requestBody, txnId: pending.txnId } : requestBody,
+        }));
+        session.mobileLogin = {
+            family: "abha",
+            requestPath: ABHA_LOGIN_REQUEST,
+            requestBody,
+            verifyPath: ABHA_LOGIN_VERIFY,
+            verifyScope: scope,
+            txnId: text(response.txnId) || (resend ? pending.txnId : this.requireTxnId(response.txnId, "profile/login/request/otp")),
+            otp: resend ? { sentAt: this.clock(), resends: pending.otp.resends + 1 } : { sentAt: this.clock(), resends: 0 },
+        };
+        return this.otpSent(session, text(response.message) || "OTP sent.", session.mobileLogin.otp.resends);
+    }
+
+    /**
+     * Verifies that ABHA-number OTP and holds its token for the mobile update only. A wrong OTP keeps
+     * the transaction. An answer without a refresh token is exchanged at verify/user for this ABHA's
+     * own account, never another one the mobile holds.
+     */
+    async verifyMobileUpdateLoginOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<{ canUpdateMobile: true; message: string }> {
+        const session = requireSession(this.sessions, input.sessionId, input.staffUserId);
+        const pending = session.mobileLogin;
+        if (!session.verified || !pending) throw new AbhaJourneyError(409, "state", "Send the OTP for the ABHA number first.");
+        const otp = String(input.otp ?? "");
+        if (!/^\d{6}$/.test(otp)) throw new AbhaJourneyError(400, "validation", "Enter the 6-digit OTP.", { field: "otp" });
+
+        const encryptedOtp = await this.crypto.encrypt(otp);
+        const response = await withCertificateCheck(this.crypto, () => this.gateway.call<Record<string, any>>({
+            operation: "profile/login/verify (before a mobile update)",
+            method: "POST",
+            path: pending.verifyPath,
+            body: { scope: pending.verifyScope, authData: { authMethods: ["otp"], otp: { txnId: pending.txnId, otpValue: encryptedOtp } } },
+        }));
+        const authResult = text(response.authResult).toLowerCase();
+        if (authResult && authResult !== "success") {
+            throw new AbhaJourneyError(422, "rejected", "ABDM did not verify the OTP.", { abdmMessage: textOrNull(response.message) });
+        }
+        const message = text(response.message) || "ABHA number verified.";
+        let token = textOrNull(response.token);
+        let expiresIn: unknown = response.expiresIn;
+        if (!token) throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "profile/login/verify", message: "ABDM verified the OTP but sent no token." });
+        if (!textOrNull(response.refreshToken)) {
+            const wanted = normalizeAbhaNumber(session.abhaNumber);
+            const account = (Array.isArray(response.accounts) ? response.accounts : []).find((candidate: any) => normalizeAbhaNumber(candidate?.ABHANumber) === wanted);
+            if (!account) throw new AbhaJourneyError(409, "state", "ABDM did not list this ABHA for that OTP, so its mobile can't be changed here.");
+            const user = await this.gateway.call<Record<string, any>>({
+                operation: "profile/login/verify/user (before a mobile update)",
+                method: "POST",
+                path: "/abha/api/v3/profile/login/verify/user",
+                headers: { "T-token": `Bearer ${token}` },
+                body: { ABHANumber: text(account.ABHANumber), txnId: text(response.txnId) || pending.txnId },
+            });
+            token = textOrNull(user.token);
+            expiresIn = user.expiresIn;
+            if (!token) throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "profile/login/verify/user", message: "ABDM sent no user token for this ABHA." });
+        }
+        const seconds = Number(expiresIn);
+        session.mobileXToken = token;
+        session.mobileXTokenExpiresAt = this.clock() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 1800) * 1000;
+        session.mobileLogin = null;
+        return { canUpdateMobile: true, message };
+    }
+
+    /**
+     * VRFY_ABHA_101/201, and 102/202 after the ABHA-number step: when the clinic's record holds a
+     * different mobile, the desk may update the ABHA profile's mobile. Only an ABHA number, Aadhaar
+     * or mobile login's token can do this.
      */
     async requestProfileMobileOtp(input: { sessionId: string; staffUserId: string; mobile: string }): Promise<OtpSent> {
-        const session = this.verifiedAbhaSession(input.sessionId, input.staffUserId);
+        const { session, xToken } = this.profileMobileToken(input.sessionId, input.staffUserId);
         const mobile = String(input.mobile ?? "");
         if (!/^\d{10}$/.test(mobile)) throw new AbhaJourneyError(400, "validation", "Enter a valid 10-digit mobile number.", { field: "mobile" });
         if (session.profileMobile?.last4 === mobile.slice(-4)) assertCanResend(session.profileMobile.otp, this.clock());
@@ -419,7 +536,7 @@ export class AbhaLoginService {
             operation: "profile/account/request/otp (update mobile)",
             method: "POST",
             path: "/abha/api/v3/profile/account/request/otp",
-            headers: { "X-token": `Bearer ${session.xToken}` },
+            headers: { "X-token": `Bearer ${xToken}` },
             body: {
                 scope: ["abha-profile", "mobile-verify"],
                 loginHint: "mobile",
@@ -438,7 +555,7 @@ export class AbhaLoginService {
     }
 
     async verifyProfileMobileOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<{ updated: true; message: string }> {
-        const session = this.verifiedAbhaSession(input.sessionId, input.staffUserId);
+        const { session, xToken } = this.profileMobileToken(input.sessionId, input.staffUserId);
         const pending = session.profileMobile;
         if (!pending) throw new AbhaJourneyError(409, "state", "Send the OTP to the new mobile number first.");
         const otp = String(input.otp ?? "");
@@ -449,7 +566,7 @@ export class AbhaLoginService {
             operation: "profile/account/verify (update mobile)",
             method: "POST",
             path: "/abha/api/v3/profile/account/verify",
-            headers: { "X-token": `Bearer ${session.xToken}` },
+            headers: { "X-token": `Bearer ${xToken}` },
             body: {
                 scope: ["abha-profile", "mobile-verify"],
                 authData: { authMethods: ["otp"], otp: { txnId: pending.txnId, otpValue: encryptedOtp } },
@@ -505,6 +622,7 @@ export class AbhaLoginService {
             profile,
             linkedPatient,
             canUpdateMobile: !phr,
+            mobileUpdateNeedsAbhaLogin: phr && normalizeAbhaNumber(profile.abhaNumber) !== null,
         };
     }
 
@@ -521,16 +639,23 @@ export class AbhaLoginService {
         return new AbdmApiError({ status: 502, kind: "unavailable", operation: "profile/account/abha/search", message: "ABDM sent an unexpected response to the ABHA search." });
     }
 
-    private verifiedAbhaSession(sessionId: string, staffUserId: string): AbhaSession {
+    /**
+     * The token that may change the profile mobile: the login's own for an ABHA number, Aadhaar or
+     * mobile login; after an ABHA-address login, only the ABHA-number step's (never the PHR token).
+     */
+    private profileMobileToken(sessionId: string, staffUserId: string): { session: AbhaSession; xToken: string } {
         const session = requireSession(this.sessions, sessionId, staffUserId);
         if (!session.verified || !session.xToken) throw new AbhaJourneyError(409, "state", "Verify the ABHA first.");
-        if (session.tokenKind !== "abha") {
-            throw new AbhaJourneyError(409, "state", "The mobile number can't be updated after an ABHA address login. Verify with the ABHA number instead.");
+        const phr = session.tokenKind === "phr";
+        const xToken = phr ? session.mobileXToken : session.xToken;
+        const expiresAt = phr ? session.mobileXTokenExpiresAt : session.xTokenExpiresAt;
+        if (!xToken) {
+            throw new AbhaJourneyError(409, "state", "The mobile number can't be updated after an ABHA address login until the ABHA number is verified too.");
         }
-        if (session.xTokenExpiresAt !== null && this.clock() >= session.xTokenExpiresAt) {
+        if (expiresAt !== null && this.clock() >= expiresAt) {
             throw new AbhaJourneyError(410, "session-ended", "The ABHA session has timed out. Verify the patient again.");
         }
-        return session;
+        return { session, xToken };
     }
 
     private otpSent(session: AbhaSession, message: string, resends: number = session.login?.otp.resends ?? 0): OtpSent {

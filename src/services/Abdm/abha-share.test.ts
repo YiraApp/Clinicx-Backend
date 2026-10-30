@@ -65,6 +65,9 @@ const store: AbhaShareStore = {
     async listShares({ counterId }) {
         return [...rows].reverse().filter((row) => row.status !== "REPEAT" && (!counterId || sameCounter(row.counterId, counterId)));
     },
+    async listPatientShares({ hospitalId, userId }) {
+        return rows.filter((row) => row.hospitalId === hospitalId && row.userId?.toLowerCase() === userId.toLowerCase() && row.status !== "REPEAT");
+    },
     async findPatientIdByAbhaNumber(abhaNumber) { return byAbha.get(abhaNumber) ?? null; },
     async findPatientIdsByAbhaAddress(patient) { return byAddress.get(patient.abhaAddress) ?? []; },
     async findPatientIdsByDemographics() { return demographicMatches; },
@@ -230,6 +233,51 @@ test("a repeat scan at the same counter keeps the token and adds no queue entry;
     await share("req-4");
     assert.equal(rows[3]!.tokenNumber, "2", "after the token runs out the patient queues again");
     assert.equal(rows[3]!.status, "ACKNOWLEDGED");
+});
+
+test("a scan opens the visit's care context under the patient: one visit per run of live tokens, none for an uncertain match (702)", async () => {
+    const opened: Array<{ hospitalId: number; userId: string; shareId: number }> = [];
+    service = new AbhaShareService(store, gateway, () => now, {
+        byScanShareHipId: async (id) => (id === "Yira-HIP" ? { hospitalId: 19, hipId: null, name: "Yira.ai", scanShareHipId: "Yira-HIP", hiuId: null, autoLink: false } : null),
+    }, { opened: async ({ hospitalId, userId, shareId }) => { opened.push({ hospitalId, userId, shareId }); return `SS-${shareId}`; } });
+    byAbha.set(ABHA_NUMBER, EXISTING);
+
+    await share("req-1");
+    assert.deepEqual(opened, [{ hospitalId: 19, userId: EXISTING, shareId: 1 }], "under the existing beneficiary id");
+    assert.equal(rows[0]!.status, "ACKNOWLEDGED");
+
+    await share("req-1");
+    assert.equal(opened.length, 1, "a retry of the same share is not processed again");
+    now += 5 * 60_000;
+    await share("req-2");
+    assert.equal(rows[1]!.status, "REPEAT");
+    assert.deepEqual(opened[1], { hospitalId: 19, userId: EXISTING, shareId: 1 }, "a rescan asks for the visit it repeats (insert only: opened once)");
+
+    await share("req-3", {}, "OPD2");
+    assert.deepEqual(opened[2], { hospitalId: 19, userId: EXISTING, shareId: 1 }, "another counter while the first token is valid is the same visit");
+
+    now += 56 * 60_000;
+    await share("req-4");
+    assert.deepEqual(opened[3], { hospitalId: 19, userId: EXISTING, shareId: 1 }, "OPD1's token ran out while OPD2's had not: still that visit");
+    now += 130 * 60_000;
+    await share("req-5", {}, "OPD2");
+    assert.deepEqual(opened[4], { hospitalId: 19, userId: EXISTING, shareId: 5 }, "once every token has run out, a new visit");
+
+    byAbha.clear();
+    byAddress.set("asha.kumari@sbx", [EXISTING, "33333333-3333-3333-3333-333333333333"]);
+    await share("req-6", { abhaNumber: null }, "OPD3");
+    assert.equal(opened.length, 5, "an uncertain match opens nothing until the desk resolves it");
+});
+
+test("a care context that cannot be opened leaves the share answered and acknowledged", async () => {
+    service = new AbhaShareService(store, gateway, () => now, {
+        byScanShareHipId: async (id) => (id === "Yira-HIP" ? { hospitalId: 19, hipId: null, name: "Yira.ai", scanShareHipId: "Yira-HIP", hiuId: null, autoLink: false } : null),
+    }, { opened: async () => { throw new Error("the database timed out"); } });
+    byAbha.set(ABHA_NUMBER, EXISTING);
+    await share("req-1");
+    assert.equal(onShares.length, 1);
+    assert.equal(onShares[0].acknowledgement.status, "SUCCESS");
+    assert.equal(rows[0]!.status, "ACKNOWLEDGED");
 });
 
 test("the on-share expiry is sent in the unit ABDM_SHARE_EXPIRY_UNIT names; the token stays valid for the minutes configured", async () => {

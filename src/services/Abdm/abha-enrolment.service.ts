@@ -250,7 +250,7 @@ export const checkAbhaAddress = (input: string, suffix: string): { localPart: st
     return { localPart, broken };
 };
 
-const assertConsent = (consent: AbhaConsentInput | undefined): void => {
+export const assertConsent = (consent: AbhaConsentInput | undefined): void => {
     const d = consent?.declarations;
     const complete = !!consent && consent.termsAccepted === true && !!d &&
         d.aadhaarSharing === true && d.linkRecords === true && d.shareWithProviders === true && d.anonymisedUse === true &&
@@ -262,6 +262,25 @@ const assertConsent = (consent: AbhaConsentInput | undefined): void => {
         throw new AbhaJourneyError(400, "consent", "Creating an ABHA with a document other than Aadhaar is not available here yet.");
     }
 };
+
+/** The consent record kept before an Aadhaar number goes to ABDM: only the known declarations, as booleans. */
+export const consentRecord = (consent: AbhaConsentInput, who: Pick<NewAbhaConsent, "staffUserId" | "staffName" | "hospitalId" | "organizationId" | "agreedAt">): NewAbhaConsent => ({
+    consentCode: CONSENT_CODE,
+    consentVersion: CONSENT_VERSION,
+    declarations: JSON.stringify({
+        termsAccepted: true,
+        aadhaarSharing: consent.declarations.aadhaarSharing === true,
+        otherDocument: consent.declarations.otherDocument === true,
+        linkRecords: consent.declarations.linkRecords === true,
+        shareWithProviders: consent.declarations.shareWithProviders === true,
+        anonymisedUse: consent.declarations.anonymisedUse === true,
+        staffConfirmed: true,
+        beneficiaryConfirmed: true,
+        language: /^[a-z]{2}$/.test(String(consent.language ?? "")) ? consent.language : "en",
+    }),
+    beneficiaryName: text(consent.beneficiaryName) || null,
+    ...who,
+});
 
 export class AbhaEnrolmentService {
     private readonly store: AbhaEnrolmentStore;
@@ -302,28 +321,13 @@ export class AbhaEnrolmentService {
         if (!abdmConfig.isConfigured) throw abdmNotConfiguredError("enrollment/request/otp");
 
         const encryptedAadhaar = await this.crypto.encrypt(aadhaar);
-        const consentId = await this.store.saveConsent({
-            consentCode: CONSENT_CODE,
-            consentVersion: CONSENT_VERSION,
-            // Only the known declarations, as booleans: nothing else from the request reaches the record.
-            declarations: JSON.stringify({
-                termsAccepted: true,
-                aadhaarSharing: input.consent.declarations.aadhaarSharing === true,
-                otherDocument: input.consent.declarations.otherDocument === true,
-                linkRecords: input.consent.declarations.linkRecords === true,
-                shareWithProviders: input.consent.declarations.shareWithProviders === true,
-                anonymisedUse: input.consent.declarations.anonymisedUse === true,
-                staffConfirmed: true,
-                beneficiaryConfirmed: true,
-                language: /^[a-z]{2}$/.test(String(input.consent.language ?? "")) ? input.consent.language : "en",
-            }),
+        const consentId = await this.store.saveConsent(consentRecord(input.consent, {
             staffUserId: input.staffUserId,
             staffName: await this.store.staffName(input.staffUserId),
-            beneficiaryName: text(input.consent.beneficiaryName) || null,
             hospitalId: input.hospitalId ?? null,
             organizationId: input.organizationId ?? null,
             agreedAt: new Date(this.clock()),
-        });
+        }));
 
         const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
             operation: "enrollment/request/otp (aadhaar)",

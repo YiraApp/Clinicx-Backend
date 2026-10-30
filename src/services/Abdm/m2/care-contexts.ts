@@ -13,13 +13,13 @@ import type { CareContextKind, CareContextRow, CareContextSeed, Hip, M2Store } f
 
 const REFERENCE_PREFIX: Record<CareContextKind, string> = {
     visit: "OP", discharge: "IP", immunization: "IM", vitals: "VT", prescription: "RX", consultation: "MR", note: "CN", document: "DOC",
-    report: "DR", wellness: "WR",
+    report: "DR", wellness: "WR", share: "SS",
 };
 
 export const careContextReference = (kind: CareContextKind, sourceId: string | number): string => `${REFERENCE_PREFIX[kind]}-${sourceId}`;
 
 export const parseCareContextReference = (ref: string): { kind: CareContextKind; sourceId: string } | null => {
-    const match = ref.match(/^(OP|IP|IM|VT|RX|MR|CN|DOC|DR|WR)-(.+)$/);
+    const match = ref.match(/^(OP|IP|IM|VT|RX|MR|CN|DOC|DR|WR|SS)-(.+)$/);
     if (!match) return null;
     const kind = (Object.entries(REFERENCE_PREFIX).find(([, prefix]) => prefix === match[1])![0]) as CareContextKind;
     return { kind, sourceId: match[2]! };
@@ -39,6 +39,7 @@ export const careContextDisplay = (kind: CareContextKind, date: Date, options: {
         case "note": return `Clinical note, ${day(date)}`;
         case "report": return `${options.category === "Imaging" ? "Imaging report" : "Lab report"}, ${day(date)}`;
         case "wellness": return `Wellness record, ${day(date)}`;
+        case "share": return `OPD visit, ${day(date)}`;
         // The kind of document only: its title or file name may name a condition
         case "document": {
             const kind = diagnosticKind(options.category);
@@ -56,6 +57,23 @@ export class CareContextCatalog {
         private readonly records: Pick<AbdmHealthRecordRepository, "visit" | "standaloneRecordIds" | "standaloneRecords" | "dischargeSummary" | "immunization" | "vitalsRecord">
             & Partial<Pick<AbdmHealthRecordRepository, "documentDate">> = abdmHealthRecordRepository,
     ) {}
+
+    /**
+     * SHARE_PATIENT_PROFILE_702: a Scan and Share opens the visit's care context under the patient's
+     * existing beneficiary id. It holds nothing yet, so it is not linked to the ABHA (link/carecontext
+     * needs an HI type and a count); the visit's records link through the usual path once saved.
+     * Insert only: a care context already made under this reference is never written over. Returns
+     * the reference opened, or null when it already exists.
+     */
+    async openShareVisit(hip: Hip, visit: { shareId: number; userId: string; at: Date }): Promise<string | null> {
+        const referenceNumber = careContextReference("share", visit.shareId);
+        if ((await this.store.careContextsByRefs(hip.id, [referenceNumber])).length) return null;
+        await this.store.upsertCareContexts([{
+            hipId: hip.id, referenceNumber, patientUserId: patientReference(visit.userId), hospitalId: hip.hospitalId,
+            kind: "share", sourceId: String(visit.shareId), recordDate: visit.at, display: careContextDisplay("share", visit.at), hiTypes: [],
+        }]);
+        return referenceNumber;
+    }
 
     /**
      * Recomputes what each care context at this facility holds from the records, keeps link state, and
@@ -112,7 +130,8 @@ export class CareContextCatalog {
         await this.store.upsertCareContexts(seeds);
         const current = new Set(seeds.map((s) => s.referenceNumber));
         const rows = (await this.store.careContexts(patientReference(patientUserId), hip.id))
-            .filter((c) => current.has(c.referenceNumber) || c.linkStatus === "linked");
+            // A visit a Scan and Share opened stays listed though no record makes it.
+            .filter((c) => current.has(c.referenceNumber) || c.linkStatus === "linked" || c.kind === "share");
         const redated: CareContextSeed[] = [];
         for (const c of rows) {
             if (current.has(c.referenceNumber) || c.kind !== "document" || !this.records.documentDate) continue;

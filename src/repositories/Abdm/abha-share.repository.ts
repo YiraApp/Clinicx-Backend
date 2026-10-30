@@ -104,6 +104,13 @@ export class AbhaShareRepository implements AbhaShareStore {
         return (await query.getMany()).map(toRow);
     }
 
+    async listPatientShares(input: { hospitalId: number; userId: string; since: Date }): Promise<ShareRow[]> {
+        return (await this.shares.createQueryBuilder("s")
+            .where("s.HospitalId = :hospitalId AND s.UserId = :userId AND s.CreatedAt >= :since", input)
+            .andWhere("s.Status <> :repeat", { repeat: "REPEAT" })
+            .getMany()).map(toRow);
+    }
+
     async findPatientIdByAbhaNumber(abhaNumber: string): Promise<string | null> {
         const user = await this.users.createQueryBuilder("u")
             .select(["u.Id"])

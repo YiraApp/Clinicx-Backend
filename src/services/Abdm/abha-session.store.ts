@@ -73,7 +73,7 @@ export interface AbhaSession {
     id: string;
     staffUserId: string;
     flow: AbhaFlow;
-    /** Consent to create an ABHA from Aadhaar; only the create journey records one. */
+    /** The consent recorded before an Aadhaar number went to ABDM: to create an ABHA, or to verify one by Aadhaar. */
     consentId: number | null;
     txnId: string;
     /** The Aadhaar number as ABDM ciphertext, kept only until the OTP verifies: a resend needs it. */
@@ -102,6 +102,14 @@ export interface AbhaSession {
     loginAccounts: LoginAccount[] | null;
     /** Updating the mobile on a verified ABHA profile. */
     profileMobile: { txnId: string; last4: string; otp: OtpState } | null;
+    /**
+     * After an ABHA-address login: ABDM updates the profile mobile only with an ABHA-number login's
+     * token, so the desk verifies that number too. The OTP login in progress, then its token, used
+     * for the mobile update alone (the session stays the address login, its card the PHR card).
+     */
+    mobileLogin: (PendingLogin & { txnId: string }) | null;
+    mobileXToken: string | null;
+    mobileXTokenExpiresAt: number | null;
     expiresAt: number;
 }
 
@@ -139,6 +147,9 @@ export class AbhaSessionStore {
             foundAccounts: null,
             loginAccounts: null,
             profileMobile: null,
+            mobileLogin: null,
+            mobileXToken: null,
+            mobileXTokenExpiresAt: null,
             ...init,
             id: randomUUID(),
             expiresAt: this.clock() + this.idleMs,
