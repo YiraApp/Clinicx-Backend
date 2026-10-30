@@ -1,6 +1,6 @@
 {
  "organisation": "YIRA HEALTH TECH PVT LTD",
- "product": "ClinicX",
+ "product": "Yira Clinics",
  "milestone": "M2",
  "api_version": "V3",
  "category": "HMIS",
@@ -13,7 +13,7 @@
  },
  "applications": [
   {
-   "name": "ClinicX web (HIP IN3610001937, Ocimum dentistry)",
+   "name": "Yira Clinics web (HIP IN3610001937, Ocimum dentistry)",
    "url": "http://localhost:4200/"
   }
  ],
@@ -49,8 +49,8 @@
  ],
  "document": {
   "id": "FT-M2",
-  "version": "1.0",
-  "release_date": "2026-10-29",
+  "version": "1.1",
+  "release_date": "2026-10-30",
   "prepared_by": "Manikanta N, Tester",
   "reviewed_by": "Not yet reviewed",
   "approved_by": "Not yet approved",
@@ -61,6 +61,12 @@
     "date": "2026-10-29",
     "by": "Manikanta N",
     "change": "First issue"
+   },
+   {
+    "version": "1.1",
+    "date": "2026-10-30",
+    "by": "Manikanta N",
+    "change": "Product name corrected from ClinicX to Yira Clinics"
    }
   ],
   "distribution": [
@@ -125,7 +131,8 @@
   "The build does not store the bodies of its outbound replies and pushes (on-discover, on-init, on-confirm, on-notify, on-request, data push, notify); their content is shown by the code and by ABDM accepting them and by what followed.",
   "ABDM sandbox: one on-discover was answered with 'Runtime Error', and twice no health-information request followed a granted consent (USER_INIT_LINK_607 passes 1 and 2).",
   "Extra checks outside the set (count mismatch ABDM-1037, wrong OTP, consent revocation) were not run.",
-  "HIP_INIT_SHARE_CARECONTEXT was re-run on 2026-10-29 on backend db30fa2 / frontend feb708f, after a read-only Consents view was added. Backend changes since 85ae1bd are only that view (0326320, db30fa2) and a hospital-role check on the staff ABDM patient routes (a5a4dca); the linking, data-flow, FHIR, gateway and crypto code the other 12 cases ran on is unchanged. Frontend feb708f adds the view to the ABDM Records tab and also carries the M1/M3 commits merged at 00:13 on 2026-10-29 (HIU record request pages and the shared calendar), none of which touches the ABDM Records tab or the linking screens. The quick tunnel was replaced and the bridge URL re-registered for the re-run."
+  "HIP_INIT_SHARE_CARECONTEXT was re-run on 2026-10-29 on backend db30fa2 / frontend feb708f, after a read-only Consents view was added. Backend changes since 85ae1bd are only that view (0326320, db30fa2) and a hospital-role check on the staff ABDM patient routes (a5a4dca); the linking, data-flow, FHIR, gateway and crypto code the other 12 cases ran on is unchanged. Frontend feb708f adds the view to the ABDM Records tab and also carries the M1/M3 commits merged at 00:13 on 2026-10-29 (HIU record request pages and the shared calendar), none of which touches the ABDM Records tab or the linking screens. The quick tunnel was replaced and the bridge URL re-registered for the re-run.",
+  "The product's name is Yira Clinics. Its screens still show the working name ClinicX in places, so screenshots and screen messages quoted in this report can carry that name."
  ],
  "findings": {
   "Health_RECORD_CREATION_101": "All 8 HI types are created as NRCES document bundles stored against care contexts, with SNOMED CT and LOINC codes.",
@@ -140,7 +147,7 @@
   "USER_INIT_LINK_605": "The HIP sends the OTP, verifies it on confirm and links only the selected care context.",
   "USER_INIT_LINK_607": "The linked prescription was pulled into the PHR app on the third pass; ABDM sent no data request on the first two.",
   "HIP_INIT_NOTIFY_HIECM": "A new record for a patient without ABHA sends sms/notify2 on its own, and the SMS with the deep link arrives.",
-  "HIP_INIT_SHARE_CARECONTEXT": "Records are shared encrypted on request and shown in the PHR app, and ClinicX shows each stored consent against the patient with its HI types, date range, purpose and expiry."
+  "HIP_INIT_SHARE_CARECONTEXT": "Records are shared encrypted on request and shown in the PHR app, and Yira Clinics shows each stored consent against the patient with its HI types, date range, purpose and expiry."
  },
  "agreed_not_run": {},
  "recordings": []
