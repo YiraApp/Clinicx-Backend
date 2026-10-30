@@ -1258,9 +1258,12 @@ export class HiuConsentService {
             });
             await this.record(row, HIU_AUDIT_EVENTS.ON_NOTIFY_SENT, HIU_AUDIT_OUTCOMES.OK, { requestId: ackRequestId, detail: `${artefactIds.length} acknowledged` });
         } catch (error: any) {
+            // ABDM's own words beside the code: ABDM-9999 alone does not say why; digits masked.
+            const code = error instanceof AbdmApiError ? (error.code ?? error.kind) : "error";
+            const message = error instanceof AbdmApiError && error.message ? String(error.message).replace(/\d{6,}/g, "[digits]").slice(0, 200) : "";
             await this.record(row, HIU_AUDIT_EVENTS.ON_NOTIFY_SENT, HIU_AUDIT_OUTCOMES.FAILED, {
                 requestId: ackRequestId,
-                detail: error instanceof AbdmApiError ? (error.code ?? error.kind) : "error",
+                detail: message ? `${code}: ${message}` : code,
             });
             console.error(`[ABDM HIU] on-notify REQUEST-ID=${ackRequestId} for request=${row.id} failed: ${error?.code ?? error?.kind ?? error?.name ?? "error"}`);
         }

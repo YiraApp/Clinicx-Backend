@@ -762,6 +762,17 @@ for (const status of ["DENIED", "EXPIRED"]) {
     });
 }
 
+test("a refused acknowledgement is audited with ABDM's message beside its code, digits masked", async () => {
+    await raised();
+    gatewayFault = (call) => call.path.endsWith("/hiu/on-notify")
+        ? new AbdmApiError({ status: 400, kind: "rejected", operation: "consent/v3/request/hiu/on-notify", code: "ABDM-9999", message: "Acknowledgment should not be null or empty 1234567890" })
+        : null;
+    await notify("DENIED", [], "notify-denied");
+    const row = audits.find((event) => event.event === "ON_NOTIFY_SENT")!;
+    assert.equal(row.outcome, "FAILED");
+    assert.equal(row.detail, "ABDM-9999: Acknowledgment should not be null or empty [digits]");
+});
+
 test("a notification for a consent request we do not hold is dropped, unacknowledged", async () => {
     await raised();
     await notify("GRANTED", [ARTEFACT_A], "foreign", "eeeeeeee-0000-4000-8000-00000000000e");
