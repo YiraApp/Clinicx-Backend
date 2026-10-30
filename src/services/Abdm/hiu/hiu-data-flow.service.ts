@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { abdmConfig } from "../../../config/abdm.config.js";
 import type { AbdmSettings } from "../abdm-facilities.service.js";
-import { AbdmApiError, abdmGatewayService, isOutcomeUnknown, type AbdmGatewayService } from "../abdm-gateway.service.js";
+import { AbdmApiError, abdmGatewayService, isAbdmSideFailure, isOutcomeUnknown, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import {
     decryptEntry as fideliusDecrypt,
     generateKeyMaterial as fideliusKeyMaterial,
@@ -13,7 +13,7 @@ import {
     type HiuKeyMaterial,
 } from "./fidelius-crypto.js";
 import { atRestKeysFromConfig, open, seal, type AtRestKeys } from "./hiu-at-rest.js";
-import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, type HiuAudit } from "./hiu-audit.js";
+import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, type HiuAudit, type HiuAuditEventInput } from "./hiu-audit.js";
 import { errorCodeOf, retryTransient } from "./hiu-db-errors.js";
 // Type-only: the shared staff and callback shapes live with the consent service; no runtime cycle.
 import type { CallbackHeaders, HealthInformationRequester, StaffContext } from "./hiu-consent.service.js";
@@ -256,7 +256,7 @@ export interface HiuDataFlowDeps {
     pushBaseUrl?: () => Promise<string>;
     /** Runs a page's processing after acceptPush has answered. Tests pass one they can await. */
     runInBackground?: (task: () => Promise<void>) => void;
-    /** How a retried database read waits; tests pass one that does not. */
+    /** How a retry (a database read, the notify) waits; tests pass one that does not. */
     sleep?: (ms: number) => Promise<void>;
 }
 
@@ -302,6 +302,23 @@ const defaultSettings = (): HiuDataFlowSettings => ({
 
 /** Default when settings leave it out: ABDM_DATA_PUSH_MAX_TRANSFER_MB's own default. */
 const DEFAULT_MAX_TRANSFER_MB = 100;
+
+/**
+ * How long to wait before each further try of health-information/notify while ABDM fails on its
+ * side: three tries in all, over about a minute. Unsent, ABDM never learns how the transfer ended;
+ * on 2026-10-29 the gateway answered a call with 303001 (endpoint suspended), which passes after a pause.
+ */
+const NOTIFY_RETRY_MS: readonly number[] = [15_000, 45_000];
+const NOTIFY_TRIES = NOTIFY_RETRY_MS.length + 1;
+
+/** A transfer's health-information/notify, as every try sends and audits it. */
+interface PendingNotify {
+    auditBase: Pick<HiuAuditEventInput, "hospitalId" | "consentRequestId" | "artefactId" | "transactionId">;
+    transactionId: string;
+    sessionStatus: HiuNotifySessionStatus;
+    careContexts: number;
+    body: object;
+}
 
 const defaultBackground = (task: () => Promise<void>): void => {
     setImmediate(() => {
@@ -365,7 +382,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
     private readonly settings: () => HiuDataFlowSettings;
     private readonly pushBaseUrl: () => Promise<string>;
     private readonly runInBackground: (task: () => Promise<void>) => void;
-    private readonly sleep: ((ms: number) => Promise<void>) | undefined;
+    private readonly sleep: (ms: number) => Promise<void>;
 
     constructor(deps: HiuDataFlowDeps) {
         this.store = deps.store;
@@ -377,7 +394,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
         this.settings = deps.settings ?? defaultSettings;
         this.pushBaseUrl = deps.pushBaseUrl ?? deploymentPushBaseUrl;
         this.runInBackground = deps.runInBackground ?? defaultBackground;
-        this.sleep = deps.sleep;
+        this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -902,40 +919,66 @@ export class HiuDataFlowService implements HealthInformationRequester {
             return;
         }
 
+        await this.sendNotify({
+            auditBase,
+            transactionId: row.transactionId,
+            sessionStatus,
+            careContexts: statusResponses.length,
+            body: {
+                notification: {
+                    consentId: artefact?.consentArtefactId ?? "",
+                    transactionId: row.transactionId,
+                    // "The date at which the transaction was initiated": our health-information
+                    // request. Never the moment of sending: a server clock a second fast puts that in
+                    // ABDM's future, which ABDM refuses ("Done At should be present or past date time").
+                    doneAt: abdmDateTime(row.createdAt),
+                    notifier: { type: "HIU", id: hiuId },
+                    statusNotification: {
+                        sessionStatus,
+                        hipId: artefact?.hipId ?? "",
+                        statusResponses,
+                    },
+                },
+            },
+        }, notifyRequestId, 1);
+    }
+
+    /**
+     * One try of a transfer's notify, audited with its outcome. After a failure on ABDM's side
+     * (isAbdmSideFailure) the next try follows NOTIFY_RETRY_MS later, in the background so the sweep
+     * is not held up: the same body, doneAt included, under a fresh REQUEST-ID. A refusal (4xx) is
+     * never tried again.
+     */
+    private async sendNotify(notify: PendingNotify, requestId: string, attempt: number): Promise<void> {
+        const tries = `attempt ${attempt} of ${NOTIFY_TRIES}`;
         try {
             await this.gateway.call({
                 operation: "data-flow/health-information/notify",
                 method: "POST",
                 host: "gateway",
                 path: "/api/hiecm/data-flow/v3/health-information/notify",
-                requestId: notifyRequestId,
-                body: {
-                    notification: {
-                        consentId: artefact?.consentArtefactId ?? "",
-                        transactionId: row.transactionId,
-                        // "The date at which the transaction was initiated": our health-information
-                        // request. Never the moment of sending: a server clock a second fast puts that in
-                        // ABDM's future, which ABDM refuses ("Done At should be present or past date time").
-                        doneAt: abdmDateTime(row.createdAt),
-                        notifier: { type: "HIU", id: hiuId },
-                        statusNotification: {
-                            sessionStatus,
-                            hipId: artefact?.hipId ?? "",
-                            statusResponses,
-                        },
-                    },
-                },
+                requestId,
+                body: notify.body,
             });
-            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId: notifyRequestId, outcome: sessionStatus, detail: `${statusResponses.length} care contexts` });
-            console.log(`[ABDM HIU] health-information/notify transactionId=${row.transactionId} ${sessionStatus} REQUEST-ID=${notifyRequestId}`);
+            const after = attempt > 1 ? ` (${tries})` : "";
+            await this.audit.record({ ...notify.auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId, outcome: notify.sessionStatus, detail: `${notify.careContexts} care contexts${after}` });
+            console.log(`[ABDM HIU] health-information/notify transactionId=${notify.transactionId} ${notify.sessionStatus} REQUEST-ID=${requestId}${after}`);
         } catch (error: any) {
+            const delay = isAbdmSideFailure(error) ? NOTIFY_RETRY_MS[attempt - 1] : undefined;
             const code = error instanceof AbdmApiError ? error.code : null;
             // ABDM's own words beside the code (ABDM-9999 is a catch-all), or alone when its answer
             // carried no code ({message, timestamp}, a field's message, plain text); digits masked.
             const message = error instanceof AbdmApiError && error.message ? String(error.message).replace(/\d{6,}/g, "[digits]").slice(0, 200) : "";
-            const detail = code && message ? `${code}: ${message}` : code || message || null;
-            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId: notifyRequestId, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail });
-            console.error(`[ABDM HIU] health-information/notify transactionId=${row.transactionId} not sent: ${code ?? error?.kind ?? "error"}`);
+            const reason = code && message ? `${code}: ${message}` : code || message;
+            const note = delay !== undefined ? `${tries}, trying again` : attempt > 1 ? tries : "";
+            const detail = reason && note ? `${reason} (${note})` : reason || note || null;
+            await this.audit.record({ ...notify.auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail });
+            console.error(`[ABDM HIU] health-information/notify transactionId=${notify.transactionId} not sent: ${code ?? error?.kind ?? "error"}${note ? ` (${note})` : ""}`);
+            if (delay === undefined) return;
+            this.runInBackground(async () => {
+                await this.sleep(delay);
+                await this.sendNotify(notify, randomUUID(), attempt + 1);
+            });
         }
     }
 

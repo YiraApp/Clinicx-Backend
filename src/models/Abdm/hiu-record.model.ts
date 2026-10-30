@@ -39,8 +39,11 @@ export class HiuRecord {
     @Column({ type: "bit", default: false })
     ChecksumOk: boolean;
 
-    /** The decrypted entry (a FHIR bundle), sealed at rest. Null for an entry that failed. */
-    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    /**
+     * The decrypted entry (a FHIR bundle), sealed at rest: ASCII, so VARCHAR (half NVARCHAR's size; a
+     * table made as NVARCHAR is converted by run-hiu-content-migration.ts). Null for an entry that failed.
+     */
+    @Column({ type: "varchar", length: "MAX", nullable: true })
     Content?: string | null;
 
     @Column({ type: "datetime2", precision: 3, nullable: true })

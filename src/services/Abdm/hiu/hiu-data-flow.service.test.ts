@@ -12,6 +12,7 @@ import {
     HiuDataFlowService,
     sha256Hex,
     type HiuDataArtefact,
+    type HiuDataFlowDeps,
     type HiuDataFlowSettings,
     type HiuDataRequestRow,
     type HiuDataStore,
@@ -40,6 +41,8 @@ let records: (HiuRecordRow & { artefactFk: number; hospitalId: number })[];
 let calls: AbdmCall[];
 let audits: HiuAuditEventInput[];
 let tasks: Promise<void>[];
+/** Every wait the service asked for, in ms; none is waited. */
+let sleeps: number[];
 let decrypts: number;
 let settings: HiuDataFlowSettings;
 /** The deployment's push base (ABDM_DATA_PUSH_BASE_URL, else the bridge URL). */
@@ -193,7 +196,7 @@ const crypto = {
     verifyChecksum,
 };
 
-const makeService = () => new HiuDataFlowService({
+const makeService = (overrides: Partial<HiuDataFlowDeps> = {}) => new HiuDataFlowService({
     store,
     audit,
     gateway,
@@ -203,7 +206,8 @@ const makeService = () => new HiuDataFlowService({
     settings: () => settings,
     pushBaseUrl: async () => pushBase,
     runInBackground: (task) => { tasks.push(task()); },
-    sleep: async () => {},
+    sleep: async (ms) => { sleeps.push(ms); },
+    ...overrides,
 });
 
 /** Waits for every background page, including work those pages start. */
@@ -281,6 +285,7 @@ beforeEach(() => {
     calls = [];
     audits = [];
     tasks = [];
+    sleeps = [];
     decrypts = 0;
     gatewayFault = null;
     storedBeforeCall = [];
@@ -453,7 +458,7 @@ test("the notify's doneAt is when the transaction was initiated (our request), n
     assert.equal((sent.body as any).notification.doneAt, new Date(T0).toISOString());
 });
 
-test("a notify ABDM refuses is audited with its code and ABDM's message, digits masked", async () => {
+test("a notify ABDM refuses (4xx) is not tried again, and is audited with its code and ABDM's message, digits masked", async () => {
     const service = makeService();
     await openTransfer(service);
     gatewayFault = (call) => {
@@ -462,9 +467,12 @@ test("a notify ABDM refuses is audited with its code and ABDM's message, digits 
     };
     await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("op-1")) }]));
     await settle();
-    const row = audits.find((event) => event.event === "DATA_NOTIFY_SENT")!;
-    assert.equal(row.outcome, "FAILED");
-    assert.equal(row.detail, "ABDM-9999: Done At should be present or past date time [digits]");
+    assert.equal(notifies().length, 1, "our request's fault: sending it again gets the same answer");
+    assert.deepEqual(sleeps, []);
+    const rows = audits.filter((event) => event.event === "DATA_NOTIFY_SENT");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].outcome, "FAILED");
+    assert.equal(rows[0].detail, "ABDM-9999: Done At should be present or past date time [digits]");
 });
 
 test("a notify ABDM refuses with no code is audited with ABDM's message alone", async () => {
@@ -472,13 +480,74 @@ test("a notify ABDM refuses with no code is audited with ABDM's message alone", 
     await openTransfer(service);
     gatewayFault = (call) => {
         if (!call.path.endsWith("/health-information/notify")) return;
-        throw new AbdmApiError({ status: 500, kind: "unavailable", operation: "x", code: null, message: "Runtime Error" });
+        throw new AbdmApiError({ status: 400, kind: "rejected", operation: "x", code: null, field: "doneAt", message: "must not be in the future" });
     };
     await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("op-1")) }]));
     await settle();
     const row = audits.find((event) => event.event === "DATA_NOTIFY_SENT")!;
     assert.equal(row.outcome, "FAILED");
-    assert.equal(row.detail, "Runtime Error");
+    assert.equal(row.detail, "must not be in the future");
+});
+
+test("a notify that fails on ABDM's side is tried again: the same body, a fresh REQUEST-ID, every try audited", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    now = T0 + 90_000;
+    let failures = 1;
+    gatewayFault = (call) => {
+        if (!call.path.endsWith("/health-information/notify") || failures-- <= 0) return;
+        // As the gateway answers once it has suspended an endpoint.
+        throw new AbdmApiError({ status: 500, kind: "unavailable", operation: "x", code: "303001", message: "Runtime Error: endpoint SUSPENDED" });
+    };
+    await service.acceptPush(pushTokenOf(), hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("op-1")) }]));
+    await settle();
+
+    const sent = notifies();
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1].body, sent[0].body, "the same notify, doneAt included");
+    assert.equal((sent[1].body as any).notification.doneAt, new Date(T0).toISOString());
+    assert.equal(sent[0].requestId, requests[0].notifyRequestId);
+    assert.notEqual(sent[1].requestId, sent[0].requestId, "ABDM refuses a REQUEST-ID already used");
+    assert.match(sent[1].requestId!, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(sleeps, [15_000]);
+    const rows = audits.filter((event) => event.event === "DATA_NOTIFY_SENT");
+    assert.deepEqual(rows.map((event) => [event.requestId, event.outcome, event.detail]), [
+        [sent[0].requestId, "FAILED", "303001: Runtime Error: endpoint SUSPENDED (attempt 1 of 3, trying again)"],
+        [sent[1].requestId, "RECEIVED", "2 care contexts (attempt 2 of 3)"],
+    ]);
+    assert.equal(requests[0].sessionStatus, "RECEIVED");
+});
+
+test("a notify is tried at most three times over about a minute, and the sweep is not held up by the waits", async () => {
+    // The first wait holds until the sweep's call has returned.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const service = makeService({ sleep: async (ms) => { sleeps.push(ms); await held; } });
+    await openTransfer(service);
+    const faults = [
+        new AbdmApiError({ status: 0, kind: "timeout", operation: "x", message: "ABDM did not reply within 30 seconds." }),
+        new AbdmApiError({ status: 0, kind: "unavailable", operation: "x", message: "ABDM could not be reached." }),
+        new AbdmApiError({ status: 503, kind: "unavailable", operation: "x", message: "Service Unavailable" }),
+    ];
+    gatewayFault = (call) => {
+        if (call.path.endsWith("/health-information/notify")) throw faults.shift() ?? new Error("a fourth try");
+    };
+    now = T0 + 21 * 60_000;
+    await service.failTransfer(requests[0].id);
+    assert.equal(notifies().length, 1, "the further tries run in the background");
+    assert.deepEqual(sleeps, [15_000]);
+    assert.equal(requests[0].sessionStatus, "FAILED", "the transfer is settled before the notify");
+    release();
+    await settle();
+
+    assert.equal(notifies().length, 3);
+    assert.equal(new Set(notifies().map((call) => call.requestId)).size, 3);
+    assert.deepEqual(sleeps, [15_000, 45_000]);
+    assert.deepEqual(audits.filter((event) => event.event === "DATA_NOTIFY_SENT").map((event) => [event.outcome, event.detail]), [
+        ["FAILED", "ABDM did not reply within 30 seconds. (attempt 1 of 3, trying again)"],
+        ["FAILED", "ABDM could not be reached. (attempt 2 of 3, trying again)"],
+        ["FAILED", "Service Unavailable (attempt 3 of 3)"],
+    ]);
 });
 
 test("a request with no answer and no on-request is closed by its window without a notify", async () => {

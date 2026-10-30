@@ -74,11 +74,14 @@ class MemoryStore implements M2Store {
 
 class FakeGateway {
     calls: Array<{ path: string; headers: Record<string, string>; body: any; requestId?: string }> = [];
-    refuse: Record<string, AbdmApiError> = {};
+    /** Thrown by the path's next call; a list, one per call in turn. */
+    refuse: Record<string, AbdmApiError | AbdmApiError[]> = {};
     async call(c: any) {
         this.calls.push({ path: c.path, headers: c.headers ?? {}, body: c.body, requestId: c.requestId });
-        const refusal = this.refuse[c.path];
-        if (refusal) { delete this.refuse[c.path]; throw refusal; }
+        const queued = this.refuse[c.path];
+        const refusal = Array.isArray(queued) ? queued.shift() : queued;
+        if (!Array.isArray(queued) || !queued.length) delete this.refuse[c.path];
+        if (refusal) throw refusal;
         return {};
     }
     async getAccessToken() { return "gateway-token"; }
@@ -695,6 +698,66 @@ test("on-request refused by ABDM is not tried again, and the transfer is marked 
     assert.equal(gateway.calls.filter((c) => c.path.endsWith("/on-request")).length, 1);
     assert.equal(pushed, 0);
     assert.deepEqual([store.transfers[0]!.status, store.transfers[0]!.error], ["failed", "on-request: Invalid Transaction Id"]);
+});
+
+const NOTIFY_PATH = "/api/hiecm/data-flow/v3/health-information/notify";
+
+/** A linked visit, a granted consent and a service whose waits are recorded, not waited. */
+const notifyingFlow = async () => {
+    await catalog.refresh(hip, PATIENT);
+    for (const c of store.contexts) Object.assign(c, { linkStatus: "linked", linkedAbhaAddress: "asha.test@sbx" });
+    const waits: number[] = [];
+    const flow = new DataFlowService(store, healthRecords as any, gateway as any, () => NOW, async () => ({ ok: true, status: 202 }), async (ms) => { waits.push(ms); });
+    await flow.onConsentNotify(hip, "cn-1", consentNotification("GRANTED"));
+    return { flow, waits, notifies: () => gateway.calls.filter((c) => c.path === NOTIFY_PATH) };
+};
+
+test("a notify that fails on ABDM's side is tried again: the same body, a fresh REQUEST-ID, and the transfer completes", async () => {
+    const { flow, waits, notifies } = await notifyingFlow();
+    gateway.refuse[NOTIFY_PATH] = new AbdmApiError({ status: 500, kind: "unavailable", operation: "x", code: "303001", message: "Runtime Error: endpoint SUSPENDED" });
+    const sentByAbdm = new Date(NOW.getTime() - 50).toISOString();
+
+    await flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial()), sentByAbdm);
+    const sent = notifies();
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1]!.body, sent[0]!.body, "the same notify, doneAt included");
+    assert.equal(sent[1]!.body.notification.doneAt, sentByAbdm);
+    assert.ok(sent[0]!.requestId && sent[1]!.requestId);
+    assert.notEqual(sent[1]!.requestId, sent[0]!.requestId, "ABDM refuses a REQUEST-ID already used");
+    assert.deepEqual(waits, [15_000]);
+    const transfer = store.transfers[0]!;
+    assert.deepEqual([transfer.status, transfer.error ?? null, (transfer as any).completed], ["transferred", null, true]);
+});
+
+test("a notify ABDM refuses (4xx) is not tried again; the transfer keeps its results and names the notify as what failed", async () => {
+    const { flow, waits, notifies } = await notifyingFlow();
+    gateway.refuse[NOTIFY_PATH] = new AbdmApiError({ status: 400, kind: "rejected", operation: "x", code: "ABDM-9999", message: "Done At should be present or past date time" });
+
+    await assert.rejects(flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial())), /Done At/);
+    assert.equal(notifies().length, 1);
+    assert.deepEqual(waits, []);
+    const transfer = store.transfers[0]!;
+    assert.equal(transfer.status, "transferred", "the records were delivered");
+    assert.equal(transfer.error, "notify not sent: ABDM-9999: Done At should be present or past date time");
+    assert.equal((transfer as any).completed, true, "not left looking in progress");
+    assert.deepEqual((transfer.results as any[]).map((s) => [s.careContextReference, s.hiStatus]).sort(), [["IP-3", "ERRORED"], ["OP-101", "DELIVERED"]]);
+});
+
+test("a notify is tried at most three times over about a minute, then the transfer is closed with the last failure", async () => {
+    const { flow, waits, notifies } = await notifyingFlow();
+    gateway.refuse[NOTIFY_PATH] = [
+        new AbdmApiError({ status: 0, kind: "timeout", operation: "x", message: "ABDM did not reply within 30 seconds." }),
+        new AbdmApiError({ status: 0, kind: "unavailable", operation: "x", message: "ABDM could not be reached." }),
+        new AbdmApiError({ status: 503, kind: "unavailable", operation: "x", message: "Service Unavailable" }),
+        new AbdmApiError({ status: 503, kind: "unavailable", operation: "x", message: "a fourth try" }),
+    ];
+
+    await assert.rejects(flow.onHealthInformationRequest(hip, "hi-1", hiRequest(generateKeyMaterial())), /Service Unavailable/);
+    assert.equal(notifies().length, 3);
+    assert.equal(new Set(notifies().map((c) => c.requestId)).size, 3);
+    assert.deepEqual(waits, [15_000, 45_000]);
+    const transfer = store.transfers[0]!;
+    assert.deepEqual([transfer.status, transfer.error, (transfer as any).completed], ["transferred", "notify not sent: Service Unavailable", true]);
 });
 
 test("expired, revoked, unknown or out-of-range consent is refused on on-request and nothing is pushed", async () => {

@@ -1,5 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { abdmConfig } from "../../config/abdm.config.js";
+import { readContentState } from "./hiu-record-content.migration.js";
 
 export class MigrationService {
     static async ensureLogIndexes() {
@@ -463,7 +464,8 @@ export class MigrationService {
      * where none is stored), the "ABDM Record Request" menu for the roles in ABDM_HIU_ROLE_NAMES
      * (plan section 5, decision D9) and the "ABDM Facilities" menu for system admins. Idempotent: a table is created when missing, then every column is
      * added behind its own COL_LENGTH guard, so a table created by an earlier version gains later
-     * columns. Fails startup on error, like ensureAbdmSchema(). Never drops or alters an existing column.
+     * columns. Fails startup on error, like ensureAbdmSchema(). Never drops or alters an existing column
+     * (AbdmHiuRecords.Content's conversion to VARCHAR is run-hiu-content-migration.ts; startup only warns).
      */
     static async ensureAbdmHiuSchema() {
         const run = async (statement: string, params: unknown[] = []) => {
@@ -490,6 +492,13 @@ export class MigrationService {
                 .map((index) => `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${index.name}' AND object_id = OBJECT_ID('dbo.${table.name}'))
             CREATE ${index.unique ? "UNIQUE " : ""}NONCLUSTERED INDEX ${index.name} ON dbo.${table.name} (${index.on})${index.where ? ` WHERE ${index.where}` : ""};`)
                 .join("\n"));
+        }
+
+        // A records table made while Content was NVARCHAR(MAX) keeps it: converting rewrites every
+        // record, so it is run on purpose (run-hiu-content-migration.ts), never at startup.
+        const content = await readContentState(run);
+        if (content.contentType === "nvarchar" || content.pendingType) {
+            console.warn(`ABDM HIU: AbdmHiuRecords.Content is ${content.contentType}${content.pendingType ? ` (a conversion to ${content.pendingType} is unfinished)` : ""}; convert it with: npx tsx run-hiu-content-migration.ts up`);
         }
 
         // Requests raised before HIU ids were per hospital carry none: they were raised as the one
@@ -678,7 +687,9 @@ const ABDM_HIU_TABLES: HiuTableSpec[] = [
             ["CareContextReference", "VARCHAR(1000) NULL"],
             ["Media", "VARCHAR(100) NULL"],
             ["ChecksumOk", "BIT NOT NULL CONSTRAINT DF_AbdmHiuRecords_ChecksumOk DEFAULT 0"],
-            ["Content", "NVARCHAR(MAX) NULL"],
+            // Sealed (ASCII). Tables made before were NVARCHAR(MAX), twice the size, until
+            // run-hiu-content-migration.ts converts them.
+            ["Content", "VARCHAR(MAX) NULL"],
             ["DeleteAt", "DATETIME2(3) NULL"],
             ["ReceivedAt", "DATETIME2(3) NOT NULL CONSTRAINT DF_AbdmHiuRecords_ReceivedAt DEFAULT GETDATE()"],
         ],

@@ -1,4 +1,5 @@
-import { AbdmApiError, abdmGatewayService, type AbdmGatewayService } from "../abdm-gateway.service.js";
+import { randomUUID } from "crypto";
+import { AbdmApiError, abdmGatewayService, isAbdmSideFailure, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import { abdmHealthRecordService, type AbdmHealthRecordService, type HealthRecordBundle } from "../abdm-health-record.service.js";
 import { checksum, decodePublicKey, encrypt, generateKeyMaterial, HieCryptoError } from "../hie-crypto.js";
 import type { HiType } from "../fhir/fhir-common.js";
@@ -37,6 +38,13 @@ const ON_REQUEST_RETRY_MS = [2_000, 5_000];
  */
 const failedOnAbdmSide = (error: unknown): boolean =>
     error instanceof AbdmApiError && ((error.kind === "unavailable" && error.status >= 500) || /runtime error/i.test(error.message));
+
+/**
+ * How long to wait before each further try of health-information/notify while ABDM fails on its side
+ * (isAbdmSideFailure): three tries in all, over about a minute. Unsent, ABDM never learns what was
+ * delivered; on 2026-10-29 the gateway answered a call with 303001 (endpoint suspended), which passes after a pause.
+ */
+const NOTIFY_RETRY_MS = [15_000, 45_000];
 
 /**
  * When ABDM sent a request, from its TIMESTAMP header: ABDM's clock, so a server clock running ahead
@@ -93,8 +101,8 @@ export class DataFlowService {
         private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ) {}
 
-    private call(hip: Hip, operation: string, path: string, body: unknown) {
-        return this.gateway.call({ operation, host: "gateway", method: "POST", path, headers: { "X-HIP-ID": hip.id }, body });
+    private call(hip: Hip, operation: string, path: string, body: unknown, requestId?: string) {
+        return this.gateway.call({ operation, host: "gateway", method: "POST", path, headers: { "X-HIP-ID": hip.id }, body, requestId });
     }
 
     /** consent notify → on-notify. A grant is stored whole; a revocation or expiry updates its status. */
@@ -289,18 +297,49 @@ export class DataFlowService {
         }
 
         const delivered = statuses.some((s) => s.hiStatus === "DELIVERED");
-        await this.call(hip, "data-flow/v3/health-information/notify", "/api/hiecm/data-flow/v3/health-information/notify", {
-            notification: {
-                consentId: consent.consentId,
-                transactionId,
-                // "The date at which the transaction was initiated", not the moment of sending: a
-                // server clock a second fast puts that in ABDM's future, and ABDM refuses it.
-                doneAt: initiatedAt.toISOString(),
-                notifier: { type: "HIP", id: hip.id },
-                statusNotification: { sessionStatus: delivered ? "TRANSFERRED" : "FAILED", hipId: hip.id, statusResponses: statuses },
-            },
-        });
-        await this.store.updateTransfer(transactionId, { status: delivered ? "transferred" : "failed", results: statuses, completed: true });
+        const status = delivered ? "transferred" : "failed";
+        try {
+            await this.notify(hip, transactionId, {
+                notification: {
+                    consentId: consent.consentId,
+                    transactionId,
+                    // "The date at which the transaction was initiated", not the moment of sending: a
+                    // server clock a second fast puts that in ABDM's future, and ABDM refuses it.
+                    doneAt: initiatedAt.toISOString(),
+                    notifier: { type: "HIP", id: hip.id },
+                    statusNotification: { sessionStatus: delivered ? "TRANSFERRED" : "FAILED", hipId: hip.id, statusResponses: statuses },
+                },
+            });
+        } catch (error: any) {
+            // Done but never reported to ABDM: kept with its results and closed, so it never looks in progress.
+            const reason = error instanceof AbdmApiError && error.code ? `${error.code}: ${error.message}` : error?.message ?? "failed";
+            await this.store.updateTransfer(transactionId, { status, results: statuses, error: `notify not sent: ${reason}`, completed: true });
+            throw error;
+        }
+        await this.store.updateTransfer(transactionId, { status, results: statuses, completed: true });
         return statuses;
+    }
+
+    /**
+     * health-information/notify, tried again while ABDM fails on its side: the same body each time,
+     * doneAt included, under a fresh REQUEST-ID (ABDM refuses one already used, ABDM-1064). A refusal
+     * (4xx) is not tried again. Every failed try is logged with its REQUEST-ID and outcome.
+     */
+    private async notify(hip: Hip, transactionId: string, body: object): Promise<void> {
+        for (let attempt = 1; ; attempt++) {
+            const requestId = randomUUID();
+            const tries = `attempt ${attempt} of ${NOTIFY_RETRY_MS.length + 1}`;
+            try {
+                await this.call(hip, "data-flow/v3/health-information/notify", "/api/hiecm/data-flow/v3/health-information/notify", body, requestId);
+                if (attempt > 1) console.log(`[ABDM] health-information/notify transactionId=${transactionId} sent REQUEST-ID=${requestId} (${tries})`);
+                return;
+            } catch (error: any) {
+                const delay = isAbdmSideFailure(error) ? NOTIFY_RETRY_MS[attempt - 1] : undefined;
+                console.warn(`[ABDM] health-information/notify transactionId=${transactionId} REQUEST-ID=${requestId} not sent (${tries}): ` +
+                    `${error?.code ?? error?.kind ?? "error"}${delay === undefined ? "" : `; trying again in ${delay / 1000} s`}`);
+                if (delay === undefined) throw error;
+                await this.wait(delay);
+            }
+        }
     }
 }

@@ -1,10 +1,11 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { MssqlParameter } from "typeorm/index.js";
 import { HiuError } from "../../services/Abdm/hiu/hiu-enums.js";
 import { errorCodeOf, isTransientSqlError, RecordPurgeError, TRANSIENT_RETRY_DELAYS_MS as RETRY_DELAYS } from "../../services/Abdm/hiu/hiu-db-errors.js";
 import {
-    HiuDataRepository, isDuplicateKeyError, LARGE_WRITE_LOCK, LARGE_WRITE_LOCK_POLL_MS, LARGE_WRITE_LOCK_WAIT_MS, LargeWriteLockError, PURGE_SWEEP_BUDGET_MS, toDataRequestRow,
+    HiuDataRepository, isDuplicateKeyError, LARGE_WRITE_LOCK, LARGE_WRITE_LOCK_POLL_MS, LARGE_WRITE_LOCK_WAIT_MS, LargeWriteLockError, nativeTypeOf, PURGE_SWEEP_BUDGET_MS, toDataRequestRow,
 } from "./hiu-data.repository.js";
 
 type Sent = { sql: string; parameters: unknown[] };
@@ -134,6 +135,29 @@ test("a page is inserted whole in one transaction with the PagesReceived increme
     assert.ok(boundDeleteAt instanceof MssqlParameter);
     assert.equal(boundDeleteAt.type, "datetime2");
     assert.equal((boundDeleteAt.value as Date).getTime(), deleteAt.getTime());
+    // The sealed columns bind as VARCHAR, as they are stored (no conversion, half the bytes); a
+    // failed entry's null content too. Media (the HIP's own text) binds as before.
+    const sealedAt = (index: number) => {
+        const bound = parameters[index] as MssqlParameter;
+        assert.ok(bound instanceof MssqlParameter, `parameter ${index} is typed`);
+        assert.equal(bound.type, "varchar");
+        assert.deepEqual(bound.params, []);
+        return bound.value;
+    };
+    assert.equal(sealedAt(7), "sealed-a");
+    assert.equal(sealedAt(10), "sealed-c");
+    assert.equal(sealedAt(18), "sealed-b");
+    assert.equal(sealedAt(21), null);
+    assert.equal(parameters[8], "application/fhir+json");
+});
+
+test("a varchar parameter binds as VARCHAR (MAX unless it has a length), not TypeORM's NVARCHAR; others as TypeORM binds them", () => {
+    const mssql = createRequire(import.meta.url)("mssql");
+    const typeorm = (parameter: MssqlParameter) => ({ typeorm: parameter.type });
+    assert.deepEqual(nativeTypeOf(new MssqlParameter("hiu1:k1:aa:bb", "varchar"), mssql, typeorm), { type: mssql.VarChar, length: mssql.MAX });
+    assert.deepEqual(nativeTypeOf(new MssqlParameter("x", "varchar", 1000), mssql, typeorm), { type: mssql.VarChar, length: 1000 });
+    assert.deepEqual(nativeTypeOf(new MssqlParameter(new Date(), "datetime2", 3), mssql, typeorm), { typeorm: "datetime2" });
+    assert.deepEqual(nativeTypeOf(new MssqlParameter("x", "nvarchar"), mssql, typeorm), { typeorm: "nvarchar" });
 });
 
 test("a page is kept only under a granted, unpurged artefact and an open transfer, checked after the insert; else it is reported closed", async () => {

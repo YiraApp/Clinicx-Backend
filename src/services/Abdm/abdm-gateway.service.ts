@@ -54,6 +54,16 @@ export class AbdmApiError extends Error {
 export const isOutcomeUnknown = (error: unknown): boolean =>
     error instanceof AbdmApiError && (error.kind === "timeout" || (error.kind === "unavailable" && error.status === 0));
 
+/**
+ * True when a call failed on ABDM's side, so the same request may get through after a pause: a 5xx
+ * (the gateway's 303001 "Runtime Error", an endpoint it suspended, among them), a timeout or a lost
+ * connection. Never a 4xx: that refuses our request, and sending it again gets the same answer. A
+ * call sent again takes a fresh REQUEST-ID, as every call does here unless a callback quotes it:
+ * ABDM refuses one already used (ABDM-1064).
+ */
+export const isAbdmSideFailure = (error: unknown): boolean =>
+    error instanceof AbdmApiError && error.kind !== "credentials" && (error.status >= 500 || isOutcomeUnknown(error));
+
 /** ABDM codes come back bare ("ABDM-1204") or with a trailing ": " ("ABDM-1204: "). */
 export const normalizeAbdmCode = (code: unknown): string | null => {
     if (code === undefined || code === null) return null;

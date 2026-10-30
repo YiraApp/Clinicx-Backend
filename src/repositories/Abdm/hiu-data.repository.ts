@@ -92,6 +92,22 @@ const ID_CHUNK = 500;
 /** A JS Date bound as datetime2(3), so milliseconds survive (a bare Date binds as DATETIME). */
 const at = (date: Date | null | undefined): unknown => (date ? new MssqlParameter(new Date(date), "datetime2", 3) : null);
 
+/**
+ * A sealed value (seal(): its header and base64, all ASCII) bound as VARCHAR(MAX), as its column
+ * stores it: a bare string binds as NVARCHAR, sent at two bytes a character and converted by SQL
+ * Server on the way in. Only timedQuery binds it as VARCHAR (nativeTypeOf); TypeORM's query would
+ * send NVARCHAR, so it is for the large writes' statements.
+ */
+const sealedValue = (value: string | null | undefined): MssqlParameter => new MssqlParameter(value ?? null, "varchar");
+
+/**
+ * The mssql type an MssqlParameter binds as: TypeORM's own mapping ([typeorm]), except "varchar",
+ * which binds as VARCHAR (of its length, else MAX). TypeORM sends a "varchar" one as NVARCHAR unless
+ * the data source sets disableAsciiToUnicodeParamConversion, which would change every query's.
+ */
+export const nativeTypeOf = (parameter: MssqlParameter, mssql: any, typeorm: (parameter: MssqlParameter) => any): any =>
+    parameter.type === "varchar" ? mssql.VarChar(...(parameter.params.length ? parameter.params : [mssql.MAX])) : typeorm(parameter);
+
 const rowsOf = (result: any): any[] => (Array.isArray(result) ? result : []);
 
 /**
@@ -110,7 +126,8 @@ const dateOrNull = (value: unknown): Date | null => (value ? new Date(value as a
  * mssql's per-request override, which TypeORM's query does not pass. Parameters bind as TypeORM binds
  * them (@0, @1, ...; an MssqlParameter as its SQL type), and the answer is shaped as TypeORM's: the
  * recordset, or [recordset, rowsAffected] for a statement that starts with DELETE. Errors are mssql's
- * own (code, number), which hiu-db-errors reads as it reads TypeORM's.
+ * own (code, number), which hiu-db-errors reads as it reads TypeORM's. A "varchar" MssqlParameter
+ * binds as VARCHAR (nativeTypeOf), where TypeORM's would be NVARCHAR.
  */
 export const timedQuery = (timeoutMs: () => number): HiuQuery => async (sql, parameters = []) => {
     const { AppDataSource } = await import("../../config/database.js");
@@ -124,7 +141,7 @@ export const timedQuery = (timeoutMs: () => number): HiuQuery => async (sql, par
         const request = new driver.mssql.Request(pool, { requestTimeout });
         parameters.forEach((parameter, index) => {
             if (parameter instanceof MssqlParameter) {
-                const type = runner.mssqlParameterToNativeParameter(parameter);
+                const type = nativeTypeOf(parameter, driver.mssql, (typed) => runner.mssqlParameterToNativeParameter(typed));
                 if (type) request.input(String(index), type, parameter.value);
                 else request.input(String(index), parameter.value);
             } else {
@@ -506,7 +523,7 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
         const values = input.records.map((record) => {
             const bound = [
                 input.dataRequestId, input.artefactFk, input.hospitalId, input.pageNumber, record.entryIndex,
-                record.careContextReference, record.media, record.checksumOk, record.content, at(record.deleteAt), at(receivedAt),
+                sealedValue(record.careContextReference), record.media, record.checksumOk, sealedValue(record.content), at(record.deleteAt), at(receivedAt),
             ];
             const names = bound.map((value) => {
                 parameters.push(value);
