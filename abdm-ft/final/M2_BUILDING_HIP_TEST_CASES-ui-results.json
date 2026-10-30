@@ -81,15 +81,15 @@
   "id": "USER_INIT_LINK_603",
   "outcome": "passed",
   "iterations": 1,
-  "response": "Inbound POST /api/v3/hip/patient/care-context/discover REQUEST-ID 17df06aa-b95d-4f33-b2d0-5ba9cbf0677b at 23:24:10 IST: transactionId f3c99f71-3824-4f30-8a2b-afc473b1f443 present, patient.id present, patient.verifiedIdentifiers [MOBILE, ABHA_NUMBER, abhaAddress], gender F, yearOfBirth 2004",
+  "response": "Inbound POST /api/v3/hip/patient/care-context/discover REQUEST-ID 17df06aa-b95d-4f33-b2d0-5ba9cbf0677b at 23:24:10 IST: transactionId f3c99f71-3824-4f30-8a2b-afc473b1f443 present, patient.id present, patient.verifiedIdentifiers [MOBILE, ABHA_NUMBER, abhaAddress], gender F, yearOfBirth [masked]",
   "remarks": "The profile reached the HIP through the bridge; the HIP searched on the verified mobile and narrowed by name, gender and year of birth. Earlier discovers 4901885a (19:17), 1b6398a2 (19:39) and 96b633bd (20:16) also arrived; 71823539 (21:06) got ABDM 'Runtime Error' on our reply."
  },
  {
   "id": "USER_INIT_LINK_606",
   "outcome": "passed",
   "iterations": 1,
-  "response": "Matched by MOBILE to patient OCM123-2026-0013 (registered without ABHA; Female, born 2004, mobile ending 5506); on-discover sent with matchedBy [MOBILE] and patient[].careContexts [RX-67209C38-D094-4EB0-B928-A13D4529CF57], accepted by ABDM; the PHR app showed that record under our patient reference (USER_INIT_LINK_604/phr-1.png)",
-  "remarks": "Screen check: the matched patient's mobile, gender (F) and year of birth (2004) agree with the discover's. The build does not store outbound reply bodies: the on-discover content is shown by the PHR screen and by the init that selected from it."
+  "response": "Matched by MOBILE to patient OCM123-2026-0013 (registered without ABHA; Female, born [masked], mobile ending 5506); on-discover sent with matchedBy [MOBILE] and patient[].careContexts [RX-67209C38-D094-4EB0-B928-A13D4529CF57], accepted by ABDM; the PHR app showed that record under our patient reference (USER_INIT_LINK_604/phr-1.png)",
+  "remarks": "Screen check: the matched patient's mobile, gender (F) and year of birth ([masked]) agree with the discover's. The build does not store outbound reply bodies: the on-discover content is shown by the PHR screen and by the init that selected from it."
  },
  {
   "id": "USER_INIT_LINK_604",

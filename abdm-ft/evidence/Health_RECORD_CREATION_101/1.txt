@@ -80,7 +80,7 @@
                   - generic [ref=f32e187]:
                     - heading "[patient]" [level=3] [ref=f32e188]
                     - generic [ref=f32e189]: active
-                  - paragraph [ref=f32e190]: "OCM123 | 22y | DOB: 2004-06-08 | Female"
+                  - paragraph [ref=f32e190]: "OCM123 | 22y | DOB: [masked] | Female"
                   - paragraph [ref=f32e191]: General Consultation
                   - generic [ref=f32e193]:
                     - generic [ref=f32e194]: "Total Visits: 2"
@@ -92,7 +92,7 @@
                   - generic [ref=f32e211]:
                     - heading "[patient]" [level=3] [ref=f32e212]
                     - generic [ref=f32e213]: active
-                  - paragraph [ref=f32e214]: "OCM123 | 24y | DOB: 2002-05-30 | Male"
+                  - paragraph [ref=f32e214]: "OCM123 | 24y | DOB: [masked] | Male"
                   - paragraph [ref=f32e215]: General Consultation
                   - generic [ref=f32e217]:
                     - generic [ref=f32e218]: "Total Visits: 0"
@@ -104,7 +104,7 @@
                   - generic [ref=f32e235]:
                     - heading "[patient]" [level=3] [ref=f32e236]
                     - generic [ref=f32e237]: active
-                  - paragraph [ref=f32e238]: "OCM123 | 23y | DOB: 2003-03-19 | Male"
+                  - paragraph [ref=f32e238]: "OCM123 | 23y | DOB: [masked] | Male"
                   - paragraph [ref=f32e239]: General Consultation
                   - generic [ref=f32e241]:
                     - generic [ref=f32e242]: "Total Visits: 4"
@@ -127,7 +127,7 @@
                   - generic [ref=f32e288]:
                     - heading "[patient]" [level=2] [ref=f32e289]
                     - generic [ref=f32e290]: active
-                  - paragraph [ref=f32e291]: "OCM123 | 23y | DOB: 2003-03-19 | Male | —"
+                  - paragraph [ref=f32e291]: "OCM123 | 23y | DOB: [masked] | Male | —"
               - button [ref=f32e292] [cursor=pointer]
             - generic [ref=f32e296]:
               - tablist [ref=f32e297]:

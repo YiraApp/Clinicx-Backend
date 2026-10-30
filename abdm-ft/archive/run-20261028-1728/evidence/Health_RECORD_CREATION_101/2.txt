@@ -152,7 +152,7 @@
                                       - generic:
                                         - generic: HOSP11-2026-0032
                                         - generic: active
-                                    - paragraph: "OCM123 | 23y | DOB: 2003-03-19 | Male"
+                                    - paragraph: "OCM123 | 23y | DOB: [masked] | Male"
                                     - paragraph: General Consultation
                                     - generic:
                                       - generic:
@@ -183,7 +183,7 @@
                       - generic:
                         - heading [level=2]: [patient]
                         - generic: active
-                      - paragraph: "OCM123 | 23y | DOB: 2003-03-19 | Male | —"
+                      - paragraph: "OCM123 | 23y | DOB: [masked] | Male | —"
                   - button
                 - generic:
                   - tablist:

@@ -129,7 +129,7 @@
                                     - generic:
                                       - heading [level=3]: [patient]
                                       - generic: active
-                                    - paragraph: "OCM123 | 22y | DOB: 2004-06-08 | Female"
+                                    - paragraph: "OCM123 | 22y | DOB: [masked] | Female"
                                     - paragraph: General Consultation
                                     - generic:
                                       - generic:
@@ -145,7 +145,7 @@
                                     - generic:
                                       - heading [level=3]: [patient]
                                       - generic: active
-                                    - paragraph: "OCM123 | 24y | DOB: 2002-05-30 | Male"
+                                    - paragraph: "OCM123 | 24y | DOB: [masked] | Male"
                                     - paragraph: General Consultation
                                     - generic:
                                       - generic:
@@ -161,7 +161,7 @@
                                     - generic:
                                       - heading [level=3]: [patient]
                                       - generic: active
-                                    - paragraph: "OCM123 | 23y | DOB: 2003-03-19 | Male"
+                                    - paragraph: "OCM123 | 23y | DOB: [masked] | Male"
                                     - paragraph: General Consultation
                                     - generic:
                                       - generic:
@@ -193,7 +193,7 @@
                         - generic:
                           - heading [level=2]: [patient]
                           - generic: active
-                        - paragraph: "OCM123 | 23y | DOB: 2003-03-19 | Male | —"
+                        - paragraph: "OCM123 | 23y | DOB: [masked] | Male | —"
                     - button
                   - generic:
                     - tablist:

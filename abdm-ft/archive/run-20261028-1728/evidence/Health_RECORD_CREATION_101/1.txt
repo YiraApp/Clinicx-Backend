@@ -93,7 +93,7 @@
                   - generic [ref=f4e416]:
                     - 'generic "Token: HOSP11-2026-0032" [ref=f4e417]': HOSP11-2026-0032
                     - generic [ref=f4e420]: active
-                - paragraph [ref=f4e421]: "OCM123 | 23y | DOB: 2003-03-19 | Male"
+                - paragraph [ref=f4e421]: "OCM123 | 23y | DOB: [masked] | Male"
                 - paragraph [ref=f4e422]: General Consultation
                 - generic [ref=f4e424]:
                   - generic [ref=f4e425]: "Total Visits: 4"
@@ -116,7 +116,7 @@
                   - generic [ref=f4e447]:
                     - heading "[patient]" [level=2] [ref=f4e448]
                     - generic [ref=f4e449]: active
-                  - paragraph [ref=f4e450]: "OCM123 | 23y | DOB: 2003-03-19 | Male | —"
+                  - paragraph [ref=f4e450]: "OCM123 | 23y | DOB: [masked] | Male | —"
               - button [ref=f4e451] [cursor=pointer]
             - generic [ref=f4e455]:
               - tablist [ref=f4e456]:
