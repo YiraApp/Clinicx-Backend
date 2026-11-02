@@ -21,6 +21,12 @@ export class NotificationController {
             const user = await userRepo.findOne({ where: { Id: userId } }).catch(() => null);
             if (!user) return Array.from(ids);
 
+            // If the user is a dependent (not primary), ONLY return their own notifications!
+            // A dependent member must only see notifications meant for them.
+            if (!user.IsPrimary || user.ParentUserId) {
+                return Array.from(ids);
+            }
+
             const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
             const parentId = user.ParentUserId || user.Id;
 

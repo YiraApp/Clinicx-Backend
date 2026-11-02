@@ -631,7 +631,7 @@ export const updateLatestContext = async (req: Request, res: Response) => {
  */
 export const getUserData = async (req: Request, res: Response) => {
     try {
-        const userId = req.body?.userId || (req.query.userId as string) || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        const userId = req.body?.userId || (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
         const deviceId = req.body?.deviceId || (req.query.deviceId as string);
 
         if (!userId) {

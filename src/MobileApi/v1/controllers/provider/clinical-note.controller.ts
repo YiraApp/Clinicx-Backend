@@ -105,6 +105,18 @@ export class MobileClinicalNoteController {
                 return res.status(400).json(ApiResponse.error("Note ID is required"));
             }
 
+            // Only the record's author, or the patient for records they added themselves.
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { ClinicalNote } = await import("../../../../models/Appointments/clinical-note.model.js");
+            const { canDeleteRecord, requesterIdOf } = await import("../../../../middlewares/record-ownership.js");
+            const existing = await AppDataSource.getRepository(ClinicalNote).findOne({ where: { Id: parseInt(String(id), 10) } as any });
+            if (!existing) {
+                return res.status(404).json(ApiResponse.error("Clinical note not found"));
+            }
+            if (!(await canDeleteRecord(requesterIdOf(req), existing as any))) {
+                return res.status(403).json(ApiResponse.error("You can only delete clinical notes you added."));
+            }
+
             await clinicalNoteService.deleteNote(parseInt(String(id)));
             return res.json(ApiResponse.success(null, "Clinical note deleted successfully"));
         } catch (error: any) {

@@ -360,10 +360,44 @@ export const getTreatmentPlans = async (req: Request, res: Response) => {
  */
 export const getPatientAppointments = async (req: Request, res: Response) => {
     try {
-        const { patientPhone, userId, orgId, hospitalId } = req.body;
+        const { userId, hospitalId } = req.body;
         const { Appointment } = await import("../../../../models/Appointments/appointment.model.js");
         const { User } = await import("../../../../models/Account/user.model.js");
         const { AppDataSource } = await import("../../../../config/database.js");
+        const { isFamilyLinked } = await import("../../../../middlewares/request-identity.js");
+
+        // Whose appointments: the profile asked for, which must be the caller or
+        // their family. (A phone number in the body used to replace this, which
+        // let anyone list appointments for any phone.)
+        const requesterId = String((req as any).user?.userId || (req as any).user?.id || "").trim();
+        const targetId = String(userId || requesterId || "").trim();
+        if (!targetId) {
+            return res.status(400).json(ApiResponse.error("User ID is required"));
+        }
+        if (requesterId && targetId.toLowerCase() !== requesterId.toLowerCase() && !(await isFamilyLinked(requesterId, targetId))) {
+            return res.status(403).json(ApiResponse.error("You can only see appointments for yourself and your family."));
+        }
+
+        // The main account also sees its family members' appointments, each
+        // marked with who it is for. A family member's own profile sees only theirs.
+        const userRepo = AppDataSource.getRepository(User);
+        const target = await userRepo.findOne({ where: { Id: targetId } as any });
+        const patientIds = new Set<string>([targetId]);
+        const onlySelf = req.body?.onlySelf === true || req.body?.includeFamily === false || req.query?.onlySelf === "true" || req.query?.includeFamily === "false";
+        if (target && !target.ParentUserId && target.IsPrimary && !onlySelf) {
+            const children = await userRepo.find({ where: { ParentUserId: target.Id, IsDeleted: false } as any, select: ["Id"] as any });
+            children.forEach((c: any) => patientIds.add(c.Id));
+            const last10 = String(target.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+            if (last10.length === 10) {
+                const samePhone = await userRepo
+                    .createQueryBuilder("u")
+                    .select("u.Id", "Id")
+                    .where("RIGHT(u.PhoneNumber, 10) = :last10", { last10 })
+                    .andWhere("u.IsDeleted = 0")
+                    .getRawMany();
+                samePhone.forEach((r: any) => patientIds.add(r.Id));
+            }
+        }
 
         const apptRepo = AppDataSource.getRepository(Appointment);
         const qb = apptRepo.createQueryBuilder("a")
@@ -371,19 +405,13 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             .leftJoinAndSelect("a.Doctor", "d")
             .leftJoinAndSelect("a.Hospital", "h")
             .leftJoinAndSelect("a.Organization", "o")
+            .where("a.UserId IN (:...patientIds)", { patientIds: [...patientIds] })
             .orderBy("a.AppointmentDate", "DESC")
             .addOrderBy("a.StartTime", "DESC")
-            .take(50);
+            .take(100);
 
-        if (userId) {
-            qb.where("a.UserId = :userId", { userId });
-        }
         if (hospitalId && Number(hospitalId) > 0) {
             qb.andWhere("a.HospitalId = :hospitalId", { hospitalId: Number(hospitalId) });
-        } else if (patientPhone) {
-            const cleanPhone = String(patientPhone).replace(/\D/g, "");
-            const last10 = cleanPhone.slice(-10);
-            qb.where("(u.PhoneNumber = :cleanPhone OR u.PhoneNumber LIKE :last10)", { cleanPhone, last10: `%${last10}` });
         }
 
         const appts = await qb.getMany();
@@ -399,7 +427,7 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
                     .leftJoinAndSelect("hp.User", "u")
                     .leftJoinAndSelect("hp.Hospital", "hosp")
                     .where("hp.UserId IN (:...doctorIds)", { doctorIds })
-                    .andWhere("hp.IsDeleted = false")
+                    .andWhere("hp.IsDeleted = 0")
                     .getMany();
                 for (const p of providers) {
                     if (p.HospitalId) {

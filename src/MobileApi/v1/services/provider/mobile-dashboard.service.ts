@@ -336,40 +336,46 @@ export class MobileDashboardService {
             dailyData
         };
 
-        // 6. Monthly Patients Graph Data (Jan-Dec) for current year
-        const monthlyStatsQuery = appointmentRepo.createQueryBuilder("appointment")
-            .select("FORMAT(appointment.AppointmentDate, 'MMM')", "month")
-            .addSelect("COUNT(*)", "appointments")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("appointment.AppointmentDate >= CAST(DATEADD(month, -5, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
+        // 6. Monthly Patients Graph Data (Jan-Dec) for current year: distinct
+        // patients seen each month, cancelled and rejected bookings left out.
+        const istYear = new Date(Date.now() + 330 * 60_000).getUTCFullYear();
+        const yearQuery = () => {
+            const q = appointmentRepo.createQueryBuilder("appointment")
+                .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+                .andWhere("appointment.AppointmentDate >= :yearStart AND appointment.AppointmentDate < :nextYearStart", {
+                    yearStart: `${istYear}-01-01`,
+                    nextYearStart: `${istYear + 1}-01-01`,
+                })
+                .andWhere("LOWER(COALESCE(appointment.Status, '')) NOT IN ('cancelled', 'canceled', 'rejected')");
+            if (hospId && hospId > 0) {
+                q.andWhere("appointment.HospitalId = :hospId", { hospId });
+            } else if (affiliatedHospitalIds.length > 0) {
+                q.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
+            }
+            if (orgId && orgId > 0) {
+                q.andWhere("appointment.OrgId = :orgId", { orgId });
+            }
+            return q;
+        };
 
-        if (hospId && hospId > 0) {
-            monthlyStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
-        } else if (affiliatedHospitalIds.length > 0) {
-            monthlyStatsQuery.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
-        }
-        if (orgId && orgId > 0) {
-            monthlyStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
-        }
-
-        const monthlyStatsRaw = await monthlyStatsQuery
-            .groupBy("FORMAT(appointment.AppointmentDate, 'MMM')")
-            .addGroupBy("YEAR(appointment.AppointmentDate)")
-            .addGroupBy("MONTH(appointment.AppointmentDate)")
-            .orderBy("YEAR(appointment.AppointmentDate)", "ASC")
-            .addOrderBy("MONTH(appointment.AppointmentDate)", "ASC")
+        const monthlyStatsRaw = await yearQuery()
+            .select("MONTH(appointment.AppointmentDate)", "month")
+            .addSelect("COUNT(DISTINCT appointment.UserId)", "patients")
+            .groupBy("MONTH(appointment.AppointmentDate)")
             .getRawMany();
 
         const monthLabels = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-        const monthlyData = monthLabels.map(label => {
-            const row = monthlyStatsRaw.find(r => (r.month || "").toUpperCase() === label);
+        const monthlyData = monthLabels.map((label, i) => {
+            const row = monthlyStatsRaw.find(r => Number(r.month) === i + 1);
             return {
                 label,
-                value: row ? parseInt(row.appointments || "0", 10) : 0
+                value: row ? parseInt(row.patients || "0", 10) : 0
             };
         });
 
-        const yearlyTotal = monthlyData.reduce((sum, item) => sum + item.value, 0);
+        // A patient seen in several months counts once for the year.
+        const yearlyRow = await yearQuery().select("COUNT(DISTINCT appointment.UserId)", "patients").getRawOne();
+        const yearlyTotal = parseInt(yearlyRow?.patients || "0", 10);
 
         const monthlyPatients = {
             yearlyTotal,
@@ -738,8 +744,8 @@ export class MobileDashboardService {
         }
 
         // Visits calculations
-        const completedVisits = appointments.filter(a => a.Status === 'Completed').length;
-        const totalVisits = completedVisits || appointments.length;
+        // Every visit except cancelled or rejected ones, counted the same way as the patient list.
+        const totalVisits = appointments.filter(a => !["cancelled", "canceled", "rejected"].includes(String(a.Status || "").toLowerCase())).length;
 
         // Condition
         const latestAppt = appointments[0];

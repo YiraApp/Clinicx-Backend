@@ -98,7 +98,8 @@ export class PatientRegistrationRepository {
             const appointmentQuery = AppDataSource.getRepository(Appointment)
                 .createQueryBuilder("a")
                 .select("UPPER(a.UserId)", "userId")
-                .addSelect("COUNT(*)", "totalVisits")
+                // Cancelled and rejected bookings are not visits.
+                .addSelect("SUM(CASE WHEN LOWER(COALESCE(a.Status, '')) IN ('cancelled', 'canceled', 'rejected') THEN 0 ELSE 1 END)", "totalVisits")
                 .addSelect("SUM(CASE WHEN LOWER(a.Status) = LOWER(:completedStatus) THEN 1 ELSE 0 END)", "completedVisits")
                 .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) });
 

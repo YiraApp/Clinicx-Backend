@@ -222,7 +222,10 @@ export class ProfileShareService {
 
         const scoped = <T>(rows: T[]): T[] =>
             opts.hospitalId ? rows.filter((r: any) => Number(r.HospitalId) === Number(opts.hospitalId)) : rows;
-        const visits = scoped(appointments).filter((a: any) => !opts.excludeAppointmentId || Number(a.Id) !== Number(opts.excludeAppointmentId));
+        // Cancelled and rejected bookings never happened, so they aren't past visits.
+        const visits = scoped(appointments)
+            .filter((a: any) => !["cancelled", "canceled", "rejected"].includes(String(a.Status || "").toLowerCase()))
+            .filter((a: any) => !opts.excludeAppointmentId || Number(a.Id) !== Number(opts.excludeAppointmentId));
         const ownData = <T>(rows: T[]): T[] => (opts.hospitalId ? [] : rows);
 
         const hospitalIds = [

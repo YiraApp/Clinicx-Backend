@@ -542,6 +542,18 @@ export class MobilePrescriptionController {
                 return res.status(400).json(ApiResponse.error("Prescription ID is required"));
             }
 
+            // Only the record's author, or the patient for records they added themselves.
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { PatientPrescription } = await import("../../../../models/Appointments/patient-prescription.model.js");
+            const { canDeleteRecord, requesterIdOf } = await import("../../../../middlewares/record-ownership.js");
+            const existing = await AppDataSource.getRepository(PatientPrescription).findOne({ where: { Id: String(id) } as any });
+            if (!existing) {
+                return res.status(404).json(ApiResponse.error("Prescription not found"));
+            }
+            if (!(await canDeleteRecord(requesterIdOf(req), existing as any))) {
+                return res.status(403).json(ApiResponse.error("You can only delete prescriptions you added."));
+            }
+
             await patientPrescriptionService.deletePrescription(String(id));
             return res.json(ApiResponse.success(null, "Prescription deleted successfully"));
         } catch (error: any) {

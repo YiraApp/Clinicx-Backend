@@ -104,7 +104,22 @@ export class MobileDoctorSuggestionController {
                 return res.status(400).json(ApiResponse.error("Suggestion ID is required"));
             }
 
-            await doctorSuggestionService.deleteSuggestion(parseInt(String(id)));
+            const suggestionId = parseInt(String(id), 10);
+            if (!Number.isFinite(suggestionId)) {
+                return res.status(400).json(ApiResponse.error("Suggestion ID is invalid"));
+            }
+            // Only the doctor who wrote a suggestion may delete it.
+            const requesterId = String((req as any).user?.userId || (req as any).user?.id || "").toLowerCase();
+            const { doctorSuggestionRepository } = await import("../../../../repositories/Appointments/doctor-suggestion.repository.js");
+            const existing = await doctorSuggestionRepository.findById(suggestionId);
+            if (!existing) {
+                return res.status(404).json(ApiResponse.error("Suggestion not found"));
+            }
+            if (!requesterId || String(existing.DoctorId).toLowerCase() !== requesterId) {
+                return res.status(403).json(ApiResponse.error("You can only delete suggestions you wrote."));
+            }
+
+            await doctorSuggestionService.deleteSuggestion(suggestionId);
             return res.json(ApiResponse.success(null, "Suggestion deleted successfully"));
         } catch (error: any) {
             console.error("Mobile Doctor Suggestion Delete Error:", error);
