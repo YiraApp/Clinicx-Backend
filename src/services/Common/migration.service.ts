@@ -48,6 +48,73 @@ export class MigrationService {
                     UpdatedAt DATETIME DEFAULT GETDATE()
                 );`,
 
+                // Patient Profile Share Links (read-only web links for doctors not on Yira)
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientProfileShareLinks')
+                CREATE TABLE PatientProfileShareLinks (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    PatientId UNIQUEIDENTIFIER NOT NULL,
+                    CreatedByUserId UNIQUEIDENTIFIER NOT NULL,
+                    TokenHash VARCHAR(64) NOT NULL,
+                    Label NVARCHAR(120) NULL,
+                    ExpiresAt DATETIME NOT NULL,
+                    RevokedAt DATETIME NULL,
+                    ViewCount INT NOT NULL DEFAULT 0,
+                    LastViewedAt DATETIME NULL,
+                    CreatedAt DATETIME NOT NULL DEFAULT GETDATE()
+                );`,
+                "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_PatientProfileShareLinks_TokenHash' AND object_id = OBJECT_ID('PatientProfileShareLinks')) CREATE UNIQUE INDEX UX_PatientProfileShareLinks_TokenHash ON PatientProfileShareLinks (TokenHash);",
+                "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_PatientProfileShareLinks_PatientId' AND object_id = OBJECT_ID('PatientProfileShareLinks')) CREATE INDEX IX_PatientProfileShareLinks_PatientId ON PatientProfileShareLinks (PatientId);",
+
+                // My billing: bills patients add themselves
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientManualBills')
+                CREATE TABLE PatientManualBills (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    PatientId UNIQUEIDENTIFIER NOT NULL,
+                    CreatedByUserId UNIQUEIDENTIFIER NOT NULL,
+                    Title NVARCHAR(150) NOT NULL,
+                    ProviderName NVARCHAR(200) NULL,
+                    Category VARCHAR(40) NOT NULL,
+                    BillDate DATE NOT NULL,
+                    BillNumber NVARCHAR(80) NULL,
+                    TotalAmount DECIMAL(18,2) NOT NULL,
+                    PaidAmount DECIMAL(18,2) NOT NULL DEFAULT 0,
+                    PaymentMode VARCHAR(40) NULL,
+                    Notes NVARCHAR(1000) NULL,
+                    FileUrl NVARCHAR(MAX) NULL,
+                    FileName NVARCHAR(255) NULL,
+                    IsDeleted BIT NOT NULL DEFAULT 0,
+                    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                    UpdatedAt DATETIME NULL
+                );`,
+                "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_PatientManualBills_PatientId' AND object_id = OBJECT_ID('PatientManualBills')) CREATE INDEX IX_PatientManualBills_PatientId ON PatientManualBills (PatientId, BillDate DESC);",
+
+                // My policies: insurance policies and schemes patients add themselves
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PatientPolicies')
+                CREATE TABLE PatientPolicies (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    PatientId UNIQUEIDENTIFIER NOT NULL,
+                    CreatedByUserId UNIQUEIDENTIFIER NOT NULL,
+                    PolicyType VARCHAR(40) NOT NULL,
+                    Insurer NVARCHAR(200) NOT NULL,
+                    PolicyName NVARCHAR(200) NULL,
+                    PolicyNumber NVARCHAR(100) NOT NULL,
+                    MemberId NVARCHAR(100) NULL,
+                    SumInsured DECIMAL(18,2) NULL,
+                    Premium DECIMAL(18,2) NULL,
+                    StartDate DATE NULL,
+                    EndDate DATE NULL,
+                    TpaName NVARCHAR(200) NULL,
+                    HelplineNumber NVARCHAR(40) NULL,
+                    CoveredMembers NVARCHAR(500) NULL,
+                    Notes NVARCHAR(1000) NULL,
+                    FileUrl NVARCHAR(MAX) NULL,
+                    FileName NVARCHAR(255) NULL,
+                    IsDeleted BIT NOT NULL DEFAULT 0,
+                    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                    UpdatedAt DATETIME NULL
+                );`,
+                "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_PatientPolicies_PatientId' AND object_id = OBJECT_ID('PatientPolicies')) CREATE INDEX IX_PatientPolicies_PatientId ON PatientPolicies (PatientId);",
+
                 // Seed default AppVersions if not existing
                 `IF NOT EXISTS (SELECT * FROM AppVersions WHERE Platform = 'android')
                 INSERT INTO AppVersions (Platform, Version, MinVersion, ForceUpdate, Url, IsLatest, IsDeleted, CreatedAt, Maintenance, Logout)

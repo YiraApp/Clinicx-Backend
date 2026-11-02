@@ -7,6 +7,11 @@ import { v4 as uuidv4 } from "uuid";
  * Repository implementation for UserOTP entity.
  * Handles OTP generation, verification, and validation for any contact type.
  */
+/** UserOTP.UpdatedBy value meaning the right code was entered for this record. */
+export const OTP_VERIFIED_MARKER = "OTP_VERIFIED";
+/** UserOTP.UpdatedBy value meaning that verification has already changed a password. */
+export const OTP_CONSUMED_MARKER = "OTP_CONSUMED";
+
 export class UserOTPRepository {
     private repo = AppDataSource.getRepository(UserOTP);
 
@@ -138,8 +143,9 @@ export class UserOTPRepository {
             };
         }
 
-        // Verify OTP matches or check master test OTP (123456 / 111111) for testing
-        const isMasterOtp = otp === "123456" || otp === "111111";
+        // Test codes (123456 / 111111) let QA sign in without a real SMS. They are
+        // off unless ALLOW_TEST_OTP=true, so they can never unlock a live account.
+        const isMasterOtp = process.env.ALLOW_TEST_OTP === "true" && (otp === "123456" || otp === "111111");
         if (userOTP.OTP !== otp && !isMasterOtp) {
             userOTP.AttemptCount += 1;
             await this.repo.save(userOTP);
@@ -153,6 +159,9 @@ export class UserOTPRepository {
         // OTP is valid - mark as expired to prevent reuse
         userOTP.IsExpired = true;
         userOTP.UpdatedDate = new Date();
+        // IsExpired alone also covers resent, timed-out and locked-out codes, so a
+        // correct entry is recorded separately for the password-change step.
+        userOTP.UpdatedBy = OTP_VERIFIED_MARKER;
         await this.repo.save(userOTP);
 
         return { 

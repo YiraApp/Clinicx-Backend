@@ -5,7 +5,7 @@ import { User } from "../../../models/Account/user.model.js";
  * Defines the contract for user login, token refresh, and logout operations.
  */
 export interface IAuthService {
-    login(identity: string, password?: string, roleId?: string | string[], deviceInfo?: string, ipAddress?: string): Promise<{
+    login(identity: string, password?: string, roleId?: string | string[], deviceInfo?: string, ipAddress?: string, otpProof?: { otp?: string; sessionId?: string; countryCode?: string }): Promise<{
         accessToken: string,
         refreshToken: string,
         accessTokenExpiry: Date,

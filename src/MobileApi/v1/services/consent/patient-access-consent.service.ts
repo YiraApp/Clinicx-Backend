@@ -133,47 +133,160 @@ export class PatientAccessConsentService {
             order: { Id: "DESC" }
         });
 
-        if (!consent) {
-            return { hasAccess: false, status: "NO_REQUEST", consent: null };
-        }
-
+        let hasActiveConsent = false;
         const now = new Date();
 
-        if (consent.Status === "APPROVED") {
+        if (consent && consent.Status === "APPROVED") {
             // Check if expired
             if (consent.DurationMinutes > 0 && consent.ExpiresAt && consent.ExpiresAt < now) {
                 consent.Status = "EXPIRED";
                 consent.UpdatedAt = now;
                 await this.consentRepo.save(consent);
+            } else {
+                hasActiveConsent = true;
+                let remainingMinutes: number | null = null;
+                if (consent.ExpiresAt) {
+                    remainingMinutes = Math.max(0, Math.floor((consent.ExpiresAt.getTime() - now.getTime()) / (1000 * 60)));
+                }
+
                 return {
-                    hasAccess: false,
-                    status: "EXPIRED",
+                    hasAccess: true,
+                    status: "APPROVED",
                     consent,
+                    expiresAt: consent.ExpiresAt,
+                    remainingMinutes,
                     durationLabel: this.getDurationLabel(consent.Duration)
                 };
             }
+        }
 
-            let remainingMinutes: number | null = null;
-            if (consent.ExpiresAt) {
-                remainingMinutes = Math.max(0, Math.floor((consent.ExpiresAt.getTime() - now.getTime()) / (1000 * 60)));
+        // Check if doctor has treated this patient and is linked to the hospital
+        try {
+            const { Appointment } = await import("../../../../models/Appointments/appointment.model.js");
+            const appointmentRepo = AppDataSource.getRepository(Appointment);
+            const treatedAppointment = await appointmentRepo.createQueryBuilder("a")
+                .where("a.UserId = :patientId", { patientId })
+                .andWhere("a.DoctorId = :doctorId", { doctorId })
+                .andWhere("LOWER(COALESCE(a.Status, '')) NOT IN ('cancelled', 'canceled', 'rejected')")
+                .orderBy("a.AppointmentDate", "DESC")
+                .getOne();
+
+            if (treatedAppointment) {
+                // Verify doctor is linked to the hospital
+                let isLinked = true;
+                if (treatedAppointment.HospitalId) {
+                    const hp = await this.providerRepo.findOne({
+                        where: { UserId: doctorId, HospitalId: treatedAppointment.HospitalId, IsDeleted: false }
+                    });
+                    isLinked = !!hp;
+                }
+
+                if (isLinked) {
+                    return {
+                        hasAccess: true,
+                        status: "APPROVED",
+                        treated: true,
+                        hospitalId: treatedAppointment.HospitalId,
+                        consent: consent || null,
+                        durationLabel: "Treating Doctor (Hospital Linked)"
+                    };
+                }
             }
-
-            return {
-                hasAccess: true,
-                status: "APPROVED",
-                consent,
-                expiresAt: consent.ExpiresAt,
-                remainingMinutes,
-                durationLabel: this.getDurationLabel(consent.Duration)
-            };
+        } catch (treatmentCheckError) {
+            console.error("[checkAccess] Treatment check error:", treatmentCheckError);
         }
 
         return {
             hasAccess: false,
-            status: consent.Status, // PENDING, REJECTED, EXPIRED, REVOKED
-            consent,
-            durationLabel: this.getDurationLabel(consent.Duration)
+            status: consent ? consent.Status : "NO_REQUEST",
+            consent: consent || null,
+            durationLabel: consent ? this.getDurationLabel(consent.Duration) : undefined
         };
+    }
+
+    /**
+     * Whether someone working at a hospital may read the records created there
+     * without the patient's consent. They may when they are on that hospital's
+     * staff and the patient has booked an appointment there or is registered
+     * with it. When an appointment is given, its hospital is used.
+     */
+    async checkHospitalRecordAccess(
+        patientId: string,
+        requesterId: string,
+        scope: { hospitalId?: number; appointmentId?: number }
+    ): Promise<{ allowed: boolean; hospitalId?: number; reason?: string }> {
+        if (!patientId || !requesterId) return { allowed: false, reason: "MISSING_IDS" };
+        const { Appointment } = await import("../../../../models/Appointments/appointment.model.js");
+        const appointmentRepo = AppDataSource.getRepository(Appointment);
+
+        let hospitalId = scope.hospitalId && scope.hospitalId > 0 ? scope.hospitalId : undefined;
+        if (scope.appointmentId) {
+            const appt = await appointmentRepo.findOne({ where: { Id: scope.appointmentId } });
+            if (!appt || String(appt.UserId).toUpperCase() !== patientId.toUpperCase()) {
+                return { allowed: false, reason: "APPOINTMENT_NOT_FOR_PATIENT" };
+            }
+            if (hospitalId && Number(appt.HospitalId) !== hospitalId) {
+                return { allowed: false, reason: "APPOINTMENT_OTHER_HOSPITAL" };
+            }
+            hospitalId = Number(appt.HospitalId) || undefined;
+        }
+        if (!hospitalId) return { allowed: false, reason: "NO_HOSPITAL" };
+
+        // Staff of the hospital: a provider profile there, or any role there.
+        const isProvider = await this.providerRepo.count({
+            where: { UserId: requesterId, HospitalId: hospitalId, IsDeleted: false },
+        });
+        const isStaff = isProvider > 0 || (await AppDataSource.getRepository(UserRole).count({
+            where: { UserId: requesterId, HospitalId: hospitalId, IsDeleted: false },
+        })) > 0;
+        if (!isStaff) return { allowed: false, hospitalId, reason: "NOT_HOSPITAL_STAFF" };
+
+        // The patient's relationship with the hospital: an appointment or a registration.
+        const booked = await appointmentRepo.createQueryBuilder("a")
+            .where("a.UserId = :patientId", { patientId })
+            .andWhere("a.HospitalId = :hospitalId", { hospitalId })
+            .andWhere("LOWER(COALESCE(a.Status, '')) NOT IN ('cancelled', 'canceled', 'rejected')")
+            .getCount();
+        if (booked > 0) return { allowed: true, hospitalId };
+
+        const registered = await AppDataSource.getRepository(PatientRegistration).count({
+            where: { UserId: patientId, HospitalId: hospitalId, IsDeleted: false },
+        });
+        if (registered > 0) return { allowed: true, hospitalId };
+
+        return { allowed: false, hospitalId, reason: "PATIENT_NOT_AT_HOSPITAL" };
+    }
+
+    /**
+     * The patient gives a doctor on Yira access to all their records, without
+     * waiting for the doctor to ask. Replaces any earlier request between them.
+     */
+    async grantAccess(patientId: string, doctorId: string, duration: string = "7_DAYS", hospitalId?: number): Promise<any> {
+        if (!patientId || !doctorId) throw new Error("patientId and doctorId are required");
+        const doctor = await this.userRepo.findOne({ where: { Id: doctorId, IsDeleted: false } });
+        if (!doctor) throw new Error("Doctor not found");
+        const isProvider = await this.providerRepo.count({ where: { UserId: doctorId, IsDeleted: false } });
+        if (isProvider === 0) throw new Error("This person is not a doctor on Yira");
+
+        const durationMinutes = this.getDurationMinutes(duration);
+        const now = new Date();
+        let consent = await this.consentRepo.findOne({
+            where: { PatientId: patientId, DoctorId: doctorId },
+            order: { Id: "DESC" },
+        });
+        if (!consent) {
+            consent = this.consentRepo.create({ PatientId: patientId, DoctorId: doctorId, RequestedAt: now });
+        }
+        consent.Duration = duration;
+        consent.DurationMinutes = durationMinutes;
+        consent.Status = "APPROVED";
+        consent.ApprovedAt = now;
+        consent.ExpiresAt = durationMinutes > 0 ? new Date(now.getTime() + durationMinutes * 60 * 1000) : undefined;
+        if (hospitalId) consent.HospitalId = hospitalId;
+        consent.Notes = "Shared by patient";
+        consent.UpdatedAt = now;
+        const saved = await this.consentRepo.save(consent);
+        return { ...saved, durationLabel: this.getDurationLabel(saved.Duration) };
     }
 
     /**

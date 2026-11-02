@@ -387,32 +387,70 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
         }
 
         const appts = await qb.getMany();
-        const formatted = appts.map(a => ({
-            id: a.Id,
-            appointmentDate: a.AppointmentDate,
-            startTime: a.StartTime,
-            endTime: a.EndTime,
-            duration: a.Duration ? `${a.Duration} mins` : "15 mins",
-            appointmentType: a.AppointmentType,
-            isTeleConsultation: a.IsTeleConsultation === true ||
-                                (a.AppointmentType && a.AppointmentType.toLowerCase().includes("video")) ||
-                                (a.AppointmentType && a.AppointmentType.toLowerCase().includes("tele")) ||
-                                (!!a.MeetingUrl),
-            meetingUrl: a.MeetingUrl || "",
-            status: a.Status,
-            reason: a.Reason,
-            hospitalId: a.HospitalId ?? a.Hospital?.Id ?? null,
-            hospitalName: a.Hospital?.Name || "Healthcare Facility",
-            organizationId: a.OrgId ?? a.Organization?.Id ?? null,
-            organizationName: a.Organization?.Name || "Organization",
-            doctorId: a.DoctorId ?? a.Doctor?.Id ?? null,
-            slotId: a.SlotId ?? null,
-            patientUserId: a.UserId ?? a.User?.Id ?? null,
-            doctorName: a.Doctor ? `Dr. ${a.Doctor.FirstName || ''} ${a.Doctor.LastName || ''}`.trim() : "Doctor",
-            patientName: a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : "Patient",
-            relation: (a.User?.Relation && a.User?.Relation.toLowerCase() !== "self") ? a.User.Relation : (a.User?.IsPrimary ? "Self" : "Dependent"),
-            isPrimary: a.User?.IsPrimary ?? true
-        }));
+
+        // Enrich appointments with healthcare provider details (specialty, qualification, experience, fee)
+        const { HealthcareProvider } = await import("../../../../models/Organizations/healthcare-provider.model.js");
+        const hpRepo = AppDataSource.getRepository(HealthcareProvider);
+        const doctorIds = Array.from(new Set(appts.map(a => a.DoctorId).filter(Boolean)));
+        let providersMap: Record<string, any> = {};
+        if (doctorIds.length > 0) {
+            try {
+                const providers = await hpRepo.createQueryBuilder("hp")
+                    .leftJoinAndSelect("hp.User", "u")
+                    .leftJoinAndSelect("hp.Hospital", "hosp")
+                    .where("hp.UserId IN (:...doctorIds)", { doctorIds })
+                    .andWhere("hp.IsDeleted = false")
+                    .getMany();
+                for (const p of providers) {
+                    if (p.HospitalId) {
+                        providersMap[`${p.UserId}_${p.HospitalId}`] = p;
+                    }
+                    if (!providersMap[p.UserId]) {
+                        providersMap[p.UserId] = p;
+                    }
+                }
+            } catch (hpErr) {
+                console.error("Error fetching healthcare providers for appointments:", hpErr);
+            }
+        }
+
+        const formatted = appts.map(a => {
+            const docIdStr = a.DoctorId ?? a.Doctor?.Id;
+            const hospIdNum = a.HospitalId ?? a.Hospital?.Id;
+            const provider = (docIdStr && hospIdNum ? providersMap[`${docIdStr}_${hospIdNum}`] : null) || (docIdStr ? providersMap[docIdStr] : null);
+
+            return {
+                id: a.Id,
+                appointmentDate: a.AppointmentDate,
+                startTime: a.StartTime,
+                endTime: a.EndTime,
+                duration: a.Duration ? `${a.Duration} mins` : "15 mins",
+                appointmentType: a.AppointmentType,
+                isTeleConsultation: a.IsTeleConsultation === true ||
+                                    (a.AppointmentType && a.AppointmentType.toLowerCase().includes("video")) ||
+                                    (a.AppointmentType && a.AppointmentType.toLowerCase().includes("tele")) ||
+                                    (!!a.MeetingUrl),
+                meetingUrl: a.MeetingUrl || "",
+                status: a.Status,
+                reason: a.Reason,
+                hospitalId: a.HospitalId ?? a.Hospital?.Id ?? provider?.HospitalId ?? null,
+                hospitalName: a.Hospital?.Name || provider?.Hospital?.Name || "Healthcare Facility",
+                organizationId: a.OrgId ?? a.Organization?.Id ?? null,
+                organizationName: a.Organization?.Name || "Organization",
+                doctorId: a.DoctorId ?? a.Doctor?.Id ?? null,
+                slotId: a.SlotId ?? null,
+                patientUserId: a.UserId ?? a.User?.Id ?? null,
+                doctorName: a.Doctor ? `Dr. ${a.Doctor.FirstName || ''} ${a.Doctor.LastName || ''}`.trim() : (provider?.User ? `Dr. ${provider.User.FirstName || ''} ${provider.User.LastName || ''}`.trim() : "Doctor"),
+                specialty: provider?.Specialty || "General Physician",
+                qualification: provider?.Qualification || "MBBS",
+                experience: provider?.Experience || "",
+                consultationFee: provider?.ConsultationFee !== undefined && provider?.ConsultationFee !== null ? Number(provider.ConsultationFee) : 0,
+                doctorPhoto: a.Doctor?.ImagePath || provider?.User?.ImagePath || null,
+                patientName: a.User ? `${a.User.FirstName || ''} ${a.User.LastName || ''}`.trim() : "Patient",
+                relation: (a.User?.Relation && a.User?.Relation.toLowerCase() !== "self") ? a.User.Relation : (a.User?.IsPrimary ? "Self" : "Dependent"),
+                isPrimary: a.User?.IsPrimary ?? true
+            };
+        });
 
         return res.json(ApiResponse.success(formatted, "Patient appointments fetched successfully."));
     } catch (error: any) {

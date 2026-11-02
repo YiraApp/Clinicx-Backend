@@ -1,10 +1,26 @@
 import type { Request, Response, NextFunction } from "express";
 import { AppDataSource } from "../config/database.js";
 import { APILog } from "../models/Logs/apilog.model.js";
-import { verifyAccessToken } from "../utils/jwt.utils.js";
-import { findByAccessToken } from "../repositories/Account/token.repository.js";
+import { resolveRequestIdentity } from "./request-identity.js";
+
+/** Profile share links carry their secret in the path; never store or print it. */
+const redactShareSecrets = (path: string) => path.replace(/(\/shared-profile\/)[^/?#]+/gi, "$1********");
+
+/** Responses that carry a share link URL, a shared profile's records, a patient's past-records bundle, or their bills and policies. */
+const isShareRequest = (path: string) => /\/shared-profile\/|\/patient\/share-links|\/past-records|\/patient\/(billing|policies)/i.test(path || "");
 
 const apiLogRepository = AppDataSource.getRepository(APILog);
+
+// The public booking pages only read these. Changing them needs a signed-in user.
+const READ_ONLY_PUBLIC_PREFIXES = ["/api/hospitals", "/api/providers", "/api/default-organization", "/api/default-organizations"];
+
+/** Requests under a public prefix that the public pages never make. */
+function isStaffOnlyRequest(method: string, path: string): boolean {
+    const isRead = method === "GET" || method === "HEAD" || method === "OPTIONS";
+    if (path.endsWith("/settings/history")) return true;
+    if (path.startsWith("/api/feedback")) return !isRead && !(method === "POST" && path.replace(/\/$/, "") === "/api/feedback");
+    return !isRead && READ_ONLY_PUBLIC_PREFIXES.some(prefix => path === prefix || path.startsWith(`${prefix}/`));
+}
 
 /**
  * Global combined middleware for structured request logging and JWT authentication.
@@ -43,14 +59,11 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/api/redirections",
         "/favicon.ico",
         "/robots.txt",
-        "/api/test-sms",
         "/api/clinical-summary/share",
         "/api/patients/registration-link",
         "/api/patients/register",
         "/api/patients/quick-check",
         "/api/patients/next-token",
-        "/api/patients/send-registration-link",
-        "/api/patients",
         "/api/users/updateUser",
         "/api/users/checkPrimary",
         "/api/users/check-email",
@@ -103,8 +116,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         "/v1/api/auth/reset_password",
         "/v1/api/auth/app-version",
         "/v1/api/auth/offers",
-        "/api/offers",
-        "/api/push-campaigns",
+        "/v1/api/auth/shared-profile/",
         "/api/feedback",
         "/api/diet/foods",
         "/api/diet/templates",
@@ -121,14 +133,15 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     ];
 
     const cleanReqPath = (req.path || "").toLowerCase();
-    const isPublic = publicRoutes.some(route => cleanReqPath.startsWith(route.toLowerCase())) ||
+    const isPublic = !isStaffOnlyRequest(req.method, cleanReqPath) && (
+        publicRoutes.some(route => cleanReqPath.startsWith(route.toLowerCase())) ||
         cleanReqPath.endsWith("/pdf") ||
-        (cleanReqPath.includes("/prescriptions/") && cleanReqPath.includes("/pdf"));
+        (cleanReqPath.includes("/prescriptions/") && cleanReqPath.includes("/pdf")));
 
     // Capture initial request metadata
     const requestLog = new APILog();
     requestLog.Method = req.method;
-    requestLog.Path = req.path;
+    requestLog.Path = redactShareSecrets(req.path);
     requestLog.QueryString = JSON.stringify(req.query?.token ? { ...req.query, token: "********" } : req.query);
     requestLog.RequestedOn = requestedOn;
 
@@ -150,15 +163,18 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     // Truncate and mask RequestBody
     if (req.body) {
         let body = { ...req.body };
-        if (body.password) body.password = "********";
-        if (body.Password) body.Password = "********";
+        // Never store credentials, one-time codes or session tokens in the logs
+        const secretKeys = ["password", "Password", "newPassword", "confirmPassword", "oldPassword", "currentPassword", "otp", "OTP", "refreshToken", "accessToken", "token", "fcmToken"];
+        for (const key of secretKeys) {
+            if (body[key]) body[key] = "********";
+        }
         const bodyStr = JSON.stringify(body);
         requestLog.RequestBody = bodyStr.length > 2000 ? bodyStr.substring(0, 2000) + "... [truncated]" : bodyStr;
     }
 
 
     const timeStr = new Date().toLocaleTimeString();
-    console.log(`📥 [${timeStr}] ${req.method} ${req.originalUrl || req.url || req.path} (from ${ip || 'unknown'})`);
+    console.log(`📥 [${timeStr}] ${req.method} ${redactShareSecrets(req.originalUrl || req.url || req.path)} (from ${ip || 'unknown'})`);
     if (process.env.NODE_ENV !== 'production' && requestLog.RequestBody && requestLog.RequestBody !== '{}') {
         console.log(`   Body: ${requestLog.RequestBody}`);
     }
@@ -264,12 +280,14 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
                 }
             }
 
-            requestLog.Response = responseStr.length > 2000 ? responseStr.substring(0, 2000) + "... [truncated]" : responseStr;
+            requestLog.Response = isShareRequest(req.path)
+                ? "[not logged: contains a share link or shared health records]"
+                : responseStr.length > 2000 ? responseStr.substring(0, 2000) + "... [truncated]" : responseStr;
             requestLog.ResponseStatusCode = res.statusCode;
             requestLog.ResponseTimeMs = durationMs;
             requestLog.UpdatedOn = new Date();
 
-            console.log(`📤 [${new Date().toLocaleTimeString()}] ${res.statusCode} ${req.method} ${req.originalUrl || req.url || req.path} (${durationMs}ms)`);
+            console.log(`📤 [${new Date().toLocaleTimeString()}] ${res.statusCode} ${req.method} ${redactShareSecrets(req.originalUrl || req.url || req.path)} (${durationMs}ms)`);
 
             // Fire and forget
             saveLog();
@@ -279,40 +297,15 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
         // Step 2: JWT Authentication for protected routes
 
         if (!isPublic) {
-            // Check for Mobile User/Device header or body fallback
-            const queryUserId = req.body?.userId || req.query.userId || req.headers["x-user-id"];
-            const queryDeviceId = req.body?.deviceId || req.query.deviceId || req.headers["x-device-id"];
-            if (queryUserId && queryDeviceId) {
-                (req as any).userId = String(queryUserId);
-                (req as any).user = { userId: String(queryUserId) };
-                next();
-                return;
-            }
-
-            const authHeader = req.headers.authorization;
-            if (!authHeader || !authHeader.startsWith("Bearer ")) {
-                res.status(401).json({ error: "No token provided, access denied" });
-                return;
-            }
-
-            const token = authHeader.split(" ")[1];
-            const payload = verifyAccessToken(token!);
-
-            if (!payload) {
-                res.status(401).json({ error: "Access token is invalid or expired" });
-                return;
-            }
-
-            // Step 3: Database check for token revocation
-            const tokenRecord = await findByAccessToken(token!);
-            if (!tokenRecord || tokenRecord.IsRevoked) {
-                res.status(401).json({ error: "Token has been revoked" });
+            const identity = await resolveRequestIdentity(req);
+            if (identity.failure !== undefined) {
+                res.status(401).json({ error: identity.failure });
                 return;
             }
 
             // Attach user ID to the request object
-            (req as any).userId = payload.userId;
-            (req as any).user = payload; // For compatibility
+            (req as any).userId = identity.user.userId;
+            (req as any).user = identity.user; // For compatibility
         }
 
         next();

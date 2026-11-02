@@ -1,6 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { verifyAccessToken } from "../utils/jwt.utils.js";
-import { tokenRepository } from "../repositories/Account/token.repository.js";
+import { resolveRequestIdentity } from "./request-identity.js";
 
 /**
  * Middleware to verify JWT Access Token.
@@ -8,41 +7,14 @@ import { tokenRepository } from "../repositories/Account/token.repository.js";
  */
 export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
     try {
-        const queryUserId = req.body?.userId || req.query.userId || req.headers["x-user-id"];
-        const queryDeviceId = req.body?.deviceId || req.query.deviceId || req.headers["x-device-id"];
-        if (queryUserId && queryDeviceId) {
-            (req as any).user = { userId: String(queryUserId) };
-            next();
-            return;
-        }
-
-        const authHeader = req.headers.authorization;
-        if (!authHeader?.startsWith("Bearer ")) {
-            res.status(401).json({ error: "No token provided or invalid format, access denied" });
-            return;
-        }
-
-        const token = authHeader.split(" ")[1];
-        if (!token) {
-            res.status(401).json({ error: "Access token missing" });
-            return;
-        }
-
-        const payload = verifyAccessToken(token);
-        if (!payload) {
-            res.status(401).json({ error: "Invalid or expired access token" });
-            return;
-        }
-
-        // Check if token is revoked in database for immediate reflection of status/role changes
-        const tokenRecord = await tokenRepository.findByAccessToken(token);
-        if (!tokenRecord) {
-            res.status(401).json({ error: "Token revoked or session ended. Please login again." });
+        const identity = await resolveRequestIdentity(req);
+        if (identity.failure !== undefined) {
+            res.status(401).json({ error: identity.failure });
             return;
         }
 
         // Attach user info to the request for subsequent handlers
-        (req as any).user = payload;
+        (req as any).user = identity.user;
 
         next();
     } catch (err) {
@@ -56,24 +28,10 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
  */
 export async function optionalAuthMiddleware(req: Request, res: Response, next: NextFunction) {
     try {
-        const queryUserId = req.body?.userId || req.query.userId || req.headers["x-user-id"];
-        const queryDeviceId = req.body?.deviceId || req.query.deviceId || req.headers["x-device-id"];
-        if (queryUserId && queryDeviceId) {
-            (req as any).user = { userId: String(queryUserId) };
-            return next();
-        }
-
-        const authHeader = req.headers.authorization;
-        if (authHeader?.startsWith("Bearer ")) {
-            const token = authHeader.split(" ")[1];
-            if (token) {
-                const payload = verifyAccessToken(token);
-                if (payload) {
-                    (req as any).user = payload;
-                }
-            }
+        const identity = await resolveRequestIdentity(req);
+        if (identity.user) {
+            (req as any).user = identity.user;
         }
     } catch (_) {}
     next();
 }
-

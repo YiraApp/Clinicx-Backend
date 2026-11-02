@@ -17,7 +17,14 @@ export class MobileMedicalDocumentController {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
-            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit);
+            let result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit);
+
+            // In a hospital's view, staff see what was added there, not the
+            // patient's own uploads that are not tied to a visit.
+            const requesterId = String((req as any).user?.userId || (req as any).user?.id || "");
+            if (hospitalId && !appointmentId && requesterId.toLowerCase() !== String(patientId).toLowerCase()) {
+                result = result.filter((d: any) => !(d.IsPatientUploaded && !d.AppointmentId));
+            }
             return res.json(ApiResponse.success(result, "Patient documents fetched successfully."));
         } catch (error: any) {
             console.error("Mobile Medical Document Get Error:", error);

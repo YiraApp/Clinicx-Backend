@@ -27,6 +27,7 @@ export class PatientDashboardService {
         const upcomingApptsRaw = await AppDataSource.getRepository(Appointment).createQueryBuilder("apt")
             .leftJoinAndSelect("apt.Doctor", "doctor")
             .leftJoinAndSelect("apt.User", "patient")
+            .leftJoinAndSelect("apt.Hospital", "hospital")
             .where("apt.UserId IN (:...allFamilyUserIds)", { allFamilyUserIds })
             .andWhere("LOWER(apt.Status) = 'scheduled'")
             .andWhere("CAST(apt.AppointmentDate AS DATE) >= :todayStr", { todayStr })
@@ -56,7 +57,9 @@ export class PatientDashboardService {
                 date: appt.AppointmentDate,
                 time: appt.StartTime,
                 type: appt.IsTeleConsultation ? "Video" : (appt.AppointmentType || "In-Person"),
-                status: appt.Status
+                status: appt.Status,
+                hospitalName: appt.Hospital?.Name,
+                meetingUrl: appt.MeetingUrl
             });
         }
 

@@ -154,7 +154,7 @@ export class OTPService {
                             ]
                         }
                     ];
-                    console.log(`[OTP] Sending WhatsApp template message to ${normalizedTo} with OTP ${otp}...`);
+                    console.log(`[OTP] Sending WhatsApp OTP template message to ${normalizedTo}...`);
                     await whatsappService.sendTemplateMessage(normalizedTo, "auth", "en", components);
                 } catch (whatsappError: any) {
                     console.error(`[OTP] Failed to send WhatsApp message to ${fullMobileForSMS}:`, whatsappError);

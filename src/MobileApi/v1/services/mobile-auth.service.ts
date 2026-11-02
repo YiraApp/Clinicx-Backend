@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 import { mobileAuthRepository } from "../repositories/mobile-auth.repository.js";
-import { userOTPRepository } from "../../../repositories/Account/userotp.repository.js";
+import { OTP_CONSUMED_MARKER, OTP_VERIFIED_MARKER, userOTPRepository } from "../../../repositories/Account/userotp.repository.js";
 import { tokenRepository } from "../../../repositories/Account/token.repository.js";
 import { otpService } from "../../../services/Account/otp.service.js";
 import { mailService } from "../../../services/Mail/mail.service.js";
@@ -20,8 +20,45 @@ export class MobileAuthService {
     /**
      * Retrieves all family profiles (primary account and dependents) linked to a user.
      */
-    private async getProfilesForUser(user: User): Promise<any[]> {
+    /**
+     * The profiles a session can switch between. A primary account sees its
+     * whole family. A family member who signs in with their own phone or
+     * email sees only their own profile: the family is managed from the
+     * primary account, and a dependent can't open their relatives' records.
+     *
+     * [viewerId] is the signed-in account when it differs from [user], as
+     * when a primary account reloads a family member's profile.
+     */
+    private async getProfilesForUser(user: User, viewerId?: string): Promise<any[]> {
         const userRepo = AppDataSource.getRepository(User);
+        let viewer: User | null = user;
+        if (viewerId && viewerId.toLowerCase() !== String(user.Id).toLowerCase()) {
+            viewer = await userRepo.findOne({ where: { Id: viewerId, IsDeleted: false } }).catch(() => null);
+        }
+        // An account marked primary signs in in its own right, even when it's also linked to a family.
+        const viewerIsDependent = !!viewer && viewer.IsPrimary !== true && (
+            !!viewer.ParentUserId ||
+            (!!viewer.PhoneNumber &&
+                (await userRepo.count({ where: { PhoneNumber: viewer.PhoneNumber, IsPrimary: true, IsDeleted: false } }).catch(() => 0)) > 0)
+        );
+        if (viewer && viewerIsDependent) {
+            const fullName = `${viewer.FirstName || ''} ${viewer.LastName || ''}`.trim() || "My Profile";
+            return [{
+                id: viewer.Id,
+                firstName: viewer.FirstName ?? null,
+                lastName: viewer.LastName ?? null,
+                name: fullName,
+                phoneNumber: viewer.PhoneNumber,
+                relation: "Self",
+                isPrimary: true,
+                gender: viewer.Gender ?? null,
+                dob: formatDOB(viewer.DateOfBirth),
+                accountType: "Dependent",
+                imagePath: viewer.ImagePath || null,
+                profileImageUrl: viewer.ImagePath || null
+            }];
+        }
+
         let primaryUser: User = user;
 
         // If current user is a dependent or child, resolve the root primary parent
@@ -1298,7 +1335,7 @@ export class MobileAuthService {
     /**
      * Retrieves all profile and session context details for an authenticated user.
      */
-    async getUserData(userId: string, deviceId?: string): Promise<{
+    async getUserData(userId: string, deviceId?: string, viewerId?: string): Promise<{
         accessToken?: string;
         refreshToken?: string;
         accessTokenExpiry?: Date;
@@ -1491,7 +1528,7 @@ export class MobileAuthService {
             latestHospitalId: effectiveHospitalId ?? null,
             latestUserRole: latestUserRole ?? userRoleName,
             navigationId: navigationId,
-            profiles: await this.getProfilesForUser(user),
+            profiles: await this.getProfilesForUser(user, viewerId),
             imagePath: user.ImagePath || null,
             profileImageUrl: user.ImagePath || null
         };
@@ -1760,6 +1797,7 @@ export class MobileAuthService {
             where: {
                 Contact: lookupIdentity,
                 IsExpired: true,
+                UpdatedBy: OTP_VERIFIED_MARKER,
                 Purpose: OTPPurpose.PASSWORD_RESET
             },
             order: { UpdatedDate: "DESC" }
@@ -1774,6 +1812,10 @@ export class MobileAuthService {
         if (!user) {
             throw new Error("User not found");
         }
+
+        // One verification allows one password change
+        verifiedOtp.UpdatedBy = OTP_CONSUMED_MARKER;
+        await AppDataSource.getRepository(UserOTP).save(verifiedOtp);
 
         // Update password
         const salt = await bcrypt.genSalt(10);

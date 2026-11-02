@@ -10,12 +10,14 @@ import { mobileMedicalRecordController } from "../controllers/provider/medical-r
 import { mobilePrescriptionController } from "../controllers/provider/prescription.controller.js";
 import { mobileMedicalDocumentController } from "../controllers/provider/medical-document.controller.js";
 import { patientAccessConsentController } from "../controllers/consent/patient-access-consent.controller.js";
+import { profileShareController } from "../controllers/consent/profile-share.controller.js";
 import { notificationController } from "../controllers/notification.controller.js";
 import { hospitalController } from "../../../controllers/Organizations/hospital.controller.js";
 import { mobileDoctorSuggestionController } from "../controllers/provider/doctor-suggestion.controller.js";
 import { getActiveOffers, getActivePopupAd } from "../controllers/offer-banner.controller.js";
 import { patientVitalsController } from "../controllers/patient-vitals.controller.js";
 import { patientFitnessController } from "../controllers/patient-fitness.controller.js";
+import { patientWalletController } from "../controllers/patient-wallet.controller.js";
 import { patientMedicationReminderController } from "../controllers/patient-medication-reminder.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
@@ -118,6 +120,14 @@ authRouter.post("/patient-access/request", authMiddleware, (req, res) => patient
 authRouter.get("/patient-access/check", authMiddleware, (req, res) => patientAccessConsentController.checkAccess(req, res));
 authRouter.get("/patient-access/patient-consents", authMiddleware, (req, res) => patientAccessConsentController.getPatientConsents(req, res));
 authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patientAccessConsentController.respondToConsent(req, res));
+authRouter.post("/patient-access/grant", authMiddleware, (req, res) => profileShareController.grant(req, res));
+
+// Share my profile: read-only web links for doctors who are not on Yira
+authRouter.post("/patient/share-links", authMiddleware, (req, res) => profileShareController.create(req, res));
+authRouter.get("/patient/share-links", authMiddleware, (req, res) => profileShareController.list(req, res));
+authRouter.post("/patient/share-links/:id/revoke", authMiddleware, (req, res) => profileShareController.revoke(req, res));
+authRouter.get("/shared-profile/:token", (req, res) => profileShareController.view(req, res));
+authRouter.get("/provider/patients/:patientId/past-records", authMiddleware, (req, res) => profileShareController.pastRecords(req, res));
 
 // In-App Notifications & Alerts
 authRouter.get("/notifications", authMiddleware, notificationController.getNotifications);
@@ -142,6 +152,16 @@ authRouter.post("/patient/fitness/sync", authMiddleware, (req, res) => patientFi
 authRouter.get("/patient/fitness/summary", authMiddleware, (req, res) => patientFitnessController.getFitnessSummary(req, res));
 authRouter.get("/patient/fitness/status", authMiddleware, (req, res) => patientFitnessController.getFitnessStatus(req, res));
 authRouter.post("/patient/fitness/disconnect", authMiddleware, (req, res) => patientFitnessController.disconnectFitness(req, res));
+
+// My billing and My policies (patient and family accounts only)
+authRouter.get("/patient/billing", authMiddleware, (req, res) => patientWalletController.getBilling(req, res));
+authRouter.post("/patient/billing", authMiddleware, upload.single("file"), (req, res) => patientWalletController.addBill(req, res));
+authRouter.put("/patient/billing/:id", authMiddleware, upload.single("file"), (req, res) => patientWalletController.updateBill(req, res));
+authRouter.delete("/patient/billing/:id", authMiddleware, (req, res) => patientWalletController.deleteBill(req, res));
+authRouter.get("/patient/policies", authMiddleware, (req, res) => patientWalletController.getPolicies(req, res));
+authRouter.post("/patient/policies", authMiddleware, upload.single("file"), (req, res) => patientWalletController.addPolicy(req, res));
+authRouter.put("/patient/policies/:id", authMiddleware, upload.single("file"), (req, res) => patientWalletController.updatePolicy(req, res));
+authRouter.delete("/patient/policies/:id", authMiddleware, (req, res) => patientWalletController.deletePolicy(req, res));
 
 // Online Payments & Razorpay (Teleconsultation & In-Person Prepayments)
 authRouter.post("/payments/create-order", authMiddleware, (req, res) => paymentController.createOrder(req, res));

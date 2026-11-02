@@ -12,6 +12,9 @@ import path from 'path';
 const app: Application = express();
 
 
+// Entities with a joined User row must never send its password hash to a client.
+app.set('json replacer', (key: string, value: unknown) => (key === 'PasswordHash' ? undefined : value));
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

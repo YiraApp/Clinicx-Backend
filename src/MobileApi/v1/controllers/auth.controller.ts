@@ -5,6 +5,7 @@ import { ApiResponse } from "../../../utils/response.utils.js";
 import { userDeviceService } from "../services/userdevice.service.js";
 import { verifyRefreshToken } from "../../../utils/jwt.utils.js";
 import { tokenRepository } from "../../../repositories/Account/token.repository.js";
+import { isFamilyLinked, legacyUserHeadersAllowed } from "../../../middlewares/request-identity.js";
 
 /**
  * Handles mobile user login requests.
@@ -410,7 +411,9 @@ export const logout = async (req: Request, res: Response) => {
     try {
         const { refreshToken, fcmToken, deviceId, one, logoutAll, allDevices } = req.body || {};
 
-        let userId: string | null = (req as any).userId || (req.body && req.body.userId) || (req.headers && (req.headers['x-user-id'] as string)) || null;
+        // Logout is reachable without a session, so an unproven userId is only trusted from released builds.
+        const claimedUserId = legacyUserHeadersAllowed() ? ((req.body && req.body.userId) || (req.headers && (req.headers['x-user-id'] as string)) || null) : null;
+        let userId: string | null = (req as any).userId || claimedUserId;
         if (refreshToken) {
             try {
                 // First decode using JWT utility to see if payload is valid
@@ -640,7 +643,18 @@ export const getUserData = async (req: Request, res: Response) => {
             });
         }
 
-        const userData = await mobileAuthService.getUserData(userId, deviceId);
+        // This response carries fresh tokens for userId, so it is limited to the caller's own family.
+        const callerId = (req as any).user?.userId;
+        if (!callerId || !(await isFamilyLinked(String(callerId), String(userId)))) {
+            return res.status(403).json({
+                status: false,
+                message: "You do not have access to this profile",
+                code: "PROFILE_ACCESS_DENIED",
+                data: { code: "PROFILE_ACCESS_DENIED" }
+            });
+        }
+
+        const userData = await mobileAuthService.getUserData(userId, deviceId, String(callerId));
         return res.json(ApiResponse.success(userData, "User details fetched successfully"));
     } catch (error: any) {
         const isUserNotFound = error.message === "User not found";

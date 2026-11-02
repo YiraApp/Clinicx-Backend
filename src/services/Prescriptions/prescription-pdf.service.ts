@@ -334,7 +334,14 @@ export class PrescriptionPdfService {
                 // ── Diagnoses Section (if present) ──
                 cursorY += cardHeight + 10;
                 if (data.prescription.diagnoses && data.prescription.diagnoses.length > 0) {
-                    const validDiag = data.prescription.diagnoses.filter(d => d && String(d).trim().length > 0);
+                    // Split, trim and de-duplicate so stray separators (",viral pyrexia") don't show.
+                    const validDiag: string[] = [];
+                    for (const d of data.prescription.diagnoses) {
+                        for (const part of String(d ?? "").split(/[,;]/)) {
+                            const clean = part.trim();
+                            if (clean && !validDiag.some(v => v.toLowerCase() === clean.toLowerCase())) validDiag.push(clean);
+                        }
+                    }
                     if (validDiag.length > 0) {
                         doc.fontSize(8)
                            .font("Helvetica-Bold")
@@ -415,7 +422,18 @@ export class PrescriptionPdfService {
                 } else {
                     for (let i = 0; i < meds.length; i++) {
                         const med = meds[i];
-                        const rowHeight = 30;
+                        const medName = (med.name && med.name.trim()) ? med.name.trim() : "NA";
+                        const rawNote = (med.instructions && med.instructions.trim())
+                            ? med.instructions.trim()
+                            : ((med.note && med.note.trim()) ? med.note.trim() : "");
+                        const noteText = rawNote.length > 0 ? rawNote : "NA";
+                        // Grow the row so a long name or note wraps instead of overlapping the next line.
+                        const nameHeight = doc.fontSize(8.5).font("Helvetica-Bold").heightOfString(medName, { width: colMedWidth - 8 });
+                        const noteHeight = Math.min(
+                            doc.fontSize(7.5).font("Helvetica").heightOfString(noteText, { width: colNoteWidth - 8 }),
+                            40
+                        );
+                        const rowHeight = Math.max(30, Math.ceil(nameHeight) + 20, Math.ceil(noteHeight) + 12);
                         const isEven = i % 2 === 0;
 
                         // Row background
@@ -435,19 +453,18 @@ export class PrescriptionPdfService {
                            .fillColor("#475569")
                            .text(String(i + 1), colX.sno, cursorY + 9, { width: colSnoWidth, align: "center" });
 
-                        // Medicine Name
-                        const medName = (med.name && med.name.trim()) ? med.name.trim() : "NA";
+                        // Medicine Name (wraps; the row is tall enough)
                         doc.fontSize(8.5)
                            .font("Helvetica-Bold")
                            .fillColor("#0F172A")
-                           .text(medName, colX.med + 5, cursorY + 5, { width: colMedWidth - 8, ellipsis: true });
+                           .text(medName, colX.med + 5, cursorY + 5, { width: colMedWidth - 8 });
 
-                        // Route subtext
+                        // Route subtext, under the name however many lines it took
                         const routeText = (med.route && med.route.trim()) ? `Route: ${med.route.trim()}` : "Route: NA";
                         doc.fontSize(7)
                            .font("Helvetica")
                            .fillColor("#64748B")
-                           .text(routeText, colX.med + 5, cursorY + 17, { width: colMedWidth - 8 });
+                           .text(routeText, colX.med + 5, cursorY + 7 + Math.ceil(nameHeight), { width: colMedWidth - 8 });
 
                         // Dosage
                         const dosageText = (med.dosage && med.dosage.trim()) ? med.dosage.trim() : "NA";
@@ -475,17 +492,12 @@ export class PrescriptionPdfService {
                            .text(durText, colX.dur + 2, cursorY + 9, { width: colDurWidth - 4, align: "center" });
 
                         // Note / Instructions (or "NA" if not available)
-                        const rawNote = (med.instructions && med.instructions.trim()) 
-                            ? med.instructions.trim() 
-                            : ((med.note && med.note.trim()) ? med.note.trim() : "");
-                        const noteText = rawNote.length > 0 ? rawNote : "NA";
-
                         doc.fontSize(7.5)
                            .font("Helvetica")
                            .fillColor(noteText === "NA" ? "#94A3B8" : "#334155")
                            .text(noteText, colX.note + 4, cursorY + 6, {
                                width: colNoteWidth - 8,
-                               height: 20,
+                               height: 40,
                                ellipsis: true
                            });
 

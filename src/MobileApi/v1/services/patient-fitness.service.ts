@@ -3,31 +3,116 @@ import { PatientFitnessData } from "../../../models/Fitness/patient-fitness.mode
 
 export interface FitnessRecordInput {
     date: string; // YYYY-MM-DD
-    steps?: number;
-    calories?: number;
-    distanceMeters?: number;
-    activeMinutes?: number;
-    flightsClimbed?: number;
-    heartRateAvg?: number;
-    heartRateMin?: number;
-    heartRateMax?: number;
-    restingHeartRate?: number;
-    bloodOxygen?: number;
-    bloodPressureSys?: number;
-    bloodPressureDia?: number;
-    sleepMinutes?: number;
-    sleepDeepMinutes?: number;
-    sleepRemMinutes?: number;
-    sleepLightMinutes?: number;
-    sleepAwakeMinutes?: number;
-    weightKg?: number;
-    bmi?: number;
-    waterLiters?: number;
-    bloodGlucoseMgDl?: number;
+    steps?: number | null;
+    calories?: number | null;
+    distanceMeters?: number | null;
+    activeMinutes?: number | null;
+    flightsClimbed?: number | null;
+    heartRateAvg?: number | null;
+    heartRateMin?: number | null;
+    heartRateMax?: number | null;
+    restingHeartRate?: number | null;
+    bloodOxygen?: number | null;
+    bloodPressureSys?: number | null;
+    bloodPressureDia?: number | null;
+    sleepMinutes?: number | null;
+    sleepDeepMinutes?: number | null;
+    sleepRemMinutes?: number | null;
+    sleepLightMinutes?: number | null;
+    sleepAwakeMinutes?: number | null;
+    weightKg?: number | null;
+    bmi?: number | null;
+    waterLiters?: number | null;
+    bloodGlucoseMgDl?: number | null;
     source?: string;
     rawHourlyJson?: any;
     rawMetricsJson?: any;
 }
+
+export interface FitnessSyncOptions {
+    /**
+     * 2 = the app reads aggregated, de-duplicated daily totals and sends null
+     * for anything it has no reading for. Older builds send 0 for missing values
+     * and summed raw samples, so their values never replace a positive one.
+     */
+    schema?: number;
+    /** A full re-read of the window: the device's values replace the stored ones, nulls included. */
+    repair?: boolean;
+}
+
+type FieldSpec = {
+    input: keyof FitnessRecordInput;
+    column: keyof PatientFitnessData;
+    int?: boolean;
+    min: number;
+    max: number;
+};
+
+// Readings outside these ranges are sensor glitches or unit mix-ups, not data.
+const FIELDS: FieldSpec[] = [
+    { input: "steps", column: "Steps", int: true, min: 0, max: 150000 },
+    { input: "calories", column: "Calories", min: 0, max: 20000 },
+    { input: "distanceMeters", column: "DistanceMeters", min: 0, max: 300000 },
+    { input: "activeMinutes", column: "ActiveMinutes", int: true, min: 0, max: 1440 },
+    { input: "flightsClimbed", column: "FlightsClimbed", int: true, min: 0, max: 2000 },
+    { input: "heartRateAvg", column: "HeartRateAvg", min: 20, max: 250 },
+    { input: "heartRateMin", column: "HeartRateMin", min: 20, max: 250 },
+    { input: "heartRateMax", column: "HeartRateMax", min: 20, max: 250 },
+    { input: "restingHeartRate", column: "RestingHeartRate", min: 20, max: 200 },
+    { input: "bloodOxygen", column: "BloodOxygen", min: 50, max: 100 },
+    { input: "bloodPressureSys", column: "BloodPressureSys", min: 50, max: 260 },
+    { input: "bloodPressureDia", column: "BloodPressureDia", min: 30, max: 180 },
+    { input: "sleepMinutes", column: "SleepMinutes", int: true, min: 0, max: 1440 },
+    { input: "sleepDeepMinutes", column: "SleepDeepMinutes", int: true, min: 0, max: 1440 },
+    { input: "sleepRemMinutes", column: "SleepRemMinutes", int: true, min: 0, max: 1440 },
+    { input: "sleepLightMinutes", column: "SleepLightMinutes", int: true, min: 0, max: 1440 },
+    { input: "sleepAwakeMinutes", column: "SleepAwakeMinutes", int: true, min: 0, max: 1440 },
+    { input: "weightKg", column: "WeightKg", min: 1, max: 400 },
+    { input: "bmi", column: "Bmi", min: 5, max: 100 },
+    { input: "waterLiters", column: "WaterLiters", min: 0, max: 20 },
+    { input: "bloodGlucoseMgDl", column: "BloodGlucoseMgDl", min: 10, max: 1000 },
+];
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_RECORDS = 120;
+
+const toDateKey = (d: any): string => {
+    if (!d) return "";
+    if (d instanceof Date) return d.toISOString().split("T")[0];
+    return String(d).split("T")[0];
+};
+
+const addDays = (dateKey: string, days: number): string => {
+    const d = new Date(`${dateKey}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().split("T")[0];
+};
+
+/** A clean number for one field, or null when the value is missing or implausible. */
+function cleanValue(raw: any, spec: FieldSpec): number | null {
+    if (raw === undefined || raw === null || raw === "") return null;
+    let n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    // Older builds sent SpO2 as a 0-1 ratio.
+    if (spec.input === "bloodOxygen" && n > 0 && n <= 1) n = n * 100;
+    if (n < spec.min || n > spec.max) return null;
+    return spec.int ? Math.round(n) : Number(n.toFixed(1));
+}
+
+/** Stored values read back as numbers, with nothing recorded as null. Zero counts as nothing. */
+const reading = (v: any): number | null => {
+    const n = Number(v);
+    return v === null || v === undefined || !Number.isFinite(n) || n <= 0 ? null : n;
+};
+
+const spo2Reading = (v: any): number | null => {
+    const n = reading(v);
+    if (n === null) return null;
+    return Number((n <= 1 ? n * 100 : n).toFixed(1));
+};
+
+const formatSleep = (minutes: number | null) =>
+    minutes ? `${Math.floor(minutes / 60)}h ${Math.round(minutes % 60)}m` : "0h 0m";
 
 export class PatientFitnessService {
     private get fitnessRepo() {
@@ -35,214 +120,247 @@ export class PatientFitnessService {
     }
 
     /**
-     * Batch upsert fitness records for a given patient.
+     * Upserts one row per patient and calendar day.
+     *
+     * Schema 2 values are trusted as the device's daily totals: a number
+     * replaces what is stored and a null leaves it alone. A repair sync goes
+     * further and clears stored values the device no longer reports, which
+     * removes the estimated calories and double-counted steps older builds
+     * saved. Days the device sends no reading at all for are left untouched.
      */
-    async syncFitnessBatch(patientId: string, source: string, records: FitnessRecordInput[]) {
+    async syncFitnessBatch(
+        patientId: string,
+        source: string,
+        records: FitnessRecordInput[],
+        options: FitnessSyncOptions = {},
+    ) {
         if (!patientId) throw new Error("patientId is required");
-        if (!records || !Array.isArray(records) || records.length === 0) {
-            return { syncedCount: 0, message: "No records provided" };
+        if (!Array.isArray(records) || records.length === 0) {
+            return { success: true, syncedCount: 0, message: "No records provided" };
         }
 
-        const synced: PatientFitnessData[] = [];
+        const isV2 = Number(options.schema) >= 2;
+        const repair = isV2 && options.repair === true;
 
-        for (const item of records) {
-            if (!item.date) continue;
-            const dateStr = item.date.split("T")[0]; // ensure YYYY-MM-DD
+        // One row per date; a later entry for the same date wins.
+        const byDate = new Map<string, FitnessRecordInput>();
+        for (const item of records.slice(0, MAX_RECORDS)) {
+            const key = toDateKey(item?.date);
+            if (DATE_RE.test(key)) byDate.set(key, item);
+        }
+        if (byDate.size === 0) {
+            return { success: true, syncedCount: 0, message: "No valid records provided" };
+        }
 
-            let existing = await this.fitnessRepo
-                .createQueryBuilder("f")
-                .where("f.PatientId = :patientId AND CAST(f.Date AS DATE) = CAST(:dateStr AS DATE)", {
-                    patientId,
-                    dateStr
-                })
-                .getOne()
-                .catch(() => null);
+        const dates = [...byDate.keys()].sort();
+        const existingRows = await this.fitnessRepo
+            .createQueryBuilder("f")
+            .where("f.PatientId = :patientId", { patientId })
+            .andWhere("f.Date BETWEEN :from AND :to", { from: dates[0], to: dates[dates.length - 1] })
+            .getMany();
+        const existingByDate = new Map(existingRows.map(r => [toDateKey(r.Date), r]));
 
-            if (!existing) {
-                existing = this.fitnessRepo.create({
+        const toSave: PatientFitnessData[] = [];
+        let skipped = 0;
+
+        for (const dateKey of dates) {
+            const item = byDate.get(dateKey)!;
+            const values = new Map<FieldSpec, number | null>();
+            for (const spec of FIELDS) values.set(spec, cleanValue(item[spec.input], spec));
+
+            const hasAnyReading = [...values.values()].some(v => v !== null && v > 0);
+            let row = existingByDate.get(dateKey);
+
+            if (!hasAnyReading && !item.rawHourlyJson) {
+                skipped++;
+                continue;
+            }
+
+            if (!row) {
+                row = this.fitnessRepo.create({
                     PatientId: patientId,
-                    Date: dateStr,
-                    Source: source || item.source || "Unknown",
-                    CreatedAt: new Date()
+                    Date: dateKey,
+                    Source: (source || item.source || "Unknown").slice(0, 50),
+                    CreatedAt: new Date(),
                 });
+                // Columns default to 0 in the database; start from "no reading" instead.
+                for (const spec of FIELDS) (row as any)[spec.column] = null;
             } else {
-                existing.UpdatedAt = new Date();
-                if (source) existing.Source = source;
+                row.UpdatedAt = new Date();
+                if (source) row.Source = source.slice(0, 50);
             }
 
-            // Assign numerical fields with positive fallback preservation
-            if (item.steps !== undefined && item.steps !== null && (Number(item.steps) > 0 || !existing.Steps)) existing.Steps = Math.round(Number(item.steps));
-            if (item.calories !== undefined && item.calories !== null && (Number(item.calories) > 0 || !existing.Calories)) existing.Calories = Number(item.calories);
-            if (item.distanceMeters !== undefined && item.distanceMeters !== null && (Number(item.distanceMeters) > 0 || !existing.DistanceMeters)) existing.DistanceMeters = Number(item.distanceMeters);
-            if (item.activeMinutes !== undefined && item.activeMinutes !== null && (Number(item.activeMinutes) > 0 || !existing.ActiveMinutes)) existing.ActiveMinutes = Math.round(Number(item.activeMinutes));
-            if (item.flightsClimbed !== undefined && item.flightsClimbed !== null && (Number(item.flightsClimbed) > 0 || !existing.FlightsClimbed)) existing.FlightsClimbed = Math.round(Number(item.flightsClimbed));
-
-            if (item.heartRateAvg !== undefined && item.heartRateAvg !== null && (Number(item.heartRateAvg) > 0 || !existing.HeartRateAvg)) existing.HeartRateAvg = Number(item.heartRateAvg);
-            if (item.heartRateMin !== undefined && item.heartRateMin !== null && (Number(item.heartRateMin) > 0 || !existing.HeartRateMin)) existing.HeartRateMin = Number(item.heartRateMin);
-            if (item.heartRateMax !== undefined && item.heartRateMax !== null && (Number(item.heartRateMax) > 0 || !existing.HeartRateMax)) existing.HeartRateMax = Number(item.heartRateMax);
-            if (item.restingHeartRate !== undefined && item.restingHeartRate !== null && (Number(item.restingHeartRate) > 0 || !existing.RestingHeartRate)) existing.RestingHeartRate = Number(item.restingHeartRate);
-
-            // Blood oxygen (SpO2): if value is a fractional ratio (<= 1.0, e.g. 0.99), normalize to percentage (99.0)
-            if (item.bloodOxygen !== undefined && item.bloodOxygen !== null) {
-                let spo2 = Number(item.bloodOxygen);
-                if (spo2 > 0 && spo2 <= 1.0) spo2 = spo2 * 100.0;
-                if (spo2 > 0 || !existing.BloodOxygen) existing.BloodOxygen = Number(spo2.toFixed(1));
+            for (const spec of FIELDS) {
+                const next = values.get(spec)!;
+                const current = (row as any)[spec.column];
+                if (isV2) {
+                    if (next !== null) (row as any)[spec.column] = next;
+                    else if (repair) (row as any)[spec.column] = null;
+                } else if (next !== null && (next > 0 || !current)) {
+                    // Older builds send 0 for "no data", so a 0 never replaces a reading.
+                    (row as any)[spec.column] = next;
+                }
             }
-            if (item.bloodPressureSys !== undefined && item.bloodPressureSys !== null && (Number(item.bloodPressureSys) > 0 || !existing.BloodPressureSys)) existing.BloodPressureSys = Number(item.bloodPressureSys);
-            if (item.bloodPressureDia !== undefined && item.bloodPressureDia !== null && (Number(item.bloodPressureDia) > 0 || !existing.BloodPressureDia)) existing.BloodPressureDia = Number(item.bloodPressureDia);
-
-            if (item.sleepMinutes !== undefined && item.sleepMinutes !== null && (Number(item.sleepMinutes) > 0 || !existing.SleepMinutes)) existing.SleepMinutes = Math.round(Number(item.sleepMinutes));
-            if (item.sleepDeepMinutes !== undefined && item.sleepDeepMinutes !== null && (Number(item.sleepDeepMinutes) > 0 || !existing.SleepDeepMinutes)) existing.SleepDeepMinutes = Math.round(Number(item.sleepDeepMinutes));
-            if (item.sleepRemMinutes !== undefined && item.sleepRemMinutes !== null && (Number(item.sleepRemMinutes) > 0 || !existing.SleepRemMinutes)) existing.SleepRemMinutes = Math.round(Number(item.sleepRemMinutes));
-            if (item.sleepLightMinutes !== undefined && item.sleepLightMinutes !== null && (Number(item.sleepLightMinutes) > 0 || !existing.SleepLightMinutes)) existing.SleepLightMinutes = Math.round(Number(item.sleepLightMinutes));
-            if (item.sleepAwakeMinutes !== undefined && item.sleepAwakeMinutes !== null && (Number(item.sleepAwakeMinutes) > 0 || !existing.SleepAwakeMinutes)) existing.SleepAwakeMinutes = Math.round(Number(item.sleepAwakeMinutes));
-
-            if (item.weightKg !== undefined && item.weightKg !== null && (Number(item.weightKg) > 0 || !existing.WeightKg)) existing.WeightKg = Number(item.weightKg);
-            if (item.bmi !== undefined && item.bmi !== null) existing.Bmi = Number(item.bmi);
-            if (item.waterLiters !== undefined && item.waterLiters !== null) existing.WaterLiters = Number(item.waterLiters);
-            if (item.bloodGlucoseMgDl !== undefined && item.bloodGlucoseMgDl !== null) existing.BloodGlucoseMgDl = Number(item.bloodGlucoseMgDl);
 
             if (item.rawHourlyJson) {
-                existing.RawHourlyJson = typeof item.rawHourlyJson === "string" ? item.rawHourlyJson : JSON.stringify(item.rawHourlyJson);
+                row.RawHourlyJson = typeof item.rawHourlyJson === "string" ? item.rawHourlyJson : JSON.stringify(item.rawHourlyJson);
+            } else if (repair) {
+                row.RawHourlyJson = null as any;
             }
             if (item.rawMetricsJson) {
-                existing.RawMetricsJson = typeof item.rawMetricsJson === "string" ? item.rawMetricsJson : JSON.stringify(item.rawMetricsJson);
+                row.RawMetricsJson = typeof item.rawMetricsJson === "string" ? item.rawMetricsJson : JSON.stringify(item.rawMetricsJson);
             }
-
-            const saved = await this.fitnessRepo.save(existing);
-            synced.push(saved);
+            toSave.push(row);
         }
+
+        if (toSave.length) await this.fitnessRepo.save(toSave, { chunk: 30 });
 
         return {
             success: true,
-            syncedCount: synced.length,
-            message: `Successfully synced ${synced.length} fitness records`
+            syncedCount: toSave.length,
+            skippedCount: skipped,
+            syncedAt: new Date().toISOString(),
+            message: `Synced ${toSave.length} day${toSave.length === 1 ? "" : "s"} of fitness data`,
         };
     }
 
     /**
-     * Retrieve fitness summary, stats, and chart trend points.
+     * Daily points for a calendar window ending on the client's today, with a
+     * point for every day (null values where nothing was recorded), averages
+     * over the days that have readings, and the latest weight and SpO2.
      */
     async getFitnessSummary(patientId: string, period: "day" | "week" | "month" = "week", todayDate?: string) {
         if (!patientId) throw new Error("patientId is required");
 
-        const daysLimit = period === "day" ? 1 : period === "week" ? 7 : 30;
+        const days = period === "day" ? 1 : period === "week" ? 7 : 30;
+        const today = todayDate && DATE_RE.test(todayDate) ? todayDate : new Date().toISOString().split("T")[0];
+        const from = addDays(today, -(days - 1));
+        // The previous window of the same length, for "vs last week" comparisons.
+        const previousFrom = addDays(from, -days);
 
-        // Fetch past N days of records
-        const records = await this.fitnessRepo
+        const rows = await this.fitnessRepo
             .createQueryBuilder("f")
             .where("f.PatientId = :patientId", { patientId })
-            .orderBy("f.Date", "DESC")
-            .take(daysLimit)
+            .andWhere("f.Date BETWEEN :from AND :to", { from: previousFrom, to: today })
+            .orderBy("f.Date", "ASC")
             .getMany();
+        const byDate = new Map(rows.map(r => [toDateKey(r.Date), r]));
 
-        // Date normalizer helper to handle Date objects and string formats
-        const normalizeDate = (d: any): string => {
-            if (!d) return "";
-            if (d instanceof Date) return d.toISOString().split("T")[0];
-            return String(d).split("T")[0];
-        };
-
-        // Normalize SpO2 helper (converts legacy decimal ratios like 0.99 into 99.0)
-        const normalizeSpo2 = (val: any): number => {
-            const n = Number(val || 0);
-            if (n > 0 && n <= 1.0) return Number((n * 100.0).toFixed(1));
-            return Number(n.toFixed(1));
-        };
-
-        // Today's record: match client's local date if provided, otherwise server UTC date
-        const targetToday = todayDate || new Date().toISOString().split("T")[0];
-        const todayRecord = records.find(r => normalizeDate(r.Date) === targetToday) || records[0] || null;
-
-        // Reverse to chronological order (Oldest -> Newest) for charts
-        const chronological = [...records].reverse();
-
-        // Chart data points
-        const chartPoints = chronological.map(r => {
+        const pointFor = (dateKey: string) => {
+            const r = byDate.get(dateKey);
             let hourly: any[] = [];
-            if (r.RawHourlyJson) {
+            if (r?.RawHourlyJson) {
                 try {
-                    hourly = JSON.parse(r.RawHourlyJson);
+                    const parsed = JSON.parse(r.RawHourlyJson);
+                    if (Array.isArray(parsed)) hourly = parsed;
                 } catch (_) {}
             }
-
             return {
-                date: normalizeDate(r.Date),
-                steps: r.Steps || 0,
-                calories: r.Calories || 0,
-                distanceMeters: r.DistanceMeters || 0,
-                heartRateAvg: r.HeartRateAvg || 0,
-                heartRateMin: r.HeartRateMin || 0,
-                heartRateMax: r.HeartRateMax || 0,
-                restingHeartRate: r.RestingHeartRate || 0,
-                bloodOxygen: normalizeSpo2(r.BloodOxygen),
-                sleepMinutes: r.SleepMinutes || 0,
-                sleepDeepMinutes: r.SleepDeepMinutes || 0,
-                sleepRemMinutes: r.SleepRemMinutes || 0,
-                weightKg: r.WeightKg || 0,
-                hourly
+                date: dateKey,
+                hasData: !!r,
+                steps: reading(r?.Steps),
+                calories: reading(r?.Calories),
+                distanceMeters: reading(r?.DistanceMeters),
+                heartRateAvg: reading(r?.HeartRateAvg),
+                heartRateMin: reading(r?.HeartRateMin),
+                heartRateMax: reading(r?.HeartRateMax),
+                restingHeartRate: reading(r?.RestingHeartRate),
+                bloodOxygen: spo2Reading(r?.BloodOxygen),
+                sleepMinutes: reading(r?.SleepMinutes),
+                sleepDeepMinutes: reading(r?.SleepDeepMinutes),
+                sleepRemMinutes: reading(r?.SleepRemMinutes),
+                sleepLightMinutes: reading(r?.SleepLightMinutes),
+                sleepAwakeMinutes: reading(r?.SleepAwakeMinutes),
+                weightKg: reading(r?.WeightKg),
+                hourly,
             };
-        });
+        };
 
-        // Compute aggregated analytics
-        const validSteps = chartPoints.map(p => p.steps).filter(s => s > 0);
-        const validCals = chartPoints.map(p => p.calories).filter(c => c > 0);
-        const validHR = chartPoints.map(p => p.heartRateAvg).filter(h => h > 0);
-        const validSleep = chartPoints.map(p => p.sleepMinutes).filter(s => s > 0);
+        const chartPoints: ReturnType<typeof pointFor>[] = [];
+        for (let i = 0; i < days; i++) chartPoints.push(pointFor(addDays(from, i)));
+        const previousPoints: ReturnType<typeof pointFor>[] = [];
+        for (let i = 0; i < days; i++) previousPoints.push(pointFor(addDays(previousFrom, i)));
 
-        const avg = (arr: number[]) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+        const present = (arr: (number | null)[]) => arr.filter((v): v is number => v !== null);
+        const avg = (arr: number[]) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0);
         const sum = (arr: number[]) => Math.round(arr.reduce((a, b) => a + b, 0));
-        const max = (arr: number[]) => arr.length ? Math.max(...arr) : 0;
-        const min = (arr: number[]) => arr.length ? Math.min(...arr) : 0;
+        const max = (arr: number[]) => (arr.length ? Math.max(...arr) : 0);
+        const min = (arr: number[]) => (arr.length ? Math.min(...arr) : 0);
+
+        const steps = present(chartPoints.map(p => p.steps));
+        const cals = present(chartPoints.map(p => p.calories));
+        const hr = present(chartPoints.map(p => p.heartRateAvg));
+        const resting = present(chartPoints.map(p => p.restingHeartRate));
+        const sleep = present(chartPoints.map(p => p.sleepMinutes));
+        const distance = present(chartPoints.map(p => p.distanceMeters));
 
         const analytics = {
-            steps: {
-                average: avg(validSteps),
-                peak: max(validSteps),
-                lowest: min(validSteps),
-                total: sum(validSteps),
-                count: validSteps.length
-            },
-            calories: {
-                average: avg(validCals),
-                peak: max(validCals),
-                lowest: min(validCals),
-                total: sum(validCals)
-            },
+            steps: { average: avg(steps), peak: max(steps), lowest: min(steps), total: sum(steps), count: steps.length },
+            calories: { average: avg(cals), peak: max(cals), lowest: min(cals), total: sum(cals) },
+            distance: { average: avg(distance), total: sum(distance) },
             heartRate: {
-                average: avg(validHR),
-                peak: max(validHR),
-                lowest: min(validHR)
+                average: avg(hr),
+                peak: max(present(chartPoints.map(p => p.heartRateMax))),
+                lowest: min(present(chartPoints.map(p => p.heartRateMin))),
+                restingAverage: avg(resting),
             },
             sleep: {
-                averageMinutes: avg(validSleep),
-                totalMinutes: sum(validSleep),
-                averageHoursFormatted: `${Math.floor(avg(validSleep) / 60)}h ${avg(validSleep) % 60}m`
-            }
+                averageMinutes: avg(sleep),
+                totalMinutes: sum(sleep),
+                averageHoursFormatted: formatSleep(avg(sleep)),
+                nights: sleep.length,
+            },
+            previous: {
+                stepsAverage: avg(present(previousPoints.map(p => p.steps))),
+                sleepAverageMinutes: avg(present(previousPoints.map(p => p.sleepMinutes))),
+                restingHeartRateAverage: avg(present(previousPoints.map(p => p.restingHeartRate))),
+            },
+            daysWithData: chartPoints.filter(p => p.hasData).length,
         };
+
+        // Weight and SpO2 are measured now and then, so show the most recent reading.
+        const latest = await this.fitnessRepo
+            .createQueryBuilder("f")
+            .select(["f.Date", "f.WeightKg", "f.BloodOxygen", "f.UpdatedAt", "f.CreatedAt", "f.Source"])
+            .where("f.PatientId = :patientId", { patientId })
+            .andWhere("f.Date <= :today", { today })
+            .orderBy("f.Date", "DESC")
+            .take(120)
+            .getMany();
+        const latestWeight = latest.find(r => reading(r.WeightKg) !== null);
+        const latestSpo2 = latest.find(r => spo2Reading(r.BloodOxygen) !== null);
+        const lastSyncedAt = latest.reduce<Date | null>((acc, r) => {
+            const t = r.UpdatedAt || r.CreatedAt;
+            return t && (!acc || t > acc) ? t : acc;
+        }, null);
+
+        const todayPoint = chartPoints[chartPoints.length - 1];
+        const todayRow = byDate.get(today);
 
         return {
             patientId,
             period,
-            today: todayRecord ? {
-                date: normalizeDate(todayRecord.Date),
-                steps: todayRecord.Steps || 0,
-                calories: todayRecord.Calories || 0,
-                distanceMeters: todayRecord.DistanceMeters || 0,
-                heartRateAvg: todayRecord.HeartRateAvg || 0,
-                heartRateMin: todayRecord.HeartRateMin || 0,
-                heartRateMax: todayRecord.HeartRateMax || 0,
-                restingHeartRate: todayRecord.RestingHeartRate || 0,
-                bloodOxygen: normalizeSpo2(todayRecord.BloodOxygen),
-                sleepMinutes: todayRecord.SleepMinutes || 0,
-                sleepFormatted: `${Math.floor((todayRecord.SleepMinutes || 0) / 60)}h ${(todayRecord.SleepMinutes || 0) % 60}m`,
-                weightKg: todayRecord.WeightKg || 0,
-                source: todayRecord.Source,
-                lastSynced: todayRecord.UpdatedAt || todayRecord.CreatedAt
-            } : null,
+            from,
+            to: today,
+            // Only today's own row; an older day is never shown as today.
+            today: todayRow
+                ? {
+                      ...todayPoint,
+                      sleepFormatted: formatSleep(todayPoint.sleepMinutes),
+                      source: todayRow.Source,
+                      lastSynced: todayRow.UpdatedAt || todayRow.CreatedAt,
+                  }
+                : null,
+            latest: {
+                weightKg: latestWeight ? reading(latestWeight.WeightKg) : null,
+                weightDate: latestWeight ? toDateKey(latestWeight.Date) : null,
+                bloodOxygen: latestSpo2 ? spo2Reading(latestSpo2.BloodOxygen) : null,
+                bloodOxygenDate: latestSpo2 ? toDateKey(latestSpo2.Date) : null,
+            },
+            lastSyncedAt,
+            source: latest[0]?.Source ?? null,
             analytics,
             chartPoints,
-            history: records
         };
     }
 
@@ -262,11 +380,11 @@ export class PatientFitnessService {
             source: latest?.Source || null,
             lastSyncedAt: latest?.UpdatedAt || latest?.CreatedAt || null,
             latestRecord: latest ? {
-                date: latest.Date,
-                steps: latest.Steps || 0,
-                calories: latest.Calories || 0,
-                heartRate: latest.HeartRateAvg || 0,
-                sleepMinutes: latest.SleepMinutes || 0
+                date: toDateKey(latest.Date),
+                steps: reading(latest.Steps),
+                calories: reading(latest.Calories),
+                heartRate: reading(latest.HeartRateAvg),
+                sleepMinutes: reading(latest.SleepMinutes)
             } : null
         };
     }
