@@ -23,6 +23,8 @@ import { PatientRegistration } from "../../models/Organizations/patient-registra
 import { PatientInsurance } from "../../models/Organizations/patient-insurance.model.js";
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { PatientMedicalRecord } from "../../models/Appointments/patient-medical-record.model.js";
+import { HealthcareProvider } from "../../models/Organizations/healthcare-provider.model.js";
+import { HealthcareProviderScheduleSlot } from "../../models/Organizations/healthcare-provider-schedule-slot.model.js";
 
 /**
  * Service implementation for User operations.
@@ -351,23 +353,34 @@ export class UserService implements IUserService {
 
         const rolesToUpdate: UserRole[] = [];
 
-        // Check if this request is specifically for Patient registration (only assigning Patient role)
-        const isOnlyPatientRequest = requestedAssignments.length > 0 &&
-            requestedAssignments.every(ra =>
-                ra.roleId?.toLowerCase() === "4fc67429-28ae-4106-93ef-436228282ed0" ||
-                ra.roleId?.toLowerCase() === "patient"
-            );
+        const shouldPreserveExistingRoles = Boolean(data.preserveExistingRoles);
 
-        const shouldPreserveExistingRoles = data.preserveExistingRoles || isOnlyPatientRequest;
+        // Provider role detection
+        const providerRole = await roleRepository.findByNormalizedName("PROVIDER");
+        const providerRoleId = providerRole ? providerRole.Id.toLowerCase() : "fe80173f-9db3-4703-84a8-5c23e7cc493c";
+
+        const isProviderRole = (roleId?: string, roleName?: string) => {
+            if (!roleId && !roleName) return false;
+            const rId = (roleId || "").toLowerCase();
+            const rName = (roleName || "").toLowerCase();
+            return rId === providerRoleId || rName === "provider" || rName.includes("provider") || rName.includes("doctor");
+        };
+
+        const providersToActivateHospIds: number[] = [];
+        const providersToDeactivateHospIds: number[] = [];
 
         // Identify existing roles and mark for update (reactivate or deactivate)
         currentRoles.forEach(cr => {
-            const matchIndex = requestedAssignments.findIndex(ra =>
-                (ra.userRoleId && Number(ra.userRoleId) === cr.UserRoleId) ||
-                (ra.roleId === cr.RoleId &&
-                    ra.organizationId === cr.OrganizationId &&
-                    (ra.hospitalId ? Number(ra.hospitalId) === cr.HospitalId : !cr.HospitalId))
-            );
+            const crRoleId = (cr.RoleId || "").toLowerCase();
+            const matchIndex = requestedAssignments.findIndex(ra => {
+                const raRoleId = (ra.roleId || "").toLowerCase();
+                const roleMatches = raRoleId === crRoleId || (isProviderRole(raRoleId) && isProviderRole(crRoleId));
+                const orgMatches = Number(ra.organizationId) === cr.OrganizationId;
+                const hospMatches = ra.hospitalId ? Number(ra.hospitalId) === cr.HospitalId : !cr.HospitalId;
+
+                return (ra.userRoleId && Number(ra.userRoleId) === cr.UserRoleId) ||
+                    (roleMatches && orgMatches && hospMatches);
+            });
 
             if (matchIndex !== -1) {
                 // Found a match - should be active
@@ -380,6 +393,10 @@ export class UserService implements IUserService {
                     rolesToUpdate.push(cr);
                 }
 
+                if (isProviderRole(cr.RoleId, cr.Role?.RoleName) && cr.HospitalId) {
+                    providersToActivateHospIds.push(cr.HospitalId);
+                }
+
                 // Remove from requested list so we don't treat it as a new creation
                 requestedAssignments.splice(matchIndex, 1);
             } else {
@@ -389,6 +406,10 @@ export class UserService implements IUserService {
                         cr.Status = false;
                         cr.UpdatedAt = new Date();
                         rolesToUpdate.push(cr);
+                    }
+
+                    if (isProviderRole(cr.RoleId, cr.Role?.RoleName) && cr.HospitalId) {
+                        providersToDeactivateHospIds.push(cr.HospitalId);
                     }
                 }
             }
@@ -413,12 +434,16 @@ export class UserService implements IUserService {
             const newRole = new UserRole();
             newRole.UserId = user!.Id;
             newRole.RoleId = finalRoleId;
-            newRole.OrganizationId = ra.organizationId;
+            newRole.OrganizationId = Number(ra.organizationId);
             if (ra.hospitalId) newRole.HospitalId = Number(ra.hospitalId);
             newRole.Status = true;
             newRole.IsDeleted = false;
             newRole.CreatedAt = new Date();
             rolesToUpdate.push(newRole);
+
+            if (isProviderRole(finalRoleId) && ra.hospitalId) {
+                providersToActivateHospIds.push(Number(ra.hospitalId));
+            }
         }
 
         if (rolesToUpdate.length > 0) {
@@ -459,6 +484,83 @@ export class UserService implements IUserService {
                     }).catch(mailErr => {
                         console.error("[UserService] Failed to send role assignment email in background:", mailErr);
                     });
+                }
+            }
+        }
+
+        // Synchronize HealthcareProviders table if provider sync is enabled
+        if (!data.skipProviderSync) {
+            const hpRepo = AppDataSource.getRepository(HealthcareProvider);
+            const slotRepo = AppDataSource.getRepository(HealthcareProviderScheduleSlot);
+
+            // 1. Activate or create HealthcareProvider records for added/kept hospitals
+            for (const hospId of providersToActivateHospIds) {
+                try {
+                    const existingHp = await hpRepo.findOne({
+                        where: { UserId: user!.Id, HospitalId: hospId }
+                    });
+
+                    if (existingHp) {
+                        if (existingHp.IsDeleted || !existingHp.Status) {
+                            existingHp.IsDeleted = false;
+                            existingHp.Status = user!.Status ?? true;
+                            existingHp.UpdatedAt = new Date();
+                            await hpRepo.save(existingHp);
+                            console.log(`[UserService] Reactivated HealthcareProvider (Id: ${existingHp.Id}) for User ${user!.Id} in Hospital ${hospId}`);
+                        }
+                    } else {
+                        const newHp = hpRepo.create({
+                            UserId: user!.Id,
+                            HospitalId: hospId,
+                            Specialty: "General Medicine",
+                            Department: "General",
+                            RegistrationNumber: user!.PhoneNumber || `REG-${user!.Id.substring(0, 8).toUpperCase()}`,
+                            Qualification: "MBBS",
+                            Experience: "",
+                            ConsultationFee: 0,
+                            Bio: "",
+                            Status: user!.Status ?? true,
+                            IsDeleted: false,
+                            CreatedAt: new Date(),
+                            UpdatedAt: new Date()
+                        });
+                        await hpRepo.save(newHp);
+                        console.log(`[UserService] Created new HealthcareProvider (Id: ${newHp.Id}) for User ${user!.Id} in Hospital ${hospId}`);
+                    }
+                } catch (hpErr: any) {
+                    console.error(`[UserService] Failed to activate/create HealthcareProvider for User ${user!.Id} in Hospital ${hospId}:`, hpErr.message);
+                }
+            }
+
+            // 2. Deactivate / soft-delete HealthcareProvider records for removed hospitals
+            for (const hospId of providersToDeactivateHospIds) {
+                if (providersToActivateHospIds.includes(hospId)) continue;
+
+                try {
+                    const existingHp = await hpRepo.findOne({
+                        where: { UserId: user!.Id, HospitalId: hospId, IsDeleted: false }
+                    });
+
+                    if (existingHp) {
+                        existingHp.Status = false;
+                        existingHp.IsDeleted = true;
+                        existingHp.UpdatedAt = new Date();
+                        await hpRepo.save(existingHp);
+                        console.log(`[UserService] Deactivated HealthcareProvider (Id: ${existingHp.Id}) for User ${user!.Id} in Hospital ${hospId}`);
+
+                        const today = new Date().toISOString().split("T")[0];
+                        await slotRepo
+                            .createQueryBuilder()
+                            .update(HealthcareProviderScheduleSlot)
+                            .set({ IsDeleted: true, IsAvailable: false, UpdatedAt: new Date() })
+                            .where("ProviderId = :id AND SlotDate >= :today AND IsBooked = 0 AND IsDeleted = 0", {
+                                id: existingHp.Id,
+                                today
+                            })
+                            .execute();
+                    }
+                } catch (hpErr: any) {
+                    console.error(`[UserService] Failed to deactivate HealthcareProvider for User ${user!.Id} in Hospital ${hospId}:`, hpErr.message);
                 }
             }
         }
@@ -647,6 +749,17 @@ export class UserService implements IUserService {
         const user = await userRepository.findById(id);
         if (!user) throw new Error("User not found.");
         await userRepository.updateStatus(id, status);
+
+        // Also sync HealthcareProvider status for this user across all their hospitals
+        try {
+            const hpRepo = AppDataSource.getRepository(HealthcareProvider);
+            await hpRepo.update(
+                { UserId: id, IsDeleted: false },
+                { Status: status, UpdatedAt: new Date() }
+            );
+        } catch (e: any) {
+            console.error(`[UserService] Failed to sync HealthcareProvider status for user ${id}:`, e.message);
+        }
     }
 
     async updatePassword(userId: string, newPassword: string): Promise<void> {

@@ -49,4 +49,5 @@ export interface UpdateUserRequest {
     workspaces: UserRoleAssignment[];
     revokeTokens?: boolean | undefined;
     preserveExistingRoles?: boolean | undefined;
+    skipProviderSync?: boolean | undefined;
 }
