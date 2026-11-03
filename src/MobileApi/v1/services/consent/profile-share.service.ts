@@ -166,7 +166,7 @@ export class ProfileShareService {
             }),
             AppDataSource.getRepository(PatientPrescription).find({
                 where: { PatientId: patientId },
-                relations: ["Diagnoses", "Medications", "Doctor"],
+                relations: ["Diagnoses", "Medications", "Doctor", "LabTests"],
                 order: { CreatedAt: "DESC" },
                 take: 200,
             }),
@@ -427,6 +427,12 @@ export class ProfileShareService {
                     duration: m.DurationValue ? `${m.DurationValue} ${m.DurationUnit ?? "days"}` : null,
                     route: clean(m.Route),
                     instructions: clean(m.Instructions),
+                })),
+                labTests: (p.LabTests ?? []).map((t: any) => ({
+                    testName: clean(t.TestName),
+                    category: clean(t.Category),
+                    priority: clean(t.Priority),
+                    instructions: clean(t.Instructions),
                 })),
             })),
             documents: [

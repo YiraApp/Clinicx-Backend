@@ -23,6 +23,7 @@ import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
+import { hospitalLabTestController } from "../../../controllers/Organizations/hospital-lab-test.controller.js";
 
 const authRouter = Router();
 
@@ -99,6 +100,7 @@ authRouter.put("/medical-records/:id", authMiddleware, (req, res) => mobileMedic
 authRouter.delete("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.deleteRecord(req, res));
 
 // Prescriptions
+authRouter.get("/hospitals/:hospitalId/lab-tests", authMiddleware, hospitalLabTestController.list.bind(hospitalLabTestController));
 authRouter.get("/prescriptions/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobilePrescriptionController.getPatientPrescriptions(req, res));
 authRouter.post("/prescriptions", authMiddleware, (req, res) => mobilePrescriptionController.addPrescription(req, res));
 authRouter.get("/prescriptions/:id/pdf", (req, res) => mobilePrescriptionController.getPrescriptionPdf(req, res));

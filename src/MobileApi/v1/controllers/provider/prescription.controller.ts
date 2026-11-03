@@ -13,6 +13,7 @@ import { HealthcareProvider } from "../../../../models/Organizations/healthcare-
 import { MedicalDocument } from "../../../../models/Appointments/medical-document.model.js";
 import { medicalDocumentRepository } from "../../../../repositories/Appointments/medical-document.repository.js";
 import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
+import { normalizeLabTests } from "../../../../utils/prescription-lab-tests.utils.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -77,6 +78,7 @@ const buildPrescriptionHeader = (source: any) => {
         UpdatedAt: source.updatedAt ? new Date(source.updatedAt) : undefined,
         Diagnoses: diagnoses,
         Medications: medications,
+        ...(normalizeLabTests(source) ? { LabTests: normalizeLabTests(source) } : {}),
         Notes: source.notes || source.Notes || source.prescriptionNotes || null,
         PdfUrl: source.pdfUrl || source.PdfUrl || null
     };
@@ -90,7 +92,7 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
     const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
     const prescription = await prescriptionRepo.findOne({
         where: { Id: String(prescriptionId) },
-        relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
+        relations: ["Diagnoses", "LabTests", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
     });
 
     if (!prescription) {
@@ -203,9 +205,9 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
     }
 
     // 4. Medications & Diagnoses
-    const medications = (prescription.Medications || []).map((m: any, idx: number) => {
+    const medications = (prescription.Medications || []).map((m: any) => {
         const overrideMed = Array.isArray(overrides?.medications)
-            ? (overrides.medications[idx] || overrides.medications.find((om: any) => (om.medication || om.name || om.Medication) === (m.Medication || m.medication)))
+            ? overrides.medications.find((om: any) => (om.medication || om.name || om.Medication) === (m.Medication || m.medication))
             : null;
 
         let dur = "";
@@ -271,6 +273,11 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             appointmentId: prescription.AppointmentId && String(prescription.AppointmentId).trim() !== "0" ? String(prescription.AppointmentId).trim() : undefined,
             diagnoses,
             medications,
+            labTests: (prescription.LabTests || []).map((test: any) => ({
+                name: test.TestName,
+                priority: test.Priority,
+                instructions: test.Instructions
+            })),
             notes: prescription.Notes || overrides?.notes || overrides?.Notes || undefined
         }
     });

@@ -46,6 +46,11 @@ export interface PrescriptionPdfInput {
             instructions?: string;
             note?: string;
         }>;
+        labTests?: Array<{
+            name: string;
+            priority?: string;
+            instructions?: string | null;
+        }>;
         notes?: string;
     };
 }
@@ -57,6 +62,19 @@ function isValidImageBuffer(buf: Buffer): boolean {
     // JPEG signature: FF D8 FF
     const isJpg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
     return isPng || isJpg;
+}
+
+// One clean instruction per line: tidies the separators doctors type between lines, keeps every word.
+function formatAdviceLines(notes?: string | null): string[] {
+    const text = (notes || "").trim();
+    if (!text || text.toLowerCase() === "null" || text.toLowerCase() === "undefined") return [];
+    return text
+        .split(/\r?\n/)
+        .map(line => line
+            .replace(/\s+/g, " ")
+            .replace(/,\s*&/g, " &")
+            .replace(/^[\s,;.\u2022\u2026]+|[\s,;.\u2022\u2026]+$/g, ""))
+        .filter(line => line.length > 0);
 }
 
 export class PrescriptionPdfService {
@@ -72,6 +90,7 @@ export class PrescriptionPdfService {
                     size: "A4",
                     margins: { top: 30, bottom: 30, left: 36, right: 36 },
                     autoFirstPage: true,
+                    bufferPages: true,
                     info: {
                         Title: `Prescription - ${data.patient.name || "Patient"}`,
                         Author: data.doctor.name || "Doctor",
@@ -119,12 +138,21 @@ export class PrescriptionPdfService {
                 const pageWidth = 595.28;
                 const margin = 36;
                 const contentWidth = pageWidth - (margin * 2); // 523.28
+                const footerY = 720;
 
                 // ── Top Header Brand Accent Stripe ──
                 doc.rect(0, 0, pageWidth, 5).fill("#1E3A8A");
 
                 // ── Hospital Header Section ──
                 let cursorY = 22;
+
+                // Start a new page when the next block would run into the footer.
+                const ensureRoom = (needed: number) => {
+                    if (cursorY + needed > footerY - 14) {
+                        doc.addPage();
+                        cursorY = 36;
+                    }
+                };
 
                 // Hospital Logo (Real Logo)
                 if (logoBuffer) {
@@ -288,7 +316,7 @@ export class PrescriptionPdfService {
                 doc.fontSize(8)
                    .font("Helvetica")
                    .fillColor("#64748B")
-                   .text(`Patient ID: ${realPatientId}  •  Ph: ${realPhone}`, pX, pY, {
+                   .text(`Patient ID: ${realPatientId}  |  Ph: ${realPhone}`, pX, pY, {
                        width: halfWidth - 24,
                        ellipsis: true
                    });
@@ -319,7 +347,7 @@ export class PrescriptionPdfService {
                 doc.fontSize(8)
                    .font("Helvetica")
                    .fillColor("#334155")
-                   .text(`Qual: ${docQual}  •  Dept: ${docSpec}`, dX, dY, { width: halfWidth - 24, ellipsis: true });
+                   .text(`Qual: ${docQual}  |  Dept: ${docSpec}`, dX, dY, { width: halfWidth - 24, ellipsis: true });
 
                 dY += 14;
                 const docReg = (data.doctor.registrationNumber && data.doctor.registrationNumber.trim())
@@ -417,7 +445,11 @@ export class PrescriptionPdfService {
                     doc.fontSize(8)
                        .font("Helvetica")
                        .fillColor("#64748B")
-                       .text("No medications recorded.", margin + 10, cursorY + 9);
+                       .text(
+                           data.prescription.labTests?.length ? "No medicines prescribed. See the lab tests below." : "No medications recorded.",
+                           margin + 10,
+                           cursorY + 9
+                       );
                     cursorY += 26;
                 } else {
                     for (let i = 0; i < meds.length; i++) {
@@ -429,12 +461,11 @@ export class PrescriptionPdfService {
                         const noteText = rawNote.length > 0 ? rawNote : "NA";
                         // Grow the row so a long name or note wraps instead of overlapping the next line.
                         const nameHeight = doc.fontSize(8.5).font("Helvetica-Bold").heightOfString(medName, { width: colMedWidth - 8 });
-                        const noteHeight = Math.min(
-                            doc.fontSize(7.5).font("Helvetica").heightOfString(noteText, { width: colNoteWidth - 8 }),
-                            40
-                        );
+                        const noteHeight = doc.fontSize(7.5).font("Helvetica").heightOfString(noteText, { width: colNoteWidth - 8 });
                         const rowHeight = Math.max(30, Math.ceil(nameHeight) + 20, Math.ceil(noteHeight) + 12);
                         const isEven = i % 2 === 0;
+
+                        ensureRoom(rowHeight);
 
                         // Row background
                         doc.rect(margin, cursorY, contentWidth, rowHeight)
@@ -483,8 +514,8 @@ export class PrescriptionPdfService {
                         // Duration (Ensure display or "NA")
                         let rawDur = (med.duration && String(med.duration).trim()) ? String(med.duration).trim() : "";
                         let durText = "NA";
-                        if (rawDur.length > 0 && rawDur !== "0" && rawDur !== "0 Days") {
-                            durText = rawDur.toLowerCase().includes("day") ? rawDur : `${rawDur} Days`;
+                        if (rawDur.length > 0 && rawDur !== "0" && rawDur !== "0 Days" && rawDur.toLowerCase() !== "days") {
+                            durText = /^\d+(\.\d+)?$/.test(rawDur) ? `${rawDur} Days` : rawDur;
                         }
                         doc.fontSize(8)
                            .font("Helvetica")
@@ -495,21 +526,44 @@ export class PrescriptionPdfService {
                         doc.fontSize(7.5)
                            .font("Helvetica")
                            .fillColor(noteText === "NA" ? "#94A3B8" : "#334155")
-                           .text(noteText, colX.note + 4, cursorY + 6, {
-                               width: colNoteWidth - 8,
-                               height: 40,
-                               ellipsis: true
-                           });
+                           .text(noteText, colX.note + 4, cursorY + 6, { width: colNoteWidth - 8 });
 
                         cursorY += rowHeight;
                     }
                 }
 
+                // ── Lab Tests Section (Only when the doctor ordered tests) ──
+                const labTests = data.prescription.labTests || [];
+                if (labTests.length > 0) {
+                    cursorY += 14;
+                    ensureRoom(24);
+                    doc.fontSize(9).font("Helvetica-Bold").fillColor("#1E3A8A")
+                       .text("LAB TESTS ADVISED", margin, cursorY);
+                    cursorY = doc.y + 5;
+                    labTests.forEach((test, index) => {
+                        const urgent = (test.priority || "").toLowerCase() === "urgent";
+                        const line = `${index + 1}. ${test.name}${urgent ? " (Urgent)" : ""}${test.instructions ? ` - ${test.instructions}` : ""}`;
+                        doc.fontSize(8.5).font("Helvetica");
+                        ensureRoom(doc.heightOfString(line, { width: contentWidth }) + 4);
+                        doc.fillColor("#334155").text(line, margin, cursorY, { width: contentWidth });
+                        cursorY = doc.y + 3;
+                    });
+                }
+
                 // ── Additional Notes / Advice Section (Only if present in DB) ──
                 cursorY += 14;
-                const notes = data.prescription.notes ? data.prescription.notes.trim() : "";
-                if (notes.length > 0 && notes.toLowerCase() !== "null" && notes.toLowerCase() !== "undefined") {
-                    const adviceBoxHeight = 52;
+                const adviceLines = formatAdviceLines(data.prescription.notes);
+                if (adviceLines.length > 0) {
+                    const adviceTextWidth = contentWidth - 24;
+                    doc.fontSize(8.5).font("Helvetica");
+                    const adviceTextHeight = adviceLines.reduce(
+                        (total, line) => total + doc.heightOfString(line, { width: adviceTextWidth }) + 3,
+                        0
+                    );
+                    const adviceBoxHeight = 26 + Math.ceil(adviceTextHeight);
+
+                    ensureRoom(adviceBoxHeight);
+
                     doc.roundedRect(margin, cursorY, contentWidth, adviceBoxHeight, 5)
                        .fillAndStroke("#FFFBEB", "#FDE68A");
 
@@ -523,12 +577,13 @@ export class PrescriptionPdfService {
 
                     doc.fontSize(8.5)
                        .font("Helvetica")
-                       .fillColor("#78350F")
-                       .text(notes, margin + 12, cursorY + 20, {
-                           width: contentWidth - 24,
-                           height: 28,
-                           ellipsis: true
-                       });
+                       .fillColor("#78350F");
+
+                    let adviceY = cursorY + 20;
+                    for (const line of adviceLines) {
+                        doc.text(line, margin + 12, adviceY, { width: adviceTextWidth });
+                        adviceY = doc.y + 3;
+                    }
 
                     cursorY += adviceBoxHeight + 14;
                 } else {
@@ -536,8 +591,6 @@ export class PrescriptionPdfService {
                 }
 
                 // ── Footer Section: Positioned safely at bottom ──
-                const footerY = 720;
-
                 // Separator line above footer
                 doc.rect(margin, footerY - 10, contentWidth, 0.75).fill("#CBD5E1");
 
@@ -597,13 +650,17 @@ export class PrescriptionPdfService {
                    });
 
                 // Bottom Page Tracker
-                doc.fontSize(7)
-                   .font("Helvetica")
-                   .fillColor("#94A3B8")
-                   .text("Page 1 of 1  •  Official Electronic Health Record", margin, 794, {
-                       width: contentWidth,
-                       align: "center"
-                   });
+                const { start: firstPage, count: pageCount } = doc.bufferedPageRange();
+                for (let i = 0; i < pageCount; i++) {
+                    doc.switchToPage(firstPage + i);
+                    doc.fontSize(7)
+                       .font("Helvetica")
+                       .fillColor("#94A3B8")
+                       .text(`Page ${i + 1} of ${pageCount}  |  Official Electronic Health Record`, margin, 794, {
+                           width: contentWidth,
+                           align: "center"
+                       });
+                }
 
                 doc.end();
             } catch (err) {

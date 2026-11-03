@@ -3,6 +3,7 @@ import { patientPrescriptionService } from "../../services/Appointments/patient-
 import { ApiResponse } from "../../utils/response.utils.js";
 import { AppDataSource } from "../../config/database.js";
 import { uploadPrescriptionPdfToBlob } from "../../MobileApi/v1/controllers/provider/prescription.controller.js";
+import { normalizeLabTests } from "../../utils/prescription-lab-tests.utils.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -63,6 +64,7 @@ const buildPrescriptionHeader = (source: any) => {
         UpdatedAt: source.updatedAt ? new Date(source.updatedAt) : undefined,
         Diagnoses: diagnoses,
         Medications: medications,
+        ...(normalizeLabTests(source) ? { LabTests: normalizeLabTests(source) } : {}),
         Notes: source.notes || source.Notes || source.prescriptionNotes || null,
         PdfUrl: source.pdfUrl || source.PdfUrl || null
     };

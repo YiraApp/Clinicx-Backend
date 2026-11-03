@@ -115,6 +115,37 @@ export class MigrationService {
                 );`,
                 "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_PatientPolicies_PatientId' AND object_id = OBJECT_ID('PatientPolicies')) CREATE INDEX IX_PatientPolicies_PatientId ON PatientPolicies (PatientId);",
 
+                // Lab tests: each hospital's list, and the tests doctors order
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'HospitalLabTests')
+                CREATE TABLE HospitalLabTests (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    HospitalId INT NOT NULL,
+                    OrganizationId INT NULL,
+                    TestName NVARCHAR(200) NOT NULL,
+                    TestCode NVARCHAR(50) NULL,
+                    Category NVARCHAR(100) NOT NULL,
+                    SampleType NVARCHAR(100) NULL,
+                    Price DECIMAL(18,2) NULL,
+                    Preparation NVARCHAR(500) NULL,
+                    IsActive BIT NOT NULL DEFAULT 1,
+                    IsDeleted BIT NOT NULL DEFAULT 0,
+                    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+                    UpdatedAt DATETIME NULL
+                );`,
+                "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_HospitalLabTests_Hospital') CREATE INDEX IX_HospitalLabTests_Hospital ON HospitalLabTests(HospitalId, IsDeleted, IsActive);",
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PrescriptionLabTests')
+                CREATE TABLE PrescriptionLabTests (
+                    Id INT IDENTITY(1,1) PRIMARY KEY,
+                    PrescriptionId UNIQUEIDENTIFIER NOT NULL,
+                    HospitalLabTestId INT NULL,
+                    TestName NVARCHAR(200) NOT NULL,
+                    Category NVARCHAR(100) NULL,
+                    Priority NVARCHAR(20) NOT NULL DEFAULT 'Routine',
+                    Instructions NVARCHAR(500) NULL,
+                    CreatedAt DATETIME NOT NULL DEFAULT GETDATE()
+                );`,
+                "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_PrescriptionLabTests_Prescription') CREATE INDEX IX_PrescriptionLabTests_Prescription ON PrescriptionLabTests(PrescriptionId);",
+
                 // Seed default AppVersions if not existing
                 `IF NOT EXISTS (SELECT * FROM AppVersions WHERE Platform = 'android')
                 INSERT INTO AppVersions (Platform, Version, MinVersion, ForceUpdate, Url, IsLatest, IsDeleted, CreatedAt, Maintenance, Logout)
