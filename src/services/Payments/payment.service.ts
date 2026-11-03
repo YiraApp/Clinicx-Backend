@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { paymentRepository } from "../../repositories/Payments/payment.repository.js";
 import { paymentLogRepository } from "../../repositories/Payments/payment-log.repository.js";
 import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
-import { appointmentBillRepository } from "../../repositories/Payments/appointment-bill.repository.js";
+import { appointmentBillRepository, roundMoney } from "../../repositories/Payments/appointment-bill.repository.js";
 import { AppDataSource } from "../../config/database.js";
 import { v4 as uuidv4 } from "uuid";
 import { userRepository } from "../../repositories/Account/user.repository.js";
@@ -12,20 +12,46 @@ import { smsService } from "../Common/sms.service.js";
 import { Payment } from "../../models/Payments/payment.model.js";
 import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { HospitalPaymentConfiguration } from "../../models/Organizations/hospital-payment-configuration.model.js";
+import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
+import { IsNull } from "typeorm/index.js";
 
+// A payment confirms the appointment (and sends the confirmation messages) only while it is still
+// waiting for payment; collecting a balance after the visit must not move it back to Confirmed.
+const AWAITING_CONFIRMATION_STATUSES = ["paymentpending", "pendingpayment", "pending", "scheduled"];
+const isAwaitingConfirmation = (status?: string | null) => !status || AWAITING_CONFIRMATION_STATUSES.includes(status.toLowerCase());
 
+/**
+ * The Razorpay keys a hospital's orders are created and verified with: its own account when both of
+ * its keys are saved, else the app's account from the environment. Keys are never hard-coded.
+ */
+function resolveRazorpayKeys(config?: HospitalPaymentConfiguration | null) {
+    if (config?.RazorpayKeyId && config.RazorpayKeySecret) {
+        return { keyId: config.RazorpayKeyId, keySecret: config.RazorpayKeySecret };
+    }
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) throw new Error("Online payment is not configured for this hospital.");
+    return { keyId, keySecret };
+}
 
-// Initialize Razorpay SDK using credentials from environment variables
-const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || "rzp_test_SpavktGuBgFo64",
-    key_secret: process.env.RAZORPAY_KEY_SECRET || "kvzLdILyyKMZfTbeCJQo32ip"
-});
+/** Compares two signatures without revealing how much of them matched. */
+function signaturesMatch(expected: string, received: string) {
+    const a = Buffer.from(expected);
+    const b = Buffer.from(received);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** The configuration as the browser may see it: whether a key secret is saved, never the secret. */
+function withoutKeySecret(config: HospitalPaymentConfiguration) {
+    const { RazorpayKeySecret, ...rest } = config;
+    return { ...rest, HasRazorpayKeySecret: !!RazorpayKeySecret };
+}
 
 export class PaymentService {
     /**
      * Create a Razorpay order and generate a pending Payment record.
      */
-    async createOrder(data: { appointmentId: number; patientId: string; amount: number; providerId?: string }) {
+    async createOrder(data: { appointmentId: number; patientId: string; amount: number; providerId?: string; billId?: string }) {
         const transactionId = `TXN_${uuidv4().replace(/-/g, "").substring(0, 16).toUpperCase()}`;
 
         // Get appointment to find its hospitalId
@@ -39,14 +65,8 @@ export class PaymentService {
             where: { HospitalId: hospitalId, IsDeleted: false }
         });
 
-        // Initialize Razorpay custom credentials if configured, otherwise fall back to environment variables
-        let rzpKeyId = process.env.RAZORPAY_KEY_ID || "rzp_test_SpavktGuBgFo64";
-        let rzpKeySecret = process.env.RAZORPAY_KEY_SECRET || "kvzLdILyyKMZfTbeCJQo32ip";
-
-        if (config && config.RazorpayKeyId && config.RazorpayKeySecret) {
-            rzpKeyId = config.RazorpayKeyId;
-            rzpKeySecret = config.RazorpayKeySecret;
-        }
+        // Use the hospital's own Razorpay credentials if configured, otherwise the app's from the environment
+        const { keyId: rzpKeyId, keySecret: rzpKeySecret } = resolveRazorpayKeys(config);
 
         const customRazorpay = new Razorpay({
             key_id: rzpKeyId,
@@ -54,7 +74,7 @@ export class PaymentService {
         });
 
         // Ensure AppointmentBill exists — create if not
-        let bill = await appointmentBillRepository.findByAppointmentId(data.appointmentId);
+        let bill = await this.resolveBill(data);
         if (!bill) {
             bill = await appointmentBillRepository.createBillWithItem({
                 appointmentId: data.appointmentId,
@@ -66,18 +86,20 @@ export class PaymentService {
             });
         }
 
-        if (bill.BillStatus === "Draft") {
+        // A draft keeps its DFT- number after a cash part-payment changes its status, so check both
+        if (bill.BillStatus === "Draft" || !bill.BillNumber || bill.BillNumber.startsWith("DFT-")) {
             // Automatically generate the invoice (finalizing it from Draft to Pending state)
             // to allow online payment initialization to proceed seamlessly
-            await appointmentBillRepository.generateInvoice(bill.AppointmentBillId);
-            const updatedBill = await appointmentBillRepository.findByAppointmentId(data.appointmentId);
-            if (updatedBill) {
-                bill = updatedBill;
-            }
+            bill = await appointmentBillRepository.generateInvoice(bill.AppointmentBillId);
         }
 
-        // Use bill's DueAmount as the actual charge amount
-        const chargeAmount = Number(bill.DueAmount) > 0 ? Number(bill.DueAmount) : data.amount;
+        if (bill.BillStatus === "Cancelled") throw new Error("This bill is cancelled.");
+        const dueAmount = roundMoney(Number(bill.TotalAmount) - Number(bill.PaidAmount));
+        if (dueAmount <= 0) throw new Error("This bill is already fully paid.");
+
+        // Charge what the caller asked for (partial payments are allowed), but never more than is due
+        const requestedAmount = roundMoney(Number(data.amount));
+        const chargeAmount = requestedAmount > 0 ? Math.min(requestedAmount, dueAmount) : dueAmount;
 
         // Call Razorpay API to generate order
         const options = {
@@ -114,8 +136,69 @@ export class PaymentService {
             key: rzpKeyId,
             transactionId: transactionId,
             billId: bill.AppointmentBillId,
-            amount: chargeAmount
+            amount: chargeAmount,
+            dueAmount
         };
+    }
+
+    /**
+     * Finds the bill a payment belongs to: the bill the caller named, else the appointment's bill or,
+     * for a follow-up visit, its root visit's bill. Legacy follow-up bills are folded in first so the
+     * payment is checked against the same due amount the billing list shows.
+     */
+    private async resolveBill(data: { appointmentId: number; billId?: string }): Promise<AppointmentBill | null> {
+        const bill = (data.billId ? await appointmentBillRepository.findById(data.billId) : null)
+            || await appointmentBillRepository.findBillForAppointment(Number(data.appointmentId));
+        return bill ? await appointmentBillRepository.mergeBillGroup(bill.AppointmentBillId) : null;
+    }
+
+    /**
+     * Moves a gateway payment to Success and credits its bill exactly once. The checkout callback and
+     * the webhook can both arrive for the same order (or the callback can be retried); only the call
+     * that performs the transition may add the amount to the bill.
+     */
+    private async markOnlinePaymentSuccess(payment: Payment, fields: Partial<Payment>) {
+        let transitioned = false;
+        let confirmedAppointment = false;
+
+        await AppDataSource.transaction(async (manager) => {
+            const result = await manager.createQueryBuilder().update(Payment)
+                .set({ ...fields, Status: "Success", UpdatedAt: new Date() })
+                .where("PaymentId = :id AND (Status IS NULL OR Status <> 'Success')", { id: payment.PaymentId })
+                .execute();
+            transitioned = (result.affected || 0) > 0;
+            if (!transitioned) return;
+
+            if (payment.AppointmentBillId) {
+                const credited = await appointmentBillRepository.applyPayment(payment.AppointmentBillId, Number(payment.Amount), { rejectOverDue: false }, manager);
+                if (!credited) {
+                    console.error(`[PaymentService] Payment ${payment.PaymentId} succeeded but bill ${payment.AppointmentBillId} was not found to credit`);
+                }
+            }
+
+            if (payment.AppointmentId) {
+                const appt = await manager.findOne(Appointment, { where: { Id: payment.AppointmentId } });
+                if (appt && isAwaitingConfirmation(appt.Status)) {
+                    confirmedAppointment = true;
+                    await manager.update("Appointments", appt.Id, {
+                        Status: "Confirmed",
+                        UpdatedAt: new Date()
+                    });
+
+                    // Book the doctor's schedule slot now that online payment is verified
+                    if (appt.SlotId) {
+                        await manager.update("HealthcareProviderScheduleSlots", appt.SlotId, {
+                            IsBooked: true,
+                            Status: "Booked",
+                            UpdatedAt: new Date()
+                        });
+                        console.log(`[PaymentService] Slot #${appt.SlotId} successfully marked as Booked after payment confirmation for appointment #${appt.Id}`);
+                    }
+                }
+            }
+        });
+
+        return { transitioned, confirmedAppointment };
     }
 
     /**
@@ -130,21 +213,18 @@ export class PaymentService {
         const payment = await paymentRepository.findByTransactionId(data.transactionId);
         if (!payment) throw new Error("Payment record not found.");
 
-        let rzpKeySecret = process.env.RAZORPAY_KEY_SECRET || "kvzLdILyyKMZfTbeCJQo32ip";
-
-        // If the payment is linked to an appointment, we query its hospital configuration
+        // If the payment is linked to an appointment, verify with the keys its hospital's order was created with
+        let config: HospitalPaymentConfiguration | null = null;
         if (payment.AppointmentId) {
             const appointment = await appointmentRepository.findById(payment.AppointmentId);
             if (appointment) {
                 const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
-                const config = await configRepo.findOne({
+                config = await configRepo.findOne({
                     where: { HospitalId: appointment.HospitalId, IsDeleted: false }
                 });
-                if (config && config.RazorpayKeySecret) {
-                    rzpKeySecret = config.RazorpayKeySecret;
-                }
             }
         }
+        const { keySecret: rzpKeySecret } = resolveRazorpayKeys(config);
 
         // Compute HMAC signature to verify payment integrity using the correct keySecret
         const hmac = crypto.createHmac("sha256", rzpKeySecret);
@@ -163,49 +243,21 @@ export class PaymentService {
             throw new Error("Payment verification failed.");
         }
 
-        const wasAlreadySuccess = payment.Status === "Success";
-
-        // Complete the payment & transition appointment to Confirmed in a secure transaction block
-        await AppDataSource.transaction(async (manager) => {
-            await manager.update("Payments", payment.PaymentId, {
-                Status: "Success",
-                GatewayPaymentId: data.razorpay_payment_id,
-                GatewaySignature: data.razorpay_signature,
-                PaymentMethod: "Razorpay",
-                UpdatedAt: new Date()
-            });
-
-            if (payment.AppointmentId) {
-                await manager.update("Appointments", payment.AppointmentId, {
-                    Status: "Confirmed",
-                    UpdatedAt: new Date()
-                });
-
-                // Book the doctor's schedule slot now that online payment is verified
-                const appt = await appointmentRepository.findById(payment.AppointmentId);
-                if (appt && appt.SlotId) {
-                    await manager.update("HealthcareProviderScheduleSlots", appt.SlotId, {
-                        IsBooked: true,
-                        Status: "Booked",
-                        UpdatedAt: new Date()
-                    });
-                    console.log(`[PaymentService] Slot #${appt.SlotId} successfully marked as Booked after payment verification for appointment #${appt.Id}`);
-                }
-            }
+        const { transitioned, confirmedAppointment } = await this.markOnlinePaymentSuccess(payment, {
+            GatewayPaymentId: data.razorpay_payment_id,
+            GatewaySignature: data.razorpay_signature,
+            PaymentMethod: "Razorpay"
         });
 
-        // Update AppointmentBill — only on success
-        if (payment.AppointmentBillId) {
-            await appointmentBillRepository.updateBillOnPaymentSuccess(payment.AppointmentBillId, Number(payment.Amount));
+        if (transitioned) {
+            await paymentLogRepository.log(payment.PaymentId, "PAYMENT_SUCCESS", "Success", "Payment verified successfully", {
+                orderId: data.razorpay_order_id,
+                paymentId: data.razorpay_payment_id
+            });
         }
 
-        await paymentLogRepository.log(payment.PaymentId, "PAYMENT_SUCCESS", "Success", "Payment verified successfully", {
-            orderId: data.razorpay_order_id,
-            paymentId: data.razorpay_payment_id
-        });
-
         // Dispatch WhatsApp & push notifications ONLY after successful confirmation
-        if (!wasAlreadySuccess && payment.AppointmentId) {
+        if (confirmedAppointment && payment.AppointmentId) {
             try {
                 const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
                 await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
@@ -219,19 +271,26 @@ export class PaymentService {
 
     /**
      * Handle webhook callbacks from Razorpay dashboard to guarantee absolute order recovery.
+     * Razorpay signs the exact bytes it sent, so the signature is checked against the raw body.
      */
-    async handleWebhook(body: any, signature: string) {
+    async handleWebhook(rawBody: Buffer | undefined, signature: string | undefined) {
+        // An unverified event could mark any pending order paid, so without the secret nothing is accepted
         const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-        if (webhookSecret && signature) {
-            const hmac = crypto.createHmac("sha256", webhookSecret);
-            hmac.update(JSON.stringify(body));
-            const generatedSignature = hmac.digest("hex");
-            if (generatedSignature !== signature) {
-                console.error("[Webhook] Invalid signature received");
-                return { success: false, error: "Invalid signature" };
-            }
+        if (!webhookSecret) {
+            console.error("[Webhook] RAZORPAY_WEBHOOK_SECRET is not set; webhook rejected");
+            return { success: false, error: "Webhook is not configured" };
+        }
+        if (!rawBody || !signature) {
+            console.error("[Webhook] Unsigned webhook rejected");
+            return { success: false, error: "Missing signature" };
+        }
+        const generatedSignature = crypto.createHmac("sha256", webhookSecret).update(rawBody).digest("hex");
+        if (!signaturesMatch(generatedSignature, signature)) {
+            console.error("[Webhook] Invalid signature received");
+            return { success: false, error: "Invalid signature" };
         }
 
+        const body = JSON.parse(rawBody.toString("utf8"));
         const event = body.event;
         const payload = body.payload;
 
@@ -241,42 +300,17 @@ export class PaymentService {
             const payment = await paymentRepository.findByGatewayOrderId(orderId);
 
             if (payment && payment.Status !== "Success") {
-                await AppDataSource.transaction(async (manager) => {
-                    await manager.update("Payments", payment.PaymentId, {
-                        Status: "Success",
-                        GatewayPaymentId: paymentId,
-                        PaymentMethod: payload.payment.entity.method,
-                        UpdatedAt: new Date()
-                    });
-
-                    if (payment.AppointmentId) {
-                        await manager.update("Appointments", payment.AppointmentId, {
-                            Status: "Confirmed",
-                            UpdatedAt: new Date()
-                        });
-
-                        // Book the doctor's schedule slot now that online payment is verified via webhook
-                        const appt = await appointmentRepository.findById(payment.AppointmentId);
-                        if (appt && appt.SlotId) {
-                            await manager.update("HealthcareProviderScheduleSlots", appt.SlotId, {
-                                IsBooked: true,
-                                Status: "Booked",
-                                UpdatedAt: new Date()
-                            });
-                            console.log(`[PaymentService] Slot #${appt.SlotId} successfully marked as Booked after webhook payment confirmation for appointment #${appt.Id}`);
-                        }
-                    }
+                const { transitioned, confirmedAppointment } = await this.markOnlinePaymentSuccess(payment, {
+                    GatewayPaymentId: paymentId,
+                    PaymentMethod: payload.payment.entity.method
                 });
 
-                // Update AppointmentBill on webhook recovery
-                if (payment.AppointmentBillId) {
-                    await appointmentBillRepository.updateBillOnPaymentSuccess(payment.AppointmentBillId, Number(payment.Amount));
+                if (transitioned) {
+                    await paymentLogRepository.log(payment.PaymentId, "WEBHOOK_RECOVERY", "Success", "Missed callback recovered successfully via webhook");
                 }
 
-                await paymentLogRepository.log(payment.PaymentId, "WEBHOOK_RECOVERY", "Success", "Missed callback recovered successfully via webhook");
-
                 // Dispatch WhatsApp & push notifications ONLY after successful confirmation
-                if (payment.AppointmentId) {
+                if (confirmedAppointment && payment.AppointmentId) {
                     try {
                         const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
                         await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
@@ -293,83 +327,74 @@ export class PaymentService {
     /**
      * Process cash payment manually and confirm appointment
      */
-    async collectManualCash(data: { appointmentId: number; amount: number; patientId: string; providerId?: string }) {
+    async collectManualCash(data: { appointmentId: number; amount: number; patientId: string; providerId?: string; billId?: string }) {
+        const amount = roundMoney(Number(data.amount));
+        if (!(amount > 0)) throw new Error("Please enter a valid amount to collect.");
         const transactionId = `CASH_${uuidv4().replace(/-/g, "").substring(0, 16).toUpperCase()}`;
 
         // Ensure AppointmentBill exists
         const appointment = await appointmentRepository.findById(data.appointmentId);
-        let bill = await appointmentBillRepository.findByAppointmentId(data.appointmentId);
+        let bill = await this.resolveBill(data);
         if (!bill && appointment) {
             bill = await appointmentBillRepository.createBillWithItem({
                 appointmentId: data.appointmentId,
                 patientId: data.patientId,
                 providerId: data.providerId,
                 hospitalId: appointment.HospitalId,
-                consultationFee: Number(data.amount),
+                consultationFee: amount,
                 config: null
             });
-        } else if (bill && bill.BillStatus === "Pending" && Number(bill.SubTotal) !== Number(data.amount)) {
-            bill = await appointmentBillRepository.updateBillBaseAmount(bill.AppointmentBillId, Number(data.amount), null);
         }
 
-        const paymentRepo = AppDataSource.getRepository(Payment);
-        let payment = await paymentRepo.findOne({
-            where: { AppointmentId: data.appointmentId, Status: "Pending" }
-        });
+        let payment!: Payment;
+        let confirmedAppointment = false;
 
-        if (payment) {
-            // Update existing pending payment to Success
-            await AppDataSource.transaction(async (manager) => {
-                await manager.update("Payments", payment!.PaymentId, {
-                    Status: "Success",
-                    PaymentGateway: "Cash",
-                    PaymentMethod: "Cash",
-                    TransactionId: transactionId,
-                    UpdatedAt: new Date()
-                });
-                await manager.update("Appointments", data.appointmentId, {
-                    Status: "Confirmed",
-                    UpdatedAt: new Date()
-                });
-            });
-        } else {
-            // Create a new Cash payment
-            payment = await paymentRepository.create({
+        await AppDataSource.transaction(async (manager) => {
+            // Credit the bill first: the conditional update refuses an amount above the due, which also
+            // stops a double-submitted collection from being recorded twice
+            if (bill) {
+                const credited = await appointmentBillRepository.applyPayment(bill.AppointmentBillId, amount, { rejectOverDue: true }, manager);
+                if (!credited) {
+                    const current = await manager.findOne(AppointmentBill, { where: { AppointmentBillId: bill.AppointmentBillId } });
+                    if (current?.BillStatus === "Cancelled") throw new Error("This bill is cancelled.");
+                    const due = Math.max(0, roundMoney(Number(current?.TotalAmount) - Number(current?.PaidAmount)));
+                    throw new Error(due > 0 ? `Amount ₹${amount} is more than the due amount ₹${due}.` : "This bill is already fully paid.");
+                }
+            }
+
+            // Always a new record: a pending gateway order for this appointment is a separate online
+            // attempt (it may still be paid) and keeps its own amount
+            payment = await manager.save(Payment, manager.create(Payment, {
                 PaymentId: uuidv4(),
                 AppointmentId: data.appointmentId,
                 AppointmentBillId: bill?.AppointmentBillId || null,
                 PatientId: data.patientId,
                 ProviderId: data.providerId || null,
                 TransactionId: transactionId,
-                Amount: data.amount,
+                Amount: amount,
                 Currency: "INR",
                 PaymentGateway: "Cash",
                 PaymentMethod: "Cash",
                 Status: "Success",
                 TransactionDate: new Date()
-            });
+            }));
 
-            await AppDataSource.transaction(async (manager) => {
+            if (appointment && isAwaitingConfirmation(appointment.Status)) {
+                confirmedAppointment = true;
                 await manager.update("Appointments", data.appointmentId, {
                     Status: "Confirmed",
                     UpdatedAt: new Date()
                 });
-            });
-        }
-
-        // Update AppointmentBill
-        if (bill) {
-            await appointmentBillRepository.updateBillOnPaymentSuccess(bill.AppointmentBillId, data.amount);
-        }
+            }
+        });
 
         // Write to payment audit log
         await paymentLogRepository.log(payment.PaymentId, "CASH_PAYMENT", "Success", "Cash payment recorded successfully");
 
-        if (data.appointmentId) {
+        if (confirmedAppointment) {
             try {
-                const appt = await appointmentRepository.findById(data.appointmentId);
-                if (appt && appt.SlotId) {
-                    await AppDataSource.getRepository("HealthcareProviderScheduleSlots").update(appt.SlotId, {
+                if (appointment?.SlotId) {
+                    await AppDataSource.getRepository("HealthcareProviderScheduleSlots").update(appointment.SlotId, {
                         IsBooked: true,
                         Status: "Booked",
                         UpdatedAt: new Date()
@@ -382,7 +407,7 @@ export class PaymentService {
             }
         }
 
-        return { success: true, transactionId };
+        return { success: true, transactionId, billId: bill?.AppointmentBillId || null };
     }
 
     /**
@@ -393,9 +418,13 @@ export class PaymentService {
         if (!user) throw new Error("Patient not found.");
 
         const paymentRepo = AppDataSource.getRepository(Payment);
+        // Reuse an earlier link, never a gateway order, and keep its amount equal to the one in the message
         let payment = await paymentRepo.findOne({
-            where: { AppointmentId: data.appointmentId, Status: "Pending" }
+            where: { AppointmentId: data.appointmentId, Status: "Pending", GatewayOrderId: IsNull() }
         });
+        if (payment && roundMoney(Number(payment.Amount)) !== roundMoney(Number(data.amount))) {
+            await paymentRepository.update(payment.PaymentId, { Amount: roundMoney(Number(data.amount)), UpdatedAt: new Date() });
+        }
 
         let transactionId = payment?.TransactionId;
         if (!payment) {
@@ -542,6 +571,7 @@ export class PaymentService {
             let paymentMethod: string | null = null;
             let paymentGateway: string | null = null;
             let transactionId: string | null = null;
+            let paymentMethods: string[] = [];
 
             try {
                 const payRecords = await payRepo.find({
@@ -552,7 +582,10 @@ export class PaymentService {
                     order: { CreatedAt: "DESC" }
                 });
 
-                const successPay = payRecords.find(p => p.Status === "Success") || payRecords[0];
+                // Abandoned or failed gateway orders are not payments; a split bill lists every method used
+                const successPays = payRecords.filter(p => p.Status === "Success");
+                paymentMethods = Array.from(new Set(successPays.map(p => p.PaymentMethod || p.PaymentGateway).filter(Boolean) as string[]));
+                const successPay = successPays[0];
                 if (successPay) {
                     paymentMethod = successPay.PaymentMethod || successPay.PaymentGateway || (Number(b.PaidAmount) > 0 ? "Cash" : null);
                     paymentGateway = successPay.PaymentGateway || null;
@@ -599,6 +632,7 @@ export class PaymentService {
                 notes: b.Notes || "",
                 appointmentChain: (b as any).appointmentChain || [],
                 paymentMethod: paymentMethod || (Number(b.PaidAmount) > 0 ? "Cash" : null),
+                paymentMethods,
                 paymentGateway: paymentGateway || (paymentMethod === "Razorpay" ? "Razorpay" : null),
                 transactionId: transactionId || null,
                 items: (b.BillItems || []).map(i => ({
@@ -711,43 +745,47 @@ export class PaymentService {
 
     async getPaymentByAppointment(appointmentId: number) {
         const payment = await paymentRepository.findByAppointmentId(appointmentId);
+
+        // The bill is looked up on its own: the latest payment may be a payment-link record with no bill,
+        // and a follow-up visit's charges sit on its root visit's bill
+        let bill: AppointmentBill | null = null;
+        try {
+            bill = await appointmentBillRepository.findBillForAppointment(appointmentId);
+        } catch (err) {
+            console.error("Error fetching bill by appointment:", err);
+        }
+        const billFields = {
+            billId: bill?.AppointmentBillId || null,
+            billStatus: bill?.BillStatus || null,
+            billTotal: bill ? Number(bill.TotalAmount || 0) : null,
+            billPaid: bill ? Number(bill.PaidAmount || 0) : null,
+            billDue: bill ? Number(bill.DueAmount || 0) : null
+        };
+
         if (!payment) {
-            try {
-                const { AppointmentBill } = await import("../../models/Payments/appointment-bill.model.js");
-                const bill = await AppDataSource.getRepository(AppointmentBill).findOne({
-                    where: { AppointmentId: appointmentId, IsDeleted: false },
-                    relations: ["Patient", "Provider", "Appointment"]
-                });
-                if (bill) {
-                    return {
-                        paymentId: null,
-                        transactionId: null,
-                        receiptNumber: bill.BillNumber,
-                        amount: Number(bill.TotalAmount || 0),
-                        currency: "INR",
-                        status: bill.BillStatus === "Paid" ? "Success" : "Pending",
-                        paymentMethod: "—",
-                        paymentGateway: "—",
-                        transactionDate: null,
-                        createdAt: bill.CreatedAt,
-                        patientId: bill.PatientId,
-                        patientName: bill.Patient ? `${bill.Patient.FirstName} ${bill.Patient.LastName}`.trim() : "—",
-                        patientPhone: bill.Patient?.PhoneNumber || "—",
-                        providerId: bill.ProviderId,
-                        providerName: bill.Provider ? `Dr. ${bill.Provider.FirstName} ${bill.Provider.LastName}` : "—",
-                        appointmentId: bill.AppointmentId,
-                        appointmentDate: bill.Appointment?.AppointmentDate || null,
-                        billStatus: bill.BillStatus,
-                        billTotal: Number(bill.TotalAmount || 0),
-                        billPaid: Number(bill.PaidAmount || 0),
-                        billDue: Number(bill.DueAmount || 0),
-                        failureReason: null
-                    };
-                }
-            } catch (err) {
-                console.error("Error fetching bill by appointment:", err);
-            }
-            return null;
+            if (!bill) return null;
+            const appointment = await appointmentRepository.findById(appointmentId);
+            return {
+                paymentId: null,
+                transactionId: null,
+                receiptNumber: bill.BillNumber,
+                amount: Number(bill.TotalAmount || 0),
+                currency: "INR",
+                status: bill.BillStatus === "Paid" ? "Success" : "Pending",
+                paymentMethod: "—",
+                paymentGateway: "—",
+                transactionDate: null,
+                createdAt: bill.CreatedAt,
+                patientId: bill.PatientId,
+                patientName: bill.Patient ? `${bill.Patient.FirstName} ${bill.Patient.LastName}`.trim() : "—",
+                patientPhone: bill.Patient?.PhoneNumber || "—",
+                providerId: bill.ProviderId,
+                providerName: bill.Provider ? `Dr. ${bill.Provider.FirstName} ${bill.Provider.LastName}` : "—",
+                appointmentId,
+                appointmentDate: appointment?.AppointmentDate || null,
+                ...billFields,
+                failureReason: null
+            };
         }
 
         return {
@@ -768,10 +806,7 @@ export class PaymentService {
             providerName: payment.Provider ? `Dr. ${payment.Provider.FirstName} ${payment.Provider.LastName}` : "—",
             appointmentId: payment.AppointmentId,
             appointmentDate: payment.Appointment?.AppointmentDate || null,
-            billStatus: payment.AppointmentBill?.BillStatus || null,
-            billTotal: payment.AppointmentBill?.TotalAmount || null,
-            billPaid: payment.AppointmentBill?.PaidAmount || null,
-            billDue: payment.AppointmentBill?.DueAmount || null,
+            ...billFields,
             failureReason: payment.FailureReason
         };
     }
@@ -787,7 +822,7 @@ export class PaymentService {
                 HospitalId: hospitalId,
                 PaymentGateway: "razorpay",
                 RazorpayKeyId: "",
-                RazorpayKeySecret: "",
+                HasRazorpayKeySecret: false,
                 GstPercentage: 0,
                 CgstPercentage: 0,
                 SgstPercentage: 0,
@@ -799,7 +834,7 @@ export class PaymentService {
                 IsActive: true
             };
         }
-        return config;
+        return withoutKeySecret(config);
     }
 
     async saveHospitalPaymentConfiguration(data: any) {
@@ -818,8 +853,15 @@ export class PaymentService {
         }
 
         config.PaymentGateway = data.paymentGateway || data.PaymentGateway || "razorpay";
+        const previousKeyId = config.RazorpayKeyId;
         config.RazorpayKeyId = data.razorpayKeyId !== undefined ? data.razorpayKeyId : data.RazorpayKeyId;
-        config.RazorpayKeySecret = data.razorpayKeySecret !== undefined ? data.razorpayKeySecret : data.RazorpayKeySecret;
+        // The page is never sent the saved secret, so an empty value keeps it
+        const newKeySecret = data.razorpayKeySecret !== undefined ? data.razorpayKeySecret : data.RazorpayKeySecret;
+        if (newKeySecret) {
+            config.RazorpayKeySecret = newKeySecret;
+        } else if (config.RazorpayKeySecret && config.RazorpayKeyId && config.RazorpayKeyId !== previousKeyId) {
+            throw new Error("Enter the Razorpay key secret for the new key ID.");
+        }
         config.GstPercentage = parseFloat(data.gstPercentage || data.GstPercentage || 0);
         config.CgstPercentage = parseFloat(data.cgstPercentage || data.CgstPercentage || 0);
         config.SgstPercentage = parseFloat(data.sgstPercentage || data.SgstPercentage || 0);
@@ -831,7 +873,7 @@ export class PaymentService {
         config.IsActive = data.isActive !== undefined ? !!data.isActive : (config.IsActive !== undefined ? config.IsActive : true);
         config.UpdatedAt = new Date();
 
-        return await repo.save(config);
+        return withoutKeySecret(await repo.save(config));
     }
 
     async updateBillDetails(

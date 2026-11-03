@@ -5,6 +5,17 @@ import { HospitalPaymentConfiguration } from "../../models/Organizations/hospita
 import { TreatmentPlan } from "../../models/Payments/treatment-plan.model.js";
 import { Payment } from "../../models/Payments/payment.model.js";
 import { v4 as uuidv4 } from "uuid";
+import { EntityManager, In } from "typeorm/index.js";
+
+export const roundMoney = (value: number) => Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+
+export const computeBillStatus = (totalAmount: number, paidAmount: number, currentStatus?: string | null) => {
+    if (currentStatus === "Cancelled") return currentStatus;
+    const due = roundMoney(Number(totalAmount) - Number(paidAmount));
+    if (Number(paidAmount) > 0 && due <= 0) return "Paid";
+    if (Number(paidAmount) > 0) return "PartiallyPaid";
+    return currentStatus === "Draft" ? "Draft" : "Pending";
+};
 
 export class AppointmentBillRepository {
     private repo = AppDataSource.getRepository(AppointmentBill);
@@ -15,6 +26,128 @@ export class AppointmentBillRepository {
             where: { AppointmentId: appointmentId, IsDeleted: false },
             relations: ["BillItems", "Patient", "Provider", "Hospital"]
         });
+    }
+
+    async getRootAppointmentId(appointmentId: number): Promise<number> {
+        const { Appointment } = await import("../../models/Appointments/appointment.model.js");
+        const appRepo = AppDataSource.getRepository(Appointment);
+        let rootId = appointmentId;
+        const visited = new Set<number>();
+        while (rootId && !visited.has(rootId)) {
+            visited.add(rootId);
+            const appt = await appRepo.findOne({ where: { Id: rootId } });
+            if (!appt?.ParentAppointmentId) break;
+            rootId = appt.ParentAppointmentId;
+        }
+        return rootId;
+    }
+
+    async getChainAppointmentIds(rootAppointmentId: number): Promise<number[]> {
+        const { Appointment } = await import("../../models/Appointments/appointment.model.js");
+        const appRepo = AppDataSource.getRepository(Appointment);
+        const ids = new Set<number>([rootAppointmentId]);
+        let frontier = [rootAppointmentId];
+        while (frontier.length > 0) {
+            const children = await appRepo.find({ where: { ParentAppointmentId: In(frontier) } });
+            frontier = children.map(c => c.Id).filter(id => !ids.has(id));
+            frontier.forEach(id => ids.add(id));
+        }
+        return Array.from(ids);
+    }
+
+    /**
+     * Follow-up visits append their charges to the root visit's bill, so a follow-up appointment
+     * usually has no bill of its own. Look up the chain before concluding that no bill exists.
+     */
+    async findBillForAppointment(appointmentId: number): Promise<AppointmentBill | null> {
+        const own = await this.findByAppointmentId(appointmentId);
+        if (own) return own;
+        const rootId = await this.getRootAppointmentId(appointmentId);
+        return rootId !== appointmentId ? await this.findByAppointmentId(rootId) : null;
+    }
+
+    /**
+     * Older payment flows created a separate bill for a follow-up visit whose charges were already on
+     * the root bill. The billing list shows such bills as one consolidated row, so fold them into the
+     * root bill (keeping the combined totals, items and payments) before a payment or an edit.
+     */
+    async mergeBillGroup(billId: string): Promise<AppointmentBill> {
+        const bill = await this.findById(billId);
+        if (!bill) throw new Error("Bill not found.");
+        if (!bill.AppointmentId) return bill;
+
+        const rootId = await this.getRootAppointmentId(bill.AppointmentId);
+        const chainIds = await this.getChainAppointmentIds(rootId);
+        const members = await this.repo.find({
+            where: { AppointmentId: In(chainIds), IsDeleted: false },
+            order: { CreatedAt: "ASC" }
+        });
+        if (members.length <= 1) return bill;
+
+        const primary = members.find(m => m.AppointmentId === rootId) || members[0];
+        const others = members.filter(m => m.AppointmentBillId !== primary.AppointmentBillId);
+        const sum = (field: keyof AppointmentBill) => roundMoney(members.reduce((s, m) => s + Number(m[field] || 0), 0));
+
+        await AppDataSource.transaction(async (manager) => {
+            for (const other of others) {
+                await manager.createQueryBuilder().update(AppointmentBillItem)
+                    .set({ AppointmentBillId: primary.AppointmentBillId, AppointmentId: () => `COALESCE(AppointmentId, ${Number(other.AppointmentId)})` })
+                    .where("AppointmentBillId = :id", { id: other.AppointmentBillId })
+                    .execute();
+                await manager.createQueryBuilder().update(Payment)
+                    .set({ AppointmentBillId: primary.AppointmentBillId })
+                    .where("AppointmentBillId = :id", { id: other.AppointmentBillId })
+                    .execute();
+                await manager.update(AppointmentBill, other.AppointmentBillId, {
+                    IsDeleted: true,
+                    Notes: `${other.Notes ? other.Notes + " | " : ""}Merged into bill ${primary.BillNumber}`,
+                    UpdatedAt: new Date()
+                });
+            }
+
+            const totalAmount = sum("TotalAmount");
+            const paidAmount = sum("PaidAmount");
+            await manager.update(AppointmentBill, primary.AppointmentBillId, {
+                SubTotal: sum("SubTotal"),
+                DiscountAmount: sum("DiscountAmount"),
+                GstAmount: sum("GstAmount"),
+                CgstAmount: sum("CgstAmount"),
+                SgstAmount: sum("SgstAmount"),
+                IgstAmount: sum("IgstAmount"),
+                TotalAmount: totalAmount,
+                PaidAmount: paidAmount,
+                DueAmount: Math.max(0, roundMoney(totalAmount - paidAmount)),
+                BillStatus: computeBillStatus(totalAmount, paidAmount, primary.BillStatus),
+                UpdatedAt: new Date()
+            });
+        });
+
+        console.log(`[AppointmentBill] Merged ${others.length} follow-up bill(s) into bill ${primary.AppointmentBillId}`);
+        return (await this.findById(primary.AppointmentBillId))!;
+    }
+
+    /**
+     * Adds a payment to a bill in a single UPDATE so concurrent collections cannot lose or double an
+     * amount. With `rejectOverDue`, nothing is written (returns false) when the amount exceeds the due.
+     */
+    async applyPayment(billId: string, amount: number, options: { rejectOverDue: boolean }, manager?: EntityManager): Promise<boolean> {
+        const paid = roundMoney(amount);
+        const qb = (manager || AppDataSource.manager).createQueryBuilder()
+            .update(AppointmentBill)
+            .set({
+                PaidAmount: () => "PaidAmount + :paid",
+                DueAmount: () => "CASE WHEN TotalAmount - (PaidAmount + :paid) > 0 THEN TotalAmount - (PaidAmount + :paid) ELSE 0 END",
+                BillStatus: () => "CASE WHEN TotalAmount - (PaidAmount + :paid) <= 0 THEN 'Paid' ELSE 'PartiallyPaid' END",
+                // The app's clock, like every other write (GETDATE() on the Azure server is UTC)
+                UpdatedAt: new Date()
+            })
+            .where("AppointmentBillId = :billId AND IsDeleted = 0", { billId })
+            .setParameter("paid", paid);
+        if (options.rejectOverDue) {
+            qb.andWhere("BillStatus <> 'Cancelled' AND TotalAmount - PaidAmount >= :minDue", { minDue: paid - 0.005 });
+        }
+        const result = await qb.execute();
+        return (result.affected || 0) > 0;
     }
 
     async findById(billId: string): Promise<AppointmentBill | null> {
@@ -198,7 +331,7 @@ export class AppointmentBillRepository {
         }
 
         // 4. NO bill number yet — bill starts as Draft
-        const overallDiscount = Number(data.discountAmount) || 0;
+        const overallDiscount = Math.min(Math.max(0, Number(data.discountAmount) || 0), subTotalSum);
         const finalTaxable = Math.max(0, subTotalSum - overallDiscount);
 
         const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
@@ -339,7 +472,7 @@ export class AppointmentBillRepository {
             }
         }
 
-        const newDiscount = (Number(bill.DiscountAmount) || 0) + (Number(data.discountAmount) || 0);
+        const newDiscount = Math.min((Number(bill.DiscountAmount) || 0) + Math.max(0, Number(data.discountAmount) || 0), subTotalSum);
         const finalTaxable = Math.max(0, subTotalSum - newDiscount);
         
         const finalGst = parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
@@ -371,72 +504,12 @@ export class AppointmentBillRepository {
             SgstAmount: sgstAmount,
             IgstAmount: igstAmount,
             TotalAmount: totalAmount,
-            DueAmount: dueAmount,
-            BillStatus: dueAmount <= 0 ? "Paid" : (Number(bill.PaidAmount) > 0 ? "PartiallyPaid" : "Pending"),
+            DueAmount: Math.max(0, dueAmount),
+            BillStatus: computeBillStatus(totalAmount, Number(bill.PaidAmount), bill.BillStatus),
             UpdatedAt: new Date()
         });
 
         return bill;
-    }
-
-    async updateBillOnPaymentSuccess(billId: string, paidAmount: number): Promise<void> {
-        const bill = await this.repo.findOne({ where: { AppointmentBillId: billId } });
-        if (!bill) return;
-
-        const newPaid = parseFloat((Number(bill.PaidAmount) + paidAmount).toFixed(2));
-        const newDue = parseFloat((Number(bill.TotalAmount) - newPaid).toFixed(2));
-        const newStatus = newDue <= 0 ? "Paid" : "PartiallyPaid";
-
-        await this.repo.update(billId, {
-            PaidAmount: newPaid,
-            DueAmount: Math.max(0, newDue),
-            BillStatus: newStatus,
-            UpdatedAt: new Date()
-        });
-    }
-
-    async updateBillBaseAmount(billId: string, newConsultationFee: number, config?: HospitalPaymentConfiguration | null): Promise<AppointmentBill> {
-        const bill = await this.repo.findOne({ where: { AppointmentBillId: billId }, relations: ["BillItems"] });
-        if (!bill || bill.BillStatus !== "Pending") return bill as any; // Only update pending bills
-
-        const gstPct = config?.GstPercentage || 0;
-        const cgstPct = config?.CgstPercentage || 0;
-        const sgstPct = config?.SgstPercentage || 0;
-        const igstPct = config?.IgstPercentage || 0;
-
-        const subTotal = newConsultationFee;
-        const gstAmount = parseFloat(((subTotal * gstPct) / 100).toFixed(2));
-        const totalAmount = parseFloat((subTotal + gstAmount).toFixed(2));
-        
-        const cgstAmount = parseFloat(((subTotal * cgstPct) / 100).toFixed(2));
-        const sgstAmount = parseFloat(((subTotal * sgstPct) / 100).toFixed(2));
-        const igstAmount = parseFloat(((subTotal * igstPct) / 100).toFixed(2));
-
-        // Update bill
-        await this.repo.update(billId, {
-            SubTotal: subTotal,
-            GstAmount: gstAmount,
-            CgstAmount: cgstAmount,
-            SgstAmount: sgstAmount,
-            IgstAmount: igstAmount,
-            TotalAmount: totalAmount,
-            DueAmount: totalAmount,
-            UpdatedAt: new Date()
-        });
-
-        // Update the consultation item
-        const item = bill.BillItems?.find(i => i.ItemType === "Consultation");
-        if (item) {
-            await this.itemRepo.update(item.AppointmentBillItemId, {
-                UnitPrice: subTotal,
-                GstPercentage: gstPct,
-                GstAmount: gstAmount,
-                TotalAmount: totalAmount
-            });
-        }
-
-        // Return updated bill
-        return (await this.repo.findOne({ where: { AppointmentBillId: billId }, relations: ["BillItems"] }))!;
     }
 
 
@@ -492,6 +565,7 @@ export class AppointmentBillRepository {
         // Aggregates
         const aggQb = this.repo.createQueryBuilder("b")
             .leftJoin("b.Appointment", "appointment")
+            .leftJoin("b.Patient", "patient")
             .select("SUM(b.PaidAmount)", "collected")
             .addSelect("SUM(b.DueAmount)", "pending")
             .where("b.IsDeleted = :deleted", { deleted: false });
@@ -500,6 +574,13 @@ export class AppointmentBillRepository {
         if (orgId) aggQb.andWhere("appointment.OrgId = :orgId", { orgId });
         if (providerId) aggQb.andWhere("b.ProviderId = :providerId", { providerId });
         if (patientId) aggQb.andWhere("b.PatientId = :patientId", { patientId });
+        if (billStatus) aggQb.andWhere("b.BillStatus = :billStatus", { billStatus });
+        if (search) {
+            aggQb.andWhere(
+                "(b.BillNumber LIKE :s OR patient.FirstName LIKE :s OR patient.LastName LIKE :s OR patient.PhoneNumber LIKE :s)",
+                { s: `%${search}%` }
+            );
+        }
         if (startDate) aggQb.andWhere("b.CreatedAt >= :startDate", { startDate: new Date(startDate) });
         if (endDate) {
             const end = new Date(endDate);
@@ -512,7 +593,6 @@ export class AppointmentBillRepository {
         const totalPending = parseFloat(agg?.pending || "0");
 
         const { Appointment } = await import("../../models/Appointments/appointment.model.js");
-        const { In } = await import("typeorm/index.js");
         const appRepo = AppDataSource.getRepository(Appointment);
 
         // Batch load appointment chain in memory to eliminate N+1 queries
@@ -543,7 +623,7 @@ export class AppointmentBillRepository {
         }
 
         const nonApptBills: AppointmentBill[] = [];
-        const rootBillMap = new Map<number, AppointmentBill>();
+        const rootIdByBill = new Map<string, number>();
 
         for (const bill of data) {
             if (!bill.AppointmentId) {
@@ -568,41 +648,71 @@ export class AppointmentBillRepository {
                     break;
                 }
             }
-
-            if (rootBillMap.has(rootParentId)) {
-                const rootBill = rootBillMap.get(rootParentId)!;
-                
-                // Merge items safely without duplicates
-                if (bill.BillItems) {
-                    for (const item of bill.BillItems) {
-                        const exists = rootBill.BillItems?.some(ri => ri.AppointmentBillItemId === item.AppointmentBillItemId);
-                        if (!exists) {
-                            rootBill.BillItems = rootBill.BillItems || [];
-                            rootBill.BillItems.push(item);
-                        }
-                    }
-                }
-
-                rootBill.SubTotal = parseFloat((Number(rootBill.SubTotal) + Number(bill.SubTotal)).toFixed(2));
-                rootBill.DiscountAmount = parseFloat((Number(rootBill.DiscountAmount) + Number(bill.DiscountAmount)).toFixed(2));
-                rootBill.GstAmount = parseFloat((Number(rootBill.GstAmount) + Number(bill.GstAmount)).toFixed(2));
-                rootBill.CgstAmount = parseFloat((Number(rootBill.CgstAmount) + Number(bill.CgstAmount)).toFixed(2));
-                rootBill.SgstAmount = parseFloat((Number(rootBill.SgstAmount) + Number(bill.SgstAmount)).toFixed(2));
-                rootBill.IgstAmount = parseFloat((Number(rootBill.IgstAmount) + Number(bill.IgstAmount)).toFixed(2));
-                rootBill.TotalAmount = parseFloat((Number(rootBill.TotalAmount) + Number(bill.TotalAmount)).toFixed(2));
-                rootBill.PaidAmount = parseFloat((Number(rootBill.PaidAmount) + Number(bill.PaidAmount)).toFixed(2));
-                rootBill.DueAmount = parseFloat((Number(rootBill.DueAmount) + Number(bill.DueAmount)).toFixed(2));
-                rootBill.BillStatus = rootBill.DueAmount <= 0 ? "Paid" : (rootBill.PaidAmount > 0 ? "PartiallyPaid" : "Pending");
-            } else {
-                const clone = {
-                    ...bill,
-                    BillItems: bill.BillItems ? [...bill.BillItems] : []
-                } as AppointmentBill;
-                rootBillMap.set(rootParentId, clone);
-            }
+            rootIdByBill.set(bill.AppointmentBillId, rootParentId);
         }
 
-        const consolidatedBills = Array.from(rootBillMap.values()).concat(nonApptBills);
+        // Older payment flows created separate bills for follow-up visits. Load every bill in each
+        // chain (not only the ones on this page) and show the root visit's bill as the row, so the
+        // consolidated totals do not change with sort order or paging.
+        const rootOfAppt = new Map<number, number>();
+        let frontier = Array.from(new Set(rootIdByBill.values()));
+        frontier.forEach(id => rootOfAppt.set(id, id));
+        while (frontier.length > 0) {
+            const children = await appRepo.find({ where: { ParentAppointmentId: In(frontier) } });
+            frontier = [];
+            for (const child of children) {
+                if (rootOfAppt.has(child.Id)) continue;
+                rootOfAppt.set(child.Id, rootOfAppt.get(child.ParentAppointmentId!)!);
+                frontier.push(child.Id);
+            }
+        }
+        const chainBills = rootOfAppt.size > 0
+            ? await this.repo.find({
+                where: { AppointmentId: In(Array.from(rootOfAppt.keys())), IsDeleted: false },
+                relations: ["Patient", "Provider", "Hospital", "Appointment", "Appointment.Doctor", "Appointment.Organization", "BillItems"],
+                order: { CreatedAt: "ASC" }
+            })
+            : [];
+
+        const consolidatedBills: any[] = [];
+        const seenRoots = new Set<number>();
+        for (const bill of data) {
+            if (!bill.AppointmentId) continue;
+            const rootParentId = rootIdByBill.get(bill.AppointmentBillId)!;
+            if (seenRoots.has(rootParentId)) continue;
+            seenRoots.add(rootParentId);
+
+            const members = chainBills.filter(b => rootOfAppt.get(b.AppointmentId!) === rootParentId);
+            if (members.length <= 1) {
+                consolidatedBills.push({ ...bill, rootAppointmentId: rootParentId });
+                continue;
+            }
+
+            const primary = members.find(m => m.AppointmentId === rootParentId) || members[0];
+            const sum = (field: keyof AppointmentBill) => roundMoney(members.reduce((s, m) => s + Number(m[field] || 0), 0));
+            const totalAmount = sum("TotalAmount");
+            const paidAmount = sum("PaidAmount");
+            consolidatedBills.push({
+                ...primary,
+                rootAppointmentId: rootParentId,
+                BillItems: members.flatMap(m => (m.BillItems || []).map(item => ({
+                    ...item,
+                    AppointmentId: item.AppointmentId ?? (m === primary ? null : m.AppointmentId)
+                }))),
+                SubTotal: sum("SubTotal"),
+                DiscountAmount: sum("DiscountAmount"),
+                GstAmount: sum("GstAmount"),
+                CgstAmount: sum("CgstAmount"),
+                SgstAmount: sum("SgstAmount"),
+                IgstAmount: sum("IgstAmount"),
+                TotalAmount: totalAmount,
+                PaidAmount: paidAmount,
+                DueAmount: Math.max(0, roundMoney(totalAmount - paidAmount)),
+                BillStatus: computeBillStatus(totalAmount, paidAmount, primary.BillStatus),
+                UpdatedAt: members.reduce((latest: Date | null | undefined, m) => (m.UpdatedAt && (!latest || m.UpdatedAt > latest) ? m.UpdatedAt : latest), primary.UpdatedAt)
+            });
+        }
+        consolidatedBills.push(...nonApptBills);
 
         // Attach appointment chain (parent + child visits) to each consolidated bill
         const payRepo = AppDataSource.getRepository(Payment);
@@ -611,8 +721,9 @@ export class AppointmentBillRepository {
 
             // Collect the full appointment chain starting from root
             const chain: any[] = [];
+            const rootAppointmentId = bill.rootAppointmentId || bill.AppointmentId;
             const rootAppt = await appRepo.findOne({
-                where: { Id: bill.AppointmentId },
+                where: { Id: rootAppointmentId },
                 relations: ["Doctor"]
             });
             if (rootAppt) {
@@ -648,23 +759,24 @@ export class AppointmentBillRepository {
                     await findChildren(child.Id);
                 }
             };
-            await findChildren(bill.AppointmentId);
+            await findChildren(rootAppointmentId);
 
             // Fetch items and payments for each visit in the chain
             const enrichedChain = await Promise.all(chain.map(async (appt) => {
+                // Only money actually received; abandoned or failed gateway orders stay out of the totals
                 const apptPayments = await payRepo.find({
-                    where: { AppointmentId: appt.id }
+                    where: { AppointmentId: appt.id, Status: "Success" }
                 });
                 
-                const apptItems = bill.BillItems ? bill.BillItems.filter(bi => {
+                const apptItems = bill.BillItems ? bill.BillItems.filter((bi: AppointmentBillItem) => {
                     if (bi.AppointmentId === appt.id) return true;
-                    if (!bi.AppointmentId && appt.id === bill.AppointmentId) return true;
+                    if (!bi.AppointmentId && appt.id === rootAppointmentId) return true;
                     return false;
                 }) : [];
 
                 return {
                     ...appt,
-                    items: apptItems.map(item => ({
+                    items: apptItems.map((item: AppointmentBillItem) => ({
                         itemName: item.ItemName,
                         itemType: item.ItemType,
                         unitPrice: Number(item.UnitPrice),
@@ -750,6 +862,14 @@ export class AppointmentBillRepository {
             gstAmount?: number;
         }
     ): Promise<AppointmentBill> {
+        // A bill always keeps at least one item; the old items are replaced by these
+        if (!Array.isArray(data.items) || data.items.length === 0) {
+            throw new Error("A bill must have at least one item.");
+        }
+
+        // The edit dialog sends the items of the whole consolidated row, so fold legacy follow-up bills in first
+        billId = (await this.mergeBillGroup(billId)).AppointmentBillId;
+
         return await AppDataSource.transaction(async (manager) => {
             const billRepo = manager.getRepository(AppointmentBill);
             const itemRepo = manager.getRepository(AppointmentBillItem);
@@ -759,8 +879,8 @@ export class AppointmentBillRepository {
                 relations: ["BillItems", "Hospital"]
             });
             if (!bill) throw new Error("Bill not found.");
-            if (bill.BillStatus === "Paid") {
-                throw new Error("Cannot edit a fully paid bill.");
+            if (bill.BillStatus === "Paid" || bill.BillStatus === "Cancelled") {
+                throw new Error(`Cannot edit a ${bill.BillStatus === "Paid" ? "fully paid" : "cancelled"} bill.`);
             }
 
             // 1. Fetch Hospital Payment Configuration for GST calculations
@@ -801,9 +921,9 @@ export class AppointmentBillRepository {
             const savedItems: AppointmentBillItem[] = [];
 
             for (const it of data.items) {
-                const qty = Number(it.quantity) || 1;
-                const price = Number(it.unitPrice) || 0;
-                const disc = Number(it.discountAmount) || 0;
+                const qty = Math.max(1, Math.floor(Number(it.quantity) || 1));
+                const price = Math.max(0, Number(it.unitPrice) || 0);
+                const disc = Math.min(Math.max(0, Number(it.discountAmount) || 0), price * qty);
                 const itemGstPct = it.gstPercentage !== undefined ? Number(it.gstPercentage) : gstPct;
 
                 // Base amount before discount and tax
@@ -847,7 +967,7 @@ export class AppointmentBillRepository {
             const finalTaxable = Math.max(0, (subTotalSum - itemsDiscountSum) - overallDiscount);
             
             // Recalculate tax based on final taxable amount (using the hospital configuration distribution)
-            const customGstAmount = data.gstAmount !== undefined && data.gstAmount !== null ? Number(data.gstAmount) : null;
+            const customGstAmount = data.gstAmount !== undefined && data.gstAmount !== null ? roundMoney(Math.max(0, Number(data.gstAmount) || 0)) : null;
             const finalGst = customGstAmount !== null ? customGstAmount : parseFloat(((finalTaxable * gstPct) / 100).toFixed(2));
 
             let cgstAmount = 0;
@@ -872,7 +992,7 @@ export class AppointmentBillRepository {
 
             const totalAmount = parseFloat((finalTaxable + finalGst).toFixed(2));
 
-            if (totalAmount < Number(bill.PaidAmount)) {
+            if (totalAmount < roundMoney(Number(bill.PaidAmount))) {
                 throw new Error(`The new total amount (₹${totalAmount}) cannot be less than the already collected/paid amount (₹${bill.PaidAmount})`);
             }
 
@@ -885,7 +1005,8 @@ export class AppointmentBillRepository {
                 SgstAmount: sgstAmount,
                 IgstAmount: igstAmount,
                 TotalAmount: totalAmount,
-                DueAmount: Math.max(0, totalAmount - Number(bill.PaidAmount)),
+                DueAmount: Math.max(0, roundMoney(totalAmount - Number(bill.PaidAmount))),
+                BillStatus: computeBillStatus(totalAmount, Number(bill.PaidAmount), bill.BillStatus),
                 Notes: data.notes !== undefined ? data.notes : bill.Notes,
                 UpdatedAt: new Date()
             });

@@ -16,7 +16,12 @@ const app: Application = express();
 app.set('json replacer', (key: string, value: unknown) => (key === 'PasswordHash' ? undefined : value));
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+    // Razorpay signs the exact bytes of its webhook, so keep them for the signature check
+    verify: (req, _res, buf) => {
+        if (req.url?.startsWith('/api/payments/webhook')) (req as any).rawBody = buf;
+    }
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use('/public', express.static(path.resolve(process.cwd(), 'public')));
 
