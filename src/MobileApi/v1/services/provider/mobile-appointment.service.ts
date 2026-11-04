@@ -462,7 +462,7 @@ export class MobileAppointmentService {
             // Establish primary user if not existing
             if (!primaryUser) {
                 primaryUser = new User();
-                primaryUser.Id = uuidv4();
+                primaryUser.Id = uuidv4().toUpperCase(); // SQL Server returns ids in upper case; match it so apps can compare them
                 primaryUser.IsPrimary = true;
                 primaryUser.Relation = "Self";
                 primaryUser.FirstName = "Primary";
@@ -484,7 +484,7 @@ export class MobileAppointmentService {
             const lastName = nameParts.slice(1).join(" ") || "";
 
             patientUser = new User();
-            patientUser.Id = uuidv4();
+            patientUser.Id = uuidv4().toUpperCase(); // SQL Server returns ids in upper case; match it so apps can compare them
             patientUser.ParentUserId = primaryUser.Id;
             patientUser.IsPrimary = false;
             patientUser.Relation = reqRelation.length > 0 ? reqRelation : "Dependent";
@@ -505,7 +505,7 @@ export class MobileAppointmentService {
                 patientUser = primaryUser;
             } else {
                 patientUser = new User();
-                patientUser.Id = uuidv4();
+                patientUser.Id = uuidv4().toUpperCase(); // SQL Server returns ids in upper case; match it so apps can compare them
                 patientUser.IsPrimary = true;
                 patientUser.Relation = "Self";
 
@@ -1281,7 +1281,7 @@ export class MobileAppointmentService {
         if (!primaryUser) {
             // Create primary account first
             primaryUser = new User();
-            primaryUser.Id = uuidv4();
+            primaryUser.Id = uuidv4().toUpperCase(); // SQL Server returns ids in upper case; match it so apps can compare them
             primaryUser.IsPrimary = true;
             primaryUser.Relation = "Self";
             primaryUser.FirstName = "Primary";
@@ -1325,7 +1325,7 @@ export class MobileAppointmentService {
             await userRepo.save(dependentUser);
         } else {
             dependentUser = new User();
-            dependentUser.Id = uuidv4();
+            dependentUser.Id = uuidv4().toUpperCase(); // SQL Server returns ids in upper case; match it so apps can compare them
             dependentUser.ParentUserId = primaryUser.Id;
             dependentUser.IsPrimary = false;
             dependentUser.Relation = reqRelation;
