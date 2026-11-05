@@ -24,6 +24,7 @@ import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
 import { hospitalLabTestController } from "../../../controllers/Organizations/hospital-lab-test.controller.js";
+import { patientQuestionnaireController } from "../controllers/patient-questionnaire.controller.js";
 
 const authRouter = Router();
 
@@ -164,6 +165,16 @@ authRouter.get("/patient/policies", authMiddleware, (req, res) => patientWalletC
 authRouter.post("/patient/policies", authMiddleware, upload.single("file"), (req, res) => patientWalletController.addPolicy(req, res));
 authRouter.put("/patient/policies/:id", authMiddleware, upload.single("file"), (req, res) => patientWalletController.updatePolicy(req, res));
 authRouter.delete("/patient/policies/:id", authMiddleware, (req, res) => patientWalletController.deletePolicy(req, res));
+
+// Questionnaires: patients (and their family accounts) fill them in; doctors read them
+authRouter.get("/patient/questionnaires", authMiddleware, (req, res) => patientQuestionnaireController.list(req, res));
+authRouter.get("/patient/questionnaires/:id", authMiddleware, (req, res) => patientQuestionnaireController.get(req, res));
+authRouter.post("/patient/questionnaires/:id/submit", authMiddleware, (req, res) => patientQuestionnaireController.submit(req, res));
+authRouter.get("/patient/questionnaire-submissions/:id", authMiddleware, (req, res) => patientQuestionnaireController.getSubmission(req, res));
+authRouter.get("/provider/patients/:patientId/questionnaires", authMiddleware, requirePatientRecordAccess, (req, res) => patientQuestionnaireController.forDoctor(req, res));
+// Staff at the patient's hospital pick a questionnaire and send it to this one patient (?hospitalId / body.hospitalId).
+authRouter.get("/provider/patients/:patientId/questionnaires/sendable", authMiddleware, (req, res) => patientQuestionnaireController.sendableForDoctor(req, res));
+authRouter.post("/provider/patients/:patientId/questionnaires/:id/send", authMiddleware, (req, res) => patientQuestionnaireController.sendFromDoctor(req, res));
 
 // Online Payments & Razorpay (Teleconsultation & In-Person Prepayments)
 authRouter.post("/payments/create-order", authMiddleware, (req, res) => paymentController.createOrder(req, res));

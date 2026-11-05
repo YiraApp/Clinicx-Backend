@@ -1,22 +1,7 @@
 import type { Request, Response } from "express";
-import { AppDataSource } from "../../config/database.js";
 import { hospitalLabTestService } from "../../services/Organizations/hospital-lab-test.service.js";
+import { canManageHospital as canManage } from "../../utils/hospital-admin-access.js";
 import { ApiResponse } from "../../utils/response.utils.js";
-
-/** Hospital admins of this hospital, admins of its organization, and system admins. */
-async function canManage(userId: string, hospitalId: number): Promise<boolean> {
-    const rows = await AppDataSource.query(
-        `SELECT TOP 1 1 AS ok
-         FROM UserRoles ur
-         JOIN Roles r ON r.Id = ur.RoleId
-         LEFT JOIN Hospitals h ON h.Id = @1
-         WHERE ur.UserId = @0 AND ur.IsDeleted = 0 AND r.RoleName LIKE '%Admin%'
-           AND (r.RoleName LIKE '%System%' OR ur.HospitalId = @1
-                OR (r.RoleName LIKE '%Org%' AND ur.OrganizationId = h.OrganizationId))`,
-        [userId, hospitalId]
-    );
-    return rows.length > 0;
-}
 
 const hospitalIdOf = (req: Request) => Number(req.params.hospitalId);
 
