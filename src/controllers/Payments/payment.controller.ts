@@ -195,6 +195,15 @@ export class PaymentController {
         }
     }
 
+    async createManualBill(req: Request, res: Response) {
+        try {
+            const result = await paymentService.createManualBill(req.body);
+            return res.status(201).json(ApiResponse.success(result, "Bill created successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
     async generateInvoice(req: Request, res: Response) {
         try {
             const { billId } = req.params;

@@ -1136,6 +1136,8 @@ export class AppointmentService {
             }
         });
 
+        await this.closeCancelledAppointmentCharges(appointmentId);
+
         // Trigger WhatsApp cancellation notification (clinix_appointment_cancel)
         try {
             await this.sendAppointmentCancellationWhatsApp(appointmentId);
@@ -1144,6 +1146,21 @@ export class AppointmentService {
         }
 
         return result;
+    }
+
+    /**
+     * A cancelled visit's charges come off its bill (left as is once money was taken), so Billing does
+     * not keep showing them as due. Never blocks the cancellation itself.
+     */
+    async closeCancelledAppointmentCharges(appointmentId: number): Promise<void> {
+        try {
+            const outcome = await appointmentBillRepository.cancelAppointmentCharges(appointmentId);
+            if (outcome === "kept-paid") {
+                console.warn(`[AppointmentService] Appointment #${appointmentId} was cancelled but its bill has payments; bill left for staff to settle.`);
+            }
+        } catch (err: any) {
+            console.error(`[AppointmentService] Could not take cancelled appointment #${appointmentId} off its bill:`, err?.message || err);
+        }
     }
 
     async sendAppointmentCancellationWhatsApp(appointmentId: number): Promise<any> {
@@ -1340,6 +1357,7 @@ export class AppointmentService {
         });
 
         if (status && status.toLowerCase() === AppointmentStatus.Cancelled.toLowerCase()) {
+            await this.closeCancelledAppointmentCharges(appointmentId);
             try {
                 await this.sendAppointmentCancellationWhatsApp(appointmentId);
             } catch (err: any) {

@@ -24,6 +24,7 @@ import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
 import { hospitalLabTestController } from "../../../controllers/Organizations/hospital-lab-test.controller.js";
+import { labPackageController } from "../../../controllers/LabPackages/lab-package.controller.js";
 
 const authRouter = Router();
 
@@ -175,5 +176,16 @@ authRouter.post("/patient/medication-reminders", authMiddleware, (req, res) => p
 authRouter.get("/patient/medication-reminders", authMiddleware, (req, res) => patientMedicationReminderController.getReminders(req, res));
 authRouter.delete("/patient/medication-reminders/:id", authMiddleware, (req, res) => patientMedicationReminderController.deleteReminder(req, res));
 authRouter.post("/patient/medication-reminders/sync", authMiddleware, (req, res) => patientMedicationReminderController.syncReminders(req, res));
+
+// Lab packages (patient): list by pincode, hospitals, Razorpay order + verify with the hospital's keys, my orders, reports
+authRouter.post("/lab-packages", authMiddleware, labPackageController.patientPackages.bind(labPackageController));
+authRouter.post("/lab-packages/hospitals", authMiddleware, labPackageController.patientHospitals.bind(labPackageController));
+authRouter.post("/lab-packages/order", authMiddleware, labPackageController.patientCreateOrder.bind(labPackageController));
+authRouter.post("/lab-packages/verify", authMiddleware, labPackageController.patientVerifyPayment.bind(labPackageController));
+authRouter.get("/lab-packages/my-orders", authMiddleware, labPackageController.patientOrders.bind(labPackageController));
+authRouter.get("/lab-packages/orders/:id/report", authMiddleware, labPackageController.patientReport.bind(labPackageController));
+// Visit slots: bookable slots (for an order or a hospital), and pick/reschedule a paid order's slot
+authRouter.post("/lab-packages/slots", authMiddleware, labPackageController.patientSlots.bind(labPackageController));
+authRouter.post("/lab-packages/orders/:id/slot", authMiddleware, labPackageController.patientSetSlot.bind(labPackageController));
 
 export { authRouter };

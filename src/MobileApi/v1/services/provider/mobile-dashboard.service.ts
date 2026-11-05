@@ -77,12 +77,17 @@ export class MobileDashboardService {
             }
         } catch (_) { }
 
+        // Cancelled and rejected bookings are not visits: listing them showed a patient once per
+        // cancelled attempt in today's schedule and recent patients
+        const notCancelled = "LOWER(LTRIM(RTRIM(COALESCE(appointment.Status, '')))) NOT IN ('cancelled', 'canceled', 'rejected')";
+
         // 2. Fetch today's schedule
         const todaysQuery = appointmentRepo.createQueryBuilder("appointment")
             .leftJoinAndSelect("appointment.User", "user")
             .leftJoinAndSelect("appointment.Doctor", "doctor")
             .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :todayStr", { todayStr });
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) = :todayStr", { todayStr })
+            .andWhere(notCancelled);
 
         const doctorProviders = await providerRepo.find({
             where: { UserId: userId, IsDeleted: false }
@@ -144,7 +149,8 @@ export class MobileDashboardService {
             .leftJoinAndSelect("appointment.User", "user")
             .leftJoinAndSelect("appointment.Doctor", "doctor")
             .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("CAST(appointment.AppointmentDate AS DATE) <= :todayStr", { todayStr });
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) <= :todayStr", { todayStr })
+            .andWhere(notCancelled);
 
         if (hospId && hospId > 0) {
             recentQuery.andWhere("appointment.HospitalId = :hospId", { hospId });

@@ -13,6 +13,8 @@ import { pushNotificationService } from "../../../../services/Notifications/push
 import { whatsappService } from "../../../../services/Common/whatsapp.service.js";
 import { zoomService } from "../../../../services/Common/zoom.service.js";
 import { v4 as uuidv4 } from "uuid";
+import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
+import { canManageHospital } from "../../../../utils/staff-access.js";
 
 export class MobileAppointmentService {
     async getAppointmentDashboard(
@@ -397,17 +399,25 @@ export class MobileAppointmentService {
         }
         const allAssociatedUsers = Array.from(allUsersMap.values());
 
+        // Ids from the app are only trusted when they are user ids (the app can hold a token number like "YRA0012")
+        const looksLikeUserId = (id?: string): id is string =>
+            Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim()));
+
         // Find primary user if one already exists
-        let primaryUser = allAssociatedUsers.find(u => u.IsPrimary === true) || 
-                          allAssociatedUsers.find(u => !u.ParentUserId) || 
+        let primaryUser = allAssociatedUsers.find(u => u.IsPrimary === true) ||
+                          allAssociatedUsers.find(u => !u.ParentUserId) ||
                           null;
+        if (!primaryUser && looksLikeUserId(data.parentUserId)) {
+            primaryUser = await userRepo.findOne({ where: { Id: data.parentUserId.trim(), IsDeleted: false } });
+        }
 
         let patientUser: User | null = null;
 
-        // 1. Match by explicit patientUserId if passed
-        if (data.patientUserId) {
-            patientUser = allUsersMap.get(data.patientUserId) || await userRepo.findOne({
-                where: { Id: data.patientUserId, IsDeleted: false }
+        // 1. The patient the app picked
+        if (looksLikeUserId(data.patientUserId)) {
+            const pickedId = data.patientUserId.trim();
+            patientUser = allUsersMap.get(pickedId.toUpperCase()) || allUsersMap.get(pickedId) || await userRepo.findOne({
+                where: { Id: pickedId, IsDeleted: false }
             });
             if (patientUser && isExplicitRelation && patientUser.Relation !== reqRelation) {
                 patientUser.Relation = reqRelation;
@@ -415,18 +425,20 @@ export class MobileAppointmentService {
             }
         }
 
-        // 2. Match by Name among associated accounts (case-insensitive full name or first name)
+        // 2. Match by Name among associated accounts (case-insensitive)
+        const reqFirst = (reqName.toLowerCase().split(/\s+/)[0] || "");
+        // Family members whose first name is the requested one; more than one is resolved below, never guessed
+        const firstNameMatches = !patientUser && reqFirst.length >= 2
+            ? allAssociatedUsers.filter(u => (u.FirstName || '').trim().toLowerCase() === reqFirst)
+            : [];
         if (!patientUser && reqName.length > 0) {
-            const reqParts = reqName.toLowerCase().split(/\s+/);
-            const reqFirst = reqParts[0] || "";
-            const reqFull = reqName.toLowerCase();
+            const reqFull = reqName.toLowerCase().replace(/\s+/g, " ");
+            const fullNameOf = (u: User) => `${u.FirstName || ''} ${u.LastName || ''}`.trim().toLowerCase().replace(/\s+/g, " ");
 
-            // First check for exact full name or first name match
-            const nameMatch = allAssociatedUsers.find(u => {
-                const uFull = `${u.FirstName || ''} ${u.LastName || ''}`.trim().toLowerCase();
-                const uFirst = (u.FirstName || '').trim().toLowerCase();
-                return uFull === reqFull || (reqFirst.length >= 2 && uFirst === reqFirst);
-            });
+            // The exact full name first. A first name alone is used only when one family member has it:
+            // "mani drac" and "mani neeli" under one phone must not be mixed up.
+            const nameMatch = allAssociatedUsers.find(u => fullNameOf(u) === reqFull)
+                || (firstNameMatches.length === 1 ? firstNameMatches[0] : undefined);
 
             if (nameMatch) {
                 patientUser = nameMatch;
@@ -437,14 +449,22 @@ export class MobileAppointmentService {
             }
         }
 
-        // 3. Match by Relation if explicit relation was provided
+        // 3. The relation settles which of several same-named family members is meant, or who is meant
+        // when no name was given. It never picks someone with a different name (a second son is a new person).
         if (!patientUser && isExplicitRelation) {
-            const relationMatch = allAssociatedUsers.find(u => 
+            const candidates = firstNameMatches.length > 1 ? firstNameMatches : (reqName.length === 0 ? allAssociatedUsers : []);
+            const relationMatches = candidates.filter(u =>
                 (u.Relation || '').trim().toLowerCase() === reqRelation.toLowerCase()
             );
-            if (relationMatch) {
-                patientUser = relationMatch;
+            if (relationMatches.length === 1) {
+                patientUser = relationMatches[0];
             }
+        }
+
+        // Several family members share this first name and nothing above told them apart: making another
+        // account would only add a duplicate, so the app has to say which patient it means
+        if (!patientUser && firstNameMatches.length > 1) {
+            throw new Error(`More than one family member under this phone number is named "${reqName}". Select the patient from the list and try again.`);
         }
 
         // 4. If booking is for a dependent / relation (or patient name differs from primary user name)
@@ -1003,11 +1023,12 @@ export class MobileAppointmentService {
         }
     }
 
-    async updateAppointmentStatus(options: { appointmentId?: string; patientId?: string; doctorId?: string; status: string } | string, statusArg?: string): Promise<any> {
+    async updateAppointmentStatus(options: { appointmentId?: string; patientId?: string; doctorId?: string; status: string; requesterId?: string } | string, statusArg?: string): Promise<any> {
         const appointmentRepo = AppDataSource.getRepository(Appointment);
         let appointmentId: string | undefined;
         let patientId: string | undefined;
         let doctorId: string | undefined;
+        let requesterId: string | undefined;
         let status: string;
 
         if (typeof options === "string") {
@@ -1017,23 +1038,32 @@ export class MobileAppointmentService {
             appointmentId = options.appointmentId;
             patientId = options.patientId;
             doctorId = options.doctorId;
+            requesterId = options.requesterId;
             status = options.status;
         }
 
+        // Statuses an appointment does not leave again
+        const isCancelledStatus = (s?: string | null) => ["cancelled", "canceled"].includes((s || "").trim().toLowerCase());
+        const closedStatuses = ["cancelled", "canceled", "completed", "rejected", "noshow", "no show"];
+
         let appointment: Appointment | null = null;
         if (appointmentId && !isNaN(Number(appointmentId)) && Number(appointmentId) > 0) {
-            appointment = await appointmentRepo.findOne({ 
+            appointment = await appointmentRepo.findOne({
                 where: { Id: Number(appointmentId) },
                 relations: ["User", "Doctor", "Hospital"]
             });
         }
 
-        if (!appointment && patientId) {
+        if (!appointment && patientId && !appointmentId) {
+            // Older app builds send only the patient. Change their latest appointment that is still open:
+            // never one already cancelled or completed (a second cancel used to hit the same cancelled
+            // visit again and leave the real booking active).
             const query = appointmentRepo.createQueryBuilder("apt")
                 .leftJoinAndSelect("apt.User", "user")
                 .leftJoinAndSelect("apt.Doctor", "doctor")
                 .leftJoinAndSelect("apt.Hospital", "hospital")
-                .where("apt.UserId = :patientId", { patientId });
+                .where("apt.UserId = :patientId", { patientId })
+                .andWhere("LOWER(LTRIM(RTRIM(COALESCE(apt.Status, '')))) NOT IN (:...closedStatuses)", { closedStatuses });
             if (doctorId) {
                 query.andWhere("apt.DoctorId = :doctorId", { doctorId });
             }
@@ -1041,17 +1071,43 @@ export class MobileAppointmentService {
                 .orderBy("apt.AppointmentDate", "DESC")
                 .addOrderBy("apt.StartTime", "DESC")
                 .getOne();
+            if (!appointment) {
+                throw new Error("This patient has no open appointment to update.");
+            }
         }
 
         if (!appointment) {
             throw new Error("Appointment not found");
         }
 
+        if (requesterId) {
+            await this.assertCanChangeAppointment(appointment, requesterId);
+        }
+
         const normalizedStatus = status.trim();
+        const isCancelled = isCancelledStatus(normalizedStatus);
+        const currentStatus = (appointment.Status || "").trim().toLowerCase();
+
+        // The same status again (a second tap on Cancel): nothing changes and nobody is messaged again
+        if (currentStatus === normalizedStatus.toLowerCase() || (isCancelled && isCancelledStatus(currentStatus))) {
+            return { appointmentId: String(appointment.Id), status: appointment.Status, unchanged: true };
+        }
+        if (isCancelledStatus(currentStatus)) {
+            throw new Error("This appointment is cancelled and its slot was released. Book a new appointment instead.");
+        }
+        if (isCancelled && currentStatus.includes("complet")) {
+            throw new Error("A completed appointment cannot be cancelled.");
+        }
+
         appointment.Status = normalizedStatus;
+        appointment.UpdatedAt = new Date();
         await appointmentRepo.save(appointment);
 
-        const isCancelled = normalizedStatus.toLowerCase() === "cancelled" || normalizedStatus.toLowerCase() === "canceled";
+        // A cancelled visit's charges come off its bill (unless money was already taken)
+        if (isCancelled) {
+            const { appointmentService } = await import("../../../../services/Appointments/appointment.service.js");
+            await appointmentService.closeCancelledAppointmentCharges(appointment.Id);
+        }
 
         // If status is cancelled, free up the doctor's schedule slot
         if (isCancelled && appointment.SlotId) {
@@ -1105,7 +1161,21 @@ export class MobileAppointmentService {
             }
         }
 
-        return { appointmentId, status: appointment.Status };
+        return { appointmentId: String(appointment.Id), status: appointment.Status };
+    }
+
+    /**
+     * Who may change an appointment's status: its doctor; its patient or an account in the patient's
+     * family; or staff of its hospital (a doctor profile there, or a role there other than Patient).
+     */
+    private async assertCanChangeAppointment(appointment: Appointment, requesterId: string): Promise<void> {
+        const same = (a?: string | null, b?: string | null) => !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
+        if (same(appointment.DoctorId, requesterId)) return;
+        if (appointment.UserId && await isFamilyLinked(requesterId, appointment.UserId)) return;
+
+        if (appointment.HospitalId && await canManageHospital(requesterId, appointment.HospitalId)) return;
+
+        throw new Error("You are not allowed to change this appointment.");
     }
 
     /**
@@ -1309,12 +1379,16 @@ export class MobileAppointmentService {
         const firstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Family";
         const lastName = nameParts.slice(1).join(" ") || "";
 
-        // Check if matching dependent already exists
-        const existingMatch = existingDependents.find(d => {
-            const dFullName = `${d.FirstName || ''} ${d.LastName || ''}`.trim().toLowerCase();
-            const reqFullName = `${firstName} ${lastName}`.trim().toLowerCase();
-            return dFullName === reqFullName || (d.FirstName?.toLowerCase() === firstName.toLowerCase() && d.Relation?.toLowerCase() === reqRelation.toLowerCase());
-        });
+        // Check if matching dependent already exists. The same name under one parent is the same person
+        // whatever relation is chosen this time: adding "Manikanta" as "Other" and then as "Brother" made
+        // two accounts, so the patient showed twice in every patient list.
+        const norm = (s?: string | null) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+        const reqFullName = norm(`${firstName} ${lastName}`);
+        const sameFirstName = (d: User) => norm(d.FirstName) === norm(firstName);
+        const existingMatch = existingDependents.find(d => norm(`${d.FirstName || ''} ${d.LastName || ''}`) === reqFullName)
+            // "Manikanta" and "Manikanta K": one of them has no last name, so they are taken as one person
+            || existingDependents.find(d => sameFirstName(d) && (!norm(d.LastName) || !norm(lastName)))
+            || existingDependents.find(d => sameFirstName(d) && norm(d.Relation) === norm(reqRelation));
 
         let dependentUser: User;
         if (existingMatch) {

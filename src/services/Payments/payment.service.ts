@@ -20,6 +20,10 @@ import { IsNull } from "typeorm/index.js";
 const AWAITING_CONFIRMATION_STATUSES = ["paymentpending", "pendingpayment", "pending", "scheduled"];
 const isAwaitingConfirmation = (status?: string | null) => !status || AWAITING_CONFIRMATION_STATUSES.includes(status.toLowerCase());
 
+// Logged on a payment taken from the Billing page (notify: false): it confirms the appointment but
+// sends no WhatsApp or push messages, whether the checkout callback or the webhook completes it.
+const NOTIFY_SUPPRESSED_EVENT = "NOTIFY_SUPPRESSED";
+
 /**
  * The Razorpay keys a hospital's orders are created and verified with: its own account when both of
  * its keys are saved, else the app's account from the environment. Keys are never hard-coded.
@@ -51,13 +55,15 @@ export class PaymentService {
     /**
      * Create a Razorpay order and generate a pending Payment record.
      */
-    async createOrder(data: { appointmentId: number; patientId: string; amount: number; providerId?: string; billId?: string }) {
+    async createOrder(data: { appointmentId?: number | null; patientId: string; amount: number; providerId?: string; billId?: string; notify?: boolean }) {
         const transactionId = `TXN_${uuidv4().replace(/-/g, "").substring(0, 16).toUpperCase()}`;
 
-        // Get appointment to find its hospitalId
-        const appointment = await appointmentRepository.findById(data.appointmentId);
-        if (!appointment) throw new Error("Appointment not found.");
-        const hospitalId = appointment.HospitalId;
+        // The hospital comes from the appointment, or from the bill for a manual bill that has none
+        const appointment = data.appointmentId ? await appointmentRepository.findById(data.appointmentId) : null;
+        if (data.appointmentId && !appointment) throw new Error("Appointment not found.");
+        let bill = await this.resolveBill(data);
+        if (!appointment && !bill) throw new Error("Bill not found.");
+        const hospitalId = appointment ? appointment.HospitalId : bill!.HospitalId;
 
         // Retrieve hospital-scoped payment configurations
         const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
@@ -73,11 +79,10 @@ export class PaymentService {
             key_secret: rzpKeySecret
         });
 
-        // Ensure AppointmentBill exists — create if not
-        let bill = await this.resolveBill(data);
+        // Ensure AppointmentBill exists — create if not (only an appointment can be without one here)
         if (!bill) {
             bill = await appointmentBillRepository.createBillWithItem({
-                appointmentId: data.appointmentId,
+                appointmentId: appointment!.Id,
                 patientId: data.patientId,
                 providerId: data.providerId,
                 hospitalId,
@@ -113,7 +118,7 @@ export class PaymentService {
         // Store Pending payment record in database
         const payment = await paymentRepository.create({
             PaymentId: uuidv4(),
-            AppointmentId: data.appointmentId,
+            AppointmentId: appointment ? appointment.Id : null,
             AppointmentBillId: bill.AppointmentBillId,
             PatientId: data.patientId,
             ProviderId: data.providerId || null,
@@ -130,6 +135,9 @@ export class PaymentService {
         await paymentLogRepository.log(payment.PaymentId, "CREATE_ORDER", "Success", "Razorpay order generated", {
             orderId: rzpOrder.id
         });
+        if (data.notify === false) {
+            await paymentLogRepository.log(payment.PaymentId, NOTIFY_SUPPRESSED_EVENT, "Success", "Taken from billing; no confirmation messages are sent");
+        }
 
         return {
             orderId: rzpOrder.id,
@@ -146,9 +154,9 @@ export class PaymentService {
      * for a follow-up visit, its root visit's bill. Legacy follow-up bills are folded in first so the
      * payment is checked against the same due amount the billing list shows.
      */
-    private async resolveBill(data: { appointmentId: number; billId?: string }): Promise<AppointmentBill | null> {
+    private async resolveBill(data: { appointmentId?: number | null; billId?: string }): Promise<AppointmentBill | null> {
         const bill = (data.billId ? await appointmentBillRepository.findById(data.billId) : null)
-            || await appointmentBillRepository.findBillForAppointment(Number(data.appointmentId));
+            || (data.appointmentId ? await appointmentBillRepository.findBillForAppointment(Number(data.appointmentId)) : null);
         return bill ? await appointmentBillRepository.mergeBillGroup(bill.AppointmentBillId) : null;
     }
 
@@ -213,16 +221,23 @@ export class PaymentService {
         const payment = await paymentRepository.findByTransactionId(data.transactionId);
         if (!payment) throw new Error("Payment record not found.");
 
-        // If the payment is linked to an appointment, verify with the keys its hospital's order was created with
+        // Verify with the keys its hospital's order was created with: the appointment's hospital, or the
+        // bill's for a manual bill that has no appointment
         let config: HospitalPaymentConfiguration | null = null;
+        let hospitalId: number | null = null;
         if (payment.AppointmentId) {
             const appointment = await appointmentRepository.findById(payment.AppointmentId);
-            if (appointment) {
-                const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
-                config = await configRepo.findOne({
-                    where: { HospitalId: appointment.HospitalId, IsDeleted: false }
-                });
-            }
+            hospitalId = appointment?.HospitalId ?? null;
+        }
+        if (!hospitalId && payment.AppointmentBillId) {
+            const bill = await appointmentBillRepository.findById(payment.AppointmentBillId);
+            hospitalId = bill?.HospitalId ?? null;
+        }
+        if (hospitalId) {
+            const configRepo = AppDataSource.getRepository(HospitalPaymentConfiguration);
+            config = await configRepo.findOne({
+                where: { HospitalId: hospitalId, IsDeleted: false }
+            });
         }
         const { keySecret: rzpKeySecret } = resolveRazorpayKeys(config);
 
@@ -257,16 +272,23 @@ export class PaymentService {
         }
 
         // Dispatch WhatsApp & push notifications ONLY after successful confirmation
-        if (confirmedAppointment && payment.AppointmentId) {
-            try {
-                const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
-                await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
-            } catch (notifyErr) {
-                console.error("[PaymentService] Error sending confirmation notifications post-verification:", notifyErr);
-            }
+        if (confirmedAppointment) {
+            await this.sendConfirmationNotifications(payment, "post-verification");
         }
 
         return { success: true };
+    }
+
+    /** Sends the appointment confirmation messages for a payment, unless it was taken from billing. */
+    private async sendConfirmationNotifications(payment: Payment, context: string) {
+        if (!payment.AppointmentId) return;
+        try {
+            if (await paymentLogRepository.hasEvent(payment.PaymentId, NOTIFY_SUPPRESSED_EVENT)) return;
+            const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
+            await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
+        } catch (notifyErr) {
+            console.error(`[PaymentService] Error sending confirmation notifications ${context}:`, notifyErr);
+        }
     }
 
     /**
@@ -299,6 +321,13 @@ export class PaymentService {
             const paymentId = payload.payment.entity.id;
             const payment = await paymentRepository.findByGatewayOrderId(orderId);
 
+            // Not an appointment payment: it may be a lab package order (kept in its own table)
+            if (!payment) {
+                const { labPackageOrderService } = await import("../LabPackages/lab-package-order.service.js");
+                const handled = await labPackageOrderService.handleCaptured(orderId, paymentId, payload.payment.entity.method);
+                if (handled) return { success: true };
+            }
+
             if (payment && payment.Status !== "Success") {
                 const { transitioned, confirmedAppointment } = await this.markOnlinePaymentSuccess(payment, {
                     GatewayPaymentId: paymentId,
@@ -310,13 +339,8 @@ export class PaymentService {
                 }
 
                 // Dispatch WhatsApp & push notifications ONLY after successful confirmation
-                if (confirmedAppointment && payment.AppointmentId) {
-                    try {
-                        const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
-                        await mobileAppointmentService.sendAppointmentConfirmationNotifications(payment.AppointmentId);
-                    } catch (notifyErr) {
-                        console.error("[PaymentService] Error sending confirmation notifications via webhook:", notifyErr);
-                    }
+                if (confirmedAppointment) {
+                    await this.sendConfirmationNotifications(payment, "via webhook");
                 }
             }
         }
@@ -327,17 +351,18 @@ export class PaymentService {
     /**
      * Process cash payment manually and confirm appointment
      */
-    async collectManualCash(data: { appointmentId: number; amount: number; patientId: string; providerId?: string; billId?: string }) {
+    async collectManualCash(data: { appointmentId?: number | null; amount: number; patientId: string; providerId?: string; billId?: string; notify?: boolean }) {
         const amount = roundMoney(Number(data.amount));
         if (!(amount > 0)) throw new Error("Please enter a valid amount to collect.");
         const transactionId = `CASH_${uuidv4().replace(/-/g, "").substring(0, 16).toUpperCase()}`;
 
-        // Ensure AppointmentBill exists
-        const appointment = await appointmentRepository.findById(data.appointmentId);
+        // Ensure AppointmentBill exists (a manual bill has no appointment, only the bill)
+        const appointment = data.appointmentId ? await appointmentRepository.findById(data.appointmentId) : null;
         let bill = await this.resolveBill(data);
+        if (!bill && !appointment) throw new Error("Bill not found.");
         if (!bill && appointment) {
             bill = await appointmentBillRepository.createBillWithItem({
-                appointmentId: data.appointmentId,
+                appointmentId: appointment.Id,
                 patientId: data.patientId,
                 providerId: data.providerId,
                 hospitalId: appointment.HospitalId,
@@ -366,7 +391,7 @@ export class PaymentService {
             // attempt (it may still be paid) and keeps its own amount
             payment = await manager.save(Payment, manager.create(Payment, {
                 PaymentId: uuidv4(),
-                AppointmentId: data.appointmentId,
+                AppointmentId: appointment ? appointment.Id : null,
                 AppointmentBillId: bill?.AppointmentBillId || null,
                 PatientId: data.patientId,
                 ProviderId: data.providerId || null,
@@ -381,7 +406,7 @@ export class PaymentService {
 
             if (appointment && isAwaitingConfirmation(appointment.Status)) {
                 confirmedAppointment = true;
-                await manager.update("Appointments", data.appointmentId, {
+                await manager.update("Appointments", appointment.Id, {
                     Status: "Confirmed",
                     UpdatedAt: new Date()
                 });
@@ -400,8 +425,11 @@ export class PaymentService {
                         UpdatedAt: new Date()
                     });
                 }
-                const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
-                await mobileAppointmentService.sendAppointmentConfirmationNotifications(data.appointmentId);
+                // Cash taken from the Billing page (notify: false) confirms the appointment without messages
+                if (data.notify !== false) {
+                    const { mobileAppointmentService } = await import("../../MobileApi/v1/services/provider/mobile-appointment.service.js");
+                    await mobileAppointmentService.sendAppointmentConfirmationNotifications(appointment!.Id);
+                }
             } catch (notifyErr) {
                 console.error("[PaymentService] Error sending confirmation notifications post cash payment:", notifyErr);
             }
@@ -644,7 +672,8 @@ export class PaymentService {
                     gstPercentage: Number(i.GstPercentage || 0),
                     gstAmount: Number(i.GstAmount || 0),
                     totalAmount: Number(i.TotalAmount || 0),
-                    appointmentId: i.AppointmentId || null
+                    appointmentId: i.AppointmentId || null,
+                    itemReferenceId: i.ItemReferenceId || null
                 }))
             };
         }));
@@ -887,6 +916,8 @@ export class PaymentService {
                 quantity: number;
                 discountAmount: number;
                 gstPercentage?: number;
+                appointmentId?: string | number | null;
+                itemReferenceId?: string | null;
             }[];
             discountAmount: number;
             notes?: string;
@@ -899,6 +930,41 @@ export class PaymentService {
 
     async generateInvoice(billId: string) {
         return await appointmentBillRepository.generateInvoice(billId);
+    }
+
+    /** A bill for a patient with no appointment, added on the billing page. It sends no messages. */
+    async createManualBill(data: {
+        patientId: string;
+        hospitalId: number | string;
+        providerId?: string | null;
+        items: {
+            itemName: string;
+            itemType: string;
+            unitPrice: number;
+            quantity: number;
+            discountAmount: number;
+            gstPercentage?: number;
+            itemReferenceId?: string | null;
+        }[];
+        discountAmount?: number;
+        notes?: string;
+        gstPercentage?: number;
+    }) {
+        if (!data.patientId) throw new Error("Select a patient for the bill.");
+        const hospitalId = Number(data.hospitalId);
+        if (!(hospitalId > 0)) throw new Error("Hospital is required.");
+        const patient = await userRepository.findById(data.patientId);
+        if (!patient) throw new Error("Patient not found.");
+
+        return await appointmentBillRepository.createManualBill({
+            patientId: patient.Id,
+            hospitalId,
+            providerId: data.providerId || null,
+            items: data.items,
+            discountAmount: Number(data.discountAmount) || 0,
+            notes: data.notes,
+            gstPercentage: data.gstPercentage
+        });
     }
 
 }

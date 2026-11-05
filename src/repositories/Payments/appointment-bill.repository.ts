@@ -7,6 +7,8 @@ import { Payment } from "../../models/Payments/payment.model.js";
 import { v4 as uuidv4 } from "uuid";
 import { EntityManager, In } from "typeorm/index.js";
 
+const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const roundMoney = (value: number) => Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
 
 export const computeBillStatus = (totalAmount: number, paidAmount: number, currentStatus?: string | null) => {
@@ -537,8 +539,10 @@ export class AppointmentBillRepository {
             .leftJoinAndSelect("b.BillItems", "items")
             .where("b.IsDeleted = :deleted", { deleted: false });
 
+        // A manual bill has no appointment, so its organisation is its hospital's
+        const orgCondition = "(appointment.OrgId = :orgId OR (b.AppointmentId IS NULL AND hospital.OrganizationId = :orgId))";
         if (hospitalId) qb.andWhere("b.HospitalId = :hospitalId", { hospitalId });
-        if (orgId) qb.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId) qb.andWhere(orgCondition, { orgId });
         if (providerId) qb.andWhere("b.ProviderId = :providerId", { providerId });
         if (patientId) qb.andWhere("b.PatientId = :patientId", { patientId });
         if (billStatus) qb.andWhere("b.BillStatus = :billStatus", { billStatus });
@@ -566,12 +570,13 @@ export class AppointmentBillRepository {
         const aggQb = this.repo.createQueryBuilder("b")
             .leftJoin("b.Appointment", "appointment")
             .leftJoin("b.Patient", "patient")
+            .leftJoin("b.Hospital", "hospital")
             .select("SUM(b.PaidAmount)", "collected")
             .addSelect("SUM(b.DueAmount)", "pending")
             .where("b.IsDeleted = :deleted", { deleted: false });
 
         if (hospitalId) aggQb.andWhere("b.HospitalId = :hospitalId", { hospitalId });
-        if (orgId) aggQb.andWhere("appointment.OrgId = :orgId", { orgId });
+        if (orgId) aggQb.andWhere(orgCondition, { orgId });
         if (providerId) aggQb.andWhere("b.ProviderId = :providerId", { providerId });
         if (patientId) aggQb.andWhere("b.PatientId = :patientId", { patientId });
         if (billStatus) aggQb.andWhere("b.BillStatus = :billStatus", { billStatus });
@@ -855,6 +860,7 @@ export class AppointmentBillRepository {
                 discountAmount: number;
                 gstPercentage?: number;
                 appointmentId?: string | number | null;
+                itemReferenceId?: string | null; // the treatment plan the item was picked from
             }[];
             discountAmount: number; // General bill discount
             notes?: string;
@@ -944,6 +950,8 @@ export class AppointmentBillRepository {
                     AppointmentBillId: billId,
                     AppointmentId: it.appointmentId ? Number(it.appointmentId) : null,
                     ItemType: it.itemType || "Custom",
+                    // A uniqueidentifier column: anything that is not a GUID is dropped rather than failing the save
+                    ItemReferenceId: it.itemReferenceId && GUID_PATTERN.test(String(it.itemReferenceId)) ? String(it.itemReferenceId) : null,
                     ItemName: it.itemName,
                     Quantity: qty,
                     UnitPrice: price,
@@ -1017,6 +1025,114 @@ export class AppointmentBillRepository {
             });
             return updatedBill!;
         });
+    }
+
+    /**
+     * Takes a cancelled appointment's charges off its bill, so Billing stops showing them as due.
+     * - Money already taken on the bill: nothing changes; staff settle it (edit or refund).
+     * - A bill with only this visit on it: the bill is cancelled.
+     * - A bill shared with follow-up visits: this visit's items come off and the totals are worked
+     *   out again at the bill's own GST rate.
+     */
+    async cancelAppointmentCharges(appointmentId: number): Promise<"cancelled" | "items-removed" | "kept-paid" | "none"> {
+        const bill = await this.findBillForAppointment(appointmentId);
+        if (!bill || bill.BillStatus === "Cancelled") return "none";
+        if (roundMoney(Number(bill.PaidAmount)) > 0) return "kept-paid";
+
+        const items = bill.BillItems || [];
+        const isOwnBill = Number(bill.AppointmentId) === Number(appointmentId);
+        // An item is this visit's when it names the visit, or names no visit on the visit's own bill
+        const isThisVisit = (it: AppointmentBillItem) =>
+            it.AppointmentId != null ? Number(it.AppointmentId) === Number(appointmentId) : isOwnBill;
+        const remaining = items.filter(it => !isThisVisit(it));
+
+        if (items.length > 0 && remaining.length === items.length) return "none";
+
+        if (remaining.length === 0) {
+            await this.repo.update(bill.AppointmentBillId, {
+                BillStatus: "Cancelled",
+                DueAmount: 0,
+                Notes: `${bill.Notes ? bill.Notes + " | " : ""}Appointment cancelled`,
+                UpdatedAt: new Date()
+            });
+            return "cancelled";
+        }
+
+        const taxable = roundMoney(Number(bill.SubTotal) - Number(bill.DiscountAmount));
+        const billGstPct = taxable > 0 ? roundMoney((Number(bill.GstAmount) / taxable) * 100) : 0;
+        const itemDiscounts = roundMoney(items.reduce((s, it) => s + Number(it.DiscountAmount || 0), 0));
+        await this.updateBillDetails(bill.AppointmentBillId, {
+            items: remaining.map(it => ({
+                itemName: it.ItemName,
+                itemType: it.ItemType,
+                unitPrice: Number(it.UnitPrice),
+                quantity: Number(it.Quantity),
+                discountAmount: Number(it.DiscountAmount || 0),
+                gstPercentage: Number(it.GstPercentage || 0),
+                appointmentId: it.AppointmentId ?? null,
+                itemReferenceId: it.ItemReferenceId ?? null
+            })),
+            // The bill-wide discount stays (capped by the smaller total)
+            discountAmount: Math.max(0, roundMoney(Number(bill.DiscountAmount) - itemDiscounts)),
+            gstPercentage: billGstPct
+        });
+        return "items-removed";
+    }
+
+    /**
+     * A bill staff add on the billing page for a patient, with no appointment behind it. It starts as a
+     * Draft like an appointment bill, and its totals are worked out by the same code as an edit.
+     */
+    async createManualBill(data: {
+        patientId: string;
+        hospitalId: number;
+        providerId?: string | null;
+        items: Parameters<AppointmentBillRepository["updateBillDetails"]>[1]["items"];
+        discountAmount: number;
+        notes?: string;
+        gstPercentage?: number;
+    }): Promise<AppointmentBill> {
+        if (!Array.isArray(data.items) || data.items.length === 0) {
+            throw new Error("A bill must have at least one item.");
+        }
+        if (data.items.some(it => !String(it.itemName || "").trim())) {
+            throw new Error("Every item needs a name.");
+        }
+
+        const bill = await this.repo.save(this.repo.create({
+            AppointmentBillId: uuidv4(),
+            AppointmentId: null,
+            PatientId: data.patientId,
+            ProviderId: data.providerId || null,
+            HospitalId: data.hospitalId,
+            BillNumber: `DFT-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`,
+            BillType: "Manual",
+            BillStatus: "Draft",
+            AddConsultationFee: false,
+            SubTotal: 0,
+            DiscountAmount: 0,
+            GstAmount: 0,
+            CgstAmount: 0,
+            SgstAmount: 0,
+            IgstAmount: 0,
+            TotalAmount: 0,
+            PaidAmount: 0,
+            DueAmount: 0,
+            CreatedAt: new Date()
+        }));
+
+        try {
+            return await this.updateBillDetails(bill.AppointmentBillId, {
+                items: data.items.map(it => ({ ...it, itemName: String(it.itemName).trim(), itemType: it.itemType || "Custom", appointmentId: null })),
+                discountAmount: data.discountAmount,
+                notes: data.notes,
+                gstPercentage: data.gstPercentage
+            });
+        } catch (err) {
+            // Nothing else points at the empty bill just saved, so it is removed rather than left behind
+            await this.repo.delete(bill.AppointmentBillId);
+            throw err;
+        }
     }
 }
 

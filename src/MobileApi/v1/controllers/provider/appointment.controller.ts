@@ -58,6 +58,10 @@ export const bookAppointment = async (req: Request, res: Response) => {
             doctorId,
             hospitalId,
             orgId,
+            patientUserId,
+            parentUserId,
+            relation,
+            isPrimary,
             patientName,
             patientPhone,
             patientEmail,
@@ -100,6 +104,12 @@ export const bookAppointment = async (req: Request, res: Response) => {
             doctorId,
             hospitalId: parsedHospitalId,
             orgId: parsedOrgId,
+            // The patient the app picked; without these the patient was guessed from phone + name,
+            // which made duplicate accounts or booked a family member with the same first name
+            patientUserId: patientUserId ? String(patientUserId).trim() : undefined,
+            parentUserId: parentUserId ? String(parentUserId).trim() : undefined,
+            relation: relation ? String(relation).trim() : undefined,
+            isPrimary: typeof isPrimary === "boolean" ? isPrimary : undefined,
             patientName,
             patientPhone,
             email: (patientEmail || email || "").trim() || undefined,
@@ -141,12 +151,19 @@ export const updateAppointmentStatus = async (req: Request, res: Response) => {
             });
         }
 
-        const effectiveDoctorId = doctorId || (req as any).user?.Id || (req as any).user?.id;
+        const requester = (req as any).user;
+        const requesterId = String(requester?.userId || requester?.Id || requester?.id || "").trim();
+        if (!requesterId) {
+            return res.status(401).json({ status: false, message: "Sign in again to change this appointment." });
+        }
+        const effectiveDoctorId = doctorId;
         const result = await mobileAppointmentService.updateAppointmentStatus({
             appointmentId: appointmentId ? String(appointmentId) : undefined,
             patientId: patientId ? String(patientId) : undefined,
             doctorId: effectiveDoctorId ? String(effectiveDoctorId) : undefined,
-            status: String(status)
+            status: String(status),
+            // Only the appointment's doctor, its patient's family, or its hospital's staff may change it
+            requesterId
         });
         return res.json(ApiResponse.success(result, "Appointment status updated successfully."));
     } catch (error: any) {

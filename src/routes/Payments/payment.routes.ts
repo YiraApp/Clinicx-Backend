@@ -17,6 +17,7 @@ paymentRouter.get("/hospital-configuration/:hospitalId", paymentController.getHo
 paymentRouter.post("/hospital-configuration", paymentController.saveHospitalPaymentConfiguration.bind(paymentController));
 paymentRouter.put("/update-bill/:billId", paymentController.updateBillDetails.bind(paymentController));
 paymentRouter.post("/generate-invoice/:billId", paymentController.generateInvoice.bind(paymentController));
+paymentRouter.post("/create-bill", paymentController.createManualBill.bind(paymentController));
 
 export { paymentRouter };
 
