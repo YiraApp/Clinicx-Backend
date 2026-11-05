@@ -8,6 +8,7 @@ import app from "./app.js";
 import { initializeDatabase } from "./config/database.js";
 import { MigrationService } from "./services/Common/migration.service.js";
 import { DietMigrationService } from "./services/Diet/diet-migration.service.js";
+import { QuestionnaireMigrationService } from "./services/Questionnaires/questionnaire-migration.service.js";
 
 const port = process.env.PORT || 8080;
 
@@ -16,6 +17,7 @@ const startServer = async () => {
         await initializeDatabase();
         await MigrationService.ensureLogIndexes();
         await DietMigrationService.runMigrationsAndSeed();
+        await QuestionnaireMigrationService.run();
 
         // Report at startup whether this server can send push notifications
         const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");
@@ -24,6 +26,10 @@ const startServer = async () => {
         // Start automated background appointment reminder scheduler (checks every 60s for 10-minute reminders)
         const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
         appointmentReminderService.startScheduler(60);
+
+        // Repeating questionnaires: request the next attempt once it's due (hourly, daytime only)
+        const { questionnairePatientService } = await import("./services/Questionnaires/questionnaire-patient.service.js");
+        questionnairePatientService.startRepeatScheduler(60);
 
         // Start automated background slot generator scheduler (syncs rolling slots for active hospitals)
         const { hospitalSettingsService } = await import("./services/Organizations/hospital-settings.service.js");
