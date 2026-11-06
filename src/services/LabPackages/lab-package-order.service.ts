@@ -13,7 +13,7 @@ import { HospitalPaymentConfiguration } from "../../models/Organizations/hospita
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { isYiraSystemAdmin, staffHospitalIds, canManageHospital } from "../../utils/staff-access.js";
 import { isFamilyLinked } from "../../middlewares/request-identity.js";
-import { labPackageService, labPackageAmounts, roundMoney } from "./lab-package.service.js";
+import { labPackageService, labPackageAmounts, roundMoney, readTestGroups, parameterCount } from "./lab-package.service.js";
 import { LabAccessError } from "./lab-access-error.js";
 import { labSlotService, slotInstant, slotLabel, RESCHEDULE_CUTOFF_HOURS } from "./lab-slot.service.js";
 
@@ -47,14 +47,6 @@ const dateOnly = (value: unknown): string | null => {
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 };
 
-const readTests = (value?: string | null): string[] => {
-    try {
-        const parsed = JSON.parse(value || "[]");
-        return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch {
-        return [];
-    }
-};
 
 export class LabPackageOrderService {
     private orderRepo = AppDataSource.getRepository(LabPackageOrder);
@@ -115,7 +107,11 @@ export class LabPackageOrderService {
             orderNumber: order.OrderNumber,
             packageId: order.LabPackageId,
             packageName: order.PackageName,
-            tests: readTests(order.TestsIncluded),
+            // the tests as they were when ordered: names, and each with its parameters
+            ...(() => {
+                const testGroups = readTestGroups(order.TestsIncluded);
+                return { tests: testGroups.map(g => g.name), testGroups, parameterCount: parameterCount(testGroups) };
+            })(),
             price: Number(order.Price || 0),
             gstPercentage: Number(order.GstPercentage || 0),
             gstAmount: Number(order.GstAmount || 0),

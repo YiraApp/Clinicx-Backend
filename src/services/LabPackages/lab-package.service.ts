@@ -60,11 +60,74 @@ export function parseBenefits(input: unknown): PackageBenefit[] {
     return benefits;
 }
 
+/**
+ * A test in a package, e.g. "Complete Blood Count with P. Smear" ("Blood health, infection,
+ * anaemia") and the parameters it covers (Haemoglobin, Total WBC Count, …). A test with no
+ * parameters counts as one.
+ */
+export interface PackageTest {
+    name: string;
+    description: string;
+    tests: string[];
+}
+
+const uniqueNames = (list: unknown[], max: number, length = 200) => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of list) {
+        const name = String(item ?? "").trim().slice(0, length);
+        if (name && !seen.has(name.toLowerCase())) {
+            seen.add(name.toLowerCase());
+            out.push(name);
+        }
+    }
+    if (out.length > max) throw new Error(`Up to ${max} entries are allowed.`);
+    return out;
+};
+
+/** Package tests as sent by the admin form: plain names (older form) or {name, description, tests}. */
+export function parseTestGroups(input: unknown): PackageTest[] {
+    const list = Array.isArray(input) ? input : (() => { try { return JSON.parse(String(input || "[]")); } catch { return []; } })();
+    if (!Array.isArray(list)) return [];
+    const seen = new Set<string>();
+    const groups: PackageTest[] = [];
+    for (const raw of list) {
+        const isText = typeof raw === "string";
+        const name = String(isText ? raw : raw?.name ?? "").trim().slice(0, 200);
+        if (!name || seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+        const subTests = isText ? [] : Array.isArray(raw?.tests) ? raw.tests : String(raw?.tests || "").split(/[\n,;]+/);
+        let tests: string[];
+        try {
+            tests = uniqueNames(subTests, 300);
+        } catch {
+            throw new Error(`"${name}" can have up to 300 parameters.`);
+        }
+        groups.push({ name, description: isText ? "" : String(raw?.description ?? "").trim().slice(0, 200), tests });
+    }
+    if (groups.length > 100) throw new Error("A package can have up to 100 tests.");
+    return groups;
+}
+
+/** The tests saved on a package or an order; older rows hold a plain list of names. */
+export function readTestGroups(value?: string | null): PackageTest[] {
+    try {
+        return parseTestGroups(JSON.parse(value || "[]"));
+    } catch {
+        return [];
+    }
+}
+
+/** Parameters across the tests; a test without parameters counts as one. */
+export const parameterCount = (groups: PackageTest[]) => groups.reduce((n, g) => n + Math.max(1, g.tests.length), 0);
+
 export interface LabPackageInput {
     benefits?: unknown;
     name?: string;
     description?: string | null;
     tests?: string[] | string;
+    /** Tests with their parameters; takes the place of `tests` */
+    testGroups?: unknown;
     sampleType?: string | null;
     preparation?: string | null;
     reportTurnaround?: string | null;
@@ -106,15 +169,6 @@ export function parsePincodes(input: LabPackageInput["pincodes"]): string[] {
     return pins;
 }
 
-const readJsonList = (value?: string | null): string[] => {
-    if (!value) return [];
-    try {
-        const parsed = JSON.parse(value);
-        return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch {
-        return [];
-    }
-};
 
 const pincodeList = (value?: string | null) => (value ? value.split(",").map(p => p.trim()).filter(Boolean) : []);
 
@@ -127,7 +181,10 @@ export class LabPackageService {
             id: pkg.Id,
             name: pkg.Name,
             description: pkg.Description || "",
-            tests: readJsonList(pkg.TestsIncluded),
+            ...(() => {
+                const testGroups = readTestGroups(pkg.TestsIncluded);
+                return { tests: testGroups.map(g => g.name), testGroups, parameterCount: parameterCount(testGroups) };
+            })(),
             sampleType: pkg.SampleType || "",
             preparation: pkg.Preparation || "",
             reportTurnaround: pkg.ReportTurnaround || "",
@@ -216,7 +273,11 @@ export class LabPackageService {
             throw new Error(`The offer price (₹${amounts.price}) cannot be more than the original price (₹${mrp}).`);
         }
 
-        const tests = data.tests !== undefined ? parseTests(data.tests) : readJsonList(existing?.TestsIncluded);
+        const tests = data.testGroups !== undefined
+            ? parseTestGroups(data.testGroups)
+            : data.tests !== undefined
+                ? parseTestGroups(parseTests(data.tests))
+                : readTestGroups(existing?.TestsIncluded);
         if (tests.length === 0) throw new Error("Add at least one test to the package.");
 
         const pincodes = data.pincodes !== undefined ? parsePincodes(data.pincodes) : pincodeList(existing?.Pincodes);

@@ -236,7 +236,21 @@ export class UserService implements IUserService {
                 user = await userRepository.findPrimaryByPhone(data.PhoneNumber);
             }
             if (!user && data.Email) {
-                user = await userRepository.findPrimaryByEmail(data.Email);
+                // A new user whose email already belongs to an account with another phone: refuse, do not
+                // take that account over (its phone would stay the old one and the new user would not exist)
+                const byEmail = await userRepository.findPrimaryByEmail(data.Email.trim());
+                if (byEmail) {
+                    const typedPhone = String(data.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+                    const theirPhone = String(byEmail.PhoneNumber || "").replace(/\D/g, "").slice(-10);
+                    if (typedPhone && theirPhone && typedPhone !== theirPhone) {
+                        throw new Error(
+                            `An account with this email already exists with another phone number (ending ${theirPhone.slice(-4)}). ` +
+                            "Use a different email, or edit that user to change their phone number."
+                        );
+                    }
+                    if (typedPhone && !theirPhone) byEmail.PhoneNumber = data.PhoneNumber;
+                    user = byEmail;
+                }
             }
 
             if (!user) {
