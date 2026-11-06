@@ -88,7 +88,7 @@ import { PatientDiagnosticReport } from "../models/Appointments/diagnostic-repor
 import { WellnessRecord } from "../models/Appointments/wellness-record.model.js";
 
 // Debug logs for Azure troubleshooting
-if (process.env.NODE_ENV !== 'production' || true) { 
+if (process.env.NODE_ENV !== 'production' || true) {
     console.log("--- Azure Environment Debug ---");
     console.log("Available Env Keys:", Object.keys(process.env).filter(k => !k.includes("PASSWORD") && !k.includes("SECRET")));
     console.log("DB_HOST exists:", !!process.env.DB_HOST);
@@ -96,12 +96,15 @@ if (process.env.NODE_ENV !== 'production' || true) {
     console.log("-------------------------------");
 }
 
+
+
 const requiredEnvVars = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"];
 const missingVars = requiredEnvVars.filter(v => !process.env[v]);
 
 if (missingVars.length > 0) {
     throw new Error(`Database configuration missing for: ${missingVars.join(", ")}. Please check your Azure Application Settings.`);
 }
+
 
 /**
  * How long one statement may run, in ms (DB_REQUEST_TIMEOUT_MS, default 30 s). At least 20 s: the
