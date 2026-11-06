@@ -23,6 +23,17 @@ jobs:
           node-version: '24.x'
 
       - name: npm install, build, and test
+        # .env is not in git. config/database.ts and blob.service.ts refuse to load without their
+        # settings, so the tests get placeholders (no test connects to a database or to storage).
+        # FHIR dates carry the server's offset, +05:30 in production, so the tests run in India time.
+        env:
+          TZ: Asia/Kolkata
+          DB_HOST: localhost
+          DB_PORT: '1433'
+          DB_USER: ci
+          DB_PASSWORD: ci
+          DB_NAME: ci
+          AZURE_STORAGE_CONNECTION_STRING: UseDevelopmentStorage=true
         run: |
           npm install
           npm run build --if-present
