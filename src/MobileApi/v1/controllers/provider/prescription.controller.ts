@@ -114,8 +114,12 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
         if (docUser && !doctorName) {
             doctorName = `${docUser.FirstName || ""} ${docUser.LastName || ""}`.trim();
         }
+        // A doctor can work at several hospitals, each with its own record (registration, department):
+        // use the one for this prescription's hospital.
         const hpRepo = AppDataSource.getRepository(HealthcareProvider);
-        const hp = await hpRepo.findOne({ where: { UserId: doctorId } });
+        const rxHospitalId = Number(prescription.HospitalId) || 0;
+        const hp = (rxHospitalId ? await hpRepo.findOne({ where: { UserId: doctorId, HospitalId: rxHospitalId, IsDeleted: false } as any }) : null)
+            ?? await hpRepo.findOne({ where: { UserId: doctorId } });
         if (hp) {
             if (hp.Qualification && !doctorQual) doctorQual = hp.Qualification.trim();
             if ((hp.Specialty || hp.Department) && !doctorSpec) doctorSpec = (hp.Specialty || hp.Department).trim();

@@ -263,11 +263,26 @@ export class PrescriptionPdfService {
 
                 // ── Two-Column Patient & Doctor Identity Card ──
                 cursorY += 28;
-                const cardHeight = 84;
+                // Doctor details, worked out first so the card is tall enough to show them in full.
+                const halfWidth = contentWidth / 2;
+                const docColWidth = halfWidth - 24;
+                const docQual = (data.doctor.qualification && data.doctor.qualification.trim()) ? data.doctor.qualification.trim() : "NA";
+                const docSpec = (data.doctor.specialty && data.doctor.specialty.trim())
+                    ? data.doctor.specialty.trim()
+                    : ((data.doctor.department && data.doctor.department.trim()) ? data.doctor.department.trim() : "NA");
+                const docReg = (data.doctor.registrationNumber && data.doctor.registrationNumber.trim())
+                    ? data.doctor.registrationNumber.trim()
+                    : "NA";
+                doc.fontSize(8).font("Helvetica");
+                const qualHeight = doc.heightOfString(`Qual: ${docQual}`, { width: docColWidth });
+                const deptHeight = doc.heightOfString(`Dept: ${docSpec}`, { width: docColWidth });
+                doc.font("Helvetica-Bold");
+                const regHeight = doc.heightOfString(`Reg No: ${docReg}`, { width: docColWidth });
+                // 8 top + 13 label + 14 name + lines with small gaps + 10 bottom
+                const cardHeight = Math.max(84, Math.ceil(8 + 13 + 14 + qualHeight + 2 + deptHeight + 3 + regHeight + 10));
                 doc.roundedRect(margin, cursorY, contentWidth, cardHeight, 6).fillAndStroke("#F8FAFC", "#E2E8F0");
 
                 // Vertical Separator
-                const halfWidth = contentWidth / 2;
                 doc.moveTo(margin + halfWidth, cursorY + 6)
                    .lineTo(margin + halfWidth, cursorY + cardHeight - 6)
                    .strokeColor("#E2E8F0")
@@ -338,26 +353,21 @@ export class PrescriptionPdfService {
                    .fillColor("#0F172A")
                    .text(`${docPrefix}${docRawName}`, dX, dY, { width: halfWidth - 24, ellipsis: true });
 
+                // Qualification, department and registration each on their own line, wrapping when long,
+                // so nothing is cut short or printed over the line below.
                 dY += 14;
-                const docQual = (data.doctor.qualification && data.doctor.qualification.trim()) ? data.doctor.qualification.trim() : "NA";
-                const docSpec = (data.doctor.specialty && data.doctor.specialty.trim())
-                    ? data.doctor.specialty.trim()
-                    : ((data.doctor.department && data.doctor.department.trim()) ? data.doctor.department.trim() : "NA");
-
                 doc.fontSize(8)
                    .font("Helvetica")
                    .fillColor("#334155")
-                   .text(`Qual: ${docQual}  |  Dept: ${docSpec}`, dX, dY, { width: halfWidth - 24, ellipsis: true });
-
-                dY += 14;
-                const docReg = (data.doctor.registrationNumber && data.doctor.registrationNumber.trim())
-                    ? data.doctor.registrationNumber.trim()
-                    : "NA";
+                   .text(`Qual: ${docQual}`, dX, dY, { width: docColWidth });
+                dY = doc.y + 2;
+                doc.text(`Dept: ${docSpec}`, dX, dY, { width: docColWidth });
+                dY = doc.y + 3;
 
                 doc.fontSize(8)
                    .font("Helvetica-Bold")
                    .fillColor("#1E40AF")
-                   .text(`Reg No: ${docReg}`, dX, dY);
+                   .text(`Reg No: ${docReg}`, dX, dY, { width: docColWidth });
 
                 // ── Diagnoses Section (if present) ──
                 cursorY += cardHeight + 10;
