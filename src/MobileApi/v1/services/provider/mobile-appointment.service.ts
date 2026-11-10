@@ -290,6 +290,10 @@ export class MobileAppointmentService {
             throw new Error("Valid patient phone number is required");
         }
 
+        // Only Active treatment plans can be attached to a new booking (checked before anything is saved)
+        const { treatmentPlanService } = await import("../../../../services/Payments/treatment-plan.service.js");
+        await treatmentPlanService.assertBookable(data.treatmentPlanIds);
+
         const last10Digits = cleanPhone.slice(-10);
         // 1. Verify Slot Availability & Ensure Time Slot Has Not Passed
         const now = new Date();

@@ -256,6 +256,16 @@ export class LabPackageController {
         }
     }
 
+    /** The patient-app switches for a hospital: slot choice, rescheduling, collection address. */
+    async saveAppOptions(req: Request, res: Response) {
+        try {
+            const data = await labSlotService.saveAppOptions(requesterOf(req), Number(req.body?.hospitalId), req.body?.appOptions);
+            return res.json(ApiResponse.success(data, "App options saved."));
+        } catch (error: any) {
+            return fail(res, error);
+        }
+    }
+
     // ---------- Mobile: patient ----------
 
     async patientPackages(req: Request, res: Response) {
@@ -286,9 +296,22 @@ export class LabPackageController {
                 pincode: req.body?.pincode,
                 preferredDate: req.body?.preferredDate,
                 slotStart: req.body?.slotStart,
-                notes: req.body?.notes
+                notes: req.body?.notes,
+                address: req.body?.address
             });
             return res.json(ApiResponse.success(data, "Lab package order created."));
+        } catch (error: any) {
+            return fail(res, error);
+        }
+    }
+
+    /** Addresses the patient can pick for sample collection. */
+    async patientAddresses(req: Request, res: Response) {
+        try {
+            const requesterId = requesterOf(req);
+            if (!requesterId) return res.status(401).json(ApiResponse.error("Sign in again to see your addresses."));
+            const data = await labPackageOrderService.savedAddresses(requesterId);
+            return res.json(ApiResponse.success(data, "Addresses fetched."));
         } catch (error: any) {
             return fail(res, error);
         }

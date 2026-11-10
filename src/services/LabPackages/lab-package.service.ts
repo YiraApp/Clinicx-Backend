@@ -7,8 +7,12 @@ import { HospitalPaymentConfiguration } from "../../models/Organizations/hospita
 import { User } from "../../models/Account/user.model.js";
 import { STANDARD_LAB_TESTS } from "../../constants/standard-lab-tests.js";
 import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
+import { labSlotService, DEFAULT_APP_OPTIONS, RESCHEDULE_CUTOFF_HOURS } from "./lab-slot.service.js";
 
 export const roundMoney = (value: number) => Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+
+/** The smallest payment Razorpay takes (₹1); a package's total is 0 (free) or at least this. */
+export const MIN_ONLINE_PAYMENT = 1;
 
 /** Price before GST, the GST on it and the total the patient pays, rounded to paise. */
 export function labPackageAmounts(price: number, gstPercentage: number) {
@@ -263,6 +267,11 @@ export class LabPackageService {
             throw new Error("GST % must be between 0 and 100.");
         }
         const amounts = labPackageAmounts(Number(priceInput), Number(gstInput));
+        // Checked when the price or GST is being set, so an older package can still be edited otherwise
+        const pricing = data.price !== undefined || data.gstPercentage !== undefined;
+        if (pricing && amounts.totalAmount > 0 && amounts.totalAmount < MIN_ONLINE_PAYMENT) {
+            throw new Error(`The total with GST (₹${amounts.totalAmount}) must be 0 for a free package, or at least ₹${MIN_ONLINE_PAYMENT}: Razorpay accepts no smaller payment.`);
+        }
 
         // Mrp is the original price shown struck through next to the offer price (Price). Both are
         // before GST, so the discount compares like with like (₹4,999 → ₹999 is 80% off).
@@ -463,6 +472,8 @@ export class LabPackageService {
         const payable = await this.payableHospitalIds(linkedIds);
         if (payable.size === 0) return [];
         const hospitals = await AppDataSource.getRepository(Hospital).find({ where: { Id: In(Array.from(payable)) } });
+        // What checkout offers at each hospital: slot choice, and whether it asks for an address
+        const options = await labSlotService.appOptionsFor(hospitals.map(h => h.Id));
         return hospitals
             .map(h => ({
                 id: h.Id,
@@ -470,7 +481,9 @@ export class LabPackageService {
                 address: h.Address || "",
                 city: h.City || "",
                 pincode: h.Pincode || "",
-                isInPincode: !!pincode && String(h.Pincode || "").trim() === pincode
+                isInPincode: !!pincode && String(h.Pincode || "").trim() === pincode,
+                ...(options.get(Number(h.Id)) ?? DEFAULT_APP_OPTIONS),
+                cutoffHours: RESCHEDULE_CUTOFF_HOURS
             }))
             .sort((a, b) => Number(b.isInPincode) - Number(a.isInPincode) || a.name.localeCompare(b.name));
     }

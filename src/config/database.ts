@@ -56,6 +56,7 @@ import { LabPackageOrder } from "../models/LabPackages/lab-package-order.model.j
 import { LabPackagePayment } from "../models/LabPackages/lab-package-payment.model.js";
 import { PincodeDirectory } from "../models/LabPackages/pincode-directory.model.js";
 import { LabSlotTiming } from "../models/LabPackages/lab-slot-timing.model.js";
+import { LabPackageSetting } from "../models/LabPackages/lab-package-setting.model.js";
 import { PrescriptionMedication } from "../models/Appointments/prescription-medication.model.js";
 import { PrescriptionMedicationSchedule } from "../models/Appointments/prescription-medication-schedule.model.js";
 import { PrescriptionMedicationDays } from "../models/Appointments/prescription-medication-days.model.js";
@@ -124,7 +125,7 @@ export const AppDataSource = new DataSource({
         PatientVerification, PatientVerificationDocument,
         ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
         PrescriptionDiagnosis, PrescriptionLabTest, HospitalLabTest, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
-        LabPackage, LabPackageHospital, LabPackageOrder, LabPackagePayment, PincodeDirectory, LabSlotTiming,
+        LabPackage, LabPackageHospital, LabPackageOrder, LabPackagePayment, PincodeDirectory, LabSlotTiming, LabPackageSetting,
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
         Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem,
         TreatmentPlan, AppointmentTreatmentPlan,

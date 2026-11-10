@@ -198,5 +198,7 @@ authRouter.get("/lab-packages/orders/:id/report", authMiddleware, labPackageCont
 // Visit slots: bookable slots (for an order or a hospital), and pick/reschedule a paid order's slot
 authRouter.post("/lab-packages/slots", authMiddleware, labPackageController.patientSlots.bind(labPackageController));
 authRouter.post("/lab-packages/orders/:id/slot", authMiddleware, labPackageController.patientSetSlot.bind(labPackageController));
+// Saved addresses to pick for sample collection, when the hospital asks for one
+authRouter.post("/lab-packages/addresses", authMiddleware, labPackageController.patientAddresses.bind(labPackageController));
 
 export { authRouter };

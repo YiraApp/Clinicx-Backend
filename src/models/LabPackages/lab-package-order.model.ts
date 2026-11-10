@@ -79,6 +79,10 @@ export class LabPackageOrder {
     @Column({ type: "nvarchar", length: 500, nullable: true })
     Notes?: string | null;
 
+    /** Where the sample is collected (JSON, lab-address.ts), when the hospital asks for it. */
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    CollectionAddress?: string | null;
+
     @Column({ type: "varchar", length: 30, default: "PaymentPending" })
     Status: string;
 

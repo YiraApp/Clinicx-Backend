@@ -225,6 +225,17 @@ export class MigrationService {
                     CreatedBy UNIQUEIDENTIFIER NULL
                 );`,
                 "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_LabSlotTimings_Hospital' AND object_id = OBJECT_ID('LabSlotTimings')) CREATE INDEX IX_LabSlotTimings_Hospital ON LabSlotTimings(HospitalId, StartTime);",
+                // What the patient app offers per hospital (Lab Packages → Settings); no row = defaults
+                `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'LabPackageSettings')
+                CREATE TABLE LabPackageSettings (
+                    HospitalId INT NOT NULL PRIMARY KEY,
+                    PatientSlots BIT NOT NULL DEFAULT 1,
+                    PatientReschedule BIT NOT NULL DEFAULT 1,
+                    CollectAddress BIT NOT NULL DEFAULT 0,
+                    UpdatedAt DATETIME NULL,
+                    UpdatedBy UNIQUEIDENTIFIER NULL
+                );`,
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackageOrders') AND name = 'CollectionAddress') ALTER TABLE LabPackageOrders ADD CollectionAddress NVARCHAR(MAX) NULL;",
                 `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'LabPackagePayments')
                 CREATE TABLE LabPackagePayments (
                     Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,

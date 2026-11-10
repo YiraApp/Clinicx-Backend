@@ -18,6 +18,8 @@ labPackageRouter.get("/orders/:id/report", authMiddleware, c.staffReport.bind(c)
 // Visit slot timings per hospital (Lab Package Orders → Settings); same access as the orders
 labPackageRouter.get("/slot-timings", authMiddleware, c.slotTimings.bind(c));
 labPackageRouter.put("/slot-timings", authMiddleware, c.saveSlotTimings.bind(c));
+// What the patient app offers per hospital: slot choice, rescheduling, collection address
+labPackageRouter.put("/app-options", authMiddleware, c.saveAppOptions.bind(c));
 
 // Pincodes for a package: India Post directory by state/district, and live search (Yira System Admin)
 labPackageRouter.get("/pincodes/status", authMiddleware, c.pincodeStatus.bind(c));

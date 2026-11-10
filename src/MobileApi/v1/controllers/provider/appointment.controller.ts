@@ -356,10 +356,12 @@ export const getTreatmentPlans = async (req: Request, res: Response) => {
         const parsedHospId = hospitalId ? Number(hospitalId) : undefined;
 
         const { treatmentPlanService } = await import("../../../../services/Payments/treatment-plan.service.js");
+        // The app lists plans to attach to a booking: Active ones only
         const plans = await treatmentPlanService.getPlans(
             parsedOrgId,
             parsedHospId,
-            String(search)
+            String(search),
+            true
         );
 
         return res.json(ApiResponse.success(plans, "Treatment plans retrieved successfully."));

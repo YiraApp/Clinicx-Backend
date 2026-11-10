@@ -336,7 +336,8 @@ table { border-collapse:collapse; width:100%; }
     }
 
     async registerPatient(data: any): Promise<any> {
-        const { userId, organizationId, hospitalId, token, ...patientFields } = data;
+        // isEdit: sent by the front desk's edit page; an edit never sends the "registered" messages
+        const { userId, organizationId, hospitalId, token, isEdit, ...patientFields } = data;
 
         if (!userId) throw new Error("UserId is required for patient registration.");
 
@@ -360,6 +361,10 @@ table { border-collapse:collapse; width:100%; }
         const effectiveHospitalId = hospitalId || activeDefault?.HospitalId || 19;
 
         let registration = await patientRegistrationRepository.findByUserId(userId, effectiveOrgId);
+        // The front desk calls this on every save, edits included; the "registered" WhatsApp and the
+        // Yira notice are only for a patient newly registered at this organisation, and never for an
+        // edit (an edit can still add a registration at another organisation, silently).
+        const isNewRegistration = !registration && isEdit !== true;
         if (!registration) {
             registration = new PatientRegistration();
             registration.UserId = userId;
@@ -469,8 +474,8 @@ table { border-collapse:collapse; width:100%; }
             }
         }
 
-        // Send clinic_reg WhatsApp template in background
-        (async () => {
+        // Send clinic_reg WhatsApp template in background, for a new registration only (not on edits)
+        if (isNewRegistration) (async () => {
             try {
                 const u = await userRepository.findById(userId);
                 if (u) {
@@ -480,9 +485,10 @@ table { border-collapse:collapse; width:100%; }
                 console.error("[WhatsApp clinic_reg] Background trigger error:", err);
             }
         })();
+        else console.log(`[WhatsApp clinic_reg] Skipped for ${userId} at organisation ${effectiveOrgId}: ${isEdit === true ? "an edit" : "already registered"}, details updated.`);
 
-        // Send info notification email to Yira if SendInfoMailToYira is enabled for this hospital
-        (async () => {
+        // Send info notification email to Yira if SendInfoMailToYira is enabled for this hospital (new registrations only)
+        if (isNewRegistration) (async () => {
             try {
                 const { hospitalSettingsService } = await import("./hospital-settings.service.js");
                 const settings = await hospitalSettingsService.getSettings(effectiveHospitalId);

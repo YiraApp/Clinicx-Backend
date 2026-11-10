@@ -13,9 +13,12 @@ import { HospitalPaymentConfiguration } from "../../models/Organizations/hospita
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { isYiraSystemAdmin, staffHospitalIds, canManageHospital } from "../../utils/staff-access.js";
 import { isFamilyLinked } from "../../middlewares/request-identity.js";
-import { labPackageService, labPackageAmounts, roundMoney, readTestGroups, parameterCount } from "./lab-package.service.js";
+import { labPackageService, labPackageAmounts, roundMoney, readTestGroups, parameterCount, MIN_ONLINE_PAYMENT } from "./lab-package.service.js";
 import { LabAccessError } from "./lab-access-error.js";
-import { labSlotService, slotInstant, slotLabel, RESCHEDULE_CUTOFF_HOURS } from "./lab-slot.service.js";
+import { labSlotService, slotInstant, slotLabel, RESCHEDULE_CUTOFF_HOURS, DEFAULT_APP_OPTIONS, type LabAppOptions } from "./lab-slot.service.js";
+import { User } from "../../models/Account/user.model.js";
+import type { Address } from "../../models/Account/address.model.js";
+import { parseCollectionAddress, readCollectionAddress, addressText, distinctAddresses, type CollectionAddress } from "./lab-address.js";
 
 export { LabAccessError };
 
@@ -37,6 +40,21 @@ function signaturesMatch(expected: string, received: string) {
     const a = Buffer.from(expected);
     const b = Buffer.from(String(received || ""));
     return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * The Razorpay SDK rejects with { statusCode, error: { code, description } }, not an Error, so
+ * error.message is empty and the app would only see "Something went wrong.". This says what failed.
+ */
+export function razorpayError(e: any): Error {
+    if (e instanceof Error) return e;
+    const status = Number(e?.statusCode);
+    const description = String(e?.error?.description || "").trim();
+    console.error("[LabPackage] Razorpay order failed:", status || "?", e?.error?.code || "", description);
+    if (status === 401) {
+        return new Error("Online payment at this hospital isn't working right now: Razorpay refused the hospital's payment keys. Please contact the hospital.");
+    }
+    return new Error(description ? `Razorpay could not start the payment: ${description}` : "Razorpay could not start the payment. Please try again.");
 }
 
 /** A SQL `date` as "YYYY-MM-DD" (the driver returns it as a Date at UTC midnight). */
@@ -71,9 +89,10 @@ export class LabPackageOrderService {
 
     /**
      * Whether the patient can pick or move the visit slot now: only once paid and before the sample
-     * is collected, and only until RESCHEDULE_CUTOFF_HOURS before the booked slot.
+     * is collected, only while the hospital lets patients choose slots in the app (and, for a slot
+     * already chosen, move them), and only until RESCHEDULE_CUTOFF_HOURS before the booked slot.
      */
-    slotState(order: LabPackageOrder, now = new Date()) {
+    slotState(order: LabPackageOrder, now = new Date(), options: LabAppOptions = DEFAULT_APP_OPTIONS) {
         const visitDate = dateOnly(order.PreferredDate);
         const hasSlot = !!(visitDate && order.SlotStart && order.SlotEnd);
         const startsAt = hasSlot ? slotInstant(visitDate!, order.SlotStart!) : null;
@@ -82,6 +101,8 @@ export class LabPackageOrderService {
         if (order.Status === "PaymentPending") reason = "Pay for the order to choose a slot.";
         else if (order.Status === "Cancelled") reason = "This order is cancelled.";
         else if (order.Status !== "Paid") reason = "The sample is already collected.";
+        else if (!options.slotsEnabled) reason = "The hospital will call you to fix the visit time.";
+        else if (hasSlot && !options.rescheduleEnabled) reason = "This hospital doesn't allow changing the slot in the app. Call the hospital to change it.";
         else if (changeUntil && now > changeUntil) {
             reason = `Slots can be changed until ${RESCHEDULE_CUTOFF_HOURS} hours before the visit. Call the hospital to change it.`;
         }
@@ -94,15 +115,26 @@ export class LabPackageOrderService {
                 startsAt
             } : null,
             canChangeSlot: reason === null,
-            slotChangeUntil: changeUntil,
+            slotChangeUntil: options.slotsEnabled && options.rescheduleEnabled ? changeUntil : null,
             slotLockedReason: reason,
-            rescheduleCount: Number(order.RescheduleCount || 0)
+            rescheduleCount: Number(order.RescheduleCount || 0),
+            slotsEnabled: options.slotsEnabled,
+            rescheduleEnabled: options.rescheduleEnabled
         };
     }
 
-    toDto(order: LabPackageOrder, payment?: LabPackagePayment | null) {
+    /** Orders with their latest payment and each hospital's app options applied (slot rules). */
+    private async dtos(orders: LabPackageOrder[]) {
+        const payments = await this.paymentsFor(orders.map(o => o.Id));
+        const options = await labSlotService.appOptionsFor(orders.map(o => o.HospitalId));
+        return orders.map(o => this.toDto(o, payments.get(o.Id.toUpperCase()), options.get(Number(o.HospitalId))));
+    }
+
+    toDto(order: LabPackageOrder, payment?: LabPackagePayment | null, options?: LabAppOptions) {
+        const collectionAddress = readCollectionAddress(order.CollectionAddress);
         return {
-            ...this.slotState(order),
+            ...this.slotState(order, new Date(), options),
+            collectionAddress: collectionAddress ? { ...collectionAddress, text: addressText(collectionAddress) } : null,
             id: order.Id,
             orderNumber: order.OrderNumber,
             packageId: order.LabPackageId,
@@ -162,7 +194,7 @@ export class LabPackageOrderService {
      * creates the Razorpay order with the hospital's keys for the package's total including GST,
      * and saves the order and its pending payment. The amount is never taken from the app.
      */
-    async createOrder(patientId: string, data: { packageId: number; hospitalId: number; pincode?: string; preferredDate?: string; slotStart?: string; notes?: string }) {
+    async createOrder(patientId: string, data: { packageId: number; hospitalId: number; pincode?: string; preferredDate?: string; slotStart?: string; notes?: string; address?: unknown }) {
         const packageId = Number(data.packageId);
         const hospitalId = Number(data.hospitalId);
         if (!(packageId > 0) || !(hospitalId > 0)) throw new Error("Choose a package and a hospital.");
@@ -176,18 +208,26 @@ export class LabPackageOrderService {
             throw new Error("Online payment is not set up at this hospital. Choose another hospital.");
         }
 
+        // When the hospital collects the sample at the patient's address, that address's pincode is
+        // the one the package must serve.
+        const options = await labSlotService.appOptions(hospitalId);
+        const address: CollectionAddress | null = options.collectAddress ? parseCollectionAddress(data.address) : null;
+
         // Outside the package's pincodes it can still be booked at the default hospital, whose
         // packages the app shows when nothing is offered in the patient's pincode.
-        const pincode = String(data.pincode || "").replace(/\D/g, "") || null;
+        const pincode = address?.pincode || String(data.pincode || "").replace(/\D/g, "") || null;
         if (!labPackageService.servesPincode(pkg, pincode)) {
             const def = await labPackageService.defaultHospital();
-            if (!def || def.id !== hospitalId) throw new Error("This package is not offered in your pincode.");
+            if (!def || def.id !== hospitalId) {
+                throw new Error(address ? `This package is not offered at pincode ${address.pincode}. Choose another address.` : "This package is not offered in your pincode.");
+            }
         }
 
-        // The visit slot is optional here; the patient can also choose it from My Orders after paying
+        // The visit slot is optional here; the patient can also choose it from My Orders after paying.
+        // A hospital that fixes the time itself takes no slot from the app.
         let preferredDate: string | null = null;
         let slot: { start: string; end: string } | null = null;
-        if (data.slotStart) {
+        if (data.slotStart && options.slotsEnabled) {
             const chosen = await labSlotService.validateChoice(hospitalId, data.preferredDate, data.slotStart);
             preferredDate = chosen.date;
             slot = { start: chosen.start, end: chosen.end };
@@ -223,6 +263,7 @@ export class LabPackageOrderService {
             SlotUpdatedAt: slot ? new Date() : null,
             RescheduleCount: 0,
             Notes: data.notes ? String(data.notes).trim().slice(0, 500) : null,
+            CollectionAddress: address ? JSON.stringify(address) : null,
             Status: "PaymentPending",
             CreatedAt: new Date()
         });
@@ -234,6 +275,11 @@ export class LabPackageOrderService {
             return { orderId, orderNumber: order.OrderNumber, requiresPayment: false, amount: 0 };
         }
 
+        // Razorpay refuses anything under ₹1 (a ₹0.01 test price fails there with no readable reason)
+        if (amounts.totalAmount < MIN_ONLINE_PAYMENT) {
+            throw new Error(`This package can't be paid online: its total (₹${amounts.totalAmount}) is below ₹${MIN_ONLINE_PAYMENT}, the smallest payment Razorpay accepts. Please contact the hospital.`);
+        }
+
         const keys = await this.hospitalKeys(hospitalId);
         const razorpay = new Razorpay({ key_id: keys.keyId, key_secret: keys.keySecret });
         const rzpOrder = await razorpay.orders.create({
@@ -241,7 +287,7 @@ export class LabPackageOrderService {
             currency: keys.currency,
             receipt: transactionId,
             notes: { type: "LAB_PACKAGE", labPackageOrderId: orderId }
-        });
+        }).catch((e: unknown) => { throw razorpayError(e); });
 
         await AppDataSource.transaction(async (manager) => {
             await manager.save(LabPackageOrder, order);
@@ -338,8 +384,47 @@ export class LabPackageOrderService {
             .andWhere("o.Status <> 'PaymentPending'")
             .orderBy("o.CreatedAt", "DESC")
             .getMany();
-        const payments = await this.paymentsFor(orders.map(o => o.Id));
-        return orders.map(o => this.toDto(o, payments.get(o.Id.toUpperCase())));
+        return this.dtos(orders);
+    }
+
+    /**
+     * Addresses the patient can pick for sample collection: the profile's permanent and temporary
+     * addresses, then those of their recent lab orders, each once.
+     */
+    async savedAddresses(patientId: string) {
+        const user = await AppDataSource.getRepository(User).findOne({
+            where: { Id: patientId },
+            relations: ["PermanentAddress", "TemporaryAddress"]
+        });
+        const fromProfile = (a: Address | undefined, label: string) => {
+            if (!a) return null;
+            try {
+                return {
+                    label,
+                    address: parseCollectionAddress({
+                        line1: a.AddressLine1, line2: a.AddressLine2, landmark: a.Landmark, city: a.City, state: a.State, pincode: a.Pincode
+                    })
+                };
+            } catch {
+                return null; // an incomplete profile address is not offered
+            }
+        };
+        const recent = await this.orderRepo.createQueryBuilder("o")
+            .select(["o.Id", "o.CollectionAddress", "o.CreatedAt"])
+            .where("o.PatientId = :patientId", { patientId })
+            .andWhere("o.CollectionAddress IS NOT NULL")
+            .orderBy("o.CreatedAt", "DESC")
+            .take(10)
+            .getMany();
+        const items = [
+            fromProfile(user?.PermanentAddress, "Home"),
+            fromProfile(user?.TemporaryAddress, "Current address"),
+            ...recent.map(o => {
+                const address = readCollectionAddress(o.CollectionAddress);
+                return address ? { label: "Used before", address } : null;
+            })
+        ].filter((item): item is { label: string; address: CollectionAddress } => item !== null);
+        return distinctAddresses(items).slice(0, 6).map(item => ({ label: item.label, ...item.address, text: addressText(item.address) }));
     }
 
     /** The patient's (or a family member's) order, or 404. */
@@ -355,13 +440,17 @@ export class LabPackageOrderService {
         let hospitalId = Number(data.hospitalId) || 0;
         if (data.orderId) hospitalId = (await this.orderForPatient(requesterId, String(data.orderId))).HospitalId;
         if (!(hospitalId > 0)) throw new Error("Choose a hospital.");
+        if (!(await labSlotService.appOptions(hospitalId)).slotsEnabled) {
+            throw new Error("The hospital will call you to fix the visit time.");
+        }
         return labSlotService.bookableDays(hospitalId);
     }
 
     /** The patient picks or moves the visit slot of a paid order, until the cutoff before the current slot. */
     async setSlot(requesterId: string, orderId: string, data: { date?: string; slotStart?: string }) {
         const order = await this.orderForPatient(requesterId, orderId);
-        const state = this.slotState(order);
+        const options = await labSlotService.appOptions(order.HospitalId);
+        const state = this.slotState(order, new Date(), options);
         if (!state.canChangeSlot) throw new Error(state.slotLockedReason || "The slot can no longer be changed.");
         const chosen = await labSlotService.validateChoice(order.HospitalId, data.date, data.slotStart);
         const unchanged = state.slot && state.slot.date === chosen.date && state.slot.start === chosen.start;
@@ -377,8 +466,7 @@ export class LabPackageOrderService {
             });
         }
         const updated = await this.orderRepo.findOne({ where: { Id: order.Id }, relations: ["Hospital"] });
-        const payments = await this.paymentsFor([order.Id]);
-        return this.toDto(updated!, payments.get(order.Id.toUpperCase()));
+        return (await this.dtos([updated!]))[0];
     }
 
     // ---------- Staff (Yira System Admin: every hospital; hospital staff: their hospitals) ----------
@@ -428,9 +516,8 @@ export class LabPackageOrderService {
             .addSelect("SUM(CASE WHEN o.Status IN ('Paid','SampleCollected') THEN 1 ELSE 0 END)", "awaitingReport")
             .where("1 = 1")).getRawOne();
 
-        const payments = await this.paymentsFor(orders.map((o: LabPackageOrder) => o.Id));
         return {
-            data: orders.map((o: LabPackageOrder) => this.toDto(o, payments.get(o.Id.toUpperCase()))),
+            data: await this.dtos(orders),
             total,
             page,
             limit,
@@ -458,7 +545,7 @@ export class LabPackageOrderService {
         const order = await this.orderForStaff(requesterId, orderId);
         const next = String(status || "").trim();
         if (!STATUS_LABELS[next] || next === "PaymentPending") throw new Error("Choose a valid status.");
-        if (order.Status === next) return this.toDto(order);
+        if (order.Status === next) return (await this.dtos([order]))[0];
         if (order.Status === "Completed" || order.Status === "Cancelled") {
             throw new Error(`A ${STATUS_LABELS[order.Status].toLowerCase()} order cannot be changed.`);
         }
@@ -473,8 +560,7 @@ export class LabPackageOrderService {
         order.UpdatedAt = new Date();
         order.UpdatedBy = requesterId;
         await this.orderRepo.save(order);
-        const payments = await this.paymentsFor([order.Id]);
-        return this.toDto(order, payments.get(order.Id.toUpperCase()));
+        return (await this.dtos([order]))[0];
     }
 
     async uploadReport(requesterId: string, orderId: string, file: Express.Multer.File | undefined) {
@@ -498,8 +584,7 @@ export class LabPackageOrderService {
         order.UpdatedAt = new Date();
         order.UpdatedBy = requesterId;
         await this.orderRepo.save(order);
-        const payments = await this.paymentsFor([order.Id]);
-        return this.toDto(order, payments.get(order.Id.toUpperCase()));
+        return (await this.dtos([order]))[0];
     }
 
     /**

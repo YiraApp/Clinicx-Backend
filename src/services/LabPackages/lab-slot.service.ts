@@ -1,5 +1,7 @@
+import { In } from "typeorm/index.js";
 import { AppDataSource } from "../../config/database.js";
 import { LabSlotTiming } from "../../models/LabPackages/lab-slot-timing.model.js";
+import { LabPackageSetting } from "../../models/LabPackages/lab-package-setting.model.js";
 import { canManageHospital } from "../../utils/staff-access.js";
 import { LabAccessError } from "./lab-access-error.js";
 
@@ -16,6 +18,34 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 export interface SlotTiming {
     start: string;
     end: string;
+}
+
+/** What the patient app offers for a hospital's lab orders (Lab Packages → Settings). */
+export interface LabAppOptions {
+    /** Patients choose a visit slot in the app. Off: the hospital fixes the time with them. */
+    slotsEnabled: boolean;
+    /** Patients can move a chosen slot in the app. Only counts while slots are on. */
+    rescheduleEnabled: boolean;
+    /** Checkout asks for the address where the sample is collected. */
+    collectAddress: boolean;
+}
+
+/** A hospital with no settings row: as before these options existed. */
+export const DEFAULT_APP_OPTIONS: LabAppOptions = { slotsEnabled: true, rescheduleEnabled: true, collectAddress: false };
+
+const toOptions = (row: LabPackageSetting | null | undefined): LabAppOptions => row
+    ? { slotsEnabled: !!row.PatientSlots, rescheduleEnabled: !!row.PatientSlots && !!row.PatientReschedule, collectAddress: !!row.CollectAddress }
+    : { ...DEFAULT_APP_OPTIONS };
+
+/** The switches as sent by Settings; each must be true or false. */
+export function parseAppOptions(input: unknown): LabAppOptions {
+    const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+    const flag = (name: keyof LabAppOptions) => {
+        if (typeof raw[name] !== "boolean") throw new Error(`Send ${name} as true or false.`);
+        return raw[name] as boolean;
+    };
+    const slotsEnabled = flag("slotsEnabled");
+    return { slotsEnabled, rescheduleEnabled: slotsEnabled && flag("rescheduleEnabled"), collectAddress: flag("collectAddress") };
 }
 
 /** Default for a hospital with no slot timings: 10 AM – 6 PM in one-hour slots. */
@@ -89,7 +119,41 @@ export class LabSlotService {
 
     async timingsForStaff(requesterId: string, hospitalId: number) {
         await this.assertStaff(requesterId, hospitalId);
-        return { hospitalId, cutoffHours: RESCHEDULE_CUTOFF_HOURS, ...(await this.timings(hospitalId)) };
+        return {
+            hospitalId,
+            cutoffHours: RESCHEDULE_CUTOFF_HOURS,
+            ...(await this.timings(hospitalId)),
+            appOptions: await this.appOptions(hospitalId)
+        };
+    }
+
+    /** The hospital's app options, or the defaults when it has saved none. */
+    async appOptions(hospitalId: number): Promise<LabAppOptions> {
+        if (!(hospitalId > 0)) return { ...DEFAULT_APP_OPTIONS };
+        return toOptions(await AppDataSource.getRepository(LabPackageSetting).findOne({ where: { HospitalId: hospitalId } }));
+    }
+
+    /** App options for several hospitals at once; every id asked for is in the map. */
+    async appOptionsFor(hospitalIds: number[]): Promise<Map<number, LabAppOptions>> {
+        const ids = Array.from(new Set(hospitalIds.map(Number).filter(id => id > 0)));
+        const rows = ids.length ? await AppDataSource.getRepository(LabPackageSetting).find({ where: { HospitalId: In(ids) } }) : [];
+        const byId = new Map(rows.map(r => [Number(r.HospitalId), r]));
+        return new Map(ids.map(id => [id, toOptions(byId.get(id))]));
+    }
+
+    async saveAppOptions(requesterId: string, hospitalId: number, input: unknown) {
+        await this.assertStaff(requesterId, hospitalId);
+        const options = parseAppOptions(input);
+        const repo = AppDataSource.getRepository(LabPackageSetting);
+        await repo.save(repo.create({
+            HospitalId: hospitalId,
+            PatientSlots: options.slotsEnabled,
+            PatientReschedule: options.rescheduleEnabled,
+            CollectAddress: options.collectAddress,
+            UpdatedAt: new Date(),
+            UpdatedBy: requesterId
+        }));
+        return this.timingsForStaff(requesterId, hospitalId);
     }
 
     /** Replaces the hospital's slot timings; an empty list goes back to the default. */

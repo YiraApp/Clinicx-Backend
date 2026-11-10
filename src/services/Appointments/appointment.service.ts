@@ -525,6 +525,10 @@ export class AppointmentService {
         const orgId = data.orgId;
         const hospitalId = data.hospitalId;
 
+        // Only Active treatment plans can be attached to a new booking
+        const { treatmentPlanService } = await import("../Payments/treatment-plan.service.js");
+        await treatmentPlanService.assertBookable(data.treatmentPlanIds);
+
         const newAppointment = await AppDataSource.transaction(async (manager) => {
             // 1. Check if slot exists and is available
             const slot = await healthcareProviderScheduleSlotRepository.findById(data.slotId);

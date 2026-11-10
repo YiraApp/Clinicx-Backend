@@ -2,6 +2,13 @@ import { AppDataSource } from "../../config/database.js";
 import { AppNotification } from "../../models/Common/app-notification.model.js";
 import { userDeviceRepository } from "../../MobileApi/v1/repositories/userdevice.repository.js";
 
+/**
+ * The patient's own appointments screen in the mobile app. Patient pushes must
+ * not name "/appointmentDashboardScreen": that is the doctor's appointments
+ * screen, and the app opens a push's route as-is when a tap starts it.
+ */
+const PATIENT_APPOINTMENTS_ROUTE = "/patientAppointments";
+
 export interface SendPushPayload {
     userId: string;
     senderId?: string | null;
@@ -336,7 +343,7 @@ export class PushNotificationService {
             body: `Your appointment with ${formattedDoctor} on ${date} has been marked as ${formattedStatus}.`,
             type: "APPOINTMENT_STATUS",
             referenceId: String(appointmentId),
-            route: "/appointmentDashboardScreen",
+            route: PATIENT_APPOINTMENTS_ROUTE,
             additionalData: { appointmentId, status, date }
         });
 
@@ -349,7 +356,7 @@ export class PushNotificationService {
                 body: `Appointment for ${patientName} with ${formattedDoctor} on ${date} has been marked as ${formattedStatus}.`,
                 type: "APPOINTMENT_STATUS",
                 referenceId: String(appointmentId),
-                route: "/appointmentDashboardScreen",
+                route: PATIENT_APPOINTMENTS_ROUTE,
                 additionalData: { appointmentId, status, date, dependentId: patientId }
             });
         }
@@ -375,7 +382,7 @@ export class PushNotificationService {
             body: `${formattedDoctor} is waiting for you in the video consultation room. Tap to join.`,
             type: "TELECONSULT_START",
             referenceId: String(appointmentId),
-            route: "/appointmentDashboardScreen",
+            route: PATIENT_APPOINTMENTS_ROUTE,
             additionalData: { appointmentId, meetingUrl }
         });
     }
@@ -419,7 +426,7 @@ export class PushNotificationService {
                 body: `Your consultation with ${formattedDoctor} starts at ${time}. Please be ready.`,
                 type: "APPOINTMENT_REMINDER_10MIN",
                 referenceId: String(appointmentId),
-                route: "/appointmentDashboardScreen",
+                route: PATIENT_APPOINTMENTS_ROUTE,
                 additionalData: { appointmentId, date, time, doctorName: formattedDoctor, consultationType }
             });
         }
