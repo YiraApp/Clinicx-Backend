@@ -15,15 +15,10 @@ import { isYiraSystemAdmin, staffHospitalIds, canManageHospital } from "../../ut
 import { isFamilyLinked } from "../../middlewares/request-identity.js";
 import { labPackageService, labPackageAmounts, roundMoney, readTestGroups, parameterCount, MIN_ONLINE_PAYMENT } from "./lab-package.service.js";
 import { LabAccessError } from "./lab-access-error.js";
-<<<<<<< HEAD
 import { labSlotService, slotInstant, slotLabel, RESCHEDULE_CUTOFF_HOURS, DEFAULT_APP_OPTIONS, type LabAppOptions } from "./lab-slot.service.js";
 import { User } from "../../models/Account/user.model.js";
 import type { Address } from "../../models/Account/address.model.js";
 import { parseCollectionAddress, readCollectionAddress, addressText, distinctAddresses, type CollectionAddress } from "./lab-address.js";
-=======
-import { labSlotService, slotInstant, slotLabel, RESCHEDULE_CUTOFF_HOURS } from "./lab-slot.service.js";
-import { razorpayOrderError } from "../../utils/razorpay.utils.js";
->>>>>>> e480527 (fixes)
 
 export { LabAccessError };
 
@@ -287,26 +282,12 @@ export class LabPackageOrderService {
 
         const keys = await this.hospitalKeys(hospitalId);
         const razorpay = new Razorpay({ key_id: keys.keyId, key_secret: keys.keySecret });
-<<<<<<< HEAD
         const rzpOrder = await razorpay.orders.create({
             amount: Math.round(amounts.totalAmount * 100),
             currency: keys.currency,
             receipt: transactionId,
             notes: { type: "LAB_PACKAGE", labPackageOrderId: orderId }
         }).catch((e: unknown) => { throw razorpayError(e); });
-=======
-        let rzpOrder: any;
-        try {
-            rzpOrder = await razorpay.orders.create({
-                amount: Math.round(amounts.totalAmount * 100),
-                currency: keys.currency,
-                receipt: transactionId,
-                notes: { type: "LAB_PACKAGE", labPackageOrderId: orderId }
-            });
-        } catch (error) {
-            throw razorpayOrderError(error, `lab package order, hospital ${hospitalId}`);
-        }
->>>>>>> e480527 (fixes)
 
         await AppDataSource.transaction(async (manager) => {
             await manager.save(LabPackageOrder, order);
