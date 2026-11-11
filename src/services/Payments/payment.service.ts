@@ -14,6 +14,7 @@ import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { HospitalPaymentConfiguration } from "../../models/Organizations/hospital-payment-configuration.model.js";
 import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
 import { IsNull } from "typeorm/index.js";
+import { razorpayKeyProblem, razorpayOrderError } from "../../utils/razorpay.utils.js";
 
 // A payment confirms the appointment (and sends the confirmation messages) only while it is still
 // waiting for payment; collecting a balance after the visit must not move it back to Confirmed.
@@ -113,7 +114,12 @@ export class PaymentService {
             receipt: transactionId
         };
 
-        const rzpOrder = await customRazorpay.orders.create(options);
+        let rzpOrder: any;
+        try {
+            rzpOrder = await customRazorpay.orders.create(options);
+        } catch (error) {
+            throw razorpayOrderError(error, `appointment bill ${bill.AppointmentBillId}`);
+        }
 
         // Store Pending payment record in database
         const payment = await paymentRepository.create({
@@ -886,10 +892,16 @@ export class PaymentService {
         config.RazorpayKeyId = data.razorpayKeyId !== undefined ? data.razorpayKeyId : data.RazorpayKeyId;
         // The page is never sent the saved secret, so an empty value keeps it
         const newKeySecret = data.razorpayKeySecret !== undefined ? data.razorpayKeySecret : data.RazorpayKeySecret;
+        if (typeof config.RazorpayKeyId === "string") config.RazorpayKeyId = config.RazorpayKeyId.trim();
         if (newKeySecret) {
-            config.RazorpayKeySecret = newKeySecret;
+            config.RazorpayKeySecret = String(newKeySecret).trim();
         } else if (config.RazorpayKeySecret && config.RazorpayKeyId && config.RazorpayKeyId !== previousKeyId) {
             throw new Error("Enter the Razorpay key secret for the new key ID.");
+        }
+        // New keys are tried against Razorpay first, so dead keys can't be saved and fail at checkout.
+        if (config.RazorpayKeyId && config.RazorpayKeySecret && (newKeySecret || config.RazorpayKeyId !== previousKeyId)) {
+            const problem = await razorpayKeyProblem(config.RazorpayKeyId, config.RazorpayKeySecret);
+            if (problem) throw new Error(problem);
         }
         config.GstPercentage = parseFloat(data.gstPercentage || data.GstPercentage || 0);
         config.CgstPercentage = parseFloat(data.cgstPercentage || data.CgstPercentage || 0);

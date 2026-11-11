@@ -35,5 +35,7 @@ dietRouter.get("/plans/patient/:patientId", authMiddleware, dietController.getPa
 dietRouter.get("/plans/:id", authMiddleware, dietController.getPlanDetails.bind(dietController));
 dietRouter.put("/plans/:id", authMiddleware, dietController.updatePlan.bind(dietController));
 dietRouter.patch("/plans/:id/status", authMiddleware, dietController.updatePlanStatus.bind(dietController));
+dietRouter.get("/plans/:id/pdf", authMiddleware, dietController.openPlanPdf.bind(dietController));
+dietRouter.post("/plans/:id/pdf", authMiddleware, dietController.savePlanPdf.bind(dietController));
 
 export { dietRouter };

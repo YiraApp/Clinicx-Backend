@@ -343,9 +343,10 @@ export class PatientDietPlanService {
         if (data.description !== undefined) existing.Description = optionalText(data.description, "Description", 1000);
         if (data.condition !== undefined) existing.Condition = optionalText(data.condition, "Medical condition", 100);
         if (data.totalDays !== undefined) existing.TotalDays = validateTotalDays(data.totalDays, existing.TotalDays);
-        const { start, end } = validateDateRange(data.startDate ?? existing.StartDate, data.endDate ?? existing.EndDate);
+        // An empty or null end date means the plan has no end date.
+        const { start, end } = validateDateRange(data.startDate ?? existing.StartDate, data.endDate === undefined ? existing.EndDate : data.endDate);
         if (start) existing.StartDate = start;
-        if (data.endDate !== undefined) existing.EndDate = end;
+        if (data.endDate !== undefined) existing.EndDate = end ?? (null as any);
         const targets = validateTargets(data);
         existing.TargetCalories = targets.targetCalories ?? existing.TargetCalories;
         existing.TargetProteinG = targets.targetProteinG ?? existing.TargetProteinG;

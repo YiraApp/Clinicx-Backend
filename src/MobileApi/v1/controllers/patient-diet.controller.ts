@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { patientDietPlanService } from "../../../services/Diet/patient-diet-plan.service.js";
 import { DietValidationError } from "../../../services/Diet/diet-validation.js";
 import { blobService } from "../../../services/Common/blob.service.js";
+import { dietPlanDocumentService } from "../../../services/Diet/diet-plan-document.service.js";
+import { sendPdf } from "../../../utils/send-pdf.js";
 
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
 const PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"];
@@ -103,6 +105,32 @@ export class MobilePatientDietController {
         } catch (error: any) {
             console.error("Error in getPlanDetails:", error);
             res.status(500).json({ error: "Failed to fetch plan details." });
+        }
+    }
+
+    /**
+     * GET /plan/:planId/pdf
+     * One of the patient's plans as a PDF (their own plans too); ?download=1 asks the browser to save it.
+     */
+    async downloadPlanPdf(req: Request, res: Response) {
+        try {
+            const patientId = signedInPatientId(req);
+            if (!patientId) {
+                return res.status(401).json({ error: "Patient authentication required." });
+            }
+            const planId = planIdParam(req);
+            if (!planId) {
+                return res.status(400).json({ error: "Invalid plan id." });
+            }
+            const plan = await patientDietPlanService.getPlanDetailsForPatient(planId, patientId);
+            const pdf = plan ? await dietPlanDocumentService.buildPdf(planId) : null;
+            if (!pdf) {
+                return res.status(404).json({ error: "Diet plan not found." });
+            }
+            sendPdf(res, pdf.buffer, pdf.fileName, req.query.download === "1");
+        } catch (error: any) {
+            console.error("Error in downloadPlanPdf:", error);
+            res.status(500).json({ error: "Couldn't create the diet plan PDF." });
         }
     }
 

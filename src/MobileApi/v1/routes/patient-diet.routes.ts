@@ -10,6 +10,7 @@ const mobileDietRouter = Router();
 mobileDietRouter.get("/active-plan", authMiddleware, mobilePatientDietController.getActivePlan.bind(mobilePatientDietController));
 mobileDietRouter.get("/today", authMiddleware, mobilePatientDietController.getTodayMeals.bind(mobilePatientDietController));
 mobileDietRouter.get("/plan/:planId", authMiddleware, mobilePatientDietController.getPlanDetails.bind(mobilePatientDietController));
+mobileDietRouter.get("/plan/:planId/pdf", authMiddleware, mobilePatientDietController.downloadPlanPdf.bind(mobilePatientDietController));
 mobileDietRouter.put("/my-plan/:planId", authMiddleware, mobilePatientDietController.updateMyPlan.bind(mobilePatientDietController));
 mobileDietRouter.get("/my-plans", authMiddleware, mobilePatientDietController.listMyPlans.bind(mobilePatientDietController));
 mobileDietRouter.post("/my-plans", authMiddleware, mobilePatientDietController.createMyPlan.bind(mobilePatientDietController));
@@ -38,6 +39,8 @@ mobileDietRouter.get("/patients/:patientId/plans", authMiddleware, dietControlle
 mobileDietRouter.get("/doctor/plans/:id", authMiddleware, dietController.getPlanDetails.bind(dietController));
 mobileDietRouter.put("/doctor/plans/:id", authMiddleware, dietController.updatePlan.bind(dietController));
 mobileDietRouter.patch("/doctor/plans/:id/status", authMiddleware, dietController.updatePlanStatus.bind(dietController));
+mobileDietRouter.get("/doctor/plans/:id/pdf", authMiddleware, dietController.openPlanPdf.bind(dietController));
+mobileDietRouter.post("/doctor/plans/:id/pdf", authMiddleware, dietController.savePlanPdf.bind(dietController));
 
 export { mobileDietRouter };
 

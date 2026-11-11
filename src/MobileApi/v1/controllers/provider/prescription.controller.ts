@@ -296,8 +296,10 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
 
     // 7. Update or Insert into MedicalDocuments archive
     try {
+        // Only this appointment's generated prescription PDF (Prescription_<id>.pdf, whatever its category)
+        // may be replaced, never the diet plan PDFs, reports or other files filed under the same appointment.
         const existingDocs = await AppDataSource.query(
-            "SELECT TOP 1 Id FROM MedicalDocuments WHERE (FileName LIKE @0 OR AppointmentId = @1) AND PatientId = @2",
+            "SELECT TOP 1 Id FROM MedicalDocuments WHERE (FileName LIKE @0 OR (AppointmentId = @1 AND FileName LIKE 'Prescription[_]%')) AND PatientId = @2",
             [`%${prescription.Id}%`, Number(prescription.AppointmentId) || -1, String(patientId)]
         );
 

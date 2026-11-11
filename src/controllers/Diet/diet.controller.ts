@@ -5,6 +5,8 @@ import { patientDietPlanService } from "../../services/Diet/patient-diet-plan.se
 import { patientAccessConsentService } from "../../MobileApi/v1/services/consent/patient-access-consent.service.js";
 import { DietFoodImagesService } from "../../services/Diet/diet-food-images.service.js";
 import { DietValidationError } from "../../services/Diet/diet-validation.js";
+import { dietPlanDocumentService } from "../../services/Diet/diet-plan-document.service.js";
+import { sendPdf } from "../../utils/send-pdf.js";
 
 function getOrganizationId(req: Request): number | undefined {
     const orgId = req.headers["x-org-id"] 
@@ -259,7 +261,9 @@ export class DietController {
                 doctorId
             });
 
-            res.status(201).json(plan);
+            // Keep a PDF of the plan in the patient's documents.
+            const document = plan ? await dietPlanDocumentService.saveToDocumentsQuietly(plan.Id) : null;
+            res.status(201).json(document ? { ...plan, PdfUrl: document.url, DocumentId: document.documentId } : plan);
         } catch (error: any) {
             sendError(res, error, "Failed to assign diet plan.", "assignPlan");
         }
@@ -334,7 +338,9 @@ export class DietController {
 
             const id = parseInt(String(req.params.id), 10);
             const updated = await patientDietPlanService.updatePlan(id, req.body, organizationId);
-            res.json(updated);
+            // The PDF in the patient's documents follows the plan.
+            const document = updated ? await dietPlanDocumentService.saveToDocumentsQuietly(id) : null;
+            res.json(document ? { ...updated, PdfUrl: document.url, DocumentId: document.documentId } : updated);
         } catch (error: any) {
             sendError(res, error, "Failed to update diet plan.", "updatePlan");
         }
@@ -354,6 +360,42 @@ export class DietController {
             sendError(res, error, "Failed to update plan status.", "updatePlanStatus");
         }
     }
+    /** GET /plans/:id/pdf: the plan as a PDF, built from what is saved now. For the clinic's staff and the patient. */
+    async openPlanPdf(req: Request, res: Response) {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid plan id." });
+            const userId = getAuthUserId(req);
+            const plan = await patientDietPlanService.getPlanDetails(id);
+            const isPatient = !!plan && !!userId && String(plan.PatientId).toLowerCase() === userId.toLowerCase();
+            if (!plan || !(isPatient || (await dietPlanDocumentService.canStaffOpen(userId, plan)))) {
+                return res.status(404).json({ error: "Diet plan not found." });
+            }
+            const pdf = await dietPlanDocumentService.buildPdf(id);
+            if (!pdf) return res.status(404).json({ error: "Diet plan not found." });
+            sendPdf(res, pdf.buffer, pdf.fileName, req.query.download === "1");
+        } catch (error: any) {
+            sendError(res, error, "Couldn't create the diet plan PDF.", "openPlanPdf");
+        }
+    }
+
+    /** POST /plans/:id/pdf: builds the plan's PDF again and saves it to the patient's documents. */
+    async savePlanPdf(req: Request, res: Response) {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid plan id." });
+            const plan = await patientDietPlanService.getPlanDetails(id);
+            if (!plan || !(await dietPlanDocumentService.canStaffOpen(getAuthUserId(req), plan))) {
+                return res.status(404).json({ error: "Diet plan not found." });
+            }
+            const document = await dietPlanDocumentService.saveToDocuments(id);
+            if (!document) return res.status(404).json({ error: "Diet plan not found." });
+            res.json({ success: true, message: "Diet plan PDF saved to the patient's documents.", url: document.url, documentId: document.documentId, fileName: document.fileName });
+        } catch (error: any) {
+            sendError(res, error, "Couldn't save the diet plan PDF to the patient's documents.", "savePlanPdf");
+        }
+    }
+
     // ----------------------------------------------------
     // FOOD IMAGE POPULATION (Admin only)
     // ----------------------------------------------------
