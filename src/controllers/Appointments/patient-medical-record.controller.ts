@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { patientMedicalRecordService } from "../../services/Appointments/patient-medical-record.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
+import { clinicalNoteFields } from "../../utils/clinical-note-fields.js";
+import { refreshAppointmentPrescriptionPdfs } from "../../services/Prescriptions/prescription-pdf-refresh.service.js";
 
 export class PatientMedicalRecordController {
     async addRecord(req: Request, res: Response): Promise<void> {
@@ -29,13 +31,16 @@ export class PatientMedicalRecordController {
                 OrganizationId: body.organizationId || body.OrganizationId,
                 HospitalId: body.hospitalId || body.HospitalId,
                 Status: body.status || body.Status || "Completed",
-                CreatedBy: body.createdBy || body.CreatedBy
+                CreatedBy: body.createdBy || body.CreatedBy,
+                ...clinicalNoteFields(body)
             };
 
             if (data.AppointmentId) data.AppointmentId = parseInt(String(data.AppointmentId));
             
             const record = await patientMedicalRecordService.addRecord(data);
             res.status(201).json(ApiResponse.success(record, "Medical record added successfully"));
+            // The visit's prescription PDF shows the medical record, so it is built again.
+            refreshAppointmentPrescriptionPdfs(data.AppointmentId);
         } catch (error: any) {
             console.error("Error in addRecord:", error);
             res.status(500).json(ApiResponse.error(error.message));
@@ -93,11 +98,13 @@ export class PatientMedicalRecordController {
             if (body.hospitalId !== undefined) data.HospitalId = body.hospitalId;
             if (body.status !== undefined) data.Status = body.status;
             if (body.updatedBy !== undefined) data.UpdatedBy = body.updatedBy;
+            Object.assign(data, clinicalNoteFields(body, true));
 
             if (data.AppointmentId !== undefined) data.AppointmentId = parseInt(String(data.AppointmentId));
 
             await patientMedicalRecordService.updateRecord(id as string, data);
             res.status(200).json(ApiResponse.success(null, "Medical record updated successfully"));
+            refreshAppointmentPrescriptionPdfs(data.AppointmentId, String(id));
         } catch (error: any) {
             console.error("Error in updateRecord:", error);
             res.status(500).json(ApiResponse.error(error.message));

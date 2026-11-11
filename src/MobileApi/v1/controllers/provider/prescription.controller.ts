@@ -14,6 +14,7 @@ import { MedicalDocument } from "../../../../models/Appointments/medical-documen
 import { medicalDocumentRepository } from "../../../../repositories/Appointments/medical-document.repository.js";
 import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
 import { normalizeLabTests } from "../../../../utils/prescription-lab-tests.utils.js";
+import { sortMedications } from "../../../../utils/prescription-medications.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -58,9 +59,11 @@ const buildPrescriptionHeader = (source: any) => {
             ? [normalizeDiagnosis(source)]
             : [];
 
-    const medications = Array.isArray(source.medications)
+    // Each medicine keeps its place on the prescription (1, 2, 3...), as the doctor wrote them.
+    const medications = (Array.isArray(source.medications)
         ? source.medications.map(normalizeMedication).filter((med: any) => !!med.Medication)
-        : [normalizeMedication(source)].filter((med: any) => !!med.Medication);
+        : [normalizeMedication(source)].filter((med: any) => !!med.Medication)
+    ).map((med: any, index: number) => ({ ...med, SortOrder: index + 1 }));
 
     const docName = source.doctorName || source.doctor || "";
     const hospName = source.hospitalName || source.hospital || "";
@@ -88,6 +91,73 @@ const buildPrescriptionHeader = (source: any) => {
  * Helper to generate prescription PDF and upload it directly to Azure Blob Storage.
  * Returns the public Azure Blob URL.
  */
+/** The prescription's lab tests in the order they were added, with the hospital catalogue's code, sample and preparation. */
+async function prescriptionLabTestsForPdf(prescriptionId: string) {
+    const rows: any[] = await AppDataSource.query(
+        `SELECT t.TestName, t.Category, t.Priority, t.Instructions, h.TestCode, h.SampleType, h.Preparation, h.Category AS CatalogCategory
+         FROM PrescriptionLabTests t
+         LEFT JOIN HospitalLabTests h ON h.Id = t.HospitalLabTestId
+         WHERE t.PrescriptionId = @0
+         ORDER BY t.Id`,
+        [prescriptionId]
+    );
+    return rows.map((r) => ({
+        name: r.TestName,
+        code: r.TestCode,
+        category: r.Category || r.CatalogCategory,
+        sampleType: r.SampleType,
+        preparation: r.Preparation,
+        priority: r.Priority,
+        instructions: r.Instructions,
+    }));
+}
+
+/**
+ * The medical record to print with a prescription: the one it was written from, else the latest
+ * record of the same visit. Read with SELECT * so newer note columns are used when they exist.
+ */
+async function clinicalRecordForPdf(prescription: PatientPrescription) {
+    const appointmentId = Number(prescription.AppointmentId) || 0;
+    const recordId = prescription.MedicalRecordId ? String(prescription.MedicalRecordId) : null;
+    if (!appointmentId && !recordId) return null;
+    const [r]: any[] = await AppDataSource.query(
+        `SELECT TOP 1 * FROM PatientMedicalRecord
+         WHERE PatientId = @0 AND (CAST(Id AS NVARCHAR(64)) = @1 OR (@2 > 0 AND AppointmentId = @2))
+           AND ISNULL(Status, '') <> 'Deleted'
+         ORDER BY CASE WHEN CAST(Id AS NVARCHAR(64)) = @1 THEN 0 ELSE 1 END, COALESCE(UpdatedAt, CreatedAt) DESC`,
+        [String(prescription.PatientId), recordId ?? "", appointmentId]
+    ).catch((error: any) => {
+        console.warn("[Prescription] Medical record for the PDF could not be read:", error?.message ?? error);
+        return [];
+    });
+    if (!r) return null;
+    return {
+        chiefComplaint: r.ChiefComplaint,
+        symptoms: r.Symptoms,
+        historyOfPresentIllness: r.HistoryOfPresentIllness,
+        pastHistory: r.PastHistory,
+        currentMedications: r.CurrentMedications,
+        vitals: {
+            temperature: r.Temperature,
+            pulse: r.HeartRate,
+            bloodPressure: r.BloodPressure,
+            respiratoryRate: r.RespiratoryRate,
+            spo2: r.SpO2,
+            weight: r.Weight,
+            height: r.Height,
+        },
+        generalExamination: r.PhysicalExamination,
+        cvs: r.CvsExamination,
+        rs: r.RespiratoryExamination,
+        abdomen: r.AbdomenExamination,
+        cns: r.CnsExamination,
+        diagnosis: r.Diagnosis,
+        diagnosisType: r.DiagnosisType,
+        treatment: r.Treatment,
+        followUpDate: r.FollowUpDate,
+    };
+}
+
 export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overrides?: any): Promise<string> {
     const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
     const prescription = await prescriptionRepo.findOne({
@@ -208,8 +278,8 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
         }
     }
 
-    // 4. Medications & Diagnoses
-    const medications = (prescription.Medications || []).map((m: any) => {
+    // 4. Medications (in the order the doctor wrote them) & Diagnoses
+    const medications = sortMedications(prescription.Medications || []).map((m: any) => {
         const overrideMed = Array.isArray(overrides?.medications)
             ? overrides.medications.find((om: any) => (om.medication || om.name || om.Medication) === (m.Medication || m.medication))
             : null;
@@ -244,7 +314,10 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
         typeof d === "string" ? d : (d.Diagnosis || d.diagnosis || "")
     ).filter(Boolean);
 
+    const clinicalRecord = await clinicalRecordForPdf(prescription);
+
     const pdfBuffer = await prescriptionPdfService.generatePrescriptionPdf({
+        clinicalRecord,
         hospital: {
             name: hospitalName,
             address: hospitalAddress,
@@ -277,11 +350,7 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             appointmentId: prescription.AppointmentId && String(prescription.AppointmentId).trim() !== "0" ? String(prescription.AppointmentId).trim() : undefined,
             diagnoses,
             medications,
-            labTests: (prescription.LabTests || []).map((test: any) => ({
-                name: test.TestName,
-                priority: test.Priority,
-                instructions: test.Instructions
-            })),
+            labTests: await prescriptionLabTestsForPdf(String(prescription.Id)),
             notes: prescription.Notes || overrides?.notes || overrides?.Notes || undefined
         }
     });
@@ -292,7 +361,8 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
     console.log(`[Prescription] Uploaded PDF to Azure Blob: ${blobUrl}`);
 
     // 6. Update database with Azure Blob URL
-    await AppDataSource.query("UPDATE PatientPrescription SET PdfUrl = @0, UpdatedAt = GETDATE() WHERE Id = @1", [blobUrl, prescription.Id]);
+    // Times are written as India time by the app (Azure SQL's GETDATE() is UTC).
+    await AppDataSource.query("UPDATE PatientPrescription SET PdfUrl = @0, UpdatedAt = @2 WHERE Id = @1", [blobUrl, prescription.Id, new Date()]);
 
     // 7. Update or Insert into MedicalDocuments archive
     try {
@@ -305,8 +375,8 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
 
         if (existingDocs && existingDocs.length > 0) {
             await AppDataSource.query(
-                "UPDATE MedicalDocuments SET BlobUrl = @0, FileSize = @1, UpdatedAt = GETDATE() WHERE Id = @2",
-                [blobUrl, pdfBuffer.length, existingDocs[0].Id]
+                "UPDATE MedicalDocuments SET BlobUrl = @0, FileSize = @1, UpdatedAt = @3 WHERE Id = @2",
+                [blobUrl, pdfBuffer.length, existingDocs[0].Id, new Date()]
             );
         } else {
             const medDoc = new MedicalDocument();
@@ -323,6 +393,7 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             medDoc.FileSize = pdfBuffer.length;
             medDoc.MimeType = "application/pdf";
             medDoc.FileExtension = ".pdf";
+            medDoc.CreatedAt = new Date();
             await medicalDocumentRepository.save(medDoc);
         }
     } catch (docErr) {

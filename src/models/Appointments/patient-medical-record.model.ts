@@ -82,6 +82,39 @@ export class PatientMedicalRecord {
     @Column({ type: "nvarchar", length: 50, nullable: true })
     SpO2?: string;
 
+    // Clinical history and examination, laid out the way doctors write an OPD note.
+    @Column({ type: "nvarchar", length: 50, nullable: true })
+    RespiratoryRate?: string;
+
+    /** H/O: onset, progression, severity, associated symptoms. */
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    HistoryOfPresentIllness?: string;
+
+    /** Relevant past and comorbid history (DM, HTN, asthma, thyroid, past surgeries). */
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    PastHistory?: string;
+
+    /** Medicines the patient already takes, to check for interactions. */
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    CurrentMedications?: string;
+
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    CvsExamination?: string;
+
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    RespiratoryExamination?: string;
+
+    /** P/A: per abdomen. */
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    AbdomenExamination?: string;
+
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    CnsExamination?: string;
+
+    /** Provisional or Confirmed. */
+    @Column({ type: "nvarchar", length: 20, nullable: true })
+    DiagnosisType?: string;
+
     @Column({ type: "nvarchar", length: 100, nullable: true })
     Status?: string;
 

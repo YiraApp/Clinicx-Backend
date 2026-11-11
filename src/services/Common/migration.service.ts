@@ -289,4 +289,33 @@ export class MigrationService {
             console.error("Failed to ensure log indexes:", error);
         }
     }
+
+    /**
+     * Columns for the medicine order on prescriptions and the clinical note in medical records.
+     * Each statement runs on its own, so one failure doesn't skip the rest; all are no-ops once added.
+     */
+    static async ensureClinicalColumns() {
+        const columns: Array<[string, string, string]> = [
+            ["PrescriptionMedication", "SortOrder", "INT NULL"],
+            ["PatientMedicalRecord", "RespiratoryRate", "NVARCHAR(50) NULL"],
+            ["PatientMedicalRecord", "HistoryOfPresentIllness", "NVARCHAR(MAX) NULL"],
+            ["PatientMedicalRecord", "PastHistory", "NVARCHAR(MAX) NULL"],
+            ["PatientMedicalRecord", "CurrentMedications", "NVARCHAR(MAX) NULL"],
+            ["PatientMedicalRecord", "CvsExamination", "NVARCHAR(1000) NULL"],
+            ["PatientMedicalRecord", "RespiratoryExamination", "NVARCHAR(1000) NULL"],
+            ["PatientMedicalRecord", "AbdomenExamination", "NVARCHAR(1000) NULL"],
+            ["PatientMedicalRecord", "CnsExamination", "NVARCHAR(1000) NULL"],
+            ["PatientMedicalRecord", "DiagnosisType", "NVARCHAR(20) NULL"],
+            ["PatientMedicalRecord", "SpO2", "NVARCHAR(50) NULL"],
+        ];
+        for (const [table, column, type] of columns) {
+            try {
+                await AppDataSource.query(
+                    `IF OBJECT_ID('${table}') IS NOT NULL AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('${table}') AND name = '${column}') ALTER TABLE ${table} ADD ${column} ${type};`
+                );
+            } catch (error: any) {
+                console.error(`[Migration] ${table}.${column}: ${error.message}`);
+            }
+        }
+    }
 }

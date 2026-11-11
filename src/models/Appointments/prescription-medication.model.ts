@@ -39,6 +39,10 @@ export class PrescriptionMedication {
     @Column({ type: "nvarchar", length: 100, nullable: true })
     Route?: string;
 
+    /** The medicine's place on the prescription (1, 2, 3...), as the doctor wrote them. */
+    @Column({ type: "int", nullable: true })
+    SortOrder?: number | null;
+
     @Column({ type: "datetime", default: () => "GETUTCDATE()" })
     CreatedAt: Date;
 

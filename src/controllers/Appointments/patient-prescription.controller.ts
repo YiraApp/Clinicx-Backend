@@ -48,9 +48,11 @@ const buildPrescriptionHeader = (source: any) => {
             ? [normalizeDiagnosis(source)]
             : [];
 
-    const medications = Array.isArray(source.medications)
+    // Each medicine keeps its place on the prescription (1, 2, 3...), as the doctor wrote them.
+    const medications = (Array.isArray(source.medications)
         ? source.medications.map(normalizeMedication).filter((med: any) => !!med.Medication)
-        : [normalizeMedication(source)].filter((med: any) => !!med.Medication);
+        : [normalizeMedication(source)].filter((med: any) => !!med.Medication)
+    ).map((med: any, index: number) => ({ ...med, SortOrder: index + 1 }));
 
     return {
         PatientId: source.patientId || source.PatientId,

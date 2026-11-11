@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Relation } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Relation, AfterLoad } from "typeorm/index.js";
+import { compareMedications } from "../../utils/prescription-medications.js";
 import { User } from "../Account/user.model.js";
 import { PrescriptionDiagnosis } from "./prescription-diagnosis.model.js";
 import { PrescriptionMedication } from "./prescription-medication.model.js";
@@ -63,4 +64,10 @@ export class PatientPrescription {
 
     @OneToMany(() => PrescriptionLabTest, (test) => test.Prescription, { cascade: true })
     LabTests?: PrescriptionLabTest[];
+
+    /** Medicines always come back in the order the doctor wrote them, whichever query loaded them. */
+    @AfterLoad()
+    sortMedications() {
+        if (Array.isArray(this.Medications)) this.Medications.sort(compareMedications);
+    }
 }

@@ -49,11 +49,60 @@ export interface PrescriptionPdfInput {
         }>;
         labTests?: Array<{
             name: string;
+            code?: string | null;
+            category?: string | null;
+            sampleType?: string | null;
+            preparation?: string | null;
             priority?: string;
             instructions?: string | null;
         }>;
         notes?: string;
     };
+    /** The visit's medical record, printed above the medicines when there is one. */
+    clinicalRecord?: {
+        chiefComplaint?: string | null;
+        symptoms?: string | null;
+        historyOfPresentIllness?: string | null;
+        pastHistory?: string | null;
+        currentMedications?: string | null;
+        vitals?: {
+            temperature?: string | null;
+            pulse?: string | null;
+            bloodPressure?: string | null;
+            respiratoryRate?: string | null;
+            spo2?: string | null;
+            weight?: string | null;
+            height?: string | null;
+        };
+        generalExamination?: string | null;
+        cvs?: string | null;
+        rs?: string | null;
+        abdomen?: string | null;
+        cns?: string | null;
+        diagnosis?: string | null;
+        diagnosisType?: string | null;
+        treatment?: string | null;
+        followUpDate?: Date | string | null;
+    } | null;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const filled = (value?: string | null) => (value ?? "").trim();
+/** A vital with its unit when only the number was typed ("80" pulse is "80 /min"). */
+function vitalText(value: string | null | undefined, unit: string): string {
+    const v = filled(value);
+    if (!v) return "";
+    if (unit === "temp") {
+        if (!/^\d+(\.\d+)?$/.test(v)) return v;
+        return Number(v) >= 50 ? `${v} \u00b0F` : `${v} \u00b0C`;
+    }
+    if (unit === "mmHg") return /^\d{2,3}\s*\/\s*\d{2,3}$/.test(v) ? `${v.replace(/\s+/g, "")} mmHg` : v;
+    return /^\d+(\.\d+)?$/.test(v) ? `${v} ${unit}` : v;
+}
+function shortDate(value?: Date | string | null): string {
+    if (!value) return "";
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value) : `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 function isValidImageBuffer(buf: Buffer): boolean {
@@ -172,6 +221,47 @@ export class PrescriptionPdfService {
                         y = doc.y;
                     }
                     return y;
+                };
+
+                // A titled panel of label / value rows (the clinical note). It grows to fit, and its rows
+                // carry on to the next page under the repeated title when it doesn't fit.
+                type Row = { label: string; value: string };
+                const LABEL_WIDTH = 150;
+                const valueWidth = contentWidth - LABEL_WIDTH - 12;
+                const rowHeight = (row: Row) => {
+                    doc.font("Helvetica-Bold").fontSize(8);
+                    const labelHeight = doc.heightOfString(row.label, { width: LABEL_WIDTH - 20 });
+                    doc.font("Helvetica").fontSize(8.5);
+                    return Math.ceil(Math.max(labelHeight, doc.heightOfString(row.value, { width: valueWidth })) + 11);
+                };
+                const panelTitle = (title: string, tag: string, continued: boolean) => {
+                    doc.roundedRect(margin, cursorY, contentWidth, 20, 4).fill("#EEF2FF");
+                    doc.rect(margin, cursorY, 3, 20).fill("#1E3A8A");
+                    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#1E3A8A")
+                       .text(continued ? `${title} (continued)` : title, margin + 12, cursorY + 6, { width: contentWidth - 130 });
+                    doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#64748B")
+                       .text(tag, margin + contentWidth - 118, cursorY + 6.5, { width: 108, align: "right" });
+                    cursorY += 20;
+                };
+                const drawPanel = (title: string, tag: string, rows: Row[], strip?: { height: number; draw: () => void }) => {
+                    if (!rows.length && !strip) return;
+                    ensureRoom(20 + (strip?.height ?? 0) + (rows.length ? rowHeight(rows[0]) : 0) + 4);
+                    panelTitle(title, tag, false);
+                    strip?.draw();
+                    rows.forEach((row, index) => {
+                        const height = rowHeight(row);
+                        if (cursorY + height > footerY - 14) {
+                            doc.addPage();
+                            cursorY = 36;
+                            panelTitle(title, tag, true);
+                        }
+                        if (index % 2 === 1) doc.rect(margin, cursorY, contentWidth, height).fill("#F8FAFC");
+                        doc.moveTo(margin, cursorY + height).lineTo(margin + contentWidth, cursorY + height).strokeColor("#E2E8F0").lineWidth(0.5).stroke();
+                        doc.font("Helvetica-Bold").fontSize(8).fillColor("#475569").text(row.label, margin + 12, cursorY + 6, { width: LABEL_WIDTH - 20 });
+                        doc.font("Helvetica").fontSize(8.5).fillColor("#0F172A").text(row.value, margin + LABEL_WIDTH, cursorY + 5.5, { width: valueWidth });
+                        cursorY += height;
+                    });
+                    cursorY += 12;
                 };
 
                 // Hospital Logo (Real Logo)
@@ -337,8 +427,69 @@ export class PrescriptionPdfService {
                 drawStack(patientLines, margin + 12, cursorY + 8, docColWidth);
                 drawStack(doctorLines, margin + halfWidth + 14, cursorY + 8, docColWidth);
 
-                // ── Diagnoses Section (if present) ──
                 cursorY += cardHeight + 10;
+
+                // ── The visit's medical record (C/O, H/O, examination, vitals) ──
+                const record = data.clinicalRecord;
+                const rxDiagnosisText = (data.prescription.diagnoses || []).join(", ").replace(/\s+/g, " ").trim().toLowerCase();
+                if (record) {
+                    const complaint = filled(record.chiefComplaint);
+                    const symptoms = filled(record.symptoms);
+                    const subjective: Row[] = [
+                        { label: "Chief Complaints (C/O)", value: complaint },
+                        { label: "Symptoms", value: symptoms && symptoms.toLowerCase() !== complaint.toLowerCase() ? symptoms : "" },
+                        { label: "History of Present Illness (H/O)", value: filled(record.historyOfPresentIllness) },
+                        { label: "Past / Comorbid History", value: filled(record.pastHistory) },
+                        { label: "Current Medications", value: filled(record.currentMedications) },
+                    ].filter(r => r.value);
+                    drawPanel("CLINICAL HISTORY & PRESENTATION", "Subjective", subjective);
+
+                    const v = record.vitals || {};
+                    const vitals = [
+                        { label: "TEMP", value: vitalText(v.temperature, "temp") },
+                        { label: "PULSE", value: vitalText(v.pulse, "/min") },
+                        { label: "BP", value: vitalText(v.bloodPressure, "mmHg") },
+                        { label: "RR", value: vitalText(v.respiratoryRate, "/min") },
+                        { label: "SPO2", value: vitalText(v.spo2, "%") },
+                        { label: "WEIGHT", value: vitalText(v.weight, "kg") },
+                        { label: "HEIGHT", value: vitalText(v.height, "cm") },
+                    ].filter(t => t.value);
+                    let strip: { height: number; draw: () => void } | undefined;
+                    if (vitals.length) {
+                        const gap = 6;
+                        const tileWidth = (contentWidth - 20 - gap * (vitals.length - 1)) / vitals.length;
+                        doc.font("Helvetica-Bold").fontSize(9.5);
+                        const valueHeight = Math.max(...vitals.map(t => doc.heightOfString(keepUnits(t.value), { width: tileWidth - 12 })));
+                        const tileHeight = Math.ceil(7 + 9 + 2 + valueHeight + 6);
+                        strip = {
+                            height: tileHeight + 14,
+                            draw: () => {
+                                const top = cursorY + 7;
+                                vitals.forEach((t, i) => {
+                                    const x = margin + 10 + i * (tileWidth + gap);
+                                    doc.roundedRect(x, top, tileWidth, tileHeight, 4).fillAndStroke("#F8FAFC", "#E2E8F0");
+                                    doc.font("Helvetica-Bold").fontSize(7).fillColor("#64748B").text(t.label, x + 6, top + 6, { width: tileWidth - 12 });
+                                    doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0F172A").text(keepUnits(t.value), x + 6, top + 17, { width: tileWidth - 12 });
+                                });
+                                cursorY = top + tileHeight + 7;
+                            },
+                        };
+                    }
+                    const systemic = [
+                        ["CVS", record.cvs], ["RS", record.rs], ["P/A", record.abdomen], ["CNS", record.cns],
+                    ].filter(([, value]) => filled(value as string)).map(([name, value]) => `${name}: ${filled(value as string)}`);
+                    const diagnosis = filled(record.diagnosis);
+                    const diagnosisLabel = filled(record.diagnosisType).toLowerCase() === "confirmed" ? "Confirmed Diagnosis" : "Provisional Diagnosis";
+                    const objective: Row[] = [
+                        { label: "General Examination", value: filled(record.generalExamination) },
+                        { label: "Systemic Examination", value: systemic.join("\n") },
+                        // Not repeated when it is the same as the prescription's diagnosis below.
+                        { label: diagnosisLabel, value: diagnosis && diagnosis.toLowerCase() !== rxDiagnosisText ? diagnosis : "" },
+                    ].filter(r => r.value);
+                    drawPanel("CLINICAL EXAMINATION & VITALS", "Objective", objective, strip);
+                }
+
+                // ── Diagnoses Section (if present) ──
                 if (data.prescription.diagnoses && data.prescription.diagnoses.length > 0) {
                     // Split, trim and de-duplicate so stray separators (",viral pyrexia") don't show.
                     const validDiag: string[] = [];
@@ -349,10 +500,12 @@ export class PrescriptionPdfService {
                         }
                     }
                     if (validDiag.length > 0) {
+                        doc.fontSize(8).font("Helvetica");
+                        ensureRoom(doc.heightOfString(`DIAGNOSIS / CLINICAL IMPRESSION: ${validDiag.join(", ")}`, { width: contentWidth }) + 10);
                         doc.fontSize(8)
                            .font("Helvetica-Bold")
                            .fillColor("#475569")
-                           .text("DIAGNOSIS / CLINICAL IMPRESSION: ", margin, cursorY, { continued: true })
+                           .text("DIAGNOSIS / CLINICAL IMPRESSION: ", margin, cursorY, { continued: true, width: contentWidth })
                            .font("Helvetica")
                            .fillColor("#0F172A")
                            .text(validDiag.join(", "));
@@ -525,22 +678,79 @@ export class PrescriptionPdfService {
                     }
                 }
 
-                // ── Lab Tests Section (Only when the doctor ordered tests) ──
+                // ── Lab Tests Section (Only when the doctor ordered tests): the test and its instructions ──
                 const labTests = data.prescription.labTests || [];
                 if (labTests.length > 0) {
-                    cursorY += 14;
-                    ensureRoom(24);
-                    doc.fontSize(9).font("Helvetica-Bold").fillColor("#1E3A8A")
-                       .text("LAB TESTS ADVISED", margin, cursorY);
-                    cursorY = doc.y + 5;
-                    labTests.forEach((test, index) => {
-                        const urgent = (test.priority || "").toLowerCase() === "urgent";
-                        const line = `${index + 1}. ${test.name}${urgent ? " (Urgent)" : ""}${test.instructions ? ` - ${test.instructions}` : ""}`;
-                        doc.fontSize(8.5).font("Helvetica");
-                        ensureRoom(doc.heightOfString(line, { width: contentWidth }) + 4);
-                        doc.fillColor("#334155").text(line, margin, cursorY, { width: contentWidth });
-                        cursorY = doc.y + 3;
+                    cursorY += 16;
+                    const labSnoWidth = 24;
+                    const labTestWidth = 230;
+                    const labNoteWidth = contentWidth - labSnoWidth - labTestWidth;
+                    const labX = { sno: margin, test: margin + labSnoWidth, note: margin + labSnoWidth + labTestWidth };
+                    const labRows = labTests.map(test => {
+                        const name = keepUnits(filled(test.name) || "NA");
+                        // The doctor's instructions, then the hospital's preparation notes for the test.
+                        const instructions = keepUnits(filled(test.instructions));
+                        const preparation = keepUnits(filled(test.preparation));
+                        const nameHeight = doc.font("Helvetica-Bold").fontSize(8.5).heightOfString(name, { width: labTestWidth - 10 });
+                        const instructionsHeight = instructions ? doc.font("Helvetica").fontSize(8).heightOfString(instructions, { width: labNoteWidth - 12 }) : 0;
+                        const preparationHeight = preparation ? doc.font("Helvetica-Oblique").fontSize(7.5).heightOfString(`Prep: ${preparation}`, { width: labNoteWidth - 12 }) + (instructions ? 2 : 0) : 0;
+                        const height = Math.ceil(Math.max(24, 7 + nameHeight + 7, 7 + Math.max(instructionsHeight + preparationHeight, 9) + 7));
+                        return { name, instructions, preparation, instructionsHeight, height };
                     });
+
+                    const drawLabHeader = () => {
+                        doc.roundedRect(margin, cursorY, contentWidth, 20, 4).fill("#1E3A8A");
+                        doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#FFFFFF");
+                        doc.text("#", labX.sno, cursorY + 6, { width: labSnoWidth, align: "center" });
+                        doc.text("TEST", labX.test + 5, cursorY + 6, { width: labTestWidth - 10 });
+                        doc.text("INSTRUCTIONS", labX.note + 6, cursorY + 6, { width: labNoteWidth - 12 });
+                        cursorY += 20;
+                    };
+
+                    // Heading, table header and the first row stay together.
+                    ensureRoom(26 + 20 + labRows[0].height);
+                    doc.roundedRect(margin, cursorY, 30, 20, 4).fill("#1E3A8A");
+                    doc.font("Helvetica-Bold").fontSize(9).fillColor("#FFFFFF").text("Lab", margin, cursorY + 5.5, { width: 30, align: "center" });
+                    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#1E3A8A").text("LAB TESTS ADVISED", margin + 38, cursorY + 5);
+                    cursorY += 26;
+                    drawLabHeader();
+
+                    labRows.forEach((row, index) => {
+                        if (cursorY + row.height > footerY - 14) {
+                            doc.addPage();
+                            cursorY = 36;
+                            drawLabHeader();
+                        }
+                        doc.rect(margin, cursorY, contentWidth, row.height).fill(index % 2 === 0 ? "#FFFFFF" : "#F8FAFC");
+                        doc.moveTo(margin, cursorY + row.height).lineTo(margin + contentWidth, cursorY + row.height).strokeColor("#E2E8F0").lineWidth(0.5).stroke();
+                        doc.font("Helvetica-Bold").fontSize(8).fillColor("#475569").text(String(index + 1), labX.sno, cursorY + 7.5, { width: labSnoWidth, align: "center" });
+                        doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0F172A").text(row.name, labX.test + 5, cursorY + 7, { width: labTestWidth - 10 });
+                        let noteY = cursorY + 7;
+                        if (row.instructions) {
+                            doc.font("Helvetica").fontSize(8).fillColor("#334155").text(row.instructions, labX.note + 6, noteY, { width: labNoteWidth - 12 });
+                            noteY += row.instructionsHeight + 2;
+                        }
+                        if (row.preparation) {
+                            doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#64748B").text(`Prep: ${row.preparation}`, labX.note + 6, noteY, { width: labNoteWidth - 12 });
+                        }
+                        if (!row.instructions && !row.preparation) {
+                            doc.font("Helvetica").fontSize(8).fillColor("#94A3B8").text("-", labX.note + 6, noteY, { width: labNoteWidth - 12 });
+                        }
+                        cursorY += row.height;
+                    });
+                }
+
+                // ── Plan and follow-up from the medical record ──
+                if (record) {
+                    const plan: Row[] = [
+                        { label: "Treatment Plan", value: filled(record.treatment) },
+                        { label: "Follow-up", value: shortDate(record.followUpDate) },
+                    ].filter(r => r.value);
+                    if (plan.length) {
+                        cursorY += 14;
+                        drawPanel("PLAN & FOLLOW-UP", "", plan);
+                        cursorY -= 12;
+                    }
                 }
 
                 // ── Additional Notes / Advice Section (Only if present in DB) ──

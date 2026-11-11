@@ -4,6 +4,8 @@ import { pushNotificationService } from "../../../../services/Notifications/push
 import { AppDataSource } from "../../../../config/database.js";
 import { User } from "../../../../models/Account/user.model.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
+import { clinicalNoteFields } from "../../../../utils/clinical-note-fields.js";
+import { refreshAppointmentPrescriptionPdfs } from "../../../../services/Prescriptions/prescription-pdf-refresh.service.js";
 
 export class MobileMedicalRecordController {
     async getPatientRecords(req: Request, res: Response) {
@@ -58,6 +60,7 @@ export class MobileMedicalRecordController {
                 Status: body.status || body.Status || "Completed",
                 CreatedBy: body.createdBy || body.CreatedBy || "Doctor"
             };
+            Object.assign(data, clinicalNoteFields(body));
 
             if (data.AppointmentId) {
                 data.AppointmentId = parseInt(String(data.AppointmentId));
@@ -89,6 +92,7 @@ export class MobileMedicalRecordController {
                 console.error("Failed to send medical record push notification:", e);
             }
 
+            refreshAppointmentPrescriptionPdfs(data.AppointmentId);
             return res.status(201).json(ApiResponse.success(record, "Medical record created successfully"));
         } catch (error: any) {
             console.error("Mobile Medical Record Add Error:", error);
@@ -133,7 +137,9 @@ export class MobileMedicalRecordController {
             if (body.status !== undefined) data.Status = body.status;
             if (body.updatedBy !== undefined) data.UpdatedBy = body.updatedBy;
 
+            Object.assign(data, clinicalNoteFields(body, true));
             await patientMedicalRecordService.updateRecord(String(id), data);
+            refreshAppointmentPrescriptionPdfs(data.AppointmentId, String(id));
             return res.json(ApiResponse.success(null, "Medical record updated successfully"));
         } catch (error: any) {
             console.error("Mobile Medical Record Update Error:", error);

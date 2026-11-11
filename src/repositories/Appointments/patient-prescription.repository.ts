@@ -2,13 +2,16 @@ import { AppDataSource } from "../../config/database.js";
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { PrescriptionDiagnosis } from "../../models/Appointments/prescription-diagnosis.model.js";
 import { PrescriptionMedication } from "../../models/Appointments/prescription-medication.model.js";
+import { planMedicationChanges } from "../../utils/prescription-medications.js";
 import { PrescriptionLabTest } from "../../models/Appointments/prescription-lab-test.model.js";
 
 export class PatientPrescriptionRepository {
     private repo = AppDataSource.getRepository(PatientPrescription);
 
     async create(data: Partial<PatientPrescription>): Promise<PatientPrescription> {
-        const record = this.repo.create(data);
+        // Set here, not by the column's GETDATE() default: Azure SQL's clock is UTC while the app
+        // stores India time, so the default put prescriptions (and their "Issued" time) 5.5 hours early.
+        const record = this.repo.create({ ...data, CreatedAt: data.CreatedAt ?? new Date() });
         return await this.repo.save(record);
     }
 
@@ -153,86 +156,33 @@ export class PatientPrescriptionRepository {
             }
         }
 
-        // Differential update for Medications: delete only removed, insert only new
+        // Medications: lines that stay keep their row and get their new place, new lines are
+        // inserted at theirs, and lines that were removed (or duplicated) are deleted.
         if (data.Medications) {
             const medRepo = AppDataSource.getRepository(PrescriptionMedication);
-
-            const existingMeds = existing.Medications || [];
-            const existingMedMap = new Map<string, { Id: string; CreatedAt?: Date }[]>();
-            for (const em of existingMeds) {
-                const key = [
-                    (em.Medication || "").toString().trim().toLowerCase(),
-                    (em.Dosage || "").toString().trim().toLowerCase(),
-                    (em.FrequencyType || "").toString().trim().toLowerCase(),
-                    (em.DurationUnit || "").toString().trim().toLowerCase(),
-                    (em.Route || "").toString().trim().toLowerCase(),
-                    (em.Instructions || "").toString().trim().toLowerCase()
-                ].join("|");
-                const arr = existingMedMap.get(key) || [];
-                arr.push({ Id: em.Id, CreatedAt: (em as any).CreatedAt });
-                existingMedMap.set(key, arr);
+            const plan = planMedicationChanges(existing.Medications || [], data.Medications as any[]);
+            for (const delId of plan.remove) {
+                await medRepo.delete(delId);
             }
-
-            // collapse duplicates in existing meds: keep earliest, delete others
-            for (const [key, arr] of existingMedMap.entries()) {
-                if (arr.length > 1) {
-                    arr.sort((a, b) => {
-                        const ta = a.CreatedAt ? new Date(a.CreatedAt).getTime() : 0;
-                        const tb = b.CreatedAt ? new Date(b.CreatedAt).getTime() : 0;
-                        return ta - tb;
-                    });
-                    const toDelete = arr.slice(1).map(x => x.Id);
-                    for (const delId of toDelete) {
-                        await medRepo.delete(delId);
-                    }
-                    existingMedMap.set(key, [arr[0]]);
-                }
+            for (const { id: keepId, sortOrder } of plan.keep) {
+                await medRepo.update(keepId, { SortOrder: sortOrder });
             }
-
-            const incomingMedKeys = new Set<string>();
-            for (const m of data.Medications) {
-                const mm = m as any;
-                const key = [
-                    (mm.Medication || mm.medication || "").toString().trim().toLowerCase(),
-                    (mm.Dosage || mm.dosage || "").toString().trim().toLowerCase(),
-                    (mm.FrequencyType || mm.frequencyType || mm.Frequency || mm.frequency || "").toString().trim().toLowerCase(),
-                    (mm.DurationUnit || mm.durationUnit || mm.Duration || mm.duration || "").toString().trim().toLowerCase(),
-                    (mm.Route || mm.route || "").toString().trim().toLowerCase(),
-                    (mm.Instructions || mm.instructions || "").toString().trim().toLowerCase()
-                ].join("|");
-                incomingMedKeys.add(key);
-                if (!existingMedMap.has(key)) {
-                    // insert new medication (schedules/days ignored for now)
-                    await medRepo.save(medRepo.create({
-                        PrescriptionId: id,
-                        Medication: mm.Medication || mm.medication,
-                        ConceptId: mm.ConceptId || mm.conceptId,
-                        Dosage: mm.Dosage || mm.dosage,
-                        DurationValue: mm.DurationValue || mm.durationValue,
-                        DurationUnit: mm.DurationUnit || mm.durationUnit || mm.Duration || mm.duration,
-                        FrequencyType: mm.FrequencyType || mm.frequencyType || mm.Frequency || mm.frequency,
-                        Instructions: mm.Instructions || mm.instructions,
-                        Route: mm.Route || mm.route
-                    }));
-                }
+            for (const { medication, sortOrder } of plan.insert) {
+                const mm = medication as any;
+                await medRepo.save(medRepo.create({
+                    PrescriptionId: id,
+                    Medication: mm.Medication || mm.medication,
+                    ConceptId: mm.ConceptId || mm.conceptId,
+                    Dosage: mm.Dosage || mm.dosage,
+                    DurationValue: mm.DurationValue || mm.durationValue,
+                    DurationUnit: mm.DurationUnit || mm.durationUnit || mm.Duration || mm.duration,
+                    FrequencyType: mm.FrequencyType || mm.frequencyType || mm.Frequency || mm.frequency,
+                    Instructions: mm.Instructions || mm.instructions,
+                    Route: mm.Route || mm.route,
+                    SortOrder: sortOrder
+                }));
             }
-
-            // Diagnostic logs for medications
-            try {
-                console.info("[prescription.update] PrescriptionId", id, "existingMedKeys:", Array.from(existingMedMap.keys()));
-                console.info("[prescription.update] incomingMedKeys:", Array.from(incomingMedKeys));
-            } catch (err) {
-                // ignore logging errors
-            }
-
-            // delete existing meds not in incoming
-            for (const [key, arr] of existingMedMap.entries()) {
-                if (!incomingMedKeys.has(key)) {
-                    for (const ex of arr) {
-                        await medRepo.delete(ex.Id);
-                    }
-                }
-            }
+            console.info("[prescription.update]", id, `medicines kept ${plan.keep.length}, added ${plan.insert.length}, removed ${plan.remove.length}`);
         }
 
         // Replaced only when sent: older app versions do not send lab tests.
