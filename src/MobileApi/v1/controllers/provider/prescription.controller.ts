@@ -132,9 +132,11 @@ async function clinicalRecordForPdf(prescription: PatientPrescription) {
     });
     if (!r) return null;
     return {
+        allergies: r.Allergies,
         chiefComplaint: r.ChiefComplaint,
         symptoms: r.Symptoms,
         historyOfPresentIllness: r.HistoryOfPresentIllness,
+        familyHistory: r.FamilyHistory,
         pastHistory: r.PastHistory,
         currentMedications: r.CurrentMedications,
         vitals: {

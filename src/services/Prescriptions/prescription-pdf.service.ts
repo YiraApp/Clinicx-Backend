@@ -60,6 +60,8 @@ export interface PrescriptionPdfInput {
     };
     /** The visit's medical record, printed above the medicines when there is one. */
     clinicalRecord?: {
+        allergies?: string | null;
+        familyHistory?: string | null;
         chiefComplaint?: string | null;
         symptoms?: string | null;
         historyOfPresentIllness?: string | null;
@@ -86,7 +88,6 @@ export interface PrescriptionPdfInput {
     } | null;
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const filled = (value?: string | null) => (value ?? "").trim();
 /** A vital with its unit when only the number was typed ("80" pulse is "80 /min"). */
 function vitalText(value: string | null | undefined, unit: string): string {
@@ -98,11 +99,6 @@ function vitalText(value: string | null | undefined, unit: string): string {
     }
     if (unit === "mmHg") return /^\d{2,3}\s*\/\s*\d{2,3}$/.test(v) ? `${v.replace(/\s+/g, "")} mmHg` : v;
     return /^\d+(\.\d+)?$/.test(v) ? `${v} ${unit}` : v;
-}
-function shortDate(value?: Date | string | null): string {
-    if (!value) return "";
-    const d = new Date(value);
-    return Number.isNaN(d.getTime()) ? String(value) : `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 function isValidImageBuffer(buf: Buffer): boolean {
@@ -239,8 +235,10 @@ export class PrescriptionPdfService {
                     doc.rect(margin, cursorY, 3, 20).fill("#1E3A8A");
                     doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#1E3A8A")
                        .text(continued ? `${title} (continued)` : title, margin + 12, cursorY + 6, { width: contentWidth - 130 });
-                    doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#64748B")
-                       .text(tag, margin + contentWidth - 118, cursorY + 6.5, { width: 108, align: "right" });
+                    if (tag) {
+                        doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#64748B")
+                           .text(tag, margin + contentWidth - 118, cursorY + 6.5, { width: 108, align: "right" });
+                    }
                     cursorY += 20;
                 };
                 const drawPanel = (title: string, tag: string, rows: Row[], strip?: { height: number; draw: () => void }) => {
@@ -429,20 +427,22 @@ export class PrescriptionPdfService {
 
                 cursorY += cardHeight + 10;
 
-                // ── The visit's medical record (C/O, H/O, examination, vitals) ──
+                // ── The visit's medical record: allergies first, then examination and vitals, then history ──
+                // (The record's own diagnosis and plan are not printed; the prescription's diagnosis is.)
                 const record = data.clinicalRecord;
-                const rxDiagnosisText = (data.prescription.diagnoses || []).join(", ").replace(/\s+/g, " ").trim().toLowerCase();
                 if (record) {
-                    const complaint = filled(record.chiefComplaint);
-                    const symptoms = filled(record.symptoms);
-                    const subjective: Row[] = [
-                        { label: "Chief Complaints (C/O)", value: complaint },
-                        { label: "Symptoms", value: symptoms && symptoms.toLowerCase() !== complaint.toLowerCase() ? symptoms : "" },
-                        { label: "History of Present Illness (H/O)", value: filled(record.historyOfPresentIllness) },
-                        { label: "Past / Comorbid History", value: filled(record.pastHistory) },
-                        { label: "Current Medications", value: filled(record.currentMedications) },
-                    ].filter(r => r.value);
-                    drawPanel("CLINICAL HISTORY & PRESENTATION", "Subjective", subjective);
+                    const allergies = filled(record.allergies);
+                    if (allergies) {
+                        const width = contentWidth - 24;
+                        doc.font("Helvetica-Bold").fontSize(9);
+                        const height = Math.ceil(doc.heightOfString(allergies, { width }) + 30);
+                        ensureRoom(height);
+                        doc.roundedRect(margin, cursorY, contentWidth, height, 5).fillAndStroke("#FEF2F2", "#FECACA");
+                        doc.rect(margin, cursorY, 3, height).fill("#B91C1C");
+                        doc.font("Helvetica-Bold").fontSize(8).fillColor("#991B1B").text("ALLERGIES", margin + 12, cursorY + 8, { width });
+                        doc.font("Helvetica-Bold").fontSize(9).fillColor("#7F1D1D").text(allergies, margin + 12, cursorY + 20, { width });
+                        cursorY += height + 12;
+                    }
 
                     const v = record.vitals || {};
                     const vitals = [
@@ -478,15 +478,23 @@ export class PrescriptionPdfService {
                     const systemic = [
                         ["CVS", record.cvs], ["RS", record.rs], ["P/A", record.abdomen], ["CNS", record.cns],
                     ].filter(([, value]) => filled(value as string)).map(([name, value]) => `${name}: ${filled(value as string)}`);
-                    const diagnosis = filled(record.diagnosis);
-                    const diagnosisLabel = filled(record.diagnosisType).toLowerCase() === "confirmed" ? "Confirmed Diagnosis" : "Provisional Diagnosis";
-                    const objective: Row[] = [
+                    const examination: Row[] = [
                         { label: "General Examination", value: filled(record.generalExamination) },
                         { label: "Systemic Examination", value: systemic.join("\n") },
-                        // Not repeated when it is the same as the prescription's diagnosis below.
-                        { label: diagnosisLabel, value: diagnosis && diagnosis.toLowerCase() !== rxDiagnosisText ? diagnosis : "" },
                     ].filter(r => r.value);
-                    drawPanel("CLINICAL EXAMINATION & VITALS", "Objective", objective, strip);
+                    drawPanel("CLINICAL EXAMINATION & VITALS", "", examination, strip);
+
+                    const complaint = filled(record.chiefComplaint);
+                    const symptoms = filled(record.symptoms);
+                    const history: Row[] = [
+                        { label: "Chief Complaints (C/O)", value: complaint },
+                        { label: "Symptoms", value: symptoms && symptoms.toLowerCase() !== complaint.toLowerCase() ? symptoms : "" },
+                        { label: "History of Present Illness (H/O)", value: filled(record.historyOfPresentIllness) },
+                        { label: "Family History", value: filled(record.familyHistory) },
+                        { label: "Past / Comorbid History", value: filled(record.pastHistory) },
+                        { label: "Current Medications", value: filled(record.currentMedications) },
+                    ].filter(r => r.value);
+                    drawPanel("CLINICAL HISTORY & PRESENTATION", "", history);
                 }
 
                 // ── Diagnoses Section (if present) ──
@@ -738,19 +746,6 @@ export class PrescriptionPdfService {
                         }
                         cursorY += row.height;
                     });
-                }
-
-                // ── Plan and follow-up from the medical record ──
-                if (record) {
-                    const plan: Row[] = [
-                        { label: "Treatment Plan", value: filled(record.treatment) },
-                        { label: "Follow-up", value: shortDate(record.followUpDate) },
-                    ].filter(r => r.value);
-                    if (plan.length) {
-                        cursorY += 14;
-                        drawPanel("PLAN & FOLLOW-UP", "", plan);
-                        cursorY -= 12;
-                    }
                 }
 
                 // ── Additional Notes / Advice Section (Only if present in DB) ──

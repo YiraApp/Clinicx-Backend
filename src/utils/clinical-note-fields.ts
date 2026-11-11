@@ -4,7 +4,9 @@
 const FIELDS: Array<[column: string, keys: string[]]> = [
     ["SpO2", ["spo2", "SpO2", "oxygenSaturation", "OxygenSaturation"]],
     ["RespiratoryRate", ["respiratoryRate", "RespiratoryRate", "rr"]],
+    ["Allergies", ["allergies", "Allergies"]],
     ["HistoryOfPresentIllness", ["historyOfPresentIllness", "HistoryOfPresentIllness", "presentIllness"]],
+    ["FamilyHistory", ["familyHistory", "FamilyHistory"]],
     ["PastHistory", ["pastHistory", "PastHistory", "comorbidities"]],
     ["CurrentMedications", ["currentMedications", "CurrentMedications"]],
     ["CvsExamination", ["cvsExamination", "CvsExamination", "cvs"]],

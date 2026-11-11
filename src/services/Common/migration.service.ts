@@ -298,6 +298,8 @@ export class MigrationService {
         const columns: Array<[string, string, string]> = [
             ["PrescriptionMedication", "SortOrder", "INT NULL"],
             ["PatientMedicalRecord", "RespiratoryRate", "NVARCHAR(50) NULL"],
+            ["PatientMedicalRecord", "Allergies", "NVARCHAR(MAX) NULL"],
+            ["PatientMedicalRecord", "FamilyHistory", "NVARCHAR(MAX) NULL"],
             ["PatientMedicalRecord", "HistoryOfPresentIllness", "NVARCHAR(MAX) NULL"],
             ["PatientMedicalRecord", "PastHistory", "NVARCHAR(MAX) NULL"],
             ["PatientMedicalRecord", "CurrentMedications", "NVARCHAR(MAX) NULL"],

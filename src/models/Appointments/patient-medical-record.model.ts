@@ -83,6 +83,13 @@ export class PatientMedicalRecord {
     SpO2?: string;
 
     // Clinical history and examination, laid out the way doctors write an OPD note.
+    /** Drug, food or other allergies; printed first on the prescription. */
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    Allergies?: string;
+
+    @Column({ type: "nvarchar", length: "MAX", nullable: true })
+    FamilyHistory?: string;
+
     @Column({ type: "nvarchar", length: 50, nullable: true })
     RespiratoryRate?: string;
 
