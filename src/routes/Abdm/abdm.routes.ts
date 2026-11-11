@@ -34,6 +34,8 @@ abdmRouter.get("/health-records/vitals/:id", hr.vitals.bind(hr));
 const m2 = abdmM2Controller;
 abdmRouter.get("/patients/:userId/care-contexts", abdmHospitalStaff, m2.careContexts.bind(m2));
 abdmRouter.get("/patients/:userId/care-contexts/:reference", abdmHospitalStaff, m2.careContextView.bind(m2));
+// M2: the PDF one record of a care context carries in its bundle, for the desk to see before sharing
+abdmRouter.get("/patients/:userId/care-contexts/:reference/records/:key/pdf", abdmHospitalStaff, m2.careContextPdf.bind(m2));
 // M2: the consents ABDM notified this HIP of for the patient, and what was pushed under each (read-only)
 abdmRouter.get("/patients/:userId/consents", abdmHospitalStaff, m2.consents.bind(m2));
 abdmRouter.post("/patients/:userId/link", abdmHospitalStaff, m2.link.bind(m2));

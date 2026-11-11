@@ -161,11 +161,14 @@ test("DiagnosticReport: the report file alone, typed as a laboratory report", ()
 
 test("DiagnosticReport: an entered lab report is a DiagnosticReportLab with its results, ranges, flags, specimen and file", () => {
     const bundle = build("DiagnosticReport");
-    assert.deepEqual(composition(bundle).section[0].entry.map((e: any) => e.type), ["DiagnosticReport"]);
+    // The report, and the PDF of it as unstructured data (record-pdf.test.ts)
+    assert.deepEqual(composition(bundle).section[0].entry.map((e: any) => e.type), ["DiagnosticReport", "DocumentReference"]);
     const report = resources(bundle, "DiagnosticReport")[0];
     assert.equal(report.meta.profile[0], NRCES + "DiagnosticReportLab");
     assert.deepEqual(report.category, [{ text: "Laboratory" }]);
-    assert.deepEqual(report.code.coding[0], { system: "http://loinc.org", code: "58410-2", display: "Complete blood count" });
+    // LOINC's words in the coding (the HL7 validator refuses any other display), the clinic's in the text
+    assert.deepEqual(report.code.coding[0], { system: "http://loinc.org", code: "58410-2", display: "CBC panel - Blood by Automated count" });
+    assert.equal(report.code.text, "Complete blood count");
     assert.equal(report.conclusion, "Mild anaemia.");
     assert.equal(report.conclusionCode[0].coding[0].code, "271737000");
     assert.equal(report.result.length, 3);
@@ -196,6 +199,21 @@ test("DiagnosticReport: an imaging report carries its image as Media; one withou
     assert.throws(() => build("DiagnosticReport", { ...imaging, document: null }), FhirSourceError);
 });
 
+test("DiagnosticReport: a quick-picked test's LOINC code carries LOINC's display; the clinic's name for it is the text", () => {
+    const entered = FIXTURES.DiagnosticReport.entered!;
+    const imaging = { ...FIXTURES.DiagnosticReport, kind: "imaging" as const, entered: { ...entered, results: [], specimen: null, test: { text: "Chest X-ray", conceptId: "36643-5" } } };
+    const xray = resources(build("DiagnosticReport", imaging), "DiagnosticReport")[0].code;
+    assert.deepEqual(xray, { coding: [{ system: "http://loinc.org", code: "36643-5", display: "XR Chest 2 Views" }], text: "Chest X-ray" });
+
+    // A LOINC code the quick picks don't offer (only an API call sends one): the clinic's words are all there is
+    const other = { ...FIXTURES.DiagnosticReport, entered: { ...entered, test: { text: "Vitamin D", conceptId: "1989-3" } } };
+    assert.deepEqual(resources(build("DiagnosticReport", other), "DiagnosticReport")[0].code.coding[0], { system: "http://loinc.org", code: "1989-3", display: "Vitamin D" });
+
+    // A SNOMED CT pick goes as the test's words alone, as before
+    const snomed = { ...FIXTURES.DiagnosticReport, entered: { ...entered, test: { text: "Blood count", conceptId: "26604007" } } };
+    assert.deepEqual(resources(build("DiagnosticReport", snomed), "DiagnosticReport")[0].code, { text: "Blood count" });
+});
+
 test("DischargeSummary: an inpatient stay, investigations and diagnoses listed, sections coded as DischargeSummaryRecord fixes", () => {
     const bundle = build("DischargeSummary");
     const c = composition(bundle);
@@ -204,8 +222,10 @@ test("DischargeSummary: an inpatient stay, investigations and diagnoses listed, 
     assert.ok(encounter.period.start && encounter.period.end);
     const byTitle = Object.fromEntries(c.section.map((s: any) => [s.title, s]));
     // Investigations typed as text are an observation a PHR app prints; the diagnoses a section of their own, both after the slices
-    assert.deepEqual(c.section.slice(-2).map((s: any) => [s.title, s.code.coding[0].system, s.code.coding[0].code]),
-        [["Investigations", "http://loinc.org", "30954-2"], ["Discharge diagnosis", "http://loinc.org", "11535-2"]]);
+    assert.deepEqual(c.section.slice(-2).map((s: any) => [s.title, s.code.coding[0].system, s.code.coding[0].code, s.code.coding[0].display]), [
+        ["Investigations", "http://loinc.org", "30954-2", "Relevant diagnostic tests/laboratory data note"],
+        ["Discharge diagnosis", "http://loinc.org", "11535-2", "Hospital discharge diagnosis note"],
+    ]);
     const investigations = resources(bundle, "Observation").find((o) => o.code.text === "Investigations");
     assert.ok(investigations.valueString.includes("Orthopantomogram") && investigations.effectivePeriod.start);
     assert.deepEqual(byTitle["Discharge diagnosis"].entry.map((e: any) => e.type), ["Condition"]);
@@ -221,13 +241,14 @@ test("ImmunizationRecord: the vaccine given and the dose due next", () => {
     assert.equal(immunization.protocolApplied[0].doseNumberPositiveInt, 1);
     const next = resources(bundle, "ImmunizationRecommendation")[0];
     assert.equal(next.recommendation[0].dateCriterion[0].value, "2026-11-20");
-    assert.deepEqual(composition(bundle).section[0].entry.map((e: any) => e.type), ["Immunization", "ImmunizationRecommendation", "DocumentReference"]);
+    // The certificate, then the PDF of the record
+    assert.deepEqual(composition(bundle).section[0].entry.map((e: any) => e.type), ["Immunization", "ImmunizationRecommendation", "DocumentReference", "DocumentReference"]);
 });
 
 test("WellnessRecord: sections by the titles NRCES slices on, observations by its wellness profiles", () => {
     const bundle = build("WellnessRecord");
     const sections = composition(bundle).section;
-    assert.deepEqual(sections.map((s: any) => s.title), ["Vital Signs", "Body Measurement", "Physical Activity", "General Assessment"]);
+    assert.deepEqual(sections.map((s: any) => s.title), ["Vital Signs", "Body Measurement", "Physical Activity", "General Assessment", "Document Reference"]);
     const profiles = new Set(resources(bundle, "Observation").map((o) => o.meta.profile[0].split("/").pop()));
     assert.deepEqual([...profiles].sort(), ["ObservationBodyMeasurement", "ObservationGeneralAssessment", "ObservationPhysicalActivity", "ObservationVitalSigns"]);
 });
@@ -369,7 +390,7 @@ test("ImmunizationRecord: the manufacturer where a PHR app prints it, and who ga
 test("WellnessRecord: the clinic's note, and measurements named as the clinic names them", () => {
     const bundle = buildWellnessRecord({ ...FIXTURES.WellnessRecord, notes: "Walks daily." }, NOW);
     const sections = composition(bundle).section;
-    assert.equal(sections.at(-1).title, "Other Observations");
+    assert.deepEqual(sections.slice(-2).map((s: any) => s.title), ["Other Observations", "Document Reference"], "the note, then the PDF, in NRCES's slice order");
     assert.ok(resources(bundle, "Observation").some((o) => o.valueString === "Walks daily."));
     const spo2 = resources(bundle, "Observation").find((o) => o.code.coding?.[0].code === "2708-6");
     assert.deepEqual([spo2.code.text, spo2.code.coding[0].display], ["Oxygen saturation (SpO2)", "Oxygen saturation in Arterial blood"]);

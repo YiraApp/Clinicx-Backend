@@ -284,6 +284,16 @@ test("a record saved while the token is on its way waits for it and is linked wi
     assert.deepEqual([...new Set(sent)].sort(), ["IP-3", "OP-101", "OP-102"]);
 });
 
+test("the desk's link shares only the records it reviewed; one that appeared after the review waits", async () => {
+    store.tokens.push({ patientUserId: PATIENT, hipId: HIP, abhaAddress: "asha.test@sbx", token: "kept", expiresAt: new Date(NOW.getTime() + 30 * 86400_000), requestId: "r" });
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.deepEqual(await linking.link(hip, PATIENT, ["OP-101"]), { queued: 1, status: "linking" });
+    const sent = gateway.last("/link/carecontext").body.patient.flatMap((p: any) => p.careContexts.map((c: any) => c.referenceNumber));
+    assert.deepEqual([...new Set(sent)], ["OP-101"]);
+    assert.deepEqual(store.contexts.filter((c) => c.linkStatus === "not-linked").map((c) => c.referenceNumber), ["IP-3"]);
+    assert.deepEqual(await linking.link(hip, PATIENT, []), { queued: 0, status: "nothing to link" }, "an empty review links nothing");
+});
+
 test("two links for one patient at once, a click and an auto-link, ask for one token", async () => {
     const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
     const results = await Promise.all([linking.link(hip, PATIENT), linking.link(hip, PATIENT)]);

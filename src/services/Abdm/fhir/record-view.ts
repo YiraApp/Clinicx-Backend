@@ -128,6 +128,8 @@ const lines = (r: any, resolve: Resolve): string[] => {
             ];
         }
         case "DocumentReference": {
+            // The PDF ClinicX built of the record (record-pdf.ts) is the record again: listed under its files only
+            if ((r.meta?.tag ?? []).some((t: any) => t?.code === "record-pdf")) return [];
             const attachment = r.content?.[0]?.attachment;
             return [join([r.description ?? attachment?.title ?? "Document", text(r.type), day(r.date ?? attachment?.creation)])];
         }
@@ -185,7 +187,11 @@ const attachmentsOf = (bundle: FhirBundle, fallbackTitle: string): RecordViewAtt
         if (r.resourceType === "DocumentReference") (r.content ?? []).forEach((c: any) => add(c.attachment, r.description));
         else if (r.resourceType === "DiagnosticReport") (r.presentedForm ?? []).forEach((a: any) => add(a, text(r.code)));
         else if (r.resourceType === "Media" && !presented.has(r.content?.data)) add(r.content);
-        else if (r.resourceType === "Binary") add({ contentType: r.contentType, data: r.data }, `${fallbackTitle} (signed copy)`);
+        // A Binary is a prescription's signed copy, unless it is the PDF ClinicX built of the record (record-pdf.ts tags it)
+        else if (r.resourceType === "Binary") {
+            const built = (r.meta?.tag ?? []).some((t: any) => t?.code === "record-pdf");
+            add({ contentType: r.contentType, data: r.data }, `${fallbackTitle} (${built ? "PDF" : "signed copy"})`);
+        }
     }
     return out;
 };

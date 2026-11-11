@@ -5,11 +5,13 @@ import { careContextCatalog, hipLinkingService } from "../../services/Abdm/m2/in
 import { LinkingError } from "../../services/Abdm/m2/hip-linking.js";
 import { abdmM2Repository } from "../../repositories/Abdm/abdm-m2.repository.js";
 import { abdmFacilities } from "../../services/Abdm/abdm-facilities.service.js";
-import { abdmHealthRecordService } from "../../services/Abdm/abdm-health-record.service.js";
+import { abdmHealthRecordService, type HealthRecordBundle } from "../../services/Abdm/abdm-health-record.service.js";
 import { bundlesForReference } from "../../services/Abdm/m2/data-flow.js";
 import { recordView } from "../../services/Abdm/fhir/record-view.js";
+import { recordPdfOf } from "../../services/Abdm/fhir/record-pdf.js";
 import { FhirSourceError } from "../../services/Abdm/fhir/fhir-common.js";
 import { HipConsentsService } from "../../services/Abdm/m2/hip-consents.js";
+import type { CareContextRow, Hip } from "../../services/Abdm/m2/m2-store.js";
 
 /**
  * Staff view of a patient's ABDM care contexts and the consents to share them, and the two things
@@ -45,8 +47,61 @@ const hipFor = async (req: Request) => {
     return hip;
 };
 
+/** What the record view and its PDF read: the facility, the patient, the care context, and its bundles built now. */
+export interface CareContextRecords {
+    hip(hospitalId: number | null): Promise<Hip | null>;
+    patient(userId: string): Promise<{ userId: string } | null>;
+    careContext(hipId: string, reference: string): Promise<CareContextRow | null>;
+    bundles(reference: string): Promise<HealthRecordBundle[]>;
+}
+
+const liveRecords: CareContextRecords = {
+    hip: (hospitalId) => abdmFacilities.hip(hospitalId),
+    patient: (userId) => abdmM2Repository.patient(userId),
+    careContext: async (hipId, reference) => (await abdmM2Repository.careContextsByRefs(hipId, [reference]))[0] ?? null,
+    bundles: (reference) => bundlesForReference(abdmHealthRecordService, reference),
+};
+
+/** A view request that can't be answered as asked: the status and the reason, in staff's words. */
+class RecordViewError extends Error {
+    constructor(readonly status: number, message: string) {
+        super(message);
+    }
+}
+
+const sendViewError = (res: Response, error: any) => {
+    if (error instanceof RecordViewError) return res.status(error.status).json(ApiResponse.error(error.message));
+    // The record can't be shared as it stands (a Final report with no conclusion, say): say what is missing
+    if (error instanceof FhirSourceError) return res.status(422).json(ApiResponse.error(error.message, { kind: "record" }));
+    if (/not found/i.test(error?.message ?? "")) return res.status(404).json(ApiResponse.error(error.message));
+    return sendError(res, error);
+};
+
+/** The PDF a record carries, described for the desk: what it is called, its size, and whether ClinicX built it. */
+const pdfSummary = (r: HealthRecordBundle) => {
+    const pdf = recordPdfOf(r.bundle);
+    return pdf ? { title: pdf.title, bytes: pdf.data.length, source: pdf.source } : null;
+};
+
 export class AbdmM2Controller {
-    constructor(private readonly hipConsents = new HipConsentsService(abdmM2Repository, abdmFacilities)) {}
+    constructor(
+        private readonly hipConsents = new HipConsentsService(abdmM2Repository, abdmFacilities),
+        private readonly records: CareContextRecords = liveRecords,
+    ) {}
+
+    /** The patient's care context at this hospital's facility, and its bundles as a consented fetch would get them now. */
+    private async contextRecords(req: Request): Promise<{ context: CareContextRow; records: HealthRecordBundle[] }> {
+        const hip = await this.records.hip(hospitalId(req));
+        if (!hip) throw new LinkingError("This hospital is not set up as an ABDM facility yet.", 409);
+        const patient = await this.records.patient(userId(req));
+        if (!patient) throw new RecordViewError(404, "Patient not found.");
+        const reference = String(req.params.reference);
+        const context = await this.records.careContext(hip.id, reference);
+        if (!context || context.patientUserId !== patient.userId.toLowerCase()) {
+            throw new RecordViewError(404, "That record is not one of this patient's ABDM records here.");
+        }
+        return { context, records: await this.records.bundles(reference) };
+    }
 
     async careContexts(req: Request, res: Response) {
         try {
@@ -78,31 +133,45 @@ export class AbdmM2Controller {
 
     /**
      * One care context in words: its bundles built now from the records, exactly as a consented
-     * fetch would get them, each read back as sections and lines (files listed, not sent).
+     * fetch would get them, each read back as sections and lines (files listed, not sent), with the
+     * PDF each record carries described (fetched on its own, by the record's key).
      */
     async careContextView(req: Request, res: Response) {
+        res.setHeader("Cache-Control", "no-store");
         try {
-            const hip = await hipFor(req);
-            const patient = await abdmM2Repository.patient(userId(req));
-            if (!patient) return res.status(404).json(ApiResponse.error("Patient not found."));
-            const reference = String(req.params.reference);
-            const [context] = await abdmM2Repository.careContextsByRefs(hip.id, [reference]);
-            if (!context || context.patientUserId !== patient.userId.toLowerCase()) {
-                return res.status(404).json(ApiResponse.error("That record is not one of this patient's ABDM records here."));
-            }
-            const records = await bundlesForReference(abdmHealthRecordService, reference);
+            const { context, records } = await this.contextRecords(req);
             return res.json(ApiResponse.success({
                 referenceNumber: context.referenceNumber,
                 kind: context.kind,
                 display: context.display,
                 date: context.recordDate.toISOString(),
-                records: records.map(recordView),
+                records: records.map((r) => ({ key: r.key, ...recordView(r), pdf: pdfSummary(r) })),
             }));
-        } catch (error: any) {
-            // The record can't be shared as it stands (a Final report with no conclusion, say): say what is missing
-            if (error instanceof FhirSourceError) return res.status(422).json(ApiResponse.error(error.message, { kind: "record" }));
-            if (/not found/i.test(error?.message ?? "")) return res.status(404).json(ApiResponse.error(error.message));
-            return sendError(res, error);
+        } catch (error) {
+            return sendViewError(res, error);
+        }
+    }
+
+    /**
+     * The PDF one record of a care context carries, byte for byte as it goes in the bundle, for the
+     * desk to see before the record is shared. Never cached, never logged (the API log keeps only an
+     * ABDM route's status and message).
+     */
+    async careContextPdf(req: Request, res: Response) {
+        res.setHeader("Cache-Control", "no-store");
+        try {
+            const { records } = await this.contextRecords(req);
+            const record = records.find((r) => r.key === String(req.params.key));
+            if (!record) throw new RecordViewError(404, "That record has changed since it was opened. Open the record again.");
+            const pdf = recordPdfOf(record.bundle);
+            if (!pdf) throw new RecordViewError(404, "This record carries no PDF of its own: its uploaded files are sent as they are.");
+            res.setHeader("Content-Type", "application/pdf");
+            // No patient detail in the file name
+            res.setHeader("Content-Disposition", `inline; filename="${record.hiType}.pdf"`);
+            res.setHeader("X-Content-Type-Options", "nosniff");
+            return res.status(200).send(pdf.data);
+        } catch (error) {
+            return sendViewError(res, error);
         }
     }
 
@@ -118,9 +187,17 @@ export class AbdmM2Controller {
         }
     }
 
+    /**
+     * Links the patient's records that are not linked yet: those named in `references` (the ones the
+     * desk reviewed, with their PDFs, before sharing), or every one when the body names none.
+     */
     async link(req: Request, res: Response) {
         try {
-            return res.json(ApiResponse.success(await hipLinkingService.link(await hipFor(req), userId(req)), "Linking started."));
+            const references = req.body?.references;
+            if (references !== undefined && (!Array.isArray(references) || !references.every((r: unknown) => typeof r === "string" && r.length > 0))) {
+                return res.status(400).json(ApiResponse.error("references must be a list of care context reference numbers."));
+            }
+            return res.json(ApiResponse.success(await hipLinkingService.link(await hipFor(req), userId(req), references), "Linking started."));
         } catch (error) {
             return sendError(res, error);
         }

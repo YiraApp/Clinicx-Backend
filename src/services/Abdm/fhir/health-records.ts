@@ -7,6 +7,7 @@ import {
 } from "./fhir-common.js";
 import { measurementObservation, sectionOf, visitVitalsToMeasurements, WELLNESS_PROFILES, type WellnessSection } from "./measurements.js";
 import { routeOf } from "./dosage.js";
+import { withRecordPdf } from "./record-pdf.js";
 import type {
     CodedText, DiagnosticReportSource, DischargeSummarySource, ReportResultSource, HealthDocumentSource, ImmunizationSource, InvoiceSource,
     OpConsultationSource, PractitionerSource, PrescriptionSource, RecordParties, WellnessSource,
@@ -16,6 +17,8 @@ import type {
  * One builder per ABDM HI type. Each takes ClinicX's own record and returns an NRCES document bundle.
  * The SNOMED codes on Composition.type and on each section are the ones the NRCES profile fixes
  * (StructureDefinitions, IG 6.5.0); clinical codes come only from what the clinic recorded.
+ * Every record but a HealthDocumentRecord, and a report that is only its uploaded file, also carries
+ * a PDF of itself as unstructured data (record-pdf.ts), built from the same bundle.
  */
 
 const parties = (s: RecordParties) => ({
@@ -106,33 +109,37 @@ export const buildOpConsultation = (s: OpConsultationSource, now: Date = new Dat
     const notes = s.notes.map((n, i) => ({ n, at: s.noteTimes?.[i] ?? s.visit.start })).filter(({ n }) => n.trim()).map(({ n, at: written }, i) =>
         findingResource(`${key}:note:${i}`, { text: "Clinical note" }, patient, written, "Clinical note", n.trim(), practitioner));
     const followUp = s.followUp ? [followUpAppointmentResource(`${key}:follow-up`, s.followUp, patient, practitioner)] : [];
-    const documents = s.documents.map((d) => documentReferenceResource(d, patient));
+    const uploads = s.documents.map((d) => documentReferenceResource(d, patient));
     const others = [...plans, ...prescriptionNotes, ...notes];
 
-    const sections = [
-        complaints.length ? section("Chief complaints", complaints, OP.ChiefComplaints) : null,
-        examination.length ? section("Physical examination", examination, OP.PhysicalExamination) : null,
-        allergies.length ? section("Allergies", allergies, OP.Allergies) : null,
-        history.length ? section("Medical history", history, OP.MedicalHistory) : null,
-        medications.length ? section("Medications", medications, OP.Medications) : null,
-        procedures.length ? section("Procedure", procedures, OP.Procedure) : null,
-        followUp.length ? section("Follow up", followUp, OP.FollowUp) : null,
-        others.length ? section("Other observations", others, OP.OtherObservations) : null,
-        documents.length ? section("Document reference", documents, OP.DocumentReference) : null,
-        diagnoses.length ? section("Diagnosis", diagnoses, OP.Diagnosis) : null,
-    ].filter((x): x is NonNullable<typeof x> => x !== null);
+    // The record's own PDF joins its documents in the DocumentReference slice
+    return withRecordPdf("OPConsultation", (pdf) => {
+        const documents = [...uploads, ...pdf];
+        const sections = [
+            complaints.length ? section("Chief complaints", complaints, OP.ChiefComplaints) : null,
+            examination.length ? section("Physical examination", examination, OP.PhysicalExamination) : null,
+            allergies.length ? section("Allergies", allergies, OP.Allergies) : null,
+            history.length ? section("Medical history", history, OP.MedicalHistory) : null,
+            medications.length ? section("Medications", medications, OP.Medications) : null,
+            procedures.length ? section("Procedure", procedures, OP.Procedure) : null,
+            followUp.length ? section("Follow up", followUp, OP.FollowUp) : null,
+            others.length ? section("Other observations", others, OP.OtherObservations) : null,
+            documents.length ? section("Document reference", documents, OP.DocumentReference) : null,
+            diagnoses.length ? section("Diagnosis", diagnoses, OP.Diagnosis) : null,
+        ].filter((x): x is NonNullable<typeof x> => x !== null);
 
-    return documentBundle({
-        hiType: "OPConsultation",
-        profile: "OPConsultRecord",
-        type: { coding: { code: "371530004", display: "Clinical consultation report" }, text: "Consultation report" },
-        title: "Consultation report",
-        key,
-        date: written,
-        patient, author: practitioner, custodian: organization, encounter,
-        sections,
-        summary: `Consultation of ${s.patient.name} with ${s.practitioner.name} at ${s.organization.name} on ${fhirDate(s.visit.start)}`,
-    }, [...complaints, ...diagnoses, ...examination, ...allergies, ...history, ...medications, ...prescribers, ...procedures, ...followUp, ...others, ...documents], now);
+        return documentBundle({
+            hiType: "OPConsultation",
+            profile: "OPConsultRecord",
+            type: { coding: { code: "371530004", display: "Clinical consultation report" }, text: "Consultation report" },
+            title: "Consultation report",
+            key,
+            date: written,
+            patient, author: practitioner, custodian: organization, encounter,
+            sections,
+            summary: `Consultation of ${s.patient.name} with ${s.practitioner.name} at ${s.organization.name} on ${fhirDate(s.visit.start)}`,
+        }, [...complaints, ...diagnoses, ...examination, ...allergies, ...history, ...medications, ...prescribers, ...procedures, ...followUp, ...others, ...documents], now);
+    }, { kind: "DocumentReference", type: OP.DocumentReference });
 };
 
 /** Prescription: one prescription's medicines, with the PDF the clinic generated when there is one. */
@@ -157,7 +164,7 @@ export const buildPrescription = (s: PrescriptionSource, now: Date = new Date())
     const signed = p.signedCopy ? [binaryResource(`${key}:pdf`, p.signedCopy.contentType, p.signedCopy.data)] : [];
     const record = { code: "440545006", display: "Prescription record" };
 
-    return documentBundle({
+    const build = (pdf: FhirResource[]) => documentBundle({
         hiType: "Prescription",
         profile: "PrescriptionRecord",
         type: { coding: record, text: "Prescription record" },
@@ -165,9 +172,11 @@ export const buildPrescription = (s: PrescriptionSource, now: Date = new Date())
         key,
         date: p.date,
         patient, author: practitioner, custodian: organization, encounter,
-        sections: [section("Prescription record", [...medications, ...signed], record)],
+        sections: [section("Prescription record", [...medications, ...signed, ...pdf], record)],
         summary: `Prescription for ${s.patient.name} by ${s.practitioner.name}, ${fhirDate(p.date)}: ${p.medications.map((m) => m.name).join(", ")}`,
-    }, [...medications, ...signed, ...diagnoses], now);
+    }, [...medications, ...signed, ...pdf, ...diagnoses], now);
+    // The clinic's own prescription PDF is the record's PDF; without one, a PDF of the record is built, as a Binary like it
+    return signed.length ? build([]) : withRecordPdf("Prescription", build, { kind: "Binary" });
 };
 
 /**
@@ -177,10 +186,35 @@ export const buildPrescription = (s: PrescriptionSource, now: Date = new Date())
  * the conclusion). NRCES requires those, so the clinic's form does too before a report is Final.
  * A report the clinic holds only as an uploaded file goes in as a DocumentReference, which the
  * section allows on its own: a scanned report carries no results or conclusion to put in a
- * DiagnosticReport, so none is invented for it.
+ * DiagnosticReport, so none is invented for it, and its file is already the record's unstructured
+ * copy, so no PDF is built for it. An entered report also carries a PDF of itself.
  */
 const OBSERVATION_CATEGORY = "http://terminology.hl7.org/CodeSystem/observation-category";
 const LOINC_CODE = /^\d{1,7}-\d$/;
+
+/**
+ * LOINC's own display for each test the desk's quick picks send with a LOINC code (COMMON_TESTS in
+ * the frontend's diagnostic-report.service.ts): a coding's display must be LOINC's words, while the
+ * clinic's own name for the test ("Complete blood count (CBC)") goes in the code's text, which is
+ * what PHR apps print. Checked against tx.fhir.org's LOINC on 2026-11-11. A LOINC code outside this
+ * list keeps the clinic's words as its display.
+ */
+const LOINC_DISPLAY: Record<string, string> = {
+    "58410-2": "CBC panel - Blood by Automated count",
+    "24331-1": "Lipid 1996 panel - Serum or Plasma",
+    "4548-4": "Hemoglobin A1c/Hemoglobin.total in Blood",
+    "1558-6": "Fasting glucose [Mass/volume] in Serum or Plasma",
+    "3016-3": "Thyrotropin [Units/volume] in Serum or Plasma",
+    "24325-3": "Hepatic function 2000 panel - Serum or Plasma",
+    "24362-6": "Renal function 2000 panel - Serum or Plasma",
+    "24323-8": "Comprehensive metabolic 2000 panel - Serum or Plasma",
+    "24356-8": "Urinalysis complete panel - Urine",
+    "36643-5": "XR Chest 2 Views",
+    "24725-4": "CT Head",
+    "24590-2": "MR Brain",
+    "24558-9": "US Abdomen",
+    "11524-6": "EKG study",
+};
 
 const INTERPRETATIONS = {
     normal: { code: "N", display: "Normal" },
@@ -282,9 +316,10 @@ export const buildDiagnosticReport = (s: DiagnosticReportSource, now: Date = new
         // NRCES fixes the category to SNOMED CT diagnostic services and its examples name one service each
         // (haematology, CT); a report's own service isn't recorded, so the category is said in words.
         category: [{ text: lab ? "Laboratory" : "Imaging" }],
-        // NRCES fixes the test's code to LOINC: a LOINC code is sent as one, a SNOMED CT pick as the test's words
+        // NRCES fixes the test's code to LOINC: a LOINC code is sent as one (in LOINC's words, the
+        // clinic's in the text), a SNOMED CT pick as the test's words
         code: LOINC_CODE.test(e.test.conceptId ?? "")
-            ? { coding: [{ system: LOINC, code: e.test.conceptId, display: e.test.text }], text: e.test.text }
+            ? { coding: [{ system: LOINC, code: e.test.conceptId, display: LOINC_DISPLAY[e.test.conceptId!] ?? e.test.text }], text: e.test.text }
             : { text: e.test.text },
         subject: ref(patient, "Patient"),
         effectiveDateTime: fhirDateTime(effective),
@@ -302,7 +337,8 @@ export const buildDiagnosticReport = (s: DiagnosticReportSource, now: Date = new
         } : {}),
     };
 
-    return documentBundle({
+    // The section holds at most two entries: the report and, as a DocumentReference, its PDF
+    return withRecordPdf("DiagnosticReport", (pdf) => documentBundle({
         hiType: "DiagnosticReport",
         profile: "DiagnosticReportRecord",
         type: { coding: studies, text: title },
@@ -310,9 +346,9 @@ export const buildDiagnosticReport = (s: DiagnosticReportSource, now: Date = new
         key,
         date: e.issuedAt,
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, key, effective),
-        sections: [section(title, [report], studies)],
+        sections: [section(title, [report, ...pdf], studies)],
         summary: `${title} for ${s.patient.name}: ${e.test.text}, ${fhirDate(e.issuedAt)}`,
-    }, [report, ...results, ...specimen, ...media], now);
+    }, [report, ...results, ...specimen, ...media, ...pdf], now), { kind: "DocumentReference", type: lab ? { code: "4241000179101", display: "Laboratory report" } : studies });
 };
 
 /** HealthDocumentRecord: documents the clinic holds that are not a lab, imaging or prescription record. */
@@ -363,12 +399,8 @@ export const buildWellnessRecord = (s: WellnessSource, now: Date = new Date()): 
     const order: WellnessSection[] = ["VitalSigns", "BodyMeasurement", "PhysicalActivity", "GeneralAssessment"];
     // The note goes in the slice WellnessRecord titles "Other Observations"
     const note = s.notes?.trim() ? [findingResource(`${s.key}:note`, { text: "Wellness note" }, patient, s.date, "Note", s.notes.trim(), practitioner)] : [];
-    const sections = [
-        ...order.filter((name) => bySection.has(name)).map((name) => section(WELLNESS_TITLES[name], bySection.get(name)!)),
-        ...(note.length ? [section("Other Observations", note)] : []),
-    ];
-
-    return documentBundle({
+    // The PDF in the slice WellnessRecord titles "Document Reference", after the others as NRCES lists them
+    return withRecordPdf("WellnessRecord", (pdf) => documentBundle({
         hiType: "WellnessRecord",
         profile: "WellnessRecord",
         type: { text: "Wellness Record" },
@@ -376,9 +408,13 @@ export const buildWellnessRecord = (s: WellnessSource, now: Date = new Date()): 
         key: s.key,
         date: s.date,
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, s.key, s.date),
-        sections,
+        sections: [
+            ...order.filter((name) => bySection.has(name)).map((name) => section(WELLNESS_TITLES[name], bySection.get(name)!)),
+            ...(note.length ? [section("Other Observations", note)] : []),
+            ...(pdf.length ? [section("Document Reference", pdf)] : []),
+        ],
         summary: `Wellness record for ${s.patient.name}, ${fhirDate(s.date)}`,
-    }, [...[...bySection.values()].flat(), ...note], now);
+    }, [...[...bySection.values()].flat(), ...note, ...pdf], now));
 };
 
 const BILLING = "https://nrces.in/ndhm/fhir/r4/CodeSystem/ndhm-billing-codes";
@@ -497,7 +533,9 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
     };
     if (!(invoice.totalPriceComponent as unknown[]).length) delete invoice.totalPriceComponent;
 
-    return documentBundle({
+    // InvoiceRecord's one section takes nothing but the Invoice (closed slicing), but a sub-section
+    // of it is unconstrained: the PDF goes there, still reached from the Composition
+    return withRecordPdf("Invoice", (pdf) => documentBundle({
         hiType: "Invoice",
         profile: "InvoiceRecord",
         type: { text: "Invoice Record" },
@@ -505,9 +543,9 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
         key,
         date: b.date,
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, key, b.date),
-        sections: [section("Invoice", [invoice])],
+        sections: [{ ...section("Invoice", [invoice]), ...(pdf.length ? { section: [section("Document Reference", pdf)] } : {}) }],
         summary: `Invoice ${b.number} for ${s.patient.name} from ${s.organization.name}, INR ${b.total}`,
-    }, [invoice, ...charges], now);
+    }, [invoice, ...charges, ...pdf], now));
 };
 
 // Injection sites as FHIR's immunization-site codes (HL7 v3 ActSite), for the sites the clinic's form offers
@@ -577,7 +615,7 @@ export const buildImmunizationRecord = (s: ImmunizationSource, now: Date = new D
     }] : [];
     const certificates = (s.certificates ?? []).map((c) => documentReferenceResource(c, patient));
 
-    return documentBundle({
+    return withRecordPdf("ImmunizationRecord", (pdf) => documentBundle({
         hiType: "ImmunizationRecord",
         profile: "ImmunizationRecord",
         type: { coding: record, text: "Immunization record" },
@@ -585,9 +623,9 @@ export const buildImmunizationRecord = (s: ImmunizationSource, now: Date = new D
         key: s.key,
         date: s.date,
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, s.key, s.date),
-        sections: [section("Immunization record", [...immunizations, ...recommendation, ...certificates], record)],
+        sections: [section("Immunization record", [...immunizations, ...recommendation, ...certificates, ...pdf], record)],
         summary: `Immunization record for ${s.patient.name}: ${s.immunizations.map((im) => im.vaccine.text).join(", ")}`,
-    }, [...immunizations, ...givers, ...recommendation, ...certificates], now);
+    }, [...immunizations, ...givers, ...recommendation, ...certificates, ...pdf], now), { kind: "DocumentReference", type: record });
 };
 
 // DischargeSummaryRecord section slices, discriminated on code.coding.code
@@ -600,9 +638,10 @@ const DS = {
     Procedures: { code: "1003640003", display: "History of past procedure section" },
     CarePlan: { code: "734163000", display: "Care plan" },
     DocumentReference: { code: "373942005", display: "Discharge summary" },
-    // Not slices: after them, as the profile's open-at-end sections allow
-    Diagnoses: { system: LOINC, code: "11535-2", display: "Hospital discharge Dx Narrative" },
-    InvestigationsNarrative: { system: LOINC, code: "30954-2", display: "Relevant diagnostic tests/laboratory data Narrative" },
+    // Not slices: after them, as the profile's open-at-end sections allow. LOINC's current displays
+    // (it renamed its "… Narrative" codes "… note"), checked against tx.fhir.org on 2026-11-11
+    Diagnoses: { system: LOINC, code: "11535-2", display: "Hospital discharge diagnosis note" },
+    InvestigationsNarrative: { system: LOINC, code: "30954-2", display: "Relevant diagnostic tests/laboratory data note" },
 };
 
 /** DischargeSummary: one hospital stay, written up when the patient leaves. */
@@ -660,33 +699,37 @@ export const buildDischargeSummary = (s: DischargeSummarySource, now: Date = new
         author: ref(practitioner, "Practitioner"),
         ...(followUp.length ? { activity: [{ outcomeReference: [ref(followUp[0]!, "Appointment")] }] } : {}),
     }] : [];
-    const document = s.document ? [documentReferenceResource(s.document, patient, DS.DocumentReference)] : [];
+    const upload = s.document ? [documentReferenceResource(s.document, patient, DS.DocumentReference)] : [];
 
-    const sections = [
-        complaints.length ? section("Chief complaints", complaints, DS.ChiefComplaints) : null,
-        examination.length ? section("Physical examination", examination, DS.PhysicalExamination) : null,
-        allergies.length ? section("Allergies", allergies, DS.Allergies) : null,
-        history.length ? section("Medical history", history, DS.MedicalHistory) : null,
-        procedures.length ? section("Procedures", procedures, DS.Procedures) : null,
-        medications.length ? section("Medications", medications, DS.Medications) : null,
-        carePlan.length ? section("Care plan", carePlan, DS.CarePlan) : null,
-        document.length ? section("Document reference", document, DS.DocumentReference) : null,
-        investigations.length ? section("Investigations", investigations, DS.InvestigationsNarrative) : null,
-        diagnoses.length ? section("Discharge diagnosis", diagnoses, DS.Diagnoses) : null,
-    ].filter((x): x is NonNullable<typeof x> => x !== null);
+    // The record's own PDF beside any uploaded summary, in the DocumentReference slice
+    return withRecordPdf("DischargeSummary", (pdf) => {
+        const document = [...upload, ...pdf];
+        const sections = [
+            complaints.length ? section("Chief complaints", complaints, DS.ChiefComplaints) : null,
+            examination.length ? section("Physical examination", examination, DS.PhysicalExamination) : null,
+            allergies.length ? section("Allergies", allergies, DS.Allergies) : null,
+            history.length ? section("Medical history", history, DS.MedicalHistory) : null,
+            procedures.length ? section("Procedures", procedures, DS.Procedures) : null,
+            medications.length ? section("Medications", medications, DS.Medications) : null,
+            carePlan.length ? section("Care plan", carePlan, DS.CarePlan) : null,
+            document.length ? section("Document reference", document, DS.DocumentReference) : null,
+            investigations.length ? section("Investigations", investigations, DS.InvestigationsNarrative) : null,
+            diagnoses.length ? section("Discharge diagnosis", diagnoses, DS.Diagnoses) : null,
+        ].filter((x): x is NonNullable<typeof x> => x !== null);
 
-    return documentBundle({
-        hiType: "DischargeSummary",
-        profile: "DischargeSummaryRecord",
-        type: { coding: { code: "373942005", display: "Discharge summary" }, text: "Discharge summary" },
-        title: "Discharge summary",
-        key,
-        date: d.dischargedAt,
-        patient, author: practitioner, custodian: organization, encounter,
-        sections,
-        summary: `Discharge summary for ${s.patient.name}, admitted ${fhirDate(d.admittedAt)}, discharged ${fhirDate(d.dischargedAt)}`,
-    }, [...complaints, ...diagnoses, ...(reasons === diagnoses ? [] : reasons), ...history, ...examination, ...allergies, ...procedures, ...medications,
-        ...investigations, ...carePlan, ...followUp, ...document], now);
+        return documentBundle({
+            hiType: "DischargeSummary",
+            profile: "DischargeSummaryRecord",
+            type: { coding: { code: "373942005", display: "Discharge summary" }, text: "Discharge summary" },
+            title: "Discharge summary",
+            key,
+            date: d.dischargedAt,
+            patient, author: practitioner, custodian: organization, encounter,
+            sections,
+            summary: `Discharge summary for ${s.patient.name}, admitted ${fhirDate(d.admittedAt)}, discharged ${fhirDate(d.dischargedAt)}`,
+        }, [...complaints, ...diagnoses, ...(reasons === diagnoses ? [] : reasons), ...history, ...examination, ...allergies, ...procedures, ...medications,
+            ...investigations, ...carePlan, ...followUp, ...document], now);
+    }, { kind: "DocumentReference", type: DS.DocumentReference });
 };
 
 export type RecordSourceFor = {

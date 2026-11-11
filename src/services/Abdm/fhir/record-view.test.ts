@@ -18,7 +18,7 @@ test("a consultation reads as its sections, with the doctor's name and the files
     assert.ok(section(v, "Physical examination").includes("Blood pressure: 120/80 mmHg"), "blood pressure reads as a pair");
     assert.equal(section(v, "Medications")[0], "Paracetamol 650 mg tablet — 650 mg, Twice daily, for 3 days (for Dental caries)", "with the diagnosis it treats");
     assert.deepEqual(section(v, "Follow up"), ["Follow-up visit · 27 Oct 2026"]);
-    assert.deepEqual(v.attachments.map((a) => [a.title, a.contentType]), [["Intraoral photo", "application/pdf"]]);
+    assert.deepEqual(v.attachments.map((a) => [a.title, a.contentType]), [["Intraoral photo", "application/pdf"], ["Consultation report (PDF)", "application/pdf"]], "the upload, and the PDF of the record");
     assert.ok(v.attachments[0]!.bytes! > 0);
     assert.ok(v.sections.every((s) => s.items.every((i) => !/\bNA\b|undefined|null/.test(i))), "nothing missing is spelled out");
 });
@@ -29,6 +29,11 @@ test("a prescription lists each medicine and its signed copy", () => {
     assert.equal(items.length, 2);
     assert.ok(items.every((i) => i.includes(" — ")), "each medicine with its dosage");
     assert.deepEqual(v.attachments.map((a) => [a.title, a.contentType]), [["Prescription record (signed copy)", "application/pdf"]], "the signed copy is listed as a file");
+});
+
+test("a prescription without the clinic's own PDF lists the PDF built of it, not a signed copy", () => {
+    const bundle = (BUILDERS.Prescription as (s: unknown, now: Date) => FhirBundle)({ ...FIXTURES.Prescription, prescription: { ...FIXTURES.Prescription.prescription, signedCopy: null } }, NOW);
+    assert.deepEqual(recordView({ hiType: "Prescription", bundle }).attachments.map((a) => [a.title, a.contentType]), [["Prescription record (PDF)", "application/pdf"]]);
 });
 
 test("a lab report shows its results with ranges and flags, its specimen and its conclusion", () => {

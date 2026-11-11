@@ -86,6 +86,7 @@ test("every M2 patient route is behind the hospital guard; the M1 ABHA link keep
     assert.deepEqual(m2.map((r: any) => r.path).sort(), [
         "/patients/:userId/care-contexts",
         "/patients/:userId/care-contexts/:reference",
+        "/patients/:userId/care-contexts/:reference/records/:key/pdf",
         "/patients/:userId/consents",
         "/patients/:userId/link",
         "/patients/:userId/sms-notify",

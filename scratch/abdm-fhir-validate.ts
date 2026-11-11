@@ -11,7 +11,7 @@ import { execFileSync } from "child_process";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { HI_TYPES } from "../src/services/Abdm/fhir/fhir-common.js";
+import { HI_TYPES, type HiType } from "../src/services/Abdm/fhir/fhir-common.js";
 import { BUILDERS } from "../src/services/Abdm/fhir/health-records.js";
 import { FIXTURES } from "../src/services/Abdm/fhir/fhir-fixtures.js";
 
@@ -43,11 +43,19 @@ const main = async () => {
     await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "clinicx-fhir-validate", version: "1" } });
     await rpc("notifications/initialized", {}, true);
 
+    // Each HI type's fixture, and the variants whose PDF goes elsewhere or is not built
+    const cases: Array<{ name: string; hiType: HiType; source: unknown }> = [
+        ...HI_TYPES.map((hiType) => ({ name: hiType, hiType, source: FIXTURES[hiType] as unknown })),
+        { name: "Prescription-generated-pdf", hiType: "Prescription", source: { ...FIXTURES.Prescription, prescription: { ...FIXTURES.Prescription.prescription, signedCopy: null } } },
+        { name: "DiagnosticReport-imaging", hiType: "DiagnosticReport", source: { ...FIXTURES.DiagnosticReport, kind: "imaging", entered: { ...FIXTURES.DiagnosticReport.entered!, results: [], specimen: null } } },
+        { name: "DiagnosticReport-file-only", hiType: "DiagnosticReport", source: { ...FIXTURES.DiagnosticReport, entered: null } },
+    ];
+
     let failed = 0;
-    for (const hiType of HI_TYPES) {
-        const bundle = (BUILDERS[hiType] as (s: unknown) => object)(FIXTURES[hiType]);
+    for (const { name, hiType, source } of cases) {
+        const bundle = (BUILDERS[hiType] as (s: unknown) => object)(source);
         const json = JSON.stringify(bundle);
-        const file = join(dir, `${hiType}.json`);
+        const file = join(dir, `${name}.json`);
         writeFileSync(file, json);
 
         const result = await rpc("tools/call", { name: "validate", arguments: { kind: "fhir", bundle_json: json, record_type: hiType } });
@@ -56,17 +64,17 @@ const main = async () => {
         try { report = JSON.parse(text); } catch { report = { raw: text }; }
         // A clean bundle answers "findings": null; an answer without the key is not a pass.
         const ok = "findings" in report && (report.findings === null || (Array.isArray(report.findings) && report.findings.length === 0));
-        console.log(`${ok ? "PASS" : "FAIL"}  tier 1  ${hiType}${ok ? "" : `\n${JSON.stringify(report, null, 2)}`}`);
+        console.log(`${ok ? "PASS" : "FAIL"}  tier 1  ${name}${ok ? "" : `\n${JSON.stringify(report, null, 2)}`}`);
         if (!ok) failed++;
 
         if (jar) {
             try {
                 const out = execFileSync("java", ["-jar", jar, file, "-version", "4.0.1", "-ig", "ndhm.in#6.5.0"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-                console.log(`PASS  tier 2  ${hiType}  ${out.split("\n").find((l) => /Success|errors/.test(l)) ?? ""}`);
+                console.log(`PASS  tier 2  ${name}  ${out.split("\n").find((l) => /Success|errors/.test(l)) ?? ""}`);
             } catch (error: any) {
                 failed++;
                 const lines = String(error.stdout ?? "").split("\n").filter((l) => /^\s*(Error|Warning)/.test(l) || /errors/.test(l));
-                console.log(`FAIL  tier 2  ${hiType}\n${lines.join("\n")}`);
+                console.log(`FAIL  tier 2  ${name}\n${lines.join("\n")}`);
             }
         }
     }

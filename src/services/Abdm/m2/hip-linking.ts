@@ -62,12 +62,13 @@ export class HipLinkingService {
     }
 
     /**
-     * Links every care context the patient has here that is not linked yet. Returns at once: the
-     * outcome arrives on callbacks and shows in the care contexts' link status.
+     * Links every care context the patient has here that is not linked yet, or, given [only], those of
+     * them the desk reviewed (by reference number). Returns at once: the outcome arrives on callbacks
+     * and shows in the care contexts' link status.
      */
-    async link(hip: Hip, userId: string): Promise<{ queued: number; status: string }> {
+    async link(hip: Hip, userId: string, only?: string[]): Promise<{ queued: number; status: string }> {
         const key = linkKey(hip, userId);
-        const run = (this.queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => this.linkNow(hip, userId));
+        const run = (this.queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => this.linkNow(hip, userId, only));
         this.queues.set(key, run);
         try {
             return await run;
@@ -76,12 +77,15 @@ export class HipLinkingService {
         }
     }
 
-    private async linkNow(hip: Hip, userId: string): Promise<{ queued: number; status: string }> {
+    private async linkNow(hip: Hip, userId: string, only?: string[]): Promise<{ queued: number; status: string }> {
         const patient = await this.patient(userId);
         if (!patient.abhaAddress) throw new LinkingError("The patient has no ABHA address yet: verify or create their ABHA first.");
 
         const contexts = await this.expireStale(await this.catalog.refresh(hip, userId));
-        const pending = contexts.filter((c) => c.hiTypes.length && (c.linkStatus === "not-linked" || c.linkStatus === "failed"));
+        // A record that appeared after the desk's review waits for the next one
+        const reviewed = only ? new Set(only) : null;
+        const pending = contexts.filter((c) => c.hiTypes.length && (c.linkStatus === "not-linked" || c.linkStatus === "failed")
+            && (!reviewed || reviewed.has(c.referenceNumber)));
         if (!pending.length) return { queued: 0, status: "nothing to link" };
 
         const token = await this.store.linkToken(patientReference(userId), hip.id, new Date(this.now().getTime() + TOKEN_MARGIN_MS));
