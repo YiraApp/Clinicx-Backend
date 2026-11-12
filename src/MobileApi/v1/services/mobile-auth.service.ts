@@ -15,6 +15,8 @@ import { UserRole } from "../../../models/Account/userrole.model.js";
 import { PatientRegistration } from "../../../models/Organizations/patient-registration.model.js";
 import { defaultOrganizationRepository } from "../../../repositories/Organizations/default-organization.repository.js";
 import { HealthcareProvider } from "../../../models/Organizations/healthcare-provider.model.js";
+import { isSameFamily } from "../../../middlewares/request-identity.js";
+import { familyLinkService } from "../../../services/Family/family-link.service.js";
 
 export class MobileAuthService {
     /**
@@ -34,6 +36,24 @@ export class MobileAuthService {
         let viewer: User | null = user;
         if (viewerId && viewerId.toLowerCase() !== String(user.Id).toLowerCase()) {
             viewer = await userRepo.findOne({ where: { Id: viewerId, IsDeleted: false } }).catch(() => null);
+            // Opened through a family link: show only that person, never their own family.
+            if (viewer && !(await isSameFamily(viewer.Id, user.Id).catch(() => false))) {
+                const fullName = `${user.FirstName || ''} ${user.LastName || ''}`.trim() || "Family Member";
+                return [{
+                    id: user.Id,
+                    firstName: user.FirstName ?? null,
+                    lastName: user.LastName ?? null,
+                    name: fullName,
+                    phoneNumber: user.PhoneNumber,
+                    relation: "Self",
+                    isPrimary: true,
+                    gender: user.Gender ?? null,
+                    dob: formatDOB(user.DateOfBirth),
+                    accountType: "Linked",
+                    imagePath: user.ImagePath || null,
+                    profileImageUrl: user.ImagePath || null
+                }];
+            }
         }
         // An account marked primary signs in in its own right, even when it's also linked to a family.
         const viewerIsDependent = !!viewer && viewer.IsPrimary !== true && (
@@ -99,7 +119,7 @@ export class MobileAuthService {
             }
         } catch (_) {}
 
-        return allFamilyUsers.map(u => {
+        const familyProfiles: any[] = allFamilyUsers.map(u => {
             const isPrimary = u.Id === primaryUser.Id;
             const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim() || (isPrimary ? "Primary Account" : "Family Member");
             return {
@@ -117,6 +137,19 @@ export class MobileAuthService {
                 profileImageUrl: u.ImagePath || null
             };
         });
+
+        // People with their own Yira account who are linked to this family (accepted family links).
+        try {
+            const seen = new Set(familyProfiles.map(p => String(p.id).toUpperCase()));
+            for (const linked of await familyLinkService.linkedProfilesFor(primaryUser.Id)) {
+                if (!seen.has(String(linked.id).toUpperCase())) {
+                    seen.add(String(linked.id).toUpperCase());
+                    familyProfiles.push(linked);
+                }
+            }
+        } catch (_) {}
+
+        return familyProfiles;
     }
 
     /**

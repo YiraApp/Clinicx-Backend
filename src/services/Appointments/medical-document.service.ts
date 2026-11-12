@@ -1,4 +1,5 @@
 import { medicalDocumentRepository } from "../../repositories/Appointments/medical-document.repository.js";
+import { readableRecordName } from "../../utils/record-name.js";
 import { appointmentShareLinkRepository } from "../../repositories/Appointments/appointment-share-link.repository.js";
 import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
@@ -926,7 +927,7 @@ export class MedicalDocumentService {
                     patientId: validPatientId,
                     doctorId: doctorId || null,
                     doctorName,
-                    recordName: savedDocuments[0]?.OriginalFileName || cat || "Medical Document",
+                    recordName: readableRecordName(savedDocuments[0]?.OriginalFileName, cat, null),
                     appointmentId: appointmentId ? parseInt(String(appointmentId)) : undefined
                 });
             } catch (notifErr: any) {

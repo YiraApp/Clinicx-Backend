@@ -17,7 +17,9 @@ export class PatientPrescriptionRepository {
 
     async findByPatient(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: string): Promise<PatientPrescription[]> {
         const where: any = { PatientId: patientId };
-        if (orgId) where.OrganizationId = orgId;
+        // The hospital alone decides when given (it belongs to one organization), so prescriptions
+        // saved from the app with a wrong OrganizationId still show at their hospital on web and mobile.
+        if (orgId && !hospitalId) where.OrganizationId = orgId;
         if (hospitalId) where.HospitalId = hospitalId;
         if (appointmentId) where.AppointmentId = appointmentId;
 
@@ -37,7 +39,7 @@ export class PatientPrescriptionRepository {
 
     async findByAppointment(appointmentId: string, orgId?: number, hospitalId?: number): Promise<PatientPrescription[]> {
         const where: any = { AppointmentId: appointmentId };
-        if (orgId) where.OrganizationId = orgId;
+        if (orgId && !hospitalId) where.OrganizationId = orgId;
         if (hospitalId) where.HospitalId = hospitalId;
 
         return await this.repo.find({

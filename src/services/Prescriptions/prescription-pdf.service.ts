@@ -343,12 +343,13 @@ export class PrescriptionPdfService {
                 // Real Prescription ID (Numeric ID)
                 const displayPrescriptionNumber = (data.prescription.prescriptionNumber !== undefined && data.prescription.prescriptionNumber !== null && String(data.prescription.prescriptionNumber).trim() !== "")
                     ? String(data.prescription.prescriptionNumber).trim()
-                    : ((data.prescription.id && data.prescription.id.trim()) ? data.prescription.id.trim().substring(0, 8) : "NA");
+                    : "";
 
+                // Never a slice of the internal id: patients can't use it, and it reads as noise
                 doc.fontSize(8.5)
                    .font("Helvetica-Bold")
                    .fillColor("#1E3A8A")
-                   .text(`Prescription ID: ${displayPrescriptionNumber}`, margin + 10, cursorY + 6);
+                   .text(displayPrescriptionNumber ? `Prescription No: ${displayPrescriptionNumber}` : "Prescription", margin + 10, cursorY + 6);
 
                 doc.fontSize(8)
                    .font("Helvetica")
@@ -401,8 +402,12 @@ export class PrescriptionPdfService {
                 const patientLines: Line[] = [
                     { text: "PATIENT INFORMATION", font: "Helvetica-Bold", size: 7.5, color: "#0284C7" },
                     { text: patientDisplayName, font: "Helvetica-Bold", size: 10, color: "#0F172A", gap: 4 },
-                    { text: `${ageText}  |  ${genderText}  |  ${bloodText}`, font: "Helvetica", size: 8, color: "#334155", gap: 3 },
-                    { text: `Patient ID: ${realPatientId}  |  Ph: ${realPhone}`, font: "Helvetica", size: 8, color: "#64748B", gap: 2 },
+                    { text: [ageText, genderText, bloodText].filter(t => !t.endsWith(": NA")).join("  |  ") || "Age, gender and blood group not recorded", font: "Helvetica", size: 8, color: "#334155", gap: 3 },
+                    // Only what the patient can use: the hospital's patient ID (UHID) and phone, no "NA" placeholders
+                    ...(() => {
+                        const parts = [realPatientId !== "NA" ? `Patient ID: ${realPatientId}` : "", realPhone !== "NA" ? `Ph: ${realPhone}` : ""].filter(Boolean);
+                        return parts.length ? [{ text: parts.join("  |  "), font: "Helvetica", size: 8, color: "#64748B", gap: 2 } as Line] : [];
+                    })(),
                 ];
                 // Qualification, department and registration each on their own line, wrapping when long.
                 const doctorLines: Line[] = [

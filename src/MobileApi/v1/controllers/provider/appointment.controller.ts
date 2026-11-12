@@ -4,6 +4,10 @@ import { ApiResponse } from "../../../../utils/response.utils.js";
 import { healthcareProviderScheduleSlotRepository } from "../../../../repositories/Organizations/healthcare-provider-schedule-slot.repository.js";
 import { healthcareProviderService } from "../../../../services/Organizations/healthcare-provider.service.js";
 import { healthcareProviderRepository } from "../../../../repositories/Organizations/healthcare-provider.repository.js";
+import { familyLinkService } from "../../../../services/Family/family-link.service.js";
+import { requireTokenActor, actingProfileId, sameUserId } from "../../../../utils/request-actor.js";
+import { isFamilyLinked, isSameFamily } from "../../../../middlewares/request-identity.js";
+import { canManageHospital } from "../../../../utils/staff-access.js";
 
 /**
  * Retrieves provider appointment dashboard stats and filtered appointment list.
@@ -404,18 +408,21 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
         const patientIds = new Set<string>([targetId]);
         const onlySelf = req.body?.onlySelf === true || req.body?.includeFamily === false || req.query?.onlySelf === "true" || req.query?.includeFamily === "false";
         if (target && !target.ParentUserId && target.IsPrimary && !onlySelf) {
-            const children = await userRepo.find({ where: { ParentUserId: target.Id, IsDeleted: false } as any, select: ["Id"] as any });
-            children.forEach((c: any) => patientIds.add(c.Id));
             const last10 = String(target.PhoneNumber || "").replace(/\D/g, "").slice(-10);
-            if (last10.length === 10) {
-                const samePhone = await userRepo
-                    .createQueryBuilder("u")
-                    .select("u.Id", "Id")
-                    .where("RIGHT(u.PhoneNumber, 10) = :last10", { last10 })
-                    .andWhere("u.IsDeleted = 0")
-                    .getRawMany();
-                samePhone.forEach((r: any) => patientIds.add(r.Id));
-            }
+            // Family members by parent account and by phone number, looked up together.
+            const [children, samePhone] = await Promise.all([
+                userRepo.find({ where: { ParentUserId: target.Id, IsDeleted: false } as any, select: ["Id"] as any }),
+                last10.length === 10
+                    ? userRepo
+                        .createQueryBuilder("u")
+                        .select("u.Id", "Id")
+                        .where("RIGHT(u.PhoneNumber, 10) = :last10", { last10 })
+                        .andWhere("u.IsDeleted = 0")
+                        .getRawMany()
+                    : Promise.resolve([] as any[]),
+            ]);
+            children.forEach((c: any) => patientIds.add(c.Id));
+            samePhone.forEach((r: any) => patientIds.add(r.Id));
         }
 
         const apptRepo = AppDataSource.getRepository(Appointment);
@@ -427,7 +434,10 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
             .where("a.UserId IN (:...patientIds)", { patientIds: [...patientIds] })
             .orderBy("a.AppointmentDate", "DESC")
             .addOrderBy("a.StartTime", "DESC")
-            .take(100);
+            // Every join is to one row (patient, doctor, hospital, organization), so a plain limit
+            // returns the same 100 appointments in one query; take() made TypeORM page the ids
+            // in a separate DISTINCT query first.
+            .limit(100);
 
         if (hospitalId && Number(hospitalId) > 0) {
             qb.andWhere("a.HospitalId = :hospitalId", { hospitalId: Number(hospitalId) });
@@ -519,6 +529,21 @@ export const getPatientAccountsByPhone = async (req: Request, res: Response) => 
         const orgId = req.body.orgId || req.query.orgId;
         const hospitalId = req.body.hospitalId || req.query.hospitalId;
 
+        // Staff look up any patient to book for them. A patient may only list the accounts
+        // on their own family's number, and may not search other users by name.
+        const caller = (req as any).user || {};
+        const callerIds = [caller.userId, caller.tokenUserId].filter(Boolean).map(String);
+        if (!(await familyLinkService.isStaffAccount(callerIds))) {
+            const asked = String(phone).replace(/\D/g, "").slice(-10);
+            if (asked.length < 10 || !(await familyLinkService.ownFamilyPhones(callerIds)).has(asked)) {
+                return res.status(403).json({
+                    status: false,
+                    message: "You can only look up accounts on your own number.",
+                    data: { code: "PATIENT_LOOKUP_NOT_ALLOWED" }
+                });
+            }
+        }
+
         const result = await mobileAppointmentService.findPatientAccountsByPhone(
             String(phone),
             orgId ? Number(orgId) : undefined,
@@ -554,6 +579,34 @@ export const addDependentPatient = async (req: Request, res: Response) => {
             return res.status(400).json({
                 status: false,
                 message: "Valid family member name is required (min 2 characters)"
+            });
+        }
+
+        // Staff add family members for any patient they book for. A patient may add them only
+        // under their own family's number and account; before this, anyone could add a dependent
+        // under any number or parent account.
+        const actor = requireTokenActor(req, res);
+        if (!actor) return;
+        if (!(await familyLinkService.isStaffAccount([actor]))) {
+            const profile = actingProfileId(req);
+            const ownPhones = await familyLinkService.ownFamilyPhones([actor, ...(profile ? [profile] : [])]);
+            const asked = String(targetPhone).replace(/\D/g, "").slice(-10);
+            const parentOk = !parentUserId || (await isSameFamily(actor, String(parentUserId)));
+            if (asked.length < 10 || !ownPhones.has(asked) || !parentOk) {
+                return res.status(403).json({
+                    status: false,
+                    message: "You can only add family members to your own account.",
+                    data: { code: "NOT_YOUR_FAMILY" }
+                });
+            }
+        }
+
+        // People linked from their own Yira account count toward the family limit too.
+        if (await familyLinkService.familyLimitReached(parentUserId ? String(parentUserId) : undefined, String(targetPhone))) {
+            return res.status(400).json({
+                status: false,
+                message: "Maximum limit of 6 family relations reached for this primary account.",
+                data: { code: "FAMILY_LIMIT_REACHED" }
             });
         }
 
@@ -683,6 +736,25 @@ export const rescheduleAppointment = async (req: Request, res: Response) => {
         const appointmentId = req.body.appointmentId || req.body.id || req.params.id;
         if (!appointmentId) {
             return res.status(400).json({ status: false, message: "appointmentId is required" });
+        }
+        // Only the patient (or their family), the appointment's doctor, or staff at its hospital.
+        // Before this, anyone signed in could move anyone's appointment.
+        const actor = requireTokenActor(req, res);
+        if (!actor) return;
+        const { AppDataSource } = await import("../../../../config/database.js");
+        const { Appointment } = await import("../../../../models/Appointments/appointment.model.js");
+        const appointment = await AppDataSource.getRepository(Appointment).findOne({
+            where: { Id: parseInt(String(appointmentId), 10) } as any,
+            select: { Id: true, UserId: true, DoctorId: true, HospitalId: true } as any,
+        });
+        if (!appointment) {
+            return res.status(404).json({ status: false, message: "Appointment not found" });
+        }
+        const allowed = (appointment.UserId && await isFamilyLinked(actor, String(appointment.UserId)))
+            || sameUserId(actor, appointment.DoctorId ? String(appointment.DoctorId) : null)
+            || (appointment.HospitalId && await canManageHospital(actor, Number(appointment.HospitalId)));
+        if (!allowed) {
+            return res.status(403).json({ status: false, message: "You can only reschedule your own or your family's appointments." });
         }
         const { appointmentService } = await import("../../../../services/Appointments/appointment.service.js");
         const result = await appointmentService.rescheduleAppointment(parseInt(String(appointmentId), 10), req.body);

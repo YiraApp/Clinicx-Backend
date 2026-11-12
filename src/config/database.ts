@@ -86,6 +86,7 @@ import { HospitalSettingsHistory } from "../models/Organizations/hospital-settin
 import { Feedback } from "../models/Feedback/feedback.model.js";
 import { PatientMedicationReminder } from "../models/Appointments/patient-medication-reminder.model.js";
 import { DietFoodItem, DietTemplate, DietTemplateMeal, PatientDietPlan, PatientDietPlanMeal, PatientDietMealLog } from "../models/Diet/index.js";
+import { FamilyLink, FamilyCode, FamilyLinkAttempt } from "../models/Account/family-link.model.js";
 
 // Debug logs for Azure troubleshooting
 if (process.env.NODE_ENV !== 'production' || true) { 
@@ -147,7 +148,8 @@ export const AppDataSource = new DataSource({
         DietTemplateMeal,
         PatientDietPlan,
         PatientDietPlanMeal,
-        PatientDietMealLog
+        PatientDietMealLog,
+        FamilyLink, FamilyCode, FamilyLinkAttempt
     ],
     connectionTimeout: 30000,
     requestTimeout: 30000,

@@ -179,6 +179,7 @@ export class MigrationService {
                 );`,
                 "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_LabPackageHospitals_Package' AND object_id = OBJECT_ID('LabPackageHospitals')) CREATE INDEX IX_LabPackageHospitals_Package ON LabPackageHospitals(LabPackageId, HospitalId);",
                 "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackages') AND name = 'Benefits') ALTER TABLE LabPackages ADD Benefits NVARCHAR(MAX) NULL;",
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackages') AND name = 'ImageUrl') ALTER TABLE LabPackages ADD ImageUrl NVARCHAR(1000) NULL;",
                 `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'LabPackageOrders')
                 CREATE TABLE LabPackageOrders (
                     Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
@@ -236,6 +237,9 @@ export class MigrationService {
                     UpdatedBy UNIQUEIDENTIFIER NULL
                 );`,
                 "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackageOrders') AND name = 'CollectionAddress') ALTER TABLE LabPackageOrders ADD CollectionAddress NVARCHAR(MAX) NULL;",
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackageOrders') AND name = 'InvoiceNumber') ALTER TABLE LabPackageOrders ADD InvoiceNumber NVARCHAR(40) NULL;",
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackageOrders') AND name = 'InvoiceUrl') ALTER TABLE LabPackageOrders ADD InvoiceUrl NVARCHAR(1000) NULL;",
+                "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('LabPackageOrders') AND name = 'InvoicedAt') ALTER TABLE LabPackageOrders ADD InvoicedAt DATETIME NULL;",
                 `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'LabPackagePayments')
                 CREATE TABLE LabPackagePayments (
                     Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,

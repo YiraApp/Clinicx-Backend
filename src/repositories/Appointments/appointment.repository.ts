@@ -81,11 +81,34 @@ export class AppointmentRepository {
     }
 
     async getAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, doctorId?: string, date?: string, status?: string, startDate?: string, endDate?: string, page?: number, pageSize?: number }): Promise<{ data: Appointment[], total: number }> {
-        const queryBuilder = this.repo.createQueryBuilder("appointment")
+        const queryBuilder = this.filteredAppointments(filters)
             .leftJoinAndSelect("appointment.User", "user")
             .leftJoinAndSelect("appointment.Doctor", "doctor")
             .leftJoinAndSelect("appointment.Hospital", "hospital")
             .leftJoinAndSelect("appointment.Verifications", "verifications");
+
+        const page = filters.page || 1;
+        const pageSize = filters.pageSize || 50;
+        const skip = (page - 1) * pageSize;
+
+        // The total only filters Appointments, so it is counted without the joins (left joins never
+        // drop an appointment), and at the same time as the page.
+        const [total, data] = await Promise.all([
+            this.filteredAppointments(filters).getCount(),
+            queryBuilder
+                .orderBy("appointment.AppointmentDate", "DESC")
+                .addOrderBy("appointment.StartTime", "ASC")
+                .skip(skip)
+                .take(pageSize)
+                .getMany(),
+        ]);
+
+        return { data, total };
+    }
+
+    /** Appointments matching the list filters, with no joins. */
+    private filteredAppointments(filters: { orgId?: number, hospitalId?: number, userId?: string, doctorId?: string, date?: string, status?: string, startDate?: string, endDate?: string }) {
+        const queryBuilder = this.repo.createQueryBuilder("appointment");
 
         if (filters.orgId) {
             queryBuilder.andWhere("appointment.OrgId = :orgId", { orgId: filters.orgId });
@@ -112,20 +135,7 @@ export class AppointmentRepository {
             queryBuilder.andWhere("appointment.Status = :status", { status: filters.status });
         }
 
-        const total = await queryBuilder.getCount();
-
-        const page = filters.page || 1;
-        const pageSize = filters.pageSize || 50;
-        const skip = (page - 1) * pageSize;
-
-        const data = await queryBuilder
-            .orderBy("appointment.AppointmentDate", "DESC")
-            .addOrderBy("appointment.StartTime", "ASC")
-            .skip(skip)
-            .take(pageSize)
-            .getMany();
-
-        return { data, total };
+        return queryBuilder;
     }
 
     async updateStatus(id: number, status: string): Promise<void> {

@@ -14,20 +14,35 @@ export class MedicalDocumentRepository {
         if (appointmentId) {
             query.AppointmentId = appointmentId;
         } else {
-            if (organizationId) query.OrganizationId = organizationId;
+            // A hospital belongs to one organization, so the hospital alone decides. Records saved
+            // with a wrong OrganizationId (the app's "1" fallback) still show at their hospital.
+            if (organizationId && !hospitalId) query.OrganizationId = organizationId;
             if (hospitalId) query.HospitalId = hospitalId;
         }
 
-        const findOptions: any = {
-            where: query,
-            relations: ["UploadedByUser", "Hospital", "Organization", "Appointment", "Appointment.Hospital"],
-            order: { CreatedAt: "DESC" }
-        };
         if (limit && limit > 0) {
-            findOptions.take = limit;
+            // Every relation here is to one row, so a plain TOP n returns the same documents in
+            // one query; find() with take ran a separate DISTINCT query to page the ids first.
+            const paged = this.repo.createQueryBuilder("doc")
+                .leftJoinAndSelect("doc.UploadedByUser", "uploadedByUser")
+                .leftJoinAndSelect("doc.Doctor", "doctor")
+                .leftJoinAndSelect("doc.Hospital", "hospital")
+                .leftJoinAndSelect("doc.Organization", "organization")
+                .leftJoinAndSelect("doc.Appointment", "appointment")
+                .leftJoinAndSelect("appointment.Hospital", "appointmentHospital")
+                .where("doc.PatientId = :patientId", { patientId: query.PatientId })
+                .andWhere("doc.IsDeleted = :isDeleted", { isDeleted: false });
+            if (query.AppointmentId !== undefined) paged.andWhere("doc.AppointmentId = :appointmentId", { appointmentId: query.AppointmentId });
+            if (query.OrganizationId !== undefined) paged.andWhere("doc.OrganizationId = :organizationId", { organizationId: query.OrganizationId });
+            if (query.HospitalId !== undefined) paged.andWhere("doc.HospitalId = :hospitalId", { hospitalId: query.HospitalId });
+            return await paged.orderBy("doc.CreatedAt", "DESC").limit(limit).getMany();
         }
 
-        return await this.repo.find(findOptions);
+        return await this.repo.find({
+            where: query,
+            relations: ["UploadedByUser", "Doctor", "Hospital", "Organization", "Appointment", "Appointment.Hospital"],
+            order: { CreatedAt: "DESC" }
+        });
     }
 
     async findById(id: number): Promise<MedicalDocument | null> {

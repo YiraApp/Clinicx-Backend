@@ -46,6 +46,23 @@ export class DietController {
     // MASTER FOOD APIS
     // ----------------------------------------------------
 
+    /** "Ask AI" about one food: what it is, who it suits, what to watch, better swaps. */
+    async askAboutFood(req: Request, res: Response) {
+        try {
+            const { foodAiService, FoodAiError } = await import("../../services/Diet/food-ai.service.js");
+            try {
+                const question = foodAiService.parse(req.body);
+                return res.json({ success: true, data: await foodAiService.ask(question) });
+            } catch (e: any) {
+                if (e instanceof FoodAiError) return res.status(e.status).json({ success: false, message: e.message });
+                throw e;
+            }
+        } catch (error: any) {
+            console.error("[Diet] askAboutFood:", error?.message || error);
+            return res.status(500).json({ success: false, message: "Could not get an answer right now. Please try again." });
+        }
+    }
+
     async searchFoods(req: Request, res: Response) {
         try {
             const organizationId = getOrganizationId(req);

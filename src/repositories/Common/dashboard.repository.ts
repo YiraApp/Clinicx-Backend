@@ -20,8 +20,8 @@ export class DashboardRepository {
             }
         }
 
-        const totalUsers = await userQuery.getCount();
-        const activeUsers = await userQuery.andWhere("user.Status = :status AND user.IsDeleted = :isDeleted", { status: true, isDeleted: false }).getCount();
+        // The five dashboard queries don't depend on each other, so they run together below.
+        const activeUserQuery = userQuery.clone().andWhere("user.Status = :status AND user.IsDeleted = :isDeleted", { status: true, isDeleted: false });
 
         // 2. Role Breakdown
         const roleStatsQuery = userRepo
@@ -36,11 +36,10 @@ export class DashboardRepository {
             roleStatsQuery.andWhere("userRole.HospitalId = :hospId", { hospId });
         }
 
-        const roleStats = await roleStatsQuery
+        roleStatsQuery
             .select("role.RoleName", "roleName")
             .addSelect("COUNT(user.Id)", "count")
-            .groupBy("role.RoleName")
-            .getRawMany();
+            .groupBy("role.RoleName");
 
         // 3. Recent Activity (Focused on Audit Trailing)
         const recentActivityQuery = `
@@ -74,8 +73,6 @@ export class DashboardRepository {
             ORDER BY l.LogId DESC;
         `;
 
-        const recentActivity = await AppDataSource.query(recentActivityQuery);
-
         // 4. Analytics (Appointments & Revenue)
         const analyticsQuery = `
             SELECT 
@@ -102,7 +99,13 @@ export class DashboardRepository {
             ${hospId ? 'AND a.HospitalId = ' + hospId : ''}
         `;
 
-        const analyticsResults = await AppDataSource.query(analyticsQuery);
+        const [totalUsers, activeUsers, roleStats, recentActivity, analyticsResults] = await Promise.all([
+            userQuery.getCount(),
+            activeUserQuery.getCount(),
+            roleStatsQuery.getRawMany(),
+            AppDataSource.query(recentActivityQuery),
+            AppDataSource.query(analyticsQuery),
+        ]);
         const stats = analyticsResults[0] || {};
 
         // Calculate Trends/Analysis
@@ -536,8 +539,8 @@ export class DashboardRepository {
                 COUNT(CASE WHEN AppointmentType = 'Follow-up' THEN 1 END) as followUpsToday,
                 COUNT(CASE WHEN AppointmentType IN ('New', 'Consultation', 'New Patient') THEN 1 END) as newPatientsToday
             FROM Appointments WITH (NOLOCK)
-            WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-            ${orgId ? `AND OrgId = ${orgId}` : ''}
+            WHERE DoctorId = @0 AND HospitalId = @1
+            ${orgId ? `AND OrgId = @2` : ''}
             AND CAST(AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE);
         `;
 
@@ -552,9 +555,9 @@ export class DashboardRepository {
                    AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
                    AND ur.Status = 1
                    AND ur.IsDeleted = 0
-                 WHERE a.DoctorId = '${doctorId}' 
-                   AND a.HospitalId = ${hospId} 
-                   ${orgId ? `AND a.OrgId = ${orgId}` : ''}
+                 WHERE a.DoctorId = @0 
+                   AND a.HospitalId = @1 
+                   ${orgId ? `AND a.OrgId = @2` : ''}
                    AND u.Status = 1 
                    AND u.IsDeleted = 0
                 ) as totalPatients,
@@ -568,9 +571,9 @@ export class DashboardRepository {
                    AND ur1.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
                    AND ur1.Status = 1
                    AND ur1.IsDeleted = 0
-                 WHERE a1.DoctorId = '${doctorId}' 
-                 AND a1.HospitalId = ${hospId}
-                 ${orgId ? `AND a1.OrgId = ${orgId}` : ''}
+                 WHERE a1.DoctorId = @0 
+                 AND a1.HospitalId = @1
+                 ${orgId ? `AND a1.OrgId = @2` : ''}
                  AND u1.Status = 1 
                  AND u1.IsDeleted = 0
                  AND a1.AppointmentDate >= DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
@@ -578,7 +581,7 @@ export class DashboardRepository {
                      SELECT 1 FROM Appointments a2 WITH (NOLOCK)
                      WHERE a2.UserId = a1.UserId 
                      AND a2.DoctorId = a1.DoctorId 
-                     ${orgId ? `AND a2.OrgId = ${orgId}` : ''}
+                     ${orgId ? `AND a2.OrgId = @2` : ''}
                      AND a2.AppointmentDate < DATEADD(day, -DATEPART(weekday, DATEADD(MINUTE, 330, GETUTCDATE())) + 1, DATEADD(MINUTE, 330, GETUTCDATE()))
                  )) as newPatientsThisWeek;
         `;
@@ -602,8 +605,8 @@ export class DashboardRepository {
                   AND ur.RoleId = '4FC67429-28AE-4106-93EF-436228282ED0'
                   AND ur.Status = 1
                   AND ur.IsDeleted = 0
-                WHERE a.DoctorId = '${doctorId}' AND a.HospitalId = ${hospId}
-                ${orgId ? `AND a.OrgId = ${orgId}` : ''}
+                WHERE a.DoctorId = @0 AND a.HospitalId = @1
+                ${orgId ? `AND a.OrgId = @2` : ''}
                 AND a.Status IN ('Completed', 'Confirmed', 'Arrived', 'InProgress', 'Scheduled')
                 AND u.Status = 1
                 AND u.IsDeleted = 0
@@ -616,34 +619,37 @@ export class DashboardRepository {
 
         console.log(`Fetching Doctor Dashboard stats for Doctor: ${doctorId}, Hospital: ${hospId}, Org: ${orgId}`);
 
+        // Bound as parameters (not pasted into the SQL), so SQL Server reuses one plan per query for
+        // every doctor instead of compiling a new one for each doctor and hospital.
+        const params = [doctorId, hospId, orgId ?? null];
         const [statsResults, patientResults, recentPatientsResult, weeklyStats, monthlyStats] = await Promise.all([
-            AppDataSource.query(statsQuery),
-            AppDataSource.query(patientStatsQuery),
-            AppDataSource.query(recentPatientsQuery),
+            AppDataSource.query(statsQuery, params),
+            AppDataSource.query(patientStatsQuery, params),
+            AppDataSource.query(recentPatientsQuery, params),
             AppDataSource.query(`
                 SELECT 
                     FORMAT(AppointmentDate, 'ddd') as day,
                     COUNT(*) as appointments,
                     COUNT(DISTINCT UserId) as patients
                 FROM Appointments WITH (NOLOCK)
-                WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-                ${orgId ? `AND OrgId = ${orgId}` : ''}
+                WHERE DoctorId = @0 AND HospitalId = @1
+                ${orgId ? `AND OrgId = @2` : ''}
                 AND AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
                 GROUP BY FORMAT(AppointmentDate, 'ddd'), CAST(AppointmentDate AS DATE)
                 ORDER BY CAST(AppointmentDate AS DATE) ASC;
-            `),
+            `, params),
             AppDataSource.query(`
                 SELECT 
                     FORMAT(AppointmentDate, 'MMM') as month,
                     COUNT(*) as appointments,
                     COUNT(DISTINCT UserId) as patients
                 FROM Appointments WITH (NOLOCK)
-                WHERE DoctorId = '${doctorId}' AND HospitalId = ${hospId}
-                ${orgId ? `AND OrgId = ${orgId}` : ''}
+                WHERE DoctorId = @0 AND HospitalId = @1
+                ${orgId ? `AND OrgId = @2` : ''}
                 AND AppointmentDate >= CAST(DATEADD(month, -5, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
                 GROUP BY FORMAT(AppointmentDate, 'MMM'), YEAR(AppointmentDate), MONTH(AppointmentDate)
                 ORDER BY YEAR(AppointmentDate), MONTH(AppointmentDate) ASC;
-            `)
+            `, params)
         ]);
 
         console.log(`Doctor Dashboard Data: Stats Found: ${statsResults.length}, Weekly Stats Found: ${weeklyStats.length}, Monthly Stats Found: ${monthlyStats.length}`);

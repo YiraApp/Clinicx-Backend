@@ -3,6 +3,7 @@ import { patientFitnessService } from "../services/patient-fitness.service.js";
 import { patientAccessConsentService } from "../services/consent/patient-access-consent.service.js";
 import { isFamilyLinked } from "../../../middlewares/request-identity.js";
 import { ApiResponse } from "../../../utils/response.utils.js";
+import { isGuid } from "../../../services/Fitness/fitness-input.js";
 
 const requesterOf = (req: Request) => String((req as any).user?.userId || (req as any).user?.id || "").trim();
 
@@ -13,9 +14,11 @@ const requesterOf = (req: Request) => String((req as any).user?.userId || (req a
  */
 async function resolvePatient(req: Request, rawPatientId: any, mode: "read" | "write") {
     const requesterId = requesterOf(req);
-    const patientId = String(rawPatientId || requesterId || "").trim();
-    if (!patientId) return { patientId: "", error: 400, message: "Patient ID is required" };
-    if (!requesterId || patientId.toLowerCase() === requesterId.toLowerCase()) return { patientId };
+    // No caller identity means no ownership check is possible, so nothing is allowed.
+    if (!requesterId) return { patientId: "", error: 401, message: "Please sign in again." };
+    const patientId = String(rawPatientId || requesterId).trim();
+    if (!isGuid(patientId)) return { patientId: "", error: 400, message: "A valid patient ID is required" };
+    if (patientId.toLowerCase() === requesterId.toLowerCase()) return { patientId };
     if (await isFamilyLinked(requesterId, patientId)) return { patientId };
     if (mode === "read") {
         const access = await patientAccessConsentService.checkAccess(patientId, requesterId).catch(() => null);
@@ -34,8 +37,9 @@ export class PatientFitnessController {
             const target = await resolvePatient(req, req.body.patientId, "write");
             if (target.error) return res.status(target.error).json(ApiResponse.error(target.message!));
 
-            const source = req.body.source || "Unknown";
-            const records = req.body.records || [];
+            // An empty source keeps the source already stored for a day.
+            const source = typeof req.body.source === "string" ? req.body.source : "";
+            const records = Array.isArray(req.body.records) ? req.body.records : [];
             const result = await patientFitnessService.syncFitnessBatch(target.patientId, source, records, {
                 schema: Number(req.body.schema) || 1,
                 repair: req.body.repair === true,
@@ -43,7 +47,8 @@ export class PatientFitnessController {
             return res.status(200).json(ApiResponse.success(result, "Fitness records synced successfully"));
         } catch (error: any) {
             console.error("❌ Error syncing fitness data:", error);
-            return res.status(500).json(ApiResponse.error(error.message || "Failed to sync fitness data"));
+            // Database errors stay in the log; the phone retries on its next sync.
+            return res.status(500).json(ApiResponse.error("Failed to sync fitness data"));
         }
     }
 
@@ -64,7 +69,7 @@ export class PatientFitnessController {
             return res.status(200).json(ApiResponse.success(summary, "Fitness summary retrieved"));
         } catch (error: any) {
             console.error("❌ Error retrieving fitness summary:", error);
-            return res.status(500).json(ApiResponse.error(error.message || "Failed to retrieve fitness summary"));
+            return res.status(500).json(ApiResponse.error("Failed to retrieve fitness summary"));
         }
     }
 
@@ -81,7 +86,7 @@ export class PatientFitnessController {
             return res.status(200).json(ApiResponse.success(status, "Fitness status retrieved"));
         } catch (error: any) {
             console.error("❌ Error retrieving fitness status:", error);
-            return res.status(500).json(ApiResponse.error(error.message || "Failed to retrieve fitness status"));
+            return res.status(500).json(ApiResponse.error("Failed to retrieve fitness status"));
         }
     }
 

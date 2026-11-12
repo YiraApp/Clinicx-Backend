@@ -39,5 +39,6 @@ labPackageRouter.post("/", authMiddleware, c.create.bind(c));
 labPackageRouter.get("/:id", authMiddleware, c.get.bind(c));
 labPackageRouter.put("/:id", authMiddleware, c.update.bind(c));
 labPackageRouter.delete("/:id", authMiddleware, c.remove.bind(c));
+labPackageRouter.post("/:id/image", authMiddleware, upload.single("image"), c.uploadImage.bind(c));
 
 export { labPackageRouter };

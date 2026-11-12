@@ -1,4 +1,5 @@
 import fs from "fs";
+import { prescriptionFileName } from "../../../../utils/record-name.js";
 import path from "path";
 import { Request, Response } from "express";
 import { patientPrescriptionService } from "../../../../services/Appointments/patient-prescription.service.js";
@@ -390,7 +391,8 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             medDoc.DocumentType = "Prescription";
             medDoc.DocumentCategory = "Prescription";
             medDoc.FileName = `Prescription_${prescription.Id}.pdf`;
-            medDoc.OriginalFileName = `Prescription_${new Date().toISOString().split("T")[0]}.pdf`;
+            // FileName stays Prescription_<id>.pdf (it finds this document again); people see the readable name
+            medDoc.OriginalFileName = prescriptionFileName(doctorName, prescription.CreatedAt ? new Date(prescription.CreatedAt) : new Date());
             medDoc.BlobUrl = blobUrl;
             medDoc.FileSize = pdfBuffer.length;
             medDoc.MimeType = "application/pdf";

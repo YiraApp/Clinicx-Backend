@@ -5,7 +5,10 @@ import { ApiResponse } from "../../../utils/response.utils.js";
 import { userDeviceService } from "../services/userdevice.service.js";
 import { verifyRefreshToken } from "../../../utils/jwt.utils.js";
 import { tokenRepository } from "../../../repositories/Account/token.repository.js";
-import { isFamilyLinked, legacyUserHeadersAllowed } from "../../../middlewares/request-identity.js";
+import { isFamilyLinked, isSameFamily, legacyUserHeadersAllowed } from "../../../middlewares/request-identity.js";
+import { tokenActorId, sameUserId } from "../../../utils/request-actor.js";
+import { AppDataSource } from "../../../config/database.js";
+import { User } from "../../../models/Account/user.model.js";
 
 /**
  * Handles mobile user login requests.
@@ -593,6 +596,33 @@ export const updateLatestContext = async (req: Request, res: Response) => {
         // Resolve authenticated user ID from token or request body
         const resolvedUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
 
+        // Only your own account or your family's (same parent or same number). Before this, any
+        // signed-in user could rewrite anyone's latest role, organisation and hospital.
+        const actor = tokenActorId(req);
+        if (resolvedUserId && actor && !sameUserId(String(resolvedUserId), actor)) {
+            if (!(await isSameFamily(actor, String(resolvedUserId)))) {
+                if (await isFamilyLinked(actor, String(resolvedUserId))) {
+                    // A family member linked from their own account: switching to them must not
+                    // change their own app's role, organisation or hospital. Answer with what is saved.
+                    const linked = await AppDataSource.getRepository(User).findOne({ where: { Id: String(resolvedUserId), IsDeleted: false } });
+                    if (!linked) throw new Error("User not found");
+                    return res.json(ApiResponse.success({
+                        userId: linked.Id,
+                        latestRoleId: linked.LatestRoleId,
+                        latestOrgId: linked.LatestOrgId,
+                        latestHospitalId: linked.LatestHospitalId,
+                        navigationId: getNavigationId(linked.LatestRoleId)
+                    }, "Latest context unchanged for a linked family member"));
+                }
+                return res.status(403).json({
+                    status: false,
+                    message: "You can only change your own account.",
+                    code: "NOT_YOUR_ACCOUNT",
+                    data: { code: "NOT_YOUR_ACCOUNT" }
+                });
+            }
+        }
+
         if (!resolvedUserId) {
             return res.status(400).json({
                 status: false,
@@ -654,7 +684,13 @@ export const getUserData = async (req: Request, res: Response) => {
             });
         }
 
-        const userData = await mobileAuthService.getUserData(userId, deviceId, String(callerId));
+        // A profile opened through a family link gets no tokens of its own: those would let the
+        // app act as that person everywhere, and reach their dependents and their other links.
+        const tokenUserId = (req as any).user?.tokenUserId ? String((req as any).user.tokenUserId) : "";
+        const viaFamilyLink = !!tokenUserId && !(await isSameFamily(tokenUserId, String(userId)));
+        const userData = viaFamilyLink
+            ? await mobileAuthService.getUserData(userId, undefined, tokenUserId)
+            : await mobileAuthService.getUserData(userId, deviceId, String(callerId));
         return res.json(ApiResponse.success(userData, "User details fetched successfully"));
     } catch (error: any) {
         const isUserNotFound = error.message === "User not found";

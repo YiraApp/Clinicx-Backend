@@ -8,12 +8,6 @@ import { ClinicalNote } from "../../models/Appointments/clinical-note.model.js";
 
 export class PatientSummaryRepository {
     async getPatientSummary(patientId: string, orgId?: number, hospitalId?: number) {
-        const user = await AppDataSource.getRepository(User).findOne({
-            where: { Id: patientId, IsDeleted: false },
-            relations: ["PermanentAddress"]
-        });
-        if (!user) return null;
-
         const registrationWhere: any = { UserId: patientId, IsDeleted: false };
         if (orgId) {
             registrationWhere.OrganizationId = orgId;
@@ -22,31 +16,48 @@ export class PatientSummaryRepository {
             registrationWhere.HospitalId = hospitalId;
         }
 
-        let registration = await AppDataSource.getRepository(PatientRegistration).findOne({
-            where: registrationWhere
-        });
-
-        if (!registration && (orgId || hospitalId)) {
-            registration = await AppDataSource.getRepository(PatientRegistration).findOne({
-                where: { UserId: patientId, IsDeleted: false }
+        const loadRegistration = async () => {
+            let registration = await AppDataSource.getRepository(PatientRegistration).findOne({
+                where: registrationWhere
             });
-        }
 
-        const insurance = await AppDataSource.getRepository(PatientInsurance).findOne({
-            where: { UserId: patientId, IsDeleted: false }
-        });
+            if (!registration && (orgId || hospitalId)) {
+                registration = await AppDataSource.getRepository(PatientRegistration).findOne({
+                    where: { UserId: patientId, IsDeleted: false }
+                });
+            }
+            return registration;
+        };
 
-        const latestAppointment = await AppDataSource.getRepository(Appointment).findOne({
-            where: { UserId: patientId },
-            relations: ["Doctor"],
-            order: { AppointmentDate: "DESC", StartTime: "DESC" }
-        });
+        // Everything in the summary depends only on the patient, so it is read at once.
+        const [user, registration, insurance, latestAppointment, latestRecord, recentNotes] = await Promise.all([
+            AppDataSource.getRepository(User).findOne({
+                where: { Id: patientId, IsDeleted: false },
+                relations: ["PermanentAddress"]
+            }),
+            loadRegistration(),
+            AppDataSource.getRepository(PatientInsurance).findOne({
+                where: { UserId: patientId, IsDeleted: false }
+            }),
+            AppDataSource.getRepository(Appointment).findOne({
+                where: { UserId: patientId },
+                relations: ["Doctor"],
+                order: { AppointmentDate: "DESC", StartTime: "DESC" }
+            }),
+            AppDataSource.getRepository(PatientMedicalRecord).findOne({
+                where: { PatientId: patientId },
+                order: { CreatedAt: "DESC" }
+            }),
+            AppDataSource.getRepository(ClinicalNote).find({
+                where: { PatientId: patientId },
+                order: { CreatedAt: "DESC" },
+                take: 3,
+                relations: ["Doctor"]
+            }),
+        ]);
+        if (!user) return null;
 
         let latestVitals = null;
-        const latestRecord = await AppDataSource.getRepository(PatientMedicalRecord).findOne({
-            where: { PatientId: patientId },
-            order: { CreatedAt: "DESC" }
-        });
         if (latestRecord) {
             latestVitals = {
                 bloodPressure: {
@@ -65,6 +76,10 @@ export class PatientSummaryRepository {
                     value: latestRecord.Temperature || null,
                     unit: "°F"
                 },
+                spo2: {
+                    value: latestRecord.SpO2 || null,
+                    unit: "%"
+                },
                 weight: {
                     value: latestRecord.Weight || null,
                     unit: "kg"
@@ -76,13 +91,6 @@ export class PatientSummaryRepository {
                 updatedAt: latestRecord.CreatedAt || latestRecord.UpdatedAt || null
             };
         }
-
-        const recentNotes = await AppDataSource.getRepository(ClinicalNote).find({
-            where: { PatientId: patientId },
-            order: { CreatedAt: "DESC" },
-            take: 3,
-            relations: ["Doctor"]
-        });
 
         const parseList = (str: string | null | undefined): string[] => {
             if (!str) return [];

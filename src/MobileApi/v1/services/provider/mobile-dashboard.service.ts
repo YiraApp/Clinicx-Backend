@@ -23,30 +23,41 @@ export class MobileDashboardService {
         const userRepo = AppDataSource.getRepository(User);
         const appointmentRepo = AppDataSource.getRepository(Appointment);
 
-        const user = await userRepo.findOne({
-            where: { Id: userId }
-        });
+        const hospitalRepo = AppDataSource.getRepository(Hospital);
+
+        // The doctor, their provider rows, the hospital and their family members don't depend on
+        // each other, so they are read together.
+        const findProvider = async () => {
+            let found = hospId ? await providerRepo.findOne({
+                where: { UserId: userId, HospitalId: hospId, IsDeleted: false },
+                relations: ["User", "Hospital"]
+            }) : null;
+            if (!found) {
+                found = await providerRepo.findOne({
+                    where: { UserId: userId, IsDeleted: false },
+                    relations: ["User", "Hospital"]
+                });
+            }
+            return found;
+        };
+        const [user, provider, hospital, dependents, doctorProviders] = await Promise.all([
+            userRepo.findOne({
+                where: { Id: userId }
+            }),
+            findProvider(),
+            hospitalRepo.findOne({
+                where: { Id: hospId },
+                relations: ["Organization"]
+            }),
+            userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } }).catch(() => [] as User[]),
+            providerRepo.find({
+                where: { UserId: userId, IsDeleted: false }
+            }).catch(() => [] as HealthcareProvider[]),
+        ]);
 
         if (!user) {
             throw new Error("Provider user not found");
         }
-
-        let provider = hospId ? await providerRepo.findOne({
-            where: { UserId: userId, HospitalId: hospId, IsDeleted: false },
-            relations: ["User", "Hospital"]
-        }) : null;
-        if (!provider) {
-            provider = await providerRepo.findOne({
-                where: { UserId: userId, IsDeleted: false },
-                relations: ["User", "Hospital"]
-            });
-        }
-
-        const hospitalRepo = AppDataSource.getRepository(Hospital);
-        const hospital = await hospitalRepo.findOne({
-            where: { Id: hospId },
-            relations: ["Organization"]
-        });
 
         const hospitalName = hospital?.Name || "";
         const orgName = hospital?.Organization?.Name || "";
@@ -70,12 +81,9 @@ export class MobileDashboardService {
 
         // Find all family user IDs under this account
         let allFamilyUserIds = [userId];
-        try {
-            const dependents = await userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } });
-            if (dependents.length > 0) {
-                allFamilyUserIds.push(...dependents.map(d => d.Id));
-            }
-        } catch (_) { }
+        if (dependents.length > 0) {
+            allFamilyUserIds.push(...dependents.map(d => d.Id));
+        }
 
         // Cancelled and rejected bookings are not visits: listing them showed a patient once per
         // cancelled attempt in today's schedule and recent patients
@@ -89,9 +97,6 @@ export class MobileDashboardService {
             .andWhere("CAST(appointment.AppointmentDate AS DATE) = :todayStr", { todayStr })
             .andWhere(notCancelled);
 
-        const doctorProviders = await providerRepo.find({
-            where: { UserId: userId, IsDeleted: false }
-        }).catch(() => []);
         const affiliatedHospitalIds = Array.from(new Set([
             ...doctorProviders.map(p => p.HospitalId).filter(Boolean),
             ...(hospId && hospId > 0 ? [hospId] : [])
@@ -106,9 +111,178 @@ export class MobileDashboardService {
             todaysQuery.andWhere("appointment.OrgId = :orgId", { orgId });
         }
 
-        const todaysAppointments = await todaysQuery
-            .orderBy("appointment.StartTime", "ASC")
-            .getMany();
+        // 3. Recent patients: the latest appointment of each of the six patients this doctor saw
+        // most recently. Ranking them in SQL replaces loading every past appointment of the
+        // doctor (with patient and doctor rows) to keep six of them.
+        const recentQuery = appointmentRepo.createQueryBuilder("appointment")
+            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .andWhere("CAST(appointment.AppointmentDate AS DATE) <= :todayStr", { todayStr })
+            .andWhere(notCancelled);
+
+        if (hospId && hospId > 0) {
+            recentQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        } else if (affiliatedHospitalIds.length > 0) {
+            recentQuery.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
+        }
+        if (orgId && orgId > 0) {
+            recentQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        }
+
+        const loadRecentAppointments = async (): Promise<Appointment[]> => {
+            const [rankedSql, rankedParams] = recentQuery
+                .select("appointment.Id", "id")
+                .addSelect("appointment.AppointmentDate", "appointmentDate")
+                .addSelect("appointment.StartTime", "startTime")
+                .addSelect("ROW_NUMBER() OVER (PARTITION BY appointment.UserId ORDER BY appointment.AppointmentDate DESC, appointment.StartTime DESC)", "rn")
+                .getQueryAndParameters();
+            const latest: any[] = await AppDataSource.query(
+                `SELECT TOP 6 ranked.id FROM (${rankedSql}) ranked WHERE ranked.rn = 1 ORDER BY ranked.appointmentDate DESC, ranked.startTime DESC`,
+                rankedParams
+            );
+            const ids: number[] = latest.map(r => Number(r.id));
+            if (ids.length === 0) return [];
+            const rows = await appointmentRepo.createQueryBuilder("appointment")
+                .leftJoinAndSelect("appointment.User", "user")
+                .leftJoinAndSelect("appointment.Doctor", "doctor")
+                .where("appointment.Id IN (:...ids)", { ids })
+                .getMany();
+            const position = new Map(ids.map((id, n) => [id, n]));
+            return rows.sort((a, b) => (position.get(Number(a.Id)) ?? 0) - (position.get(Number(b.Id)) ?? 0));
+        };
+
+        // Unique active patients total of this doctor (aligned with Patients List)
+        const loadPatientMetrics = async () => {
+            let totalPatients = 0;
+            let newPatientsThisWeek = 0;
+            try {
+                // New patients this week: patients whose first appointment or registration with this doctor is in the last 7 days
+                const earliestApptsQuery = appointmentRepo.createQueryBuilder("a")
+                    .select("a.UserId", "UserId")
+                    .addSelect("MIN(a.AppointmentDate)", "firstDate")
+                    .where("a.DoctorId = :doctorId", { doctorId: userId })
+                    .andWhere("a.UserId IS NOT NULL");
+                if (hospId && hospId > 0) {
+                    earliestApptsQuery.andWhere("a.HospitalId = :hospId", { hospId });
+                }
+                if (orgId && orgId > 0) {
+                    earliestApptsQuery.andWhere("a.OrgId = :orgId", { orgId });
+                }
+
+                // The same first page of up to 1000 patients the Patients list loads (only its
+                // total, ids and registration dates are used here), read at the same time as
+                // the first-appointment dates. The list's per-patient last-visit lookup is skipped.
+                const [webResult, earliestAppts] = await Promise.all([
+                    this.loadRegisteredPatients(1, 1000, {
+                        organizationId: orgId,
+                        hospitalId: hospId,
+                        doctorId: userId,
+                    }).catch((err: any) => {
+                        console.error("Error calling patientRegistrationRepository.getPatients in mobile:", err);
+                        return { patients: [], total: 0 };
+                    }),
+                    earliestApptsQuery
+                        .groupBy("a.UserId")
+                        .getRawMany(),
+                ]);
+                const allPatients: any[] = webResult.patients || [];
+                totalPatients = webResult.total !== undefined ? webResult.total : allPatients.length;
+
+                const sevenDaysAgo = new Date();
+                sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+                const earliestMap = new Map<string, Date>();
+                earliestAppts.forEach(r => {
+                    if (r.UserId && r.firstDate) {
+                        earliestMap.set(r.UserId.toLowerCase(), new Date(r.firstDate));
+                    }
+                });
+
+                newPatientsThisWeek = allPatients.filter((p: any) => {
+                    const uid = (p.userId || "").toLowerCase();
+                    const firstDate = earliestMap.get(uid);
+                    if (firstDate && firstDate >= sevenDaysAgo) return true;
+                    if (!firstDate && p.createdAt) {
+                        const regDate = new Date(p.createdAt);
+                        return !isNaN(regDate.getTime()) && regDate >= sevenDaysAgo;
+                    }
+                    return false;
+                }).length;
+            } catch (patErr) {
+                console.error("Error calculating provider patients metrics:", patErr);
+                const totalPatientsQuery = appointmentRepo.createQueryBuilder("appointment")
+                    .select("COUNT(DISTINCT appointment.UserId)", "count")
+                    .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+                    .andWhere("appointment.UserId IS NOT NULL");
+                if (hospId && hospId > 0) {
+                    totalPatientsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+                }
+                if (orgId && orgId > 0) {
+                    totalPatientsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+                }
+                const totalPatientsResult = await totalPatientsQuery.getRawOne();
+                totalPatients = parseInt(totalPatientsResult?.count || "0", 10);
+            }
+            return { totalPatients, newPatientsThisWeek };
+        };
+
+        // 5. Weekly Appointments Graph Data (Mon-Sun)
+        const dailyStatsQuery = appointmentRepo.createQueryBuilder("appointment")
+            .select("FORMAT(appointment.AppointmentDate, 'ddd')", "day")
+            .addSelect("COUNT(*)", "appointments")
+            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
+            .andWhere("appointment.AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
+
+        if (hospId && hospId > 0) {
+            dailyStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
+        } else if (affiliatedHospitalIds.length > 0) {
+            dailyStatsQuery.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
+        }
+        if (orgId && orgId > 0) {
+            dailyStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
+        }
+
+        // 6. Monthly Patients Graph Data (Jan-Dec) for current year: distinct
+        // patients seen each month, cancelled and rejected bookings left out.
+        const istYear = new Date(Date.now() + 330 * 60_000).getUTCFullYear();
+        const yearQuery = () => {
+            const q = appointmentRepo.createQueryBuilder("appointment")
+                .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+                .andWhere("appointment.AppointmentDate >= :yearStart AND appointment.AppointmentDate < :nextYearStart", {
+                    yearStart: `${istYear}-01-01`,
+                    nextYearStart: `${istYear + 1}-01-01`,
+                })
+                .andWhere("LOWER(COALESCE(appointment.Status, '')) NOT IN ('cancelled', 'canceled', 'rejected')");
+            if (hospId && hospId > 0) {
+                q.andWhere("appointment.HospitalId = :hospId", { hospId });
+            } else if (affiliatedHospitalIds.length > 0) {
+                q.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
+            }
+            if (orgId && orgId > 0) {
+                q.andWhere("appointment.OrgId = :orgId", { orgId });
+            }
+            return q;
+        };
+
+        // The dashboard's queries don't depend on each other, so they run together.
+        const [todaysAppointments, recentAppointments, patientMetrics, weeklyStatsRaw, monthlyStatsRaw, yearlyRow] = await Promise.all([
+            todaysQuery
+                .orderBy("appointment.StartTime", "ASC")
+                .getMany(),
+            loadRecentAppointments(),
+            loadPatientMetrics(),
+            dailyStatsQuery
+                .groupBy("FORMAT(appointment.AppointmentDate, 'ddd')")
+                .addGroupBy("CAST(appointment.AppointmentDate AS DATE)")
+                .orderBy("CAST(appointment.AppointmentDate AS DATE)", "ASC")
+                .getRawMany(),
+            yearQuery()
+                .select("MONTH(appointment.AppointmentDate)", "month")
+                .addSelect("COUNT(DISTINCT appointment.UserId)", "patients")
+                .groupBy("MONTH(appointment.AppointmentDate)")
+                .getRawMany(),
+            // A patient seen in several months counts once for the year.
+            yearQuery().select("COUNT(DISTINCT appointment.UserId)", "patients").getRawOne(),
+        ]);
 
         const formatTime12h = (timeStr: string) => {
             if (!timeStr) return "";
@@ -143,28 +317,6 @@ export class MobileDashboardService {
                 meetingUrl: apt.MeetingUrl || null
             };
         });
-
-        // 3. Fetch recent patients (past appointments of this provider)
-        const recentQuery = appointmentRepo.createQueryBuilder("appointment")
-            .leftJoinAndSelect("appointment.User", "user")
-            .leftJoinAndSelect("appointment.Doctor", "doctor")
-            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-            .andWhere("CAST(appointment.AppointmentDate AS DATE) <= :todayStr", { todayStr })
-            .andWhere(notCancelled);
-
-        if (hospId && hospId > 0) {
-            recentQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
-        } else if (affiliatedHospitalIds.length > 0) {
-            recentQuery.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
-        }
-        if (orgId && orgId > 0) {
-            recentQuery.andWhere("appointment.OrgId = :orgId", { orgId });
-        }
-
-        const recentAppointments = await recentQuery
-            .orderBy("appointment.AppointmentDate", "DESC")
-            .addOrderBy("appointment.StartTime", "DESC")
-            .getMany();
 
         // Keep only the latest unique patient appointments (limit to 6)
         const uniqueAppointments: any[] = [];
@@ -210,65 +362,7 @@ export class MobileDashboardService {
         const totalToday = todaysAppointments.length;
         const completedToday = todaysAppointments.filter(a => (a.Status || "").toLowerCase().includes("complet")).length;
 
-        // Unique active patients total of this doctor (aligned with Patients List)
-        let totalPatients = 0;
-        let newPatientsThisWeek = 0;
-        try {
-            const patientsResult = await this.getPatientsList(userId, orgId, hospId);
-            const allPatients = patientsResult?.patients || [];
-            totalPatients = patientsResult?.total !== undefined ? patientsResult.total : allPatients.length;
-
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-            // New patients this week: patients whose first appointment or registration with this doctor is in the last 7 days
-            const earliestApptsQuery = appointmentRepo.createQueryBuilder("a")
-                .select("a.UserId", "UserId")
-                .addSelect("MIN(a.AppointmentDate)", "firstDate")
-                .where("a.DoctorId = :doctorId", { doctorId: userId })
-                .andWhere("a.UserId IS NOT NULL");
-            if (hospId && hospId > 0) {
-                earliestApptsQuery.andWhere("a.HospitalId = :hospId", { hospId });
-            }
-            if (orgId && orgId > 0) {
-                earliestApptsQuery.andWhere("a.OrgId = :orgId", { orgId });
-            }
-            const earliestAppts = await earliestApptsQuery
-                .groupBy("a.UserId")
-                .getRawMany();
-
-            const earliestMap = new Map<string, Date>();
-            earliestAppts.forEach(r => {
-                if (r.UserId && r.firstDate) {
-                    earliestMap.set(r.UserId.toLowerCase(), new Date(r.firstDate));
-                }
-            });
-
-            newPatientsThisWeek = allPatients.filter((p: any) => {
-                const uid = (p.patientUserId || p.id || "").toLowerCase();
-                const firstDate = earliestMap.get(uid);
-                if (firstDate && firstDate >= sevenDaysAgo) return true;
-                if (!firstDate && p.registeredDate) {
-                    const regDate = new Date(p.registeredDate);
-                    return !isNaN(regDate.getTime()) && regDate >= sevenDaysAgo;
-                }
-                return false;
-            }).length;
-        } catch (patErr) {
-            console.error("Error calculating provider patients metrics:", patErr);
-            const totalPatientsQuery = appointmentRepo.createQueryBuilder("appointment")
-                .select("COUNT(DISTINCT appointment.UserId)", "count")
-                .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-                .andWhere("appointment.UserId IS NOT NULL");
-            if (hospId && hospId > 0) {
-                totalPatientsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
-            }
-            if (orgId && orgId > 0) {
-                totalPatientsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
-            }
-            const totalPatientsResult = await totalPatientsQuery.getRawOne();
-            totalPatients = parseInt(totalPatientsResult?.count || "0", 10);
-        }
+        const { totalPatients, newPatientsThisWeek } = patientMetrics;
 
         const metrics = {
             today: {
@@ -292,28 +386,6 @@ export class MobileDashboardService {
                 subtext: `${newPatientsThisWeek} new patients`
             }
         };
-
-        // 5. Weekly Appointments Graph Data (Mon-Sun)
-        const dailyStatsQuery = appointmentRepo.createQueryBuilder("appointment")
-            .select("FORMAT(appointment.AppointmentDate, 'ddd')", "day")
-            .addSelect("COUNT(*)", "appointments")
-            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
-            .andWhere("appointment.AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
-
-        if (hospId && hospId > 0) {
-            dailyStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
-        } else if (affiliatedHospitalIds.length > 0) {
-            dailyStatsQuery.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
-        }
-        if (orgId && orgId > 0) {
-            dailyStatsQuery.andWhere("appointment.OrgId = :orgId", { orgId });
-        }
-
-        const weeklyStatsRaw = await dailyStatsQuery
-            .groupBy("FORMAT(appointment.AppointmentDate, 'ddd')")
-            .addGroupBy("CAST(appointment.AppointmentDate AS DATE)")
-            .orderBy("CAST(appointment.AppointmentDate AS DATE)", "ASC")
-            .getRawMany();
 
         const dayCounts = { MON: 0, TUE: 0, WED: 0, THU: 0, FRI: 0, SAT: 0, SUN: 0 };
         weeklyStatsRaw.forEach(row => {
@@ -342,34 +414,6 @@ export class MobileDashboardService {
             dailyData
         };
 
-        // 6. Monthly Patients Graph Data (Jan-Dec) for current year: distinct
-        // patients seen each month, cancelled and rejected bookings left out.
-        const istYear = new Date(Date.now() + 330 * 60_000).getUTCFullYear();
-        const yearQuery = () => {
-            const q = appointmentRepo.createQueryBuilder("appointment")
-                .where("appointment.DoctorId = :doctorId", { doctorId: userId })
-                .andWhere("appointment.AppointmentDate >= :yearStart AND appointment.AppointmentDate < :nextYearStart", {
-                    yearStart: `${istYear}-01-01`,
-                    nextYearStart: `${istYear + 1}-01-01`,
-                })
-                .andWhere("LOWER(COALESCE(appointment.Status, '')) NOT IN ('cancelled', 'canceled', 'rejected')");
-            if (hospId && hospId > 0) {
-                q.andWhere("appointment.HospitalId = :hospId", { hospId });
-            } else if (affiliatedHospitalIds.length > 0) {
-                q.andWhere("(appointment.HospitalId IN (:...affiliatedHospitalIds) OR appointment.HospitalId IS NULL)", { affiliatedHospitalIds });
-            }
-            if (orgId && orgId > 0) {
-                q.andWhere("appointment.OrgId = :orgId", { orgId });
-            }
-            return q;
-        };
-
-        const monthlyStatsRaw = await yearQuery()
-            .select("MONTH(appointment.AppointmentDate)", "month")
-            .addSelect("COUNT(DISTINCT appointment.UserId)", "patients")
-            .groupBy("MONTH(appointment.AppointmentDate)")
-            .getRawMany();
-
         const monthLabels = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
         const monthlyData = monthLabels.map((label, i) => {
             const row = monthlyStatsRaw.find(r => Number(r.month) === i + 1);
@@ -379,8 +423,6 @@ export class MobileDashboardService {
             };
         });
 
-        // A patient seen in several months counts once for the year.
-        const yearlyRow = await yearQuery().select("COUNT(DISTINCT appointment.UserId)", "patients").getRawOne();
         const yearlyTotal = parseInt(yearlyRow?.patients || "0", 10);
 
         const monthlyPatients = {
@@ -417,11 +459,14 @@ export class MobileDashboardService {
         const providerRepo = AppDataSource.getRepository(HealthcareProvider);
         const userRepo = AppDataSource.getRepository(User);
 
+        // Notes without a linked doctor are matched to a user by name. All users are read at most
+        // once for the whole list (this used to read the whole Users table once per such note).
+        let allUsersOnce: Promise<User[]> | undefined;
         const clinical_notes = await Promise.all(notes.map(async (note) => {
             let authorUser = note.Doctor;
             if (!authorUser && note.CreatedBy) {
                 const trimmedCreatedBy = note.CreatedBy.trim();
-                const allUsers = await userRepo.find({ where: { IsDeleted: false } });
+                const allUsers = await (allUsersOnce ??= userRepo.find({ where: { IsDeleted: false } }));
                 const found = allUsers.find(u => {
                     const fullName = `${u.FirstName || ""} ${u.LastName || ""}`.trim().toLowerCase();
                     return fullName === trimmedCreatedBy.toLowerCase() ||
@@ -458,6 +503,26 @@ export class MobileDashboardService {
         return { clinical_notes };
     }
 
+    /** Patient-list calls already running, keyed by their arguments. */
+    private patientListsInFlight = new Map<string, Promise<any>>();
+
+    /**
+     * patientRegistrationRepository.getPatients, shared between callers asking for the same page
+     * at the same moment. The doctor app opens the dashboard, the Patients tab and favourites
+     * together, and each needed the same page of up to 1000 patients; while one call runs the
+     * others wait for it instead of running it again. Nothing is kept once it finishes, so no
+     * caller gets an older list than it would have read itself. Callers only read the result.
+     */
+    private loadRegisteredPatients(page: number, pageSize: number, filters: Record<string, any>): Promise<any> {
+        const key = JSON.stringify([page, pageSize, filters]);
+        const running = this.patientListsInFlight.get(key);
+        if (running) return running;
+        const call = patientRegistrationRepository.getPatients(page, pageSize, filters)
+            .finally(() => this.patientListsInFlight.delete(key));
+        this.patientListsInFlight.set(key, call);
+        return call;
+    }
+
     async getPatientsList(
         doctorId: string,
         orgId: number,
@@ -488,7 +553,7 @@ export class MobileDashboardService {
         // Call the exact same patientRegistrationRepository.getPatients that Web uses
         const page = filters?.page || 1;
         const pageSize = filters?.pageSize || 1000;
-        const webResult = await patientRegistrationRepository.getPatients(page, pageSize, {
+        const webResult = await this.loadRegisteredPatients(page, pageSize, {
             organizationId: orgId,
             hospitalId: hospId,
             doctorId: doctorUserUuid,
@@ -503,12 +568,20 @@ export class MobileDashboardService {
         const rawPatients = webResult.patients || [];
         const userIds = rawPatients.map((p: any) => p.userId).filter(Boolean);
 
-        // Fetch latest appointment per patient to enrich condition and last visit date
+        // Fetch latest appointment per patient to enrich condition and last visit date. Only each
+        // patient's latest appointment with this doctor is read, with the columns used below,
+        // instead of every appointment of every listed patient in full.
         const latestApptMap = new Map<string, any>();
         if (userIds.length > 0) {
             const appts = await appointmentRepo.createQueryBuilder("a")
-                .where("a.UserId IN (:...userIds)", { userIds })
-                .andWhere("a.DoctorId = :doctorId", { doctorId: doctorUserUuid })
+                .select(["a.Id", "a.UserId", "a.AppointmentDate", "a.StartTime", "a.Reason", "a.ChiefComplaint"])
+                .where(`a.Id IN (
+                    SELECT ranked.Id FROM (
+                        SELECT x.Id, ROW_NUMBER() OVER (PARTITION BY x.UserId ORDER BY x.AppointmentDate DESC, x.StartTime DESC) AS rn
+                        FROM Appointments x
+                        WHERE x.UserId IN (:...userIds) AND x.DoctorId = :doctorId
+                    ) ranked WHERE ranked.rn = 1
+                )`, { userIds, doctorId: doctorUserUuid })
                 .orderBy("a.AppointmentDate", "DESC")
                 .addOrderBy("a.StartTime", "DESC")
                 .getMany()
@@ -658,67 +731,124 @@ export class MobileDashboardService {
         const appointmentRepo = AppDataSource.getRepository(Appointment);
         const insuranceRepo = AppDataSource.getRepository(PatientInsurance);
 
-                let user = await userRepo.findOne({
-            where: { Id: patientId },
-            relations: ["PermanentAddress", "TemporaryAddress"]
-        }).catch(() => null);
-
-        if (!user) {
-            user = await userRepo.findOne({
-                where: { Id: patientId }
+        // Everything this overview reads depends only on the patient and the org/hospital asked
+        // for, so all of it is read at once instead of one query after another.
+        const loadUser = async () => {
+            let user = await userRepo.findOne({
+                where: { Id: patientId },
+                relations: ["PermanentAddress", "TemporaryAddress"]
             }).catch(() => null);
-        }
 
-        if (!user) {
-            user = await userRepo.createQueryBuilder("u")
-                .where("LOWER(u.Id) = LOWER(:patientId)", { patientId })
-                .getOne()
-                .catch(() => null);
-        }
+            if (!user) {
+                user = await userRepo.findOne({
+                    where: { Id: patientId }
+                }).catch(() => null);
+            }
 
-        if (!user) {
-            user = new User();
-            user.Id = patientId;
-            user.FirstName = "Patient";
-            user.LastName = "";
-        }
+            if (!user) {
+                user = await userRepo.createQueryBuilder("u")
+                    .where("LOWER(u.Id) = LOWER(:patientId)", { patientId })
+                    .getOne()
+                    .catch(() => null);
+            }
 
-        const regWhere: any = { UserId: patientId, IsDeleted: false };
-        if (orgId) regWhere.OrganizationId = orgId;
-        if (hospitalId) regWhere.HospitalId = hospitalId;
-        let reg = await regRepo.findOne({
-            where: regWhere,
-            order: { CreatedAt: "DESC" }
-        });
-        if (!reg && hospitalId) {
-            reg = await regRepo.findOne({
-                where: { UserId: patientId, IsDeleted: false },
+            if (!user) {
+                user = new User();
+                user.Id = patientId;
+                user.FirstName = "Patient";
+                user.LastName = "";
+            }
+            return user;
+        };
+
+        const loadRegistration = async () => {
+            const regWhere: any = { UserId: patientId, IsDeleted: false };
+            if (orgId) regWhere.OrganizationId = orgId;
+            if (hospitalId) regWhere.HospitalId = hospitalId;
+            let reg = await regRepo.findOne({
+                where: regWhere,
                 order: { CreatedAt: "DESC" }
             });
-        }
+            if (!reg && hospitalId) {
+                reg = await regRepo.findOne({
+                    where: { UserId: patientId, IsDeleted: false },
+                    order: { CreatedAt: "DESC" }
+                });
+            }
+            return reg;
+        };
 
-        const insWhere: any = { UserId: patientId, IsDeleted: false };
-        if (orgId) insWhere.OrganizationId = orgId;
-        if (hospitalId) insWhere.HospitalId = hospitalId;
-        let insurance = await insuranceRepo.findOne({
-            where: insWhere,
-            order: { CreatedAt: "DESC" }
-        });
-        if (!insurance && hospitalId) {
-            insurance = await insuranceRepo.findOne({
-                where: { UserId: patientId, IsDeleted: false },
+        const loadInsurance = async () => {
+            const insWhere: any = { UserId: patientId, IsDeleted: false };
+            if (orgId) insWhere.OrganizationId = orgId;
+            if (hospitalId) insWhere.HospitalId = hospitalId;
+            let insurance = await insuranceRepo.findOne({
+                where: insWhere,
                 order: { CreatedAt: "DESC" }
             });
-        }
+            if (!insurance && hospitalId) {
+                insurance = await insuranceRepo.findOne({
+                    where: { UserId: patientId, IsDeleted: false },
+                    order: { CreatedAt: "DESC" }
+                });
+            }
+            return insurance;
+        };
 
         const apptWhere: any = { UserId: patientId };
         if (orgId) apptWhere.OrgId = orgId;
                 if (hospitalId && Number(hospitalId) > 0) apptWhere.HospitalId = Number(hospitalId);
-        const appointments = await appointmentRepo.find({
-            where: apptWhere,
-            relations: ["Doctor", "Hospital", "Organization"],
-            order: { AppointmentDate: "DESC", StartTime: "DESC" }
-        });
+        const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
+        const docRepo = AppDataSource.getRepository(MedicalDocument);
+        const recordRepo = AppDataSource.getRepository(MedicalRecord);
+        const noteRepo = AppDataSource.getRepository(ClinicalNote);
+        const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
+
+        const [user, reg, insurance, appointments, allPatientAppts, allPrescriptions, allNotes, allDocs, allRecords, latestRecord] = await Promise.all([
+            loadUser(),
+            loadRegistration(),
+            loadInsurance(),
+            appointmentRepo.find({
+                where: apptWhere,
+                relations: ["Doctor", "Hospital", "Organization"],
+                order: { AppointmentDate: "DESC", StartTime: "DESC" }
+            }),
+            // All appointments globally across all orgs & hospitals for strictly this patient account
+            appointmentRepo.createQueryBuilder("apt")
+                .leftJoinAndSelect("apt.User", "user")
+                .leftJoinAndSelect("apt.Doctor", "doctor")
+                .leftJoinAndSelect("apt.Hospital", "hospital")
+                .leftJoinAndSelect("apt.Organization", "org")
+                .where("apt.UserId = :patientId", { patientId })
+                .andWhere("LOWER(apt.Status) != 'deleted'")
+                .orderBy("apt.AppointmentDate", "ASC")
+                .addOrderBy("apt.StartTime", "ASC")
+                .getMany(),
+            prescriptionRepo.find({
+                where: { PatientId: patientId },
+                relations: ["Diagnoses", "Medications", "Doctor"],
+                order: { CreatedAt: "DESC" }
+            }),
+            noteRepo.find({
+                where: { PatientId: patientId },
+                relations: ["Doctor"],
+                order: { CreatedAt: "DESC" }
+            }),
+            docRepo.find({
+                where: { PatientId: patientId },
+                relations: ["Doctor"],
+                order: { CreatedAt: "DESC" }
+            }),
+            recordRepo.find({
+                where: { PatientId: patientId },
+                relations: ["Appointment"],
+                order: { CreatedAt: "DESC" }
+            }),
+            medicalRecordRepo.findOne({
+                where: { PatientId: patientId },
+                order: { Date: "DESC", CreatedAt: "DESC" }
+            }).catch(() => null),
+        ]);
 
         // Format date helpers
         const formatDateMMMddyyyy = (dateInput: Date | string | null | undefined) => {
@@ -773,18 +903,6 @@ export class MobileDashboardService {
             return `${hourStr}:${min} ${ampm}`;
         };
 
-        // Fetch all appointments globally across all orgs & hospitals for strictly this patient account
-        const allPatientAppts = await appointmentRepo.createQueryBuilder("apt")
-            .leftJoinAndSelect("apt.User", "user")
-            .leftJoinAndSelect("apt.Doctor", "doctor")
-            .leftJoinAndSelect("apt.Hospital", "hospital")
-            .leftJoinAndSelect("apt.Organization", "org")
-            .where("apt.UserId = :patientId", { patientId })
-            .andWhere("LOWER(apt.Status) != 'deleted'")
-            .orderBy("apt.AppointmentDate", "ASC")
-            .addOrderBy("apt.StartTime", "ASC")
-            .getMany();
-
         const todayStr = new Date().toISOString().split("T")[0]; // YYYY-MM-DD for today
         const providerRepo = AppDataSource.getRepository(HealthcareProvider);
 
@@ -805,35 +923,6 @@ export class MobileDashboardService {
         const next_scheduled_appointment = futureAppointments.length > 0
             ? formatDateMMMddyyyyWithYear(futureAppointments[0].AppointmentDate)
             : "None";
-
-        const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
-        const docRepo = AppDataSource.getRepository(MedicalDocument);
-        const recordRepo = AppDataSource.getRepository(MedicalRecord);
-        const noteRepo = AppDataSource.getRepository(ClinicalNote);
-
-        const allPrescriptions = await prescriptionRepo.find({
-            where: { PatientId: patientId },
-            relations: ["Diagnoses", "Medications", "Doctor"],
-            order: { CreatedAt: "DESC" }
-        });
-
-        const allNotes = await noteRepo.find({
-            where: { PatientId: patientId },
-            relations: ["Doctor"],
-            order: { CreatedAt: "DESC" }
-        });
-
-        const allDocs = await docRepo.find({
-            where: { PatientId: patientId },
-            relations: ["Doctor"],
-            order: { CreatedAt: "DESC" }
-        });
-
-        const allRecords = await recordRepo.find({
-            where: { PatientId: patientId },
-            relations: ["Appointment"],
-            order: { CreatedAt: "DESC" }
-        });
 
         let apptsToMap = allPatientAppts;
         if (hospitalId && Number(hospitalId) > 0) {
@@ -947,11 +1036,7 @@ export class MobileDashboardService {
                     created_at: formatDateMMMddyyyy(r.CreatedAt)
                 }))
             };
-        });        const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
-        let latestRecord = await medicalRecordRepo.findOne({
-            where: { PatientId: patientId },
-            order: { Date: "DESC", CreatedAt: "DESC" }
-        }).catch(() => null);
+        });
 
         const cleanVital = (val?: string | null) => {
             if (!val) return "--";
@@ -1162,7 +1247,8 @@ export class MobileDashboardService {
         }
 
         const recordWhere: any = { PatientId: patientId };
-        if (orgId) recordWhere.OrganizationId = orgId;
+        // The hospital alone decides when given, as in the web lists (it belongs to one organization).
+        if (orgId && !hospitalId) recordWhere.OrganizationId = orgId;
         if (hospitalId) recordWhere.HospitalId = hospitalId;
         let latestRecord = await medicalRecordRepo.findOne({
             where: recordWhere,
@@ -1318,7 +1404,7 @@ export class MobileDashboardService {
         // Fetch recent medical documents globally across ALL orgs & hospitals for this patient
         const docRepo = AppDataSource.getRepository(MedicalDocument);
         const docWhere: any = { PatientId: patientId, IsDeleted: false };
-        if (orgId) docWhere.OrganizationId = orgId;
+        if (orgId && !hospitalId) docWhere.OrganizationId = orgId;
         if (hospitalId) docWhere.HospitalId = hospitalId;
 
         const medicalDocsRaw = await docRepo.find({

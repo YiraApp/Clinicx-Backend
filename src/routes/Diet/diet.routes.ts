@@ -9,6 +9,7 @@ const dietRouter = Router();
 dietRouter.get("/foods", dietController.searchFoods.bind(dietController));
 dietRouter.get("/foods/categories", dietController.getCategories.bind(dietController));
 dietRouter.get("/foods/recommendations", dietController.getSlotRecommendations.bind(dietController));
+dietRouter.post("/foods/ask-ai", authMiddleware, dietController.askAboutFood.bind(dietController));
 dietRouter.post("/foods", authMiddleware, dietController.createCustomFood.bind(dietController));
 dietRouter.put("/foods/:id", authMiddleware, dietController.updateCustomFood.bind(dietController));
 dietRouter.delete("/foods/:id", authMiddleware, dietController.deleteCustomFood.bind(dietController));

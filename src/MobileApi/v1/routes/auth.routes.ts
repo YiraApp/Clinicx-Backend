@@ -26,6 +26,7 @@ import { paymentController } from "../../../controllers/Payments/payment.control
 import { hospitalLabTestController } from "../../../controllers/Organizations/hospital-lab-test.controller.js";
 import { labPackageController } from "../../../controllers/LabPackages/lab-package.controller.js";
 import { patientQuestionnaireController } from "../controllers/patient-questionnaire.controller.js";
+import { familyController } from "../controllers/family.controller.js";
 
 const authRouter = Router();
 
@@ -200,5 +201,19 @@ authRouter.post("/lab-packages/slots", authMiddleware, labPackageController.pati
 authRouter.post("/lab-packages/orders/:id/slot", authMiddleware, labPackageController.patientSetSlot.bind(labPackageController));
 // Saved addresses to pick for sample collection, when the hospital asks for one
 authRouter.post("/lab-packages/addresses", authMiddleware, labPackageController.patientAddresses.bind(labPackageController));
+
+// Family links: link people who have their own Yira account, by family code or by request
+authRouter.get("/family/code", authMiddleware, (req, res) => familyController.getCode(req, res));
+authRouter.post("/family/code/refresh", authMiddleware, (req, res) => familyController.refreshCode(req, res));
+authRouter.post("/family/lookup", authMiddleware, (req, res) => familyController.lookup(req, res));
+authRouter.post("/family/link-with-code", authMiddleware, (req, res) => familyController.linkWithCode(req, res));
+authRouter.get("/family/requests", authMiddleware, (req, res) => familyController.listRequests(req, res));
+authRouter.post("/family/requests", authMiddleware, (req, res) => familyController.sendRequest(req, res));
+authRouter.post("/family/requests/:id/accept", authMiddleware, (req, res) => familyController.accept(req, res));
+authRouter.post("/family/requests/:id/decline", authMiddleware, (req, res) => familyController.decline(req, res));
+authRouter.post("/family/requests/:id/cancel", authMiddleware, (req, res) => familyController.cancel(req, res));
+authRouter.get("/family/members", authMiddleware, (req, res) => familyController.listMembers(req, res));
+authRouter.delete("/family/links/:id", authMiddleware, (req, res) => familyController.removeLink(req, res));
+authRouter.post("/family/links/:id/remove", authMiddleware, (req, res) => familyController.removeLink(req, res));
 
 export { authRouter };

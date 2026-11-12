@@ -11,7 +11,9 @@ export class ClinicalNoteRepository {
 
     async findByPatient(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number): Promise<ClinicalNote[]> {
         const where: any = { PatientId: patientId };
-        if (orgId) where.OrganizationId = orgId;
+        // The hospital alone decides when given (it belongs to one organization), so notes saved
+        // from the app with a wrong OrganizationId still show at their hospital on web and mobile.
+        if (orgId && !hospitalId) where.OrganizationId = orgId;
         if (hospitalId) where.HospitalId = hospitalId;
         if (appointmentId) where.AppointmentId = appointmentId;
 

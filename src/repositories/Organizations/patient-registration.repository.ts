@@ -66,20 +66,24 @@ export class PatientRegistrationRepository {
         return query;
     }
 
-    /** Runs a query with a plan compiled for these values, so a bad cached plan can't be reused. */
-    private async runFresh(query: any): Promise<any[]> {
+    /**
+     * Runs a query with one general plan (not tuned to the first caller's values) that stays
+     * cached. Compiling afresh on every call (RECOMPILE) cost 80-200 ms of database CPU each time,
+     * which saturated the S1 database when the app sent several requests at once.
+     */
+    private async runStable(query: any): Promise<any[]> {
         const [sql, params] = query.getQueryAndParameters();
-        return AppDataSource.query(`${sql} OPTION (RECOMPILE)`, params);
+        return AppDataSource.query(`${sql} OPTION (OPTIMIZE FOR UNKNOWN)`, params);
     }
 
     async getPatients(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
         const skip = (page - 1) * pageSize;
 
         // Paging a query that joins collections makes TypeORM wrap everything in one big DISTINCT
-        // subquery, and SQL Server cached a plan for it that took over a minute for one doctor
-        // (the same query compiled fresh takes about a second). So the page of ids comes from a
-        // lean query compiled fresh each time, and only those registrations are loaded in full.
-        const pageRows = await this.runFresh(
+        // subquery, and SQL Server cached a plan for it, built for one caller's values, that took
+        // over a minute for another doctor. So the page of ids comes from a lean query with one
+        // general plan, and only those registrations are loaded in full.
+        const pageRows = await this.runStable(
             this.filtered(filters)
                 .select("pr.Id", "id")
                 .addSelect("pr.CreatedAt", "createdAt")
@@ -89,7 +93,7 @@ export class PatientRegistrationRepository {
                 .offset(skip)
                 .limit(pageSize)
         );
-        const [countRow] = await this.runFresh(this.filtered(filters).select("COUNT(DISTINCT pr.Id)", "total"));
+        const [countRow] = await this.runStable(this.filtered(filters).select("COUNT(DISTINCT pr.Id)", "total"));
         const total = parseInt(countRow?.total, 10) || 0;
 
         const pageIds: number[] = pageRows.map((r: any) => Number(r.id));
@@ -178,7 +182,7 @@ export class PatientRegistrationRepository {
         }
 
         // Summary stats for this org/hosp context
-        const [stats] = await this.runFresh(
+        const [stats] = await this.runStable(
             this.filtered(filters)
                 .select("COUNT(pr.Id)", "total")
                 .addSelect("SUM(CASE WHEN u.Status = 1 THEN 1 ELSE 0 END)", "active")

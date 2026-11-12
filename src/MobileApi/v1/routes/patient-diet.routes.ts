@@ -25,6 +25,8 @@ mobileDietRouter.get("/foods", optionalAuthMiddleware, dietController.searchFood
 mobileDietRouter.get("/foods/recommendations", optionalAuthMiddleware, dietController.getSlotRecommendations.bind(dietController));
 mobileDietRouter.get("/templates", optionalAuthMiddleware, dietController.listTemplates.bind(dietController));
 mobileDietRouter.get("/templates/:id", optionalAuthMiddleware, dietController.getTemplateById.bind(dietController));
+// "Ask AI" about one food (patients and doctors)
+mobileDietRouter.post("/foods/ask-ai", authMiddleware, dietController.askAboutFood.bind(dietController));
 mobileDietRouter.post("/foods", authMiddleware, dietController.createCustomFood.bind(dietController));
 mobileDietRouter.post("/templates", authMiddleware, dietController.createTemplate.bind(dietController));
 mobileDietRouter.put("/templates/:id", authMiddleware, dietController.updateTemplate.bind(dietController));

@@ -1,3 +1,4 @@
+import { labInvoiceService } from "./lab-invoice.service.js";
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import mime from "mime-types";
@@ -159,6 +160,8 @@ export class LabPackageOrderService {
             status: order.Status,
             statusLabel: STATUS_LABELS[order.Status] || order.Status,
             hasReport: !!order.ReportUrl,
+            invoiceNumber: order.InvoiceNumber || null,
+            invoiceUrl: order.InvoiceUrl || null,
             reportFileName: order.ReportFileName || null,
             reportUploadedAt: order.ReportUploadedAt || null,
             createdAt: order.CreatedAt,
@@ -208,10 +211,10 @@ export class LabPackageOrderService {
             throw new Error("Online payment is not set up at this hospital. Choose another hospital.");
         }
 
-        // When the hospital collects the sample at the patient's address, that address's pincode is
-        // the one the package must serve.
+        // Every order says where the sample is collected; that address's pincode is the one the
+        // package must serve.
         const options = await labSlotService.appOptions(hospitalId);
-        const address: CollectionAddress | null = options.collectAddress ? parseCollectionAddress(data.address) : null;
+        const address: CollectionAddress | null = parseCollectionAddress(data.address);
 
         // Outside the package's pincodes it can still be booked at the default hospital, whose
         // packages the app shows when nothing is offered in the patient's pincode.
@@ -272,6 +275,7 @@ export class LabPackageOrderService {
         if (amounts.totalAmount <= 0) {
             order.Status = "Paid";
             await this.orderRepo.save(order);
+            await labInvoiceService.ensureInvoice(orderId);
             return { orderId, orderNumber: order.OrderNumber, requiresPayment: false, amount: 0 };
         }
 
@@ -359,8 +363,10 @@ export class LabPackageOrderService {
             GatewaySignature: data.razorpay_signature,
             Method: "Razorpay"
         });
+        // The tax invoice goes to the patient's My Billing; a failure here never undoes the payment.
+        const invoice = await labInvoiceService.ensureInvoice(payment.LabPackageOrderId);
         const order = await this.orderRepo.findOne({ where: { Id: payment.LabPackageOrderId }, relations: ["Hospital"] });
-        return { success: true, orderId: payment.LabPackageOrderId, orderNumber: order?.OrderNumber, status: order?.Status };
+        return { success: true, orderId: payment.LabPackageOrderId, orderNumber: order?.OrderNumber, status: order?.Status, invoiceNumber: invoice?.invoiceNumber ?? null, invoiceUrl: invoice?.invoiceUrl ?? null };
     }
 
     /**
@@ -373,6 +379,7 @@ export class LabPackageOrderService {
         if (payment.Status !== "Success") {
             await this.markPaid(payment, { GatewayPaymentId: gatewayPaymentId, Method: method || "Razorpay" });
         }
+        await labInvoiceService.ensureInvoice(payment.LabPackageOrderId);
         return true;
     }
 

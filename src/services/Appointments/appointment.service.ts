@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../config/database.js";
+import { In } from "typeorm/index.js";
 import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
 import { healthcareProviderScheduleSlotRepository } from "../../repositories/Organizations/healthcare-provider-schedule-slot.repository.js";
 import { patientQueueRepository } from "../../repositories/Appointments/patient-queue.repository.js";
@@ -960,23 +961,29 @@ export class AppointmentService {
         const insuranceMap = new Map<string, PatientInsurance>();
         const plansMap = new Map<number, any[]>();
 
-        if (userIds.length > 0) {
+        // Registrations, insurance and treatment plans don't depend on each other: load them together.
+        const loadRegistrations = async () => {
+            if (userIds.length === 0) return;
             const registrations = await AppDataSource.getRepository(PatientRegistration)
                 .createQueryBuilder("pr")
                 .where("pr.UserId IN (:...userIds)", { userIds })
                 .andWhere("pr.IsDeleted = :deleted", { deleted: false })
                 .getMany();
             registrations.forEach(reg => medicalMap.set(reg.UserId.toUpperCase(), reg));
+        };
 
+        const loadInsurances = async () => {
+            if (userIds.length === 0) return;
             const insurances = await AppDataSource.getRepository(PatientInsurance)
                 .createQueryBuilder("ins")
                 .where("ins.UserId IN (:...userIds)", { userIds })
                 .andWhere("ins.IsDeleted = :deleted", { deleted: false })
                 .getMany();
             insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
-        }
+        };
 
-        if (appointmentIds.length > 0) {
+        const loadTreatmentPlans = async () => {
+            if (appointmentIds.length === 0) return;
             try {
                 const { AppointmentTreatmentPlan } = await import("../../models/Payments/appointment-treatment-plan.model.js");
                 const links = await AppDataSource.getRepository(AppointmentTreatmentPlan)
@@ -995,7 +1002,9 @@ export class AppointmentService {
             } catch (error) {
                 console.error("Error attaching treatment plans:", error);
             }
-        }
+        };
+
+        await Promise.all([loadRegistrations(), loadInsurances(), loadTreatmentPlans()]);
 
         return appointments.map(apt => {
             const reg = medicalMap.get(apt.UserId?.toUpperCase());
@@ -1021,26 +1030,37 @@ export class AppointmentService {
 
     async getPatientAppointments(userId: string) {
         const appointments = await appointmentRepository.getPatientAppointments(userId);
-        const enrichedAppointments = [];
-        const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
-
-        for (const appt of appointments) {
-            let specialty = "General Medicine";
-            if (appt.DoctorId) {
-                const provider = await AppDataSource.getRepository(HealthcareProvider).findOne({
-                    where: { UserId: appt.DoctorId, IsDeleted: false }
-                });
-                if (provider) {
-                    specialty = provider.Specialty || "General Medicine";
-                }
-            }
-            enrichedAppointments.push({
-                ...appt,
-                specialty
-            });
-        }
+        const enrichedAppointments = await this.withDoctorSpecialty(appointments);
 
         return await this.attachMedicalAndInsurance(enrichedAppointments);
+    }
+
+    /**
+     * Adds each appointment's doctor specialty. The doctors' provider rows are read in one query
+     * (this used to be one query per appointment). A doctor with several active rows gets the one
+     * with the lowest Id; the old findOne took one of them in no set order.
+     */
+    private async withDoctorSpecialty(appointments: Appointment[]) {
+        const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
+        const doctorIds = [...new Set(appointments.map(a => a.DoctorId).filter(Boolean))];
+        const specialtyByDoctor = new Map<string, string>();
+        if (doctorIds.length > 0) {
+            const providers = await AppDataSource.getRepository(HealthcareProvider).find({
+                where: { UserId: In(doctorIds), IsDeleted: false },
+                select: { Id: true, UserId: true, Specialty: true },
+                order: { Id: "ASC" }
+            });
+            for (const provider of providers) {
+                const key = String(provider.UserId).toUpperCase();
+                if (!specialtyByDoctor.has(key)) {
+                    specialtyByDoctor.set(key, provider.Specialty || "General Medicine");
+                }
+            }
+        }
+        return appointments.map(appt => ({
+            ...appt,
+            specialty: (appt.DoctorId && specialtyByDoctor.get(String(appt.DoctorId).toUpperCase())) || "General Medicine"
+        }));
     }
 
     async getPatientHospitalSummary(userId: string) {
@@ -1061,7 +1081,8 @@ export class AppointmentService {
         for (const apt of allUserAppointments) {
             const s = apt.Status?.toLowerCase() || "";
             if (s === "confirmed" || s === "scheduled") stats.confirmed++;
-            else if (s === "pending" || s === "paymentpending") stats.pending++;
+            // "PendingPayment" is what the patient portal (and older app builds) save
+            else if (s === "pending" || s === "paymentpending" || s === "pendingpayment") stats.pending++;
             else if (s === "completed") stats.completed++;
         }
 
@@ -1073,24 +1094,7 @@ export class AppointmentService {
 
     async getPatientAppointmentsByHospital(userId: string, hospitalId: number) {
         const appointments = await appointmentRepository.getPatientAppointmentsByHospital(userId, hospitalId);
-        const enrichedAppointments = [];
-        const { HealthcareProvider } = await import("../../models/Organizations/healthcare-provider.model.js");
-
-        for (const appt of appointments) {
-            let specialty = "General Medicine";
-            if (appt.DoctorId) {
-                const provider = await AppDataSource.getRepository(HealthcareProvider).findOne({
-                    where: { UserId: appt.DoctorId, IsDeleted: false }
-                });
-                if (provider) {
-                    specialty = provider.Specialty || "General Medicine";
-                }
-            }
-            enrichedAppointments.push({
-                ...appt,
-                specialty
-            });
-        }
+        const enrichedAppointments = await this.withDoctorSpecialty(appointments);
 
         return await this.attachMedicalAndInsurance(enrichedAppointments);
     }
@@ -1109,7 +1113,8 @@ export class AppointmentService {
             const s = apt.Status?.toLowerCase() || "";
             if (s === "scheduled") summary.totalScheduled++;
             else if (s === "confirmed") summary.totalConfirmed++;
-            else if (s === "paymentpending") summary.totalPaymentPending++;
+            // "PendingPayment" is what the patient portal (and older app builds) save
+            else if (s === "paymentpending" || s === "pendingpayment") summary.totalPaymentPending++;
             else if (s === "completed") summary.totalCompleted++;
         }
         return { data: enriched, summary, total, page: filters.page || 1, pageSize: filters.pageSize || 50 };

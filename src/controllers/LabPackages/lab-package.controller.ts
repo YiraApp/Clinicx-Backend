@@ -78,6 +78,17 @@ export class LabPackageController {
         }
     }
 
+    /** Cover photo for a package: multipart field "image". */
+    async uploadImage(req: Request, res: Response) {
+        try {
+            const requesterId = await requireYiraAdmin(req, res);
+            if (!requesterId) return;
+            return res.json(ApiResponse.success(await labPackageService.setImage(Number(req.params.id), (req as any).file, requesterId), "Package image saved."));
+        } catch (error: any) {
+            return fail(res, error);
+        }
+    }
+
     async remove(req: Request, res: Response) {
         try {
             const requesterId = await requireYiraAdmin(req, res);

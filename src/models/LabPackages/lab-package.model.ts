@@ -60,6 +60,10 @@ export class LabPackage {
     @Column({ type: "nvarchar", length: "MAX", nullable: true })
     Pincodes?: string | null;
 
+    /** Cover photo shown on the package in the patient app (https URL); the app draws a themed cover when empty */
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    ImageUrl?: string | null;
+
     @Column({ type: "bit", default: true })
     IsActive: boolean;
 

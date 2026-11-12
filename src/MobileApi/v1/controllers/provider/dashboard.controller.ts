@@ -1,6 +1,9 @@
 import type { Request, Response } from "express";
 import { mobileDashboardService } from "../../services/provider/mobile-dashboard.service.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
+import { AppDataSource } from "../../../../config/database.js";
+import { User } from "../../../../models/Account/user.model.js";
+import { requireTokenActor } from "../../../../utils/request-actor.js";
 
 /**
  * Retrieves the provider dashboard statistics, todays schedule, recent patients,
@@ -413,13 +416,31 @@ export const getFavoritePatientsList = async (req: Request, res: Response) => {
 export const deactivateUserAccount = async (req: Request, res: Response) => {
     try {
         const { userId } = req.body;
-        const targetUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+        // Deleting an account needs a signed-in token; a claimed userId + deviceId is not enough.
+        const requesterId = requireTokenActor(req, res);
+        if (!requesterId) return;
+        const targetUserId = String(userId || requesterId || "").trim();
 
         if (!targetUserId) {
             return res.status(400).json({
                 status: false,
                 message: "User ID is required"
             });
+        }
+        // Only your own account, or a dependent under it (never someone else's, and never a linked
+        // family member's own account): before this check any signed-in user could delete any account.
+        if (targetUserId.toUpperCase() !== requesterId.toUpperCase()) {
+            const users = AppDataSource.getRepository(User);
+            const [requester, target] = await Promise.all([
+                users.findOne({ where: { Id: requesterId, IsDeleted: false }, select: { Id: true, ParentUserId: true } }),
+                users.findOne({ where: { Id: targetUserId, IsDeleted: false }, select: { Id: true, ParentUserId: true } }),
+            ]);
+            const holder = (requester?.ParentUserId || requester?.Id || "").toUpperCase();
+            const isOwnDependent = !!target?.ParentUserId && !!holder
+                && target.ParentUserId.toUpperCase() === holder && target.Id.toUpperCase() !== holder;
+            if (!isOwnDependent) {
+                return res.status(403).json({ status: false, message: "You can only delete your own account or a family member you added." });
+            }
         }
 
         const result = await mobileDashboardService.deactivateAccount(targetUserId);

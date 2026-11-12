@@ -7,7 +7,7 @@ import { resolveRequestIdentity } from "./request-identity.js";
 const redactShareSecrets = (path: string) => path.replace(/(\/shared-profile\/)[^/?#]+/gi, "$1********");
 
 /** Responses that carry a share link URL, a shared profile's records, a patient's past-records bundle, or their bills and policies. */
-const isShareRequest = (path: string) => /\/shared-profile\/|\/patient\/share-links|\/past-records|\/patient\/(billing|policies)/i.test(path || "");
+const isShareRequest = (path: string) => /\/shared-profile\/|\/patient\/share-links|\/past-records|\/patient\/(billing|policies)|\/family\/code/i.test(path || "");
 
 const apiLogRepository = AppDataSource.getRepository(APILog);
 
@@ -164,7 +164,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
     if (req.body) {
         let body = { ...req.body };
         // Never store credentials, one-time codes or session tokens in the logs
-        const secretKeys = ["password", "Password", "newPassword", "confirmPassword", "oldPassword", "currentPassword", "otp", "OTP", "refreshToken", "accessToken", "token", "fcmToken"];
+        const secretKeys = ["password", "Password", "newPassword", "confirmPassword", "oldPassword", "currentPassword", "otp", "OTP", "refreshToken", "accessToken", "token", "fcmToken", "familyCode"];
         for (const key of secretKeys) {
             if (body[key]) body[key] = "********";
         }
@@ -281,7 +281,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
             }
 
             requestLog.Response = isShareRequest(req.path)
-                ? "[not logged: contains a share link or shared health records]"
+                ? "[not logged: contains a share link, a family code or shared health records]"
                 : responseStr.length > 2000 ? responseStr.substring(0, 2000) + "... [truncated]" : responseStr;
             requestLog.ResponseStatusCode = res.statusCode;
             requestLog.ResponseTimeMs = durationMs;

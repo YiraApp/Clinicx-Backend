@@ -142,6 +142,19 @@ export interface LabPackageInput {
     pincodes?: string[] | string | null;
     isActive?: boolean;
     hospitalIds?: (number | string)[];
+    /** Cover photo URL (https); null or "" removes it */
+    imageUrl?: string | null;
+}
+
+/** An https image URL of at most 1000 characters, or null to clear; anything else is refused. */
+export function parseImageUrl(input: unknown): string | null {
+    const s = String(input ?? "").trim();
+    if (!s) return null;
+    let url: URL;
+    try { url = new URL(s); } catch { throw new Error("The package image must be a web address (https://...)."); }
+    if (url.protocol !== "https:") throw new Error("The package image must be an https:// address.");
+    if (s.length > 1000) throw new Error("The package image address is too long.");
+    return s;
 }
 
 const clean = (value: unknown, max: number): string | null => {
@@ -198,6 +211,7 @@ export class LabPackageService {
             gstAmount: Number(pkg.GstAmount || 0),
             totalAmount: Number(pkg.TotalAmount || 0),
             showInMobileApp: !!pkg.ShowInMobileApp,
+            imageUrl: pkg.ImageUrl || null,
             // "Why it is worth it": the cards, and what they add up to if booked separately
             ...(() => {
                 let benefits: PackageBenefit[] = [];
@@ -329,6 +343,7 @@ export class LabPackageService {
             ShowInMobileApp: data.showInMobileApp !== false,
             Benefits: v.benefits.length > 0 ? JSON.stringify(v.benefits) : null,
             Pincodes: v.pincodes.join(",") || null,
+            ImageUrl: parseImageUrl(data.imageUrl),
             IsActive: data.isActive !== false,
             IsDeleted: false,
             CreatedAt: new Date(),
@@ -358,11 +373,27 @@ export class LabPackageService {
             ShowInMobileApp: data.showInMobileApp !== undefined ? !!data.showInMobileApp : existing.ShowInMobileApp,
             Benefits: v.benefits.length > 0 ? JSON.stringify(v.benefits) : null,
             Pincodes: v.pincodes.join(",") || null,
+            ImageUrl: data.imageUrl !== undefined ? parseImageUrl(data.imageUrl) : existing.ImageUrl ?? null,
             IsActive: data.isActive !== undefined ? !!data.isActive : existing.IsActive,
             UpdatedAt: new Date(),
             UpdatedBy: userId || null
         });
         if (v.hospitalIds) await this.saveHospitals(id, v.hospitalIds);
+        return this.getById(id);
+    }
+
+    /** Saves an uploaded cover photo (jpg/png/webp, max 5 MB) to blob storage and sets it on the package. */
+    async setImage(id: number, file: { buffer: Buffer; originalname: string; mimetype: string; size: number } | undefined, userId?: string) {
+        if (!file?.buffer?.length) throw new Error("Choose an image to upload.");
+        if (!/^image\/(jpeg|png|webp)$/i.test(file.mimetype || "")) throw new Error("The image must be a JPG, PNG or WebP file.");
+        if (file.size > 5 * 1024 * 1024) throw new Error("The image must be 5 MB or smaller.");
+        const existing = await this.repo.findOne({ where: { Id: id, IsDeleted: false } });
+        if (!existing) throw new Error("Lab package not found.");
+        const { BlobService } = await import("../Common/blob.service.js");
+        const safeName = (file.originalname || "cover").replace(/[^A-Za-z0-9._-]/g, "_").slice(-80);
+        const [uploaded] = await new BlobService().uploadFiles([{ ...file, originalname: safeName } as any], "lab-packages", `package-${id}`);
+        if (!uploaded?.fileUrl) throw new Error("Could not save the image. Try again.");
+        await this.repo.update(id, { ImageUrl: uploaded.fileUrl, UpdatedAt: new Date(), UpdatedBy: userId || null });
         return this.getById(id);
     }
 

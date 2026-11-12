@@ -1,3 +1,4 @@
+import { In } from "typeorm/index.js";
 import { AppDataSource } from "../../../config/database.js";
 import { PatientManualBill } from "../../../models/Wallet/patient-manual-bill.model.js";
 import { PatientPolicy } from "../../../models/Wallet/patient-policy.model.js";
@@ -30,7 +31,17 @@ const amount = (v: any, field: string, { required = false } = {}): number | null
     return money(n);
 };
 const status = (total: number, paid: number) => (paid >= total ? "Paid" : paid > 0 ? "Partly paid" : "Due");
-const dateOnly = (d: any) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+/**
+ * The India date of a value: a "YYYY-MM-DD" date column as it is, a datetime
+ * (bill CreatedAt, payment TransactionDate) on India's clock, so a bill made
+ * at 1 am IST is not shown under the day before.
+ */
+const dateOnly = (d: any) => {
+    if (!d) return null;
+    if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    const t = new Date(d).getTime();
+    return Number.isNaN(t) ? null : new Date(t + 330 * 60_000).toISOString().slice(0, 10);
+};
 
 /** One row in My billing, whatever its source. */
 type BillView = { id: string; source: "hospital" | "payment" | "manual"; date: string | null; category: string; total: number; paid: number; due: number } & Record<string, unknown>;
@@ -50,10 +61,11 @@ export class PatientWalletService {
      * are left out until the hospital finalises them.
      */
     async getBilling(patientId: string) {
-        const [hospital, payments, manual] = await Promise.all([
+        const [hospital, payments, manual, lab] = await Promise.all([
             this.hospitalBills(patientId),
             this.unbilledPayments(patientId),
             AppDataSource.getRepository(PatientManualBill).find({ where: { PatientId: patientId, IsDeleted: false }, order: { BillDate: "DESC", Id: "DESC" } }),
+            this.labPackageBills(patientId),
         ]);
 
         const billedIds = new Set(hospital.map((b) => b.billRef));
@@ -63,6 +75,7 @@ export class PatientWalletService {
         const bills: BillView[] = [
             ...[...hospital, ...receipts].map(({ billRef, ...b }) => b),
             ...manual.map((m) => this.mapManual(m)),
+            ...lab,
         ]
             .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
@@ -105,7 +118,8 @@ export class PatientWalletService {
             return p?.PaymentMethod || p?.PaymentGateway || (Number(b.PaidAmount) > 0 ? "Cash" : null);
         };
         return rows
-            .filter((b: any) => !(String(b.BillStatus) === "Draft" && Number(b.PaidAmount) <= 0))
+            // Drafts until finalised, and bills cancelled with the visit (Billing shows them as Cancelled, nothing owed)
+            .filter((b: any) => !((String(b.BillStatus) === "Draft" || String(b.BillStatus) === "Cancelled") && Number(b.PaidAmount) <= 0))
             .map((b: any) => {
                 const total = money(b.TotalAmount);
                 const paid = money(b.PaidAmount);
@@ -142,6 +156,60 @@ export class PatientWalletService {
                     editable: false,
                 };
             });
+    }
+
+    /**
+     * Paid lab package orders, each with its tax invoice (created here for orders paid before
+     * invoices existed). Shown as hospital bills under "Lab tests".
+     */
+    private async labPackageBills(patientId: string): Promise<BillView[]> {
+        const { LabPackageOrder } = await import("../../../models/LabPackages/lab-package-order.model.js");
+        const { LabPackagePayment } = await import("../../../models/LabPackages/lab-package-payment.model.js");
+        const { labInvoiceService, INVOICED_STATUSES } = await import("../../../services/LabPackages/lab-invoice.service.js");
+        const repo = AppDataSource.getRepository(LabPackageOrder);
+        const find = () => repo.find({
+            where: { PatientId: patientId, Status: In(INVOICED_STATUSES) } as any,
+            relations: ["Hospital"],
+            order: { CreatedAt: "DESC" },
+            take: 200,
+        });
+        let orders = await find();
+        const missing = orders.filter((o) => !o.InvoiceUrl).map((o) => o.Id);
+        if (missing.length) {
+            await labInvoiceService.ensureInvoices(missing.slice(0, 20));
+            orders = await find();
+        }
+        const payments = orders.length
+            ? await AppDataSource.getRepository(LabPackagePayment).find({ where: { LabPackageOrderId: In(orders.map((o) => o.Id)), Status: "Success" } as any })
+            : [];
+        return orders.map((o: any) => {
+            const pay = payments.find((p: any) => p.LabPackageOrderId === o.Id);
+            const total = money(o.TotalAmount);
+            return {
+                id: `l-${o.Id}`,
+                source: "hospital" as const,
+                title: o.PackageName,
+                provider: o.Hospital?.Name || null,
+                doctor: null,
+                category: "Lab tests",
+                date: dateOnly(pay?.UpdatedAt || o.CreatedAt),
+                billNumber: o.InvoiceNumber || o.OrderNumber,
+                total,
+                paid: total,
+                due: 0,
+                status: "Paid",
+                paymentMode: pay?.Method || (total > 0 ? "Online" : null),
+                subTotal: money(o.Price),
+                discount: 0,
+                tax: money(o.GstAmount),
+                items: [{ name: o.PackageName, quantity: 1, unitPrice: money(o.Price), total: money(o.Price) }],
+                notes: `Lab order ${o.OrderNumber}`,
+                fileUrl: o.InvoiceUrl || null,
+                fileName: o.InvoiceNumber ? `Invoice ${o.InvoiceNumber}.pdf` : null,
+                appointmentId: null,
+                editable: false,
+            };
+        });
     }
 
     /** Successful online payments, in case a hospital never raised a bill for them. */

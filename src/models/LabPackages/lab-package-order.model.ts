@@ -102,6 +102,16 @@ export class LabPackageOrder {
     @Column({ type: "bigint", nullable: true })
     MedicalDocumentId?: number | string | null;
 
+    /** Tax invoice raised once the order is paid: its number, the PDF in blob storage, and when */
+    @Column({ type: "nvarchar", length: 40, nullable: true })
+    InvoiceNumber?: string | null;
+
+    @Column({ type: "nvarchar", length: 1000, nullable: true })
+    InvoiceUrl?: string | null;
+
+    @Column({ type: "datetime", nullable: true })
+    InvoicedAt?: Date | null;
+
     @Column({ type: "datetime", default: () => "GETDATE()" })
     CreatedAt: Date;
 

@@ -1,5 +1,15 @@
 import { AppDataSource } from "../../../config/database.js";
 import { PatientFitnessData } from "../../../models/Fitness/patient-fitness.model.js";
+import {
+    MAX_HOURLY_JSON_LENGTH,
+    MAX_METRICS_JSON_LENGTH,
+    addDays,
+    boundedJson,
+    isCalendarDate,
+    isDuplicateKeyError,
+    isSyncableDate,
+    localDateKey,
+} from "../../../services/Fitness/fitness-input.js";
 
 export interface FitnessRecordInput {
     date: string; // YYYY-MM-DD
@@ -73,19 +83,12 @@ const FIELDS: FieldSpec[] = [
     { input: "bloodGlucoseMgDl", column: "BloodGlucoseMgDl", min: 10, max: 1000 },
 ];
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RECORDS = 120;
 
 const toDateKey = (d: any): string => {
     if (!d) return "";
     if (d instanceof Date) return d.toISOString().split("T")[0];
     return String(d).split("T")[0];
-};
-
-const addDays = (dateKey: string, days: number): string => {
-    const d = new Date(`${dateKey}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() + days);
-    return d.toISOString().split("T")[0];
 };
 
 /** A clean number for one field, or null when the value is missing or implausible. */
@@ -141,17 +144,39 @@ export class PatientFitnessService {
 
         const isV2 = Number(options.schema) >= 2;
         const repair = isV2 && options.repair === true;
+        const sourceName = typeof source === "string" ? source.trim().slice(0, 50) : "";
 
-        // One row per date; a later entry for the same date wins.
+        // One row per date; a later entry for the same date wins. Impossible
+        // dates (2026-02-30, or years ahead from a wrong phone clock) are dropped
+        // here instead of failing the whole batch in SQL.
+        const today = localDateKey();
         const byDate = new Map<string, FitnessRecordInput>();
+        let rejected = 0;
         for (const item of records.slice(0, MAX_RECORDS)) {
             const key = toDateKey(item?.date);
-            if (DATE_RE.test(key)) byDate.set(key, item);
+            if (isSyncableDate(key, today)) byDate.set(key, item);
+            else rejected++;
         }
         if (byDate.size === 0) {
-            return { success: true, syncedCount: 0, message: "No valid records provided" };
+            return { success: true, syncedCount: 0, rejectedCount: rejected, message: "No valid records provided" };
         }
 
+        // Two syncs for the same new day can race; the loser re-reads and updates.
+        try {
+            return { ...(await this.upsertDays(patientId, sourceName, byDate, isV2, repair)), rejectedCount: rejected };
+        } catch (error) {
+            if (!isDuplicateKeyError(error)) throw error;
+            return { ...(await this.upsertDays(patientId, sourceName, byDate, isV2, repair)), rejectedCount: rejected };
+        }
+    }
+
+    private async upsertDays(
+        patientId: string,
+        source: string,
+        byDate: Map<string, FitnessRecordInput>,
+        isV2: boolean,
+        repair: boolean,
+    ) {
         const dates = [...byDate.keys()].sort();
         const existingRows = await this.fitnessRepo
             .createQueryBuilder("f")
@@ -170,17 +195,20 @@ export class PatientFitnessService {
 
             const hasAnyReading = [...values.values()].some(v => v !== null && v > 0);
             let row = existingByDate.get(dateKey);
+            const hourly = boundedJson(item.rawHourlyJson, MAX_HOURLY_JSON_LENGTH, { array: true });
+            const metrics = boundedJson(item.rawMetricsJson, MAX_METRICS_JSON_LENGTH);
 
-            if (!hasAnyReading && !item.rawHourlyJson) {
+            if (!hasAnyReading && !hourly) {
                 skipped++;
                 continue;
             }
 
             if (!row) {
+                const itemSource = typeof item.source === "string" ? item.source.trim() : "";
                 row = this.fitnessRepo.create({
                     PatientId: patientId,
                     Date: dateKey,
-                    Source: (source || item.source || "Unknown").slice(0, 50),
+                    Source: (source || itemSource || "Unknown").slice(0, 50),
                     CreatedAt: new Date(),
                 });
                 // Columns default to 0 in the database; start from "no reading" instead.
@@ -202,14 +230,12 @@ export class PatientFitnessService {
                 }
             }
 
-            if (item.rawHourlyJson) {
-                row.RawHourlyJson = typeof item.rawHourlyJson === "string" ? item.rawHourlyJson : JSON.stringify(item.rawHourlyJson);
+            if (hourly) {
+                row.RawHourlyJson = hourly;
             } else if (repair) {
                 row.RawHourlyJson = null as any;
             }
-            if (item.rawMetricsJson) {
-                row.RawMetricsJson = typeof item.rawMetricsJson === "string" ? item.rawMetricsJson : JSON.stringify(item.rawMetricsJson);
-            }
+            if (metrics) row.RawMetricsJson = metrics;
             toSave.push(row);
         }
 
@@ -233,7 +259,9 @@ export class PatientFitnessService {
         if (!patientId) throw new Error("patientId is required");
 
         const days = period === "day" ? 1 : period === "week" ? 7 : 30;
-        const today = todayDate && DATE_RE.test(todayDate) ? todayDate : new Date().toISOString().split("T")[0];
+        // The client's own date when it sends one. The fallback is India's date:
+        // the UTC date is still yesterday until 5:30 in the morning here.
+        const today = isCalendarDate(todayDate) ? todayDate : localDateKey();
         const from = addDays(today, -(days - 1));
         // The previous window of the same length, for "vs last week" comparisons.
         const previousFrom = addDays(from, -days);

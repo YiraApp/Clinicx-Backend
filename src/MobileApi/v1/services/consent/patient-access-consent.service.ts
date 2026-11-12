@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../../../config/database.js";
+import { In } from "typeorm/index.js";
 import { PatientAccessConsent } from "../../../../models/Consent/patient-access-consent.model.js";
 import { User } from "../../../../models/Account/user.model.js";
 import { UserRole } from "../../../../models/Account/userrole.model.js";
@@ -305,6 +306,30 @@ export class PatientAccessConsentService {
         const now = new Date();
         const results = [];
 
+        // The doctors, their provider rows and the hospitals of all consents, read once for the
+        // whole list (this used to be up to three queries per consent, one after another). A doctor
+        // with several provider rows gets the one with the lowest Id; findOne took one in no set order.
+        const sameId = (id: unknown) => String(id ?? "").toUpperCase();
+        const doctorIds = [...new Set(consents.map(c => c.DoctorId).filter(Boolean))];
+        const hospitalIds = [...new Set(consents.map(c => c.HospitalId).filter(Boolean))];
+        const [doctorUsers, doctorProviders, hospitals] = await Promise.all([
+            doctorIds.length ? this.userRepo.find({ where: { Id: In(doctorIds) } }) : Promise.resolve([] as User[]),
+            doctorIds.length
+                ? this.providerRepo.find({
+                    where: { UserId: In(doctorIds), IsDeleted: false },
+                    relations: ["Hospital"],
+                    order: { Id: "ASC" }
+                })
+                : Promise.resolve([] as HealthcareProvider[]),
+            hospitalIds.length ? this.hospitalRepo.find({ where: { Id: In(hospitalIds) } }) : Promise.resolve([] as Hospital[]),
+        ]);
+        const doctorUserById = new Map(doctorUsers.map(u => [sameId(u.Id), u]));
+        const providerByDoctor = new Map<string, HealthcareProvider>();
+        for (const p of doctorProviders) {
+            if (!providerByDoctor.has(sameId(p.UserId))) providerByDoctor.set(sameId(p.UserId), p);
+        }
+        const hospitalById = new Map(hospitals.map(h => [Number(h.Id), h]));
+
         for (const c of consents) {
             // Auto expire check
             if (c.Status === "APPROVED" && c.DurationMinutes > 0 && c.ExpiresAt && c.ExpiresAt < now) {
@@ -313,15 +338,12 @@ export class PatientAccessConsentService {
                 await this.consentRepo.save(c);
             }
 
-            const doctorUser = await this.userRepo.findOne({ where: { Id: c.DoctorId } });
-            const provider = await this.providerRepo.findOne({
-                where: { UserId: c.DoctorId, IsDeleted: false },
-                relations: ["Hospital"]
-            });
+            const doctorUser = doctorUserById.get(sameId(c.DoctorId)) ?? null;
+            const provider = providerByDoctor.get(sameId(c.DoctorId)) ?? null;
 
             let hospitalName = provider?.Hospital?.Name || "Main Clinic Facility";
             if (c.HospitalId) {
-                const hosp = await this.hospitalRepo.findOne({ where: { Id: c.HospitalId } });
+                const hosp = hospitalById.get(Number(c.HospitalId));
                 if (hosp?.Name) hospitalName = hosp.Name;
             }
 

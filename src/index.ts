@@ -9,6 +9,7 @@ import { initializeDatabase } from "./config/database.js";
 import { MigrationService } from "./services/Common/migration.service.js";
 import { DietMigrationService } from "./services/Diet/diet-migration.service.js";
 import { QuestionnaireMigrationService } from "./services/Questionnaires/questionnaire-migration.service.js";
+import { FamilyMigrationService } from "./services/Family/family-migration.service.js";
 
 const port = process.env.PORT || 8080;
 
@@ -19,6 +20,11 @@ const startServer = async () => {
         await MigrationService.ensureClinicalColumns();
         await DietMigrationService.runMigrationsAndSeed();
         await QuestionnaireMigrationService.run();
+        await FamilyMigrationService.run();
+        // Indexes for the hot queries. Not awaited: a first build on a large table can take
+        // minutes, and the server must start listening meanwhile. Errors are only logged.
+        const { PerformanceIndexService } = await import("./services/Common/performance-indexes.service.js");
+        void PerformanceIndexService.ensurePerformanceIndexes();
 
         // Report at startup whether this server can send push notifications
         const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");

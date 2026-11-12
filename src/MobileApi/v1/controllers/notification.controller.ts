@@ -79,7 +79,16 @@ export class NotificationController {
                 .skip(skip)
                 .take(limit);
 
-            const [notifications, total] = await queryBuilder.getManyAndCount();
+            // The page, its total and the unread count are read together.
+            const [[notifications, total], unreadCount] = await Promise.all([
+                queryBuilder.getManyAndCount(),
+                this.notificationRepo.createQueryBuilder("n")
+                    .where("n.UserId IN (:...linkedUserIds)", { linkedUserIds })
+                    .andWhere("n.IsRead = 0")
+                    .andWhere("n.Type NOT LIKE 'WHATSAPP_%'")
+                    .andWhere("n.Type NOT IN ('TEST_PUSH', 'TEST')")
+                    .getCount(),
+            ]);
 
             // Lookup missing images from PushCampaigns
             const missingRefIds = notifications.filter(n => (!n.ImageUrl || n.ImageUrl.trim() === '') && n.ReferenceId).map(n => n.ReferenceId);
@@ -92,13 +101,6 @@ export class NotificationController {
                     }
                 } catch (_) {}
             }
-
-            const unreadCount = await this.notificationRepo.createQueryBuilder("n")
-                .where("n.UserId IN (:...linkedUserIds)", { linkedUserIds })
-                .andWhere("n.IsRead = 0")
-                .andWhere("n.Type NOT LIKE 'WHATSAPP_%'")
-                .andWhere("n.Type NOT IN ('TEST_PUSH', 'TEST')")
-                .getCount();
 
             return res.json(ApiResponse.success({
                 notifications: notifications.map(n => ({

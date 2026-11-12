@@ -9,6 +9,8 @@ import { HealthcareProvider } from "../../../../models/Organizations/healthcare-
 import { HealthcareProviderScheduleSlot } from "../../../../models/Organizations/healthcare-provider-schedule-slot.model.js";
 import { PatientAccessConsent } from "../../../../models/Consent/patient-access-consent.model.js";
 import { healthcareProviderRepository } from "../../../../repositories/Organizations/healthcare-provider.repository.js";
+import { appointmentRepository } from "../../../../repositories/Appointments/appointment.repository.js";
+import { AppointmentStatus } from "../../../../enums/appointments.js";
 import { pushNotificationService } from "../../../../services/Notifications/push-notification.service.js";
 import { whatsappService } from "../../../../services/Common/whatsapp.service.js";
 import { zoomService } from "../../../../services/Common/zoom.service.js";
@@ -28,18 +30,19 @@ export class MobileAppointmentService {
         const todayStr = options?.date || new Date().toISOString().split("T")[0];
 
         const userRepo = AppDataSource.getRepository(User);
-        let allFamilyUserIds = [doctorId];
-        try {
-            const dependents = await userRepo.find({ where: { ParentUserId: doctorId, IsDeleted: false } });
-            if (dependents.length > 0) {
-                allFamilyUserIds.push(...dependents.map(d => d.Id));
-            }
-        } catch (_) {}
-
         const providerRepo = AppDataSource.getRepository(HealthcareProvider);
-        const doctorProviders = await providerRepo.find({
-            where: { UserId: doctorId, IsDeleted: false }
-        }).catch(() => []);
+        // Family members and provider rows don't depend on each other: read them together.
+        const [dependents, doctorProviders] = await Promise.all([
+            userRepo.find({ where: { ParentUserId: doctorId, IsDeleted: false } }).catch(() => [] as User[]),
+            providerRepo.find({
+                where: { UserId: doctorId, IsDeleted: false }
+            }).catch(() => [] as HealthcareProvider[]),
+        ]);
+        let allFamilyUserIds = [doctorId];
+        if (dependents.length > 0) {
+            allFamilyUserIds.push(...dependents.map(d => d.Id));
+        }
+
         const isDoctor = doctorProviders.length > 0;
         const affiliatedHospitalIds = doctorProviders.map(p => p.HospitalId).filter(Boolean);
 
@@ -47,7 +50,7 @@ export class MobileAppointmentService {
         const statsQuery = appointmentRepo.createQueryBuilder("apt")
             .select("COUNT(*)", "todayCount")
             .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('confirmed', 'scheduled') THEN 1 END)", "confirmedCount")
-            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'requested') THEN 1 END)", "pendingCount")
+            .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'pendingpayment', 'requested') THEN 1 END)", "pendingCount")
             .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' THEN 1 END)", "completedCount");
 
         if (isDoctor) {
@@ -69,49 +72,30 @@ export class MobileAppointmentService {
                 statsQuery.andWhere("(apt.OrgId = :orgId OR apt.OrgId IS NULL)", { orgId });
             }
         }
-        let todayCount = 0;
-        let confirmedCount = 0;
-        let pendingCount = 0;
-        let completedCount = 0;
-
+        // The counts and the list below are read together (the counts query is only started here).
+        let statsPromise: Promise<any>;
         if (options?.dateFrom && options?.dateTo) {
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) <= :dateTo", { dateTo: options.dateTo });
-            const statsResult = await statsQuery.getRawOne();
-            todayCount = parseInt(statsResult?.todayCount || "0", 10);
-            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
-            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
-            completedCount = parseInt(statsResult?.completedCount || "0", 10);
+            statsPromise = statsQuery.getRawOne();
         } else if (options?.dateFrom) {
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) >= :dateFrom", { dateFrom: options.dateFrom });
-            const statsResult = await statsQuery.getRawOne();
-            todayCount = parseInt(statsResult?.todayCount || "0", 10);
-            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
-            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
-            completedCount = parseInt(statsResult?.completedCount || "0", 10);
+            statsPromise = statsQuery.getRawOne();
         } else if (options?.date && options.date !== todayStr) {
             statsQuery.andWhere("CAST(apt.AppointmentDate AS DATE) = :dateStr", { dateStr: options.date });
-            const statsResult = await statsQuery.getRawOne();
-            todayCount = parseInt(statsResult?.todayCount || "0", 10);
-            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
-            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
-            completedCount = parseInt(statsResult?.completedCount || "0", 10);
+            statsPromise = statsQuery.getRawOne();
         } else {
             // Default "Today" view (when mobile launches):
             // todayCount: strictly today's appointments
             // confirmedCount & pendingCount: active upcoming/today bookings (from today onwards)
             // completedCount: today's completed appointments
-            const statsResult = await statsQuery
+            statsPromise = statsQuery
                 .select("COUNT(CASE WHEN CAST(apt.AppointmentDate AS DATE) = :todayStr THEN 1 END)", "todayCount")
                 .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('confirmed', 'scheduled') AND CAST(apt.AppointmentDate AS DATE) >= :todayStr THEN 1 END)", "confirmedCount")
-                .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'requested') AND CAST(apt.AppointmentDate AS DATE) >= :todayStr THEN 1 END)", "pendingCount")
+                .addSelect("COUNT(CASE WHEN LOWER(apt.Status) IN ('pending', 'paymentpending', 'pendingpayment', 'requested') AND CAST(apt.AppointmentDate AS DATE) >= :todayStr THEN 1 END)", "pendingCount")
                 .addSelect("COUNT(CASE WHEN LOWER(apt.Status) LIKE '%complet%' AND CAST(apt.AppointmentDate AS DATE) = :todayStr THEN 1 END)", "completedCount")
                 .setParameter("todayStr", todayStr)
                 .getRawOne();
-            todayCount = parseInt(statsResult?.todayCount || "0", 10);
-            confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
-            pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
-            completedCount = parseInt(statsResult?.completedCount || "0", 10);
         }
 
         // 2. Fetch appointments list
@@ -163,9 +147,16 @@ export class MobileAppointmentService {
             query.andWhere("(LOWER(user.FirstName) LIKE :searchPattern OR LOWER(user.LastName) LIKE :searchPattern OR LOWER(user.PhoneNumber) LIKE :searchPattern)", { searchPattern });
         }
 
-        const appointments = await query
-            .orderBy("apt.StartTime", "ASC")
-            .getMany();
+        const [statsResult, appointments] = await Promise.all([
+            statsPromise,
+            query
+                .orderBy("apt.StartTime", "ASC")
+                .getMany(),
+        ]);
+        const todayCount = parseInt(statsResult?.todayCount || "0", 10);
+        const confirmedCount = parseInt(statsResult?.confirmedCount || "0", 10);
+        const pendingCount = parseInt(statsResult?.pendingCount || "0", 10);
+        const completedCount = parseInt(statsResult?.completedCount || "0", 10);
 
         const formatTime12h = (timeStr: string) => {
             if (!timeStr) return "";
@@ -217,7 +208,8 @@ export class MobileAppointmentService {
 
             return {
                 id: String(apt.Id),
-                tokenNumber: `Token #${index + 1}`,
+                // The same token number the web lists show; the list position only when the booking has none
+                tokenNumber: apt.AppointmentNumber ? `Token #${apt.AppointmentNumber}` : `Token #${index + 1}`,
                 time: displayTime,
                 duration: `${durationMins} MIN`,
                 patientName,
@@ -288,6 +280,14 @@ export class MobileAppointmentService {
         const cleanPhone = (data.patientPhone || "").replace(/[^\d]/g, "");
         if (!cleanPhone || cleanPhone.length < 10) {
             throw new Error("Valid patient phone number is required");
+        }
+
+        // File the booking under the hospital's own organization. The app falls back to org 1 when a
+        // hospital entry has no orgId, and the web lists (and this dashboard) filter by organization,
+        // so such a booking never showed at that hospital.
+        const bookedHospital = await AppDataSource.getRepository(Hospital).findOne({ where: { Id: data.hospitalId } });
+        if (bookedHospital?.OrganizationId && Number(bookedHospital.OrganizationId) !== Number(data.orgId)) {
+            data.orgId = Number(bookedHospital.OrganizationId);
         }
 
         // Only Active treatment plans can be attached to a new booking (checked before anything is saved)
@@ -601,13 +601,28 @@ export class MobileAppointmentService {
         appointment.Reason = data.reason || "General Checkup";
         appointment.AppointmentType = data.appointmentType || (data.isTeleConsultation ? "Video Consultation" : "In-Clinic");
         appointment.IsTeleConsultation = data.isTeleConsultation || false;
-        appointment.Status = requiresOnlinePayment ? "PendingPayment" : "Confirmed";
+        // The web's name for this status (AppointmentStatus): its lists, filters and counts look for "PaymentPending"
+        appointment.Status = requiresOnlinePayment ? AppointmentStatus.PaymentPending : "Confirmed";
         appointment.CreatedBy = "MobileApp";
         if (data.parentAppointmentId) {
             appointment.ParentAppointmentId = Number(data.parentAppointmentId);
         }
         if (slot) {
             appointment.SlotId = slot.Id;
+        }
+        // End time and the hospital's token number for the day, as a web booking gets them. Without the
+        // number the web showed no token and numbered its next booking as if this one did not exist.
+        if (slot?.EndTime) {
+            appointment.EndTime = slot.EndTime;
+        } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(normalizedStartTime)) {
+            const [startH, startM] = normalizedStartTime.split(":").map(Number);
+            const endMinutes = (startH * 60 + startM + (appointment.Duration || 30)) % (24 * 60);
+            appointment.EndTime = `${String(Math.floor(endMinutes / 60)).padStart(2, "0")}:${String(endMinutes % 60).padStart(2, "0")}:00`;
+        }
+        try {
+            appointment.AppointmentNumber = await appointmentRepository.getNextAppointmentNumber(data.hospitalId, appointment.AppointmentDate);
+        } catch (numberErr) {
+            console.error("[MobileAppointmentService] Could not number the appointment:", numberErr);
         }
 
         // Generate Zoom Link for Teleconsultation
@@ -1088,12 +1103,18 @@ export class MobileAppointmentService {
             await this.assertCanChangeAppointment(appointment, requesterId);
         }
 
-        const normalizedStatus = status.trim();
+        // Save the web's status names (AppointmentStatus): the app sends "In Progress", which the web's
+        // lists, filters and dashboards (all looking for "InProgress") did not recognise
+        const compactStatus = status.trim().toLowerCase().replace(/[\s_-]+/g, "");
+        const statusAliases: Record<string, string> = { pendingpayment: AppointmentStatus.PaymentPending, canceled: AppointmentStatus.Cancelled };
+        const normalizedStatus = statusAliases[compactStatus]
+            || Object.values(AppointmentStatus).find(s => s.toLowerCase() === compactStatus)
+            || status.trim();
         const isCancelled = isCancelledStatus(normalizedStatus);
         const currentStatus = (appointment.Status || "").trim().toLowerCase();
 
         // The same status again (a second tap on Cancel): nothing changes and nobody is messaged again
-        if (currentStatus === normalizedStatus.toLowerCase() || (isCancelled && isCancelledStatus(currentStatus))) {
+        if (currentStatus.replace(/[\s_-]+/g, "") === normalizedStatus.toLowerCase() || (isCancelled && isCancelledStatus(currentStatus))) {
             return { appointmentId: String(appointment.Id), status: appointment.Status, unchanged: true };
         }
         if (isCancelledStatus(currentStatus)) {
