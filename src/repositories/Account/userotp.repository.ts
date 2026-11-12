@@ -143,10 +143,8 @@ export class UserOTPRepository {
             };
         }
 
-        // Test codes (123456 / 111111) let QA sign in without a real SMS. They are
-        // off unless ALLOW_TEST_OTP=true, so they can never unlock a live account.
-        const isMasterOtp = process.env.ALLOW_TEST_OTP === "true" && (otp === "123456" || otp === "111111");
-        if (userOTP.OTP !== otp && !isMasterOtp) {
+        // Only the code that was sent is accepted: there are no master or test codes.
+        if (userOTP.OTP !== otp) {
             userOTP.AttemptCount += 1;
             await this.repo.save(userOTP);
             const remainingAttempts = 5 - userOTP.AttemptCount;
