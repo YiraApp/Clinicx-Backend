@@ -12,7 +12,7 @@ import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { HI_TYPES, type HiType } from "../src/services/Abdm/fhir/fhir-common.js";
-import { BUILDERS } from "../src/services/Abdm/fhir/health-records.js";
+import { BUILDERS, invoicePdfDocument } from "../src/services/Abdm/fhir/health-records.js";
 import { FIXTURES } from "../src/services/Abdm/fhir/fhir-fixtures.js";
 
 const DOCS_MCP = "https://docs.abdm.gov.in/mcp";
@@ -49,6 +49,11 @@ const main = async () => {
         { name: "Prescription-generated-pdf", hiType: "Prescription", source: { ...FIXTURES.Prescription, prescription: { ...FIXTURES.Prescription.prescription, signedCopy: null } } },
         { name: "DiagnosticReport-imaging", hiType: "DiagnosticReport", source: { ...FIXTURES.DiagnosticReport, kind: "imaging", entered: { ...FIXTURES.DiagnosticReport.entered!, results: [], specimen: null } } },
         { name: "DiagnosticReport-file-only", hiType: "DiagnosticReport", source: { ...FIXTURES.DiagnosticReport, entered: null } },
+        // An issued bill's PDF, sent again as a health document a PHR app shows
+        {
+            name: "HealthDocumentRecord-invoice-pdf", hiType: "HealthDocumentRecord",
+            source: { ...FIXTURES.HealthDocumentRecord, key: `bill-${FIXTURES.Invoice.bill.id}:pdf`, title: `Invoice ${FIXTURES.Invoice.bill.number}`, date: FIXTURES.Invoice.bill.date, documents: [invoicePdfDocument(FIXTURES.Invoice)] },
+        },
     ];
 
     let failed = 0;

@@ -1,6 +1,6 @@
 import { FhirSourceError, codedText, distinctCoded, fhirDate, type FhirBundle, type HiType } from "./fhir/fhir-common.js";
-import { BUILDERS, type RecordSourceFor } from "./fhir/health-records.js";
-import type { CodedText, DiagnosticKind, DocumentSource, RecordParties, VisitVitals, WellnessMeasurement } from "./fhir/fhir-sources.js";
+import { BUILDERS, invoicePdfDocument, type RecordSourceFor } from "./fhir/health-records.js";
+import type { CodedText, DiagnosticKind, DocumentSource, InvoiceSource, RecordParties, VisitVitals, WellnessMeasurement } from "./fhir/fhir-sources.js";
 import { visitVitalsToMeasurements } from "./fhir/measurements.js";
 import { abdmHealthRecordRepository, isVitalsRecord, type AbdmHealthRecordRepository, type VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import type { PatientMedicalRecord } from "../../models/Appointments/patient-medical-record.model.js";
@@ -182,23 +182,26 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
     for (const b of v.bills) {
         // Only an issued bill with items is an invoice: a care context never claims one it can't build
         if (!issuedBill(b) || !(b.BillItems ?? []).length) continue;
-        out.push({
-            hiType: "Invoice",
-            source: {
-                ...parties,
-                bill: {
-                    id: b.AppointmentBillId,
-                    number: b.BillNumber,
-                    date: b.CreatedAt,
-                    status: b.BillStatus,
-                    subTotal: Number(b.SubTotal), discount: Number(b.DiscountAmount), total: Number(b.TotalAmount),
-                    cgst: Number(b.CgstAmount), sgst: Number(b.SgstAmount), igst: Number(b.IgstAmount), gst: Number(b.GstAmount ?? 0),
-                    items: (b.BillItems ?? []).map((i) => ({
-                        id: i.AppointmentBillItemId, type: i.ItemType, name: i.ItemName, quantity: Number(i.Quantity),
-                        unitPrice: Number(i.UnitPrice), discount: Number(i.DiscountAmount), gstAmount: Number(i.GstAmount), total: Number(i.TotalAmount),
-                    })),
-                },
+        const invoice: InvoiceSource = {
+            ...parties,
+            bill: {
+                id: b.AppointmentBillId,
+                number: b.BillNumber,
+                date: b.CreatedAt,
+                status: b.BillStatus,
+                subTotal: Number(b.SubTotal), discount: Number(b.DiscountAmount), total: Number(b.TotalAmount),
+                cgst: Number(b.CgstAmount), sgst: Number(b.SgstAmount), igst: Number(b.IgstAmount), gst: Number(b.GstAmount ?? 0),
+                items: (b.BillItems ?? []).map((i) => ({
+                    id: i.AppointmentBillItemId, type: i.ItemType, name: i.ItemName, quantity: Number(i.Quantity),
+                    unitPrice: Number(i.UnitPrice), discount: Number(i.DiscountAmount), gstAmount: Number(i.GstAmount), total: Number(i.TotalAmount),
+                })),
             },
+        };
+        out.push({ hiType: "Invoice", source: invoice });
+        // The invoice's PDF again, as a document: PHR apps don't open the sub-section the invoice keeps it in
+        out.push({
+            hiType: "HealthDocumentRecord",
+            source: { ...parties, key: `bill-${b.AppointmentBillId}:pdf`, date: b.CreatedAt, title: `Invoice ${b.BillNumber}`, documents: [invoicePdfDocument(invoice)] },
         });
     }
 

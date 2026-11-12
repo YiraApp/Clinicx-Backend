@@ -7,9 +7,9 @@ import {
 } from "./fhir-common.js";
 import { measurementObservation, sectionOf, visitVitalsToMeasurements, WELLNESS_PROFILES, type WellnessSection } from "./measurements.js";
 import { routeOf } from "./dosage.js";
-import { withRecordPdf } from "./record-pdf.js";
+import { recordPdfOf, withRecordPdf } from "./record-pdf.js";
 import type {
-    CodedText, DiagnosticReportSource, DischargeSummarySource, ReportResultSource, HealthDocumentSource, ImmunizationSource, InvoiceSource,
+    CodedText, DiagnosticReportSource, DocumentSource, DischargeSummarySource, ReportResultSource, HealthDocumentSource, ImmunizationSource, InvoiceSource,
     OpConsultationSource, PractitionerSource, PrescriptionSource, RecordParties, WellnessSource,
 } from "./fhir-sources.js";
 
@@ -534,7 +534,8 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
     if (!(invoice.totalPriceComponent as unknown[]).length) delete invoice.totalPriceComponent;
 
     // InvoiceRecord's one section takes nothing but the Invoice (closed slicing), but a sub-section
-    // of it is unconstrained: the PDF goes there, still reached from the Composition
+    // of it is unconstrained: the PDF goes there, still reached from the Composition. PHR apps don't
+    // open sub-sections, so a visit also sends this PDF as a health document (invoicePdfDocument)
     return withRecordPdf("Invoice", (pdf) => documentBundle({
         hiType: "Invoice",
         profile: "InvoiceRecord",
@@ -546,6 +547,31 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
         sections: [{ ...section("Invoice", [invoice]), ...(pdf.length ? { section: [section("Document Reference", pdf)] } : {}) }],
         summary: `Invoice ${b.number} for ${s.patient.name} from ${s.organization.name}, INR ${b.total}`,
     }, [invoice, ...charges, ...pdf], now));
+};
+
+/**
+ * An invoice's PDF as a health document of its own. InvoiceRecord keeps its one section for the
+ * Invoice alone, so the PDF in the invoice's bundle sits in a sub-section, which PHR apps do not
+ * open; this carries the same bytes where they show a document. Rendered when first read, so
+ * listing what a visit holds renders nothing.
+ */
+export const invoicePdfDocument = (s: InvoiceSource): DocumentSource => {
+    let data: Buffer | undefined;
+    return {
+        id: `invoice-pdf-${s.bill.id}`,
+        title: `Invoice ${s.bill.number} (PDF)`,
+        category: "Invoice",
+        contentType: "application/pdf",
+        createdAt: s.bill.date,
+        get data(): Buffer {
+            if (!data) {
+                const pdf = recordPdfOf(buildInvoice(s, s.bill.date));
+                if (!pdf) throw new FhirSourceError(`Bill ${s.bill.number} has no invoice PDF.`);
+                data = pdf.data;
+            }
+            return data;
+        },
+    };
 };
 
 // Injection sites as FHIR's immunization-site codes (HL7 v3 ActSite), for the sites the clinic's form offers

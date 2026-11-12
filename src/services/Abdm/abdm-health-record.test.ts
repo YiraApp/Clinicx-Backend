@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { AbdmHealthRecordService, diagnosticKind, isVitalsRecord, visitRecordDate, visitSources } from "./abdm-health-record.service.js";
 import type { VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import { documentContentType, fromDbClock, hasConsultationContent, stampedWithRow, visitStart } from "../../repositories/Abdm/abdm-health-record.repository.js";
-import { codedText, distinctCoded } from "./fhir/fhir-common.js";
+import { FhirSourceError, codedText, distinctCoded } from "./fhir/fhir-common.js";
+import { invoicePdfDocument } from "./fhir/health-records.js";
+import { recordPdfOf } from "./fhir/record-pdf.js";
 import { fixtureParties } from "./fhir/fhir-fixtures.js";
 import { immunizationColumns } from "../Appointments/immunization.service.js";
 import { checkDates, codedList, dischargeSummaryColumns } from "../Appointments/discharge-summary.service.js";
@@ -44,7 +46,7 @@ const visit = (overrides: Partial<VisitRecords> = {}): VisitRecords => ({
 test("a visit with something of each kind offers seven HI types, each from the right records", () => {
     const sources = visitSources(visit());
     assert.deepEqual(sources.map((s) => s.hiType), [
-        "OPConsultation", "Prescription", "DiagnosticReport", "DiagnosticReport", "HealthDocumentRecord", "WellnessRecord", "Invoice", "ImmunizationRecord",
+        "OPConsultation", "Prescription", "DiagnosticReport", "DiagnosticReport", "HealthDocumentRecord", "WellnessRecord", "Invoice", "HealthDocumentRecord", "ImmunizationRecord",
     ]);
     const op = sources.find((s) => s.hiType === "OPConsultation")!.source as any;
     assert.deepEqual(op.chiefComplaints.map((c: any) => [c.text, c.conceptId]), [["Toothache", "27355003"]]);
@@ -86,7 +88,7 @@ const service = (records: any) => new AbdmHealthRecordService(records, () => new
 test("the service builds a bundle for each record, and can be asked for some HI types only", async () => {
     const records = { visit: async () => visit() };
     const all = await service(records).forAppointment(101);
-    assert.equal(all.length, 8);
+    assert.equal(all.length, 9);
     for (const r of all) assert.equal(r.bundle.type, "document");
     const some = await service(records).forAppointment(101, ["Prescription", "Invoice"]);
     assert.deepEqual(some.map((r) => r.hiType), ["Prescription", "Invoice"]);
@@ -269,6 +271,41 @@ test("every set of vitals of a visit is shown, and a finding written twice once"
     })).find((x) => x.hiType === "OPConsultation")!.source as any;
     assert.deepEqual(op.vitalReadings.map((r: any) => r.vitals.bloodPressure), ["120/80", "130/85"]);
     assert.deepEqual(op.examinationFindings.map((f: any) => f.text), ["Caries"]);
+});
+
+test("an issued bill's PDF also goes as a health document of its own, the same bytes the invoice carries", async () => {
+    const records = { visit: async () => visit() };
+    const bundles = await service(records).forAppointment(101, ["Invoice", "HealthDocumentRecord"]);
+    const invoice = bundles.find((r) => r.hiType === "Invoice")!;
+    const invoicePdf = recordPdfOf(invoice.bundle)!;
+    const docs = bundles.filter((r) => r.hiType === "HealthDocumentRecord");
+    assert.equal(docs.length, 2, "the visit's uploads, and the invoice's PDF");
+    const asDocument = docs.find((r) => (r.bundle.entry[0].resource as any).title === "Invoice INV-1")!;
+    assert.ok(asDocument, "titled as the invoice");
+    const refs = asDocument.bundle.entry.map((e) => e.resource as any).filter((x) => x.resourceType === "DocumentReference");
+    assert.equal(refs.length, 1);
+    const a = refs[0].content[0].attachment;
+    assert.equal(a.contentType, "application/pdf");
+    assert.equal(a.title, "Invoice INV-1 (PDF)");
+    assert.ok(Buffer.from(a.data, "base64").equals(invoicePdf.data), "the PDF staff preview and view for the invoice");
+    // In the Composition's own section, where a PHR app shows a document, not a sub-section
+    const section = (asDocument.bundle.entry[0].resource as any).section;
+    assert.equal(section.length, 1);
+    assert.deepEqual(section[0].entry.map((e: any) => e.reference), [asDocument.bundle.entry.find((e) => e.resource.resourceType === "DocumentReference")!.fullUrl]);
+    assert.equal(section[0].section, undefined);
+    // Both records belong to the visit and are dated when the bill was made
+    assert.equal((asDocument.bundle.entry[0].resource as any).date, (invoice.bundle.entry[0].resource as any).date);
+});
+
+test("the invoice's PDF is rendered only when read, and a bill that can't be an invoice gives none", () => {
+    const sources = visitSources(visit());
+    const doc = sources.filter((s) => s.hiType === "HealthDocumentRecord").map((s) => s.source as any).find((s) => s.key === "bill-bill-1:pdf");
+    assert.ok(doc, "listed with the visit's records");
+    assert.equal(doc.documents[0].id, "invoice-pdf-bill-1");
+    const unissued = invoicePdfDocument({ ...fixtureParties, bill: { ...(sources.find((s) => s.hiType === "Invoice")!.source as any).bill, status: "Draft" } });
+    assert.equal(unissued.title, "Invoice INV-1 (PDF)", "listing it renders nothing");
+    assert.throws(() => unissued.data, FhirSourceError);
+    assert.deepEqual(visitSources(visit({ bills: [{ ...(visit().bills[0] as any), BillStatus: "Draft" }] })).filter((s) => (s.source as any).key === "bill-bill-1:pdf"), []);
 });
 
 test("a bill still numbered DFT- has not been issued and is not an invoice", () => {
