@@ -17,6 +17,7 @@ import { HealthcareProvider } from "../../models/Organizations/healthcare-provid
 import { PatientRegistration } from "../../models/Organizations/patient-registration.model.js";
 import { blobService } from "../../services/Common/blob.service.js";
 import { abdmFacilities } from "../../services/Abdm/abdm-facilities.service.js";
+import { recordLogos } from "../../services/Abdm/record-logo.js";
 import { codedText } from "../../services/Abdm/fhir/fhir-common.js";
 import type {
     CodedText, DocumentSource, MedicationSource, OrganizationSource, PatientSource, PractitionerSource, RecordParties, VisitRef,
@@ -157,12 +158,17 @@ export class AbdmHealthRecordRepository {
             ? { id: doctor.Id, name: fullName(doctor, "Doctor"), registrationNumber: provider?.RegistrationNumber || null, qualification: provider?.Qualification || null }
             // A record nobody signed is still authored by the facility's staff: named for the hospital.
             : { id: `hospital-${hospital.Id}`, name: `${hospital.Name} staff` };
+        const [facility, logo] = await Promise.all([abdmFacilities.byHospital(hospital.Id), recordLogos.get(hospital.ImageUrl)]);
+        // As the clinic's prescription PDF heads its page: the helpline first, the address in parts
         const organization: OrganizationSource = {
             id: hospital.Id,
             name: hospital.Name,
-            hfrId: (await abdmFacilities.byHospital(hospital.Id))?.hipId ?? null,
-            phone: hospital.MobileNumber ?? null,
+            hfrId: facility?.hipId ?? null,
+            phone: hospital.HelplineNumber?.trim() || hospital.MobileNumber || null,
             email: hospital.Email ?? null,
+            website: hospital.Website?.trim() || null,
+            address: { line: hospital.Address ?? null, city: hospital.City ?? null, state: hospital.State ?? null, postalCode: hospital.Pincode ?? null },
+            logo,
         };
         return { patient: patientSource, practitioner, organization };
     }

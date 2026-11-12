@@ -5,7 +5,10 @@ import { inflateSync } from "node:zlib";
 import { HI_TYPES, NRCES, type FhirBundle, type HiType } from "./fhir-common.js";
 import { BUILDERS } from "./health-records.js";
 import { FIXTURES } from "./fhir-fixtures.js";
+import { readFileSync } from "node:fs";
 import { printable, recordPdfOf, renderRecordPdf } from "./record-pdf.js";
+import { drawableLogo } from "../record-logo.js";
+import { prescriptionPdfService } from "../../Prescriptions/prescription-pdf.service.js";
 import { recordView } from "./record-view.js";
 
 /**
@@ -108,28 +111,104 @@ for (const p of PLACEMENT) {
     });
 }
 
-test("the PDF says what the bundle says: its title, the patient, the doctor and every section's lines", () => {
+test("the PDF says what the bundle says: its letterhead, the patient, the doctor, the ABHA card and every section", () => {
     for (const p of PLACEMENT) {
         const bundle = build(p.hiType, p.source);
         const text = pdfText(recordPdfOf(bundle)!.data);
         // Read back from the bundle without its own PDF: the same lines, as the record view gives them
         const view = recordView({ hiType: p.hiType, bundle: { ...bundle, entry: bundle.entry.filter((e) => !tagged(bundle).includes(e.resource)) } });
         assert.ok(text.includes(printable(view.title)), `${p.name}: the title`);
-        assert.ok(text.includes("Asha <Test> & Rao"), `${p.name}: the patient's name, as text`);
-        // The fixture's made-up ABHA number and address
+        // The letterhead, as the clinic's prescription PDF heads its page
+        assert.ok(text.includes("Ocimum Dental Clinic"), `${p.name}: the facility`);
+        assert.ok(text.includes("12 Test Road, Hyderabad, Telangana - 500001"), `${p.name}: the facility's address`);
+        assert.ok(text.includes("Web: ocimum.example.test"), `${p.name}: the facility's website`);
+        assert.ok(text.includes("ABDM facility ID (HFR): IN3610001937"), `${p.name}: the HFR id`);
+        assert.ok(text.includes("PATIENT INFORMATION") && text.includes("Asha <Test> & Rao"), `${p.name}: the patient's name, as text`);
+        assert.ok(text.includes("Age: 36 Yrs") && text.includes("Gender: Female") && text.includes("DOB: 12 Apr 1990"), `${p.name}: age, gender and birth date`);
+        assert.ok(text.includes("CONSULTING DOCTOR") && text.includes("Dr. Kiran Test"), `${p.name}: the doctor`);
+        assert.ok(text.includes("Qual: BDS") && text.includes("Reg No: TSMC-12345"), `${p.name}: the doctor's qualification and registration`);
+        // The ABHA card: the fixture's made-up ABHA number and address
+        assert.ok(text.includes("AYUSHMAN BHARAT HEALTH ACCOUNT"), `${p.name}: the ABHA card`);
         assert.ok(text.includes("91-0000-0000-0000"), `${p.name}: the ABHA number`);
         assert.ok(text.includes("asha.test@sbx"), `${p.name}: the ABHA address`);
         assert.ok(text.indexOf("ABHA number") < text.indexOf("ABHA address"), `${p.name}: the number, then the address`);
-        assert.ok(text.includes("Dr. Kiran Test"), `${p.name}: the doctor`);
-        assert.ok(text.includes("Ocimum Dental Clinic"), `${p.name}: the facility`);
+        assert.ok(text.includes("RECORDED BY"), `${p.name}: who recorded it`);
         for (const s of view.sections) {
             assert.ok(text.includes(s.title.toUpperCase()), `${p.name}: section ${s.title}`);
-            // A long line wraps: its first words are on one line of the PDF
-            for (const item of s.items) assert.ok(text.includes(printable(item).split(" ").slice(0, 3).join(" ")), `${p.name}: ${item}`);
+            // Each line's subject (before its value), whether it is drawn as a list line, a table row or a box's title
+            for (const item of s.items) {
+                // ("Total Rs. 1,652": the label and the amount are cells of their own)
+                const words = printable(item).split(/: | — | · /)[0]!.split(" ");
+                const amountAt = words.findIndex((w) => /^(\d|Rs\.)/.test(w));
+                const subject = (amountAt > 0 ? words.slice(0, amountAt) : words).slice(0, 3).join(" ");
+                assert.ok(text.toLowerCase().includes(subject.toLowerCase()), `${p.name}: ${item}`);
+            }
         }
     }
+});
+
+test("medicines, results, vaccines and bill lines are tables, with the values in their own columns", () => {
+    const op = pdfText(recordPdfOf(build("OPConsultation"))!.data);
+    for (const cell of ["MEDICINE & ROUTE", "DOSAGE & SCHEDULE", "Paracetamol 650 mg tablet", "Route: Oral", "650 mg, Twice daily, for 3 days", "Dental caries", "Blood pressure", "120/80 mmHg"]) {
+        assert.ok(op.includes(cell), `consultation: ${cell}`);
+    }
+    // The prescription PDF's Rx tile heads the medicines; a note reads as its advice box
+    assert.ok(op.includes("Rx") && op.includes("CLINICAL NOTE") && op.includes("Advised warm saline rinses."));
+    const lab = pdfText(recordPdfOf(build("DiagnosticReport"))!.data);
+    for (const cell of ["TEST / PARAMETER", "REFERENCE / FLAG", "Haemoglobin", "11.2 g/dL", "Low, 13 g/dL", "CONCLUSION", "Mild anaemia."]) assert.ok(lab.includes(cell), `lab report: ${cell}`);
+    const vaccine = pdfText(recordPdfOf(build("ImmunizationRecord"))!.data);
+    for (const cell of ["VACCINE", "GIVEN ON", "Tetanus toxoid vaccine", "20 Oct 2026"]) assert.ok(vaccine.includes(cell), `immunization: ${cell}`);
     const invoice = pdfText(recordPdfOf(build("Invoice"))!.data);
-    assert.ok(invoice.includes("Consultation fee: Rs. 500"), "the rupee sign is spelt out for the PDF's fonts");
+    // The rupee sign is spelt out for the PDF's fonts
+    for (const cell of ["ITEM", "AMOUNT", "Consultation fee", "Rs. 500", "Items total", "Total", "Status: Paid"]) assert.ok(invoice.includes(cell), `invoice: ${cell}`);
+});
+
+test("the letterhead carries the clinic's logo; one PDFKit can't draw at once leaves it out rather than cutting the file short", () => {
+    const stored = readFileSync("public/images/hospital_logo.png");
+    const logo = drawableLogo(stored)!;
+    const withLogo = (l: Buffer | null) => recordPdfOf(build("Invoice", { ...FIXTURES.Invoice, organization: { ...FIXTURES.Invoice.organization, logo: l } }))!.data;
+    const drawn = withLogo(logo);
+    assert.match(drawn.toString("latin1"), /\/Subtype \/Image/, "the logo is in the PDF");
+    assert.deepEqual(withLogo(logo), drawn, "still the same bytes for the same record");
+    assert.doesNotMatch(recordPdfOf(build("Invoice"))!.data.toString("latin1"), /\/Subtype \/Image/, "no logo, no image");
+    // The logo as stored (a PNG with transparency), not made opaque: PDFKit would only finish it later
+    const raw = withLogo(stored);
+    assert.match(raw.subarray(-16).toString("latin1"), /%%EOF\s*$/, "a whole file");
+    assert.deepEqual(raw, recordPdfOf(build("Invoice"))!.data, "the record without the logo");
+    // The logo is the letterhead's, not the record's: the bundle does not carry it
+    const bundle = JSON.stringify(build("Invoice", { ...FIXTURES.Invoice, organization: { ...FIXTURES.Invoice.organization, logo } }));
+    assert.ok(!bundle.includes(logo.toString("base64").slice(0, 40)));
+});
+
+test("a long record breaks over pages: each page numbered, a table's header again on the next page", () => {
+    const medications = Array.from({ length: 40 }, (_, i) => ({ id: `m-${i}`, name: `Test medicine ${i + 1} 500 mg tablet`, dosage: "500 mg", frequency: "Twice daily", duration: "5 days", route: "Oral" }));
+    const text = pdfText(recordPdfOf(build("OPConsultation", { ...FIXTURES.OPConsultation, medications }))!.data);
+    const pages = Number(text.match(/Page 1 of (\d+)/)?.[1]);
+    assert.ok(pages >= 2, "more than a page");
+    for (let i = 1; i <= pages; i++) assert.ok(text.includes(`Page ${i} of ${pages}`), `page ${i} numbered`);
+    assert.ok(text.split("MEDICINE & ROUTE").length - 1 >= 2, "the medicines' header on each page they run over");
+    assert.ok(text.includes("Test medicine 40 500 mg tablet") && text.includes("(continued)"));
+});
+
+test("a record nobody signed names the clinic's staff, not a doctor", () => {
+    const staff = { id: "hospital-12", name: "Ocimum Dental Clinic staff" };
+    const text = pdfText(recordPdfOf(build("WellnessRecord", { ...FIXTURES.WellnessRecord, practitioner: staff }))!.data);
+    assert.ok(text.includes("Ocimum Dental Clinic staff"));
+    assert.ok(!text.includes("Dr. Ocimum"), "no Dr. before the staff");
+    assert.ok(!text.includes("CONSULTING DOCTOR"));
+});
+
+test("the clinic's own prescription PDF shows the ABHA card too", async () => {
+    const input = {
+        hospital: { name: "Ocimum Dental Clinic" },
+        doctor: { name: "Kiran Test" },
+        patient: { name: "Asha Test", abhaNumber: "91000000000000", abhaAddress: "asha.test@sbx" },
+        prescription: { medications: [{ name: "Paracetamol 650 mg tablet" }] },
+    };
+    const text = pdfText(await prescriptionPdfService.generatePrescriptionPdf(input));
+    assert.ok(text.includes("AYUSHMAN BHARAT HEALTH ACCOUNT") && text.includes("91-0000-0000-0000") && text.includes("asha.test@sbx"));
+    const without = pdfText(await prescriptionPdfService.generatePrescriptionPdf({ ...input, patient: { name: "Asha Test" } }));
+    assert.ok(!without.includes("AYUSHMAN BHARAT HEALTH ACCOUNT"), "no card for a patient without an ABHA");
 });
 
 test("the same record builds the same PDF, byte for byte, so what staff preview is what is sent", () => {

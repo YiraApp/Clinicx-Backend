@@ -21,7 +21,10 @@ export const fixtureParties: RecordParties = {
         abhaAddress: "asha.test@sbx",
     },
     practitioner: { id: "7a1e3c55-2b4d-4e6f-8a9b-0c1d2e3f4a5b", name: "Dr. Kiran Test", registrationNumber: "TSMC-12345", qualification: "BDS" },
-    organization: { id: 12, name: "Ocimum Dental Clinic", hfrId: "IN3610001937", phone: "+914000000000" },
+    organization: {
+        id: 12, name: "Ocimum Dental Clinic", hfrId: "IN3610001937", phone: "+914000000000", website: "ocimum.example.test",
+        address: { line: "12 Test Road", city: "Hyderabad", state: "Telangana", postalCode: "500001" },
+    },
 };
 
 export const FIXTURES: { [T in HiType]: RecordSourceFor[T] } = {

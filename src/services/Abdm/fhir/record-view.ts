@@ -26,34 +26,34 @@ export interface RecordView {
     attachments: RecordViewAttachment[];
 }
 
-type Resolve = (reference: unknown) => any;
+export type Resolve = (reference: unknown) => any;
 
-const text = (cc: any): string | null => cc?.text || cc?.coding?.find((c: any) => c?.display)?.display || null;
+export const text = (cc: any): string | null => cc?.text || cc?.coding?.find((c: any) => c?.display)?.display || null;
 
-const join = (parts: Array<string | null | undefined | false>, separator = " · ") => parts.filter(Boolean).join(separator);
+export const join = (parts: Array<string | null | undefined | false>, separator = " · ") => parts.filter(Boolean).join(separator);
 
 const DAY = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
 
-const day = (value: unknown): string | null => {
+export const day = (value: unknown): string | null => {
     const d = value ? new Date(String(value)) : null;
     return d && !Number.isNaN(d.getTime()) ? DAY.format(d) : null;
 };
 
-const quantity = (q: any): string | null => (q?.value === undefined || q?.value === null ? null : `${q.value}${q.unit ? ` ${q.unit}` : ""}`);
+export const quantity = (q: any): string | null => (q?.value === undefined || q?.value === null ? null : `${q.value}${q.unit ? ` ${q.unit}` : ""}`);
 
-const money = (m: any): string | null =>
+export const money = (m: any): string | null =>
     m?.value === undefined || m?.value === null
         ? null
         : `${!m.currency || m.currency === "INR" ? "₹" : `${m.currency} `}${Number(m.value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
-const personName = (r: any): string | null => {
+export const personName = (r: any): string | null => {
     const n = r?.name?.[0];
     if (!n) return typeof r?.name === "string" ? r.name : null;
     return n.text || join([...(n.prefix ?? []), ...(n.given ?? []), n.family], " ") || null;
 };
 
 /** An Observation's value: a quantity, words, a code, or its components (blood pressure as 120/80 mmHg). */
-const observationValue = (o: any): string | null => {
+export const observationValue = (o: any): string | null => {
     const direct = quantity(o.valueQuantity) ?? o.valueString ?? text(o.valueCodeableConcept)
         ?? (typeof o.valueBoolean === "boolean" ? (o.valueBoolean ? "Yes" : "No") : null)
         ?? (o.valueInteger ?? null);
@@ -99,7 +99,7 @@ const invoiceLines = (inv: any, resolve: Resolve): string[] => {
 };
 
 /** What one resource says, as one line or a few (a report and its results; an invoice and its items). */
-const lines = (r: any, resolve: Resolve): string[] => {
+export const entryLines = (r: any, resolve: Resolve): string[] => {
     switch (r?.resourceType) {
         case "Condition":
         case "AllergyIntolerance":
@@ -212,7 +212,7 @@ export const recordView = (record: { hiType: HiType; bundle: FhirBundle }): Reco
         for (const s of list ?? []) {
             const items = (s.entry ?? []).flatMap((ref: any) => {
                 const r = resolve(ref?.reference);
-                return r ? lines(r, resolve) : [];
+                return r ? entryLines(r, resolve) : [];
             });
             if (items.length) sections.push({ title: s.title ?? text(s.code) ?? "Section", items });
             walk(s.section);

@@ -7,7 +7,7 @@ import {
 } from "./fhir-common.js";
 import { measurementObservation, sectionOf, visitVitalsToMeasurements, WELLNESS_PROFILES, type WellnessSection } from "./measurements.js";
 import { routeOf } from "./dosage.js";
-import { recordPdfOf, withRecordPdf } from "./record-pdf.js";
+import { recordPdfOf, withRecordPdf, type RecordLetterhead } from "./record-pdf.js";
 import type {
     CodedText, DiagnosticReportSource, DocumentSource, DischargeSummarySource, ReportResultSource, HealthDocumentSource, ImmunizationSource, InvoiceSource,
     OpConsultationSource, PractitionerSource, PrescriptionSource, RecordParties, WellnessSource,
@@ -20,6 +20,9 @@ import type {
  * Every record but a HealthDocumentRecord, and a report that is only its uploaded file, also carries
  * a PDF of itself as unstructured data (record-pdf.ts), built from the same bundle.
  */
+
+/** The clinic's letterhead on a record's PDF: its logo, which the bundle does not carry. */
+const letterheadOf = (s: RecordParties): RecordLetterhead => ({ logo: s.organization.logo ?? null });
 
 const parties = (s: RecordParties) => ({
     patient: patientResource(s.patient),
@@ -139,7 +142,7 @@ export const buildOpConsultation = (s: OpConsultationSource, now: Date = new Dat
             sections,
             summary: `Consultation of ${s.patient.name} with ${s.practitioner.name} at ${s.organization.name} on ${fhirDate(s.visit.start)}`,
         }, [...complaints, ...diagnoses, ...examination, ...allergies, ...history, ...medications, ...prescribers, ...procedures, ...followUp, ...others, ...documents], now);
-    }, { kind: "DocumentReference", type: OP.DocumentReference });
+    }, { kind: "DocumentReference", type: OP.DocumentReference }, letterheadOf(s));
 };
 
 /** Prescription: one prescription's medicines, with the PDF the clinic generated when there is one. */
@@ -176,7 +179,7 @@ export const buildPrescription = (s: PrescriptionSource, now: Date = new Date())
         summary: `Prescription for ${s.patient.name} by ${s.practitioner.name}, ${fhirDate(p.date)}: ${p.medications.map((m) => m.name).join(", ")}`,
     }, [...medications, ...signed, ...pdf, ...diagnoses], now);
     // The clinic's own prescription PDF is the record's PDF; without one, a PDF of the record is built, as a Binary like it
-    return signed.length ? build([]) : withRecordPdf("Prescription", build, { kind: "Binary" });
+    return signed.length ? build([]) : withRecordPdf("Prescription", build, { kind: "Binary" }, letterheadOf(s));
 };
 
 /**
@@ -348,7 +351,7 @@ export const buildDiagnosticReport = (s: DiagnosticReportSource, now: Date = new
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, key, effective),
         sections: [section(title, [report, ...pdf], studies)],
         summary: `${title} for ${s.patient.name}: ${e.test.text}, ${fhirDate(e.issuedAt)}`,
-    }, [report, ...results, ...specimen, ...media, ...pdf], now), { kind: "DocumentReference", type: lab ? { code: "4241000179101", display: "Laboratory report" } : studies });
+    }, [report, ...results, ...specimen, ...media, ...pdf], now), { kind: "DocumentReference", type: lab ? { code: "4241000179101", display: "Laboratory report" } : studies }, letterheadOf(s));
 };
 
 /** HealthDocumentRecord: documents the clinic holds that are not a lab, imaging or prescription record. */
@@ -414,7 +417,7 @@ export const buildWellnessRecord = (s: WellnessSource, now: Date = new Date()): 
             ...(pdf.length ? [section("Document Reference", pdf)] : []),
         ],
         summary: `Wellness record for ${s.patient.name}, ${fhirDate(s.date)}`,
-    }, [...[...bySection.values()].flat(), ...note, ...pdf], now));
+    }, [...[...bySection.values()].flat(), ...note, ...pdf], now), undefined, letterheadOf(s));
 };
 
 const BILLING = "https://nrces.in/ndhm/fhir/r4/CodeSystem/ndhm-billing-codes";
@@ -546,7 +549,7 @@ export const buildInvoice = (s: InvoiceSource, now: Date = new Date()): FhirBund
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, key, b.date),
         sections: [{ ...section("Invoice", [invoice]), ...(pdf.length ? { section: [section("Document Reference", pdf)] } : {}) }],
         summary: `Invoice ${b.number} for ${s.patient.name} from ${s.organization.name}, INR ${b.total}`,
-    }, [invoice, ...charges, ...pdf], now));
+    }, [invoice, ...charges, ...pdf], now), undefined, letterheadOf(s));
 };
 
 /**
@@ -651,7 +654,7 @@ export const buildImmunizationRecord = (s: ImmunizationSource, now: Date = new D
         patient, author: practitioner, custodian: organization, encounter: encounterOf(s, patient, s.key, s.date),
         sections: [section("Immunization record", [...immunizations, ...recommendation, ...certificates, ...pdf], record)],
         summary: `Immunization record for ${s.patient.name}: ${s.immunizations.map((im) => im.vaccine.text).join(", ")}`,
-    }, [...immunizations, ...givers, ...recommendation, ...certificates, ...pdf], now), { kind: "DocumentReference", type: record });
+    }, [...immunizations, ...givers, ...recommendation, ...certificates, ...pdf], now), { kind: "DocumentReference", type: record }, letterheadOf(s));
 };
 
 // DischargeSummaryRecord section slices, discriminated on code.coding.code
@@ -755,7 +758,7 @@ export const buildDischargeSummary = (s: DischargeSummarySource, now: Date = new
             summary: `Discharge summary for ${s.patient.name}, admitted ${fhirDate(d.admittedAt)}, discharged ${fhirDate(d.dischargedAt)}`,
         }, [...complaints, ...diagnoses, ...(reasons === diagnoses ? [] : reasons), ...history, ...examination, ...allergies, ...procedures, ...medications,
             ...investigations, ...carePlan, ...followUp, ...document], now);
-    }, { kind: "DocumentReference", type: DS.DocumentReference });
+    }, { kind: "DocumentReference", type: DS.DocumentReference }, letterheadOf(s));
 };
 
 export type RecordSourceFor = {

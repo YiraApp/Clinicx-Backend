@@ -171,6 +171,8 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
     let patientAge: string | number | undefined = undefined;
     let patientBlood = "";
     let patientIdentifier = "";
+    let patientAbhaNumber = "";
+    let patientAbhaAddress = "";
     let patientFolder = "patient";
 
     if (patientId) {
@@ -190,6 +192,8 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
                 }
             }
             if (patUser.BloodGroup) patientBlood = patUser.BloodGroup.trim();
+            if (patUser.AbhaNumber) patientAbhaNumber = patUser.AbhaNumber.trim();
+            if (patUser.AbhaAddress) patientAbhaAddress = patUser.AbhaAddress.trim();
             if (patUser.TokenNumber) patientIdentifier = patUser.TokenNumber.trim();
         }
 
@@ -266,7 +270,9 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
             age: patientAge,
             gender: patientGender,
             phoneNumber: patientPhone,
-            bloodGroup: patientBlood
+            bloodGroup: patientBlood,
+            abhaNumber: patientAbhaNumber || undefined,
+            abhaAddress: patientAbhaAddress || undefined
         },
         prescription: {
             id: prescription.Id,

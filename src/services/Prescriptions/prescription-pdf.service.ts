@@ -30,6 +30,9 @@ export interface PrescriptionPdfInput {
         gender?: string;
         phoneNumber?: string;
         bloodGroup?: string;
+        /** The patient's ABHA number and address, shown as the ABHA card ABDM records carry. */
+        abhaNumber?: string;
+        abhaAddress?: string;
     };
     prescription: {
         id?: string;
@@ -331,8 +334,32 @@ export class PrescriptionPdfService {
                    .fillColor("#1E40AF")
                    .text(`Reg No: ${docReg}`, dX, dY);
 
-                // ── Diagnoses Section (if present) ──
                 cursorY += cardHeight + 10;
+
+                // ── ABHA card: the patient's ABHA number and address, as every ABDM record PDF shows them ──
+                const abhaNumber = (data.patient.abhaNumber || "").trim();
+                const abhaAddress = (data.patient.abhaAddress || "").trim();
+                if (abhaNumber || abhaAddress) {
+                    const abhaHeight = 48;
+                    doc.roundedRect(margin, cursorY, contentWidth, abhaHeight, 6).fillAndStroke("#ECFDF5", "#A7F3D0");
+                    doc.roundedRect(margin, cursorY, 4, abhaHeight, 2).fill("#047857");
+                    doc.fontSize(7.5)
+                       .font("Helvetica-Bold")
+                       .fillColor("#047857")
+                       .text("ABHA  •  AYUSHMAN BHARAT HEALTH ACCOUNT", margin + 14, cursorY + 7, { characterSpacing: 0.3 });
+                    const digits = abhaNumber.replace(/\D/g, "");
+                    const numberText = digits.length === 14 ? `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6, 10)}-${digits.slice(10)}` : abhaNumber;
+                    const fields = [abhaNumber && ["ABHA number", numberText], abhaAddress && ["ABHA address", abhaAddress]].filter(Boolean) as string[][];
+                    const fieldWidth = (contentWidth - 28) / 2;
+                    fields.forEach(([label, value], i) => {
+                        const x = margin + 14 + i * fieldWidth;
+                        doc.fontSize(7).font("Helvetica").fillColor("#64748B").text(label, x, cursorY + 20);
+                        doc.fontSize(11).font("Helvetica-Bold").fillColor("#0F172A").text(value, x, cursorY + 29, { width: fieldWidth - 8, height: 14, ellipsis: true });
+                    });
+                    cursorY += abhaHeight + 10;
+                }
+
+                // ── Diagnoses Section (if present) ──
                 if (data.prescription.diagnoses && data.prescription.diagnoses.length > 0) {
                     const validDiag = data.prescription.diagnoses.filter(d => d && String(d).trim().length > 0);
                     if (validDiag.length > 0) {

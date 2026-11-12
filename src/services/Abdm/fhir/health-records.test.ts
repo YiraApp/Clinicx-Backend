@@ -91,6 +91,17 @@ test("the patient carries the ABHA number both ways NRCES allows, the address, a
     assert.equal(resources(build("Prescription"), "Organization")[0].identifier[0].value, "IN3610001937");
 });
 
+test("the facility carries its address and website as the clinic's letterhead gives them, and no logo", () => {
+    const organization = resources(build("OPConsultation"), "Organization")[0];
+    assert.deepEqual(organization.address, [{ use: "work", type: "physical", line: ["12 Test Road"], city: "Hyderabad", state: "Telangana", postalCode: "500001", country: "IN" }]);
+    assert.deepEqual(organization.telecom.map((t: any) => [t.system, t.value]), [["phone", "+914000000000"], ["url", "ocimum.example.test"]]);
+    const bare = resources(build("OPConsultation", { ...FIXTURES.OPConsultation, organization: { id: 12, name: "Ocimum Dental Clinic", address: { line: " ", city: null } } }), "Organization")[0];
+    assert.equal(bare.address, undefined, "nothing recorded, no address");
+    assert.equal(bare.telecom, undefined);
+    const withLogo = resources(build("OPConsultation", { ...FIXTURES.OPConsultation, organization: { ...FIXTURES.OPConsultation.organization, logo: Buffer.from("logo") } }), "Organization")[0];
+    assert.deepEqual(Object.keys(withLogo).sort(), Object.keys(organization).sort(), "the logo is the PDF's, not the record's");
+});
+
 test("narratives escape the patient's name", () => {
     const div = composition(build("OPConsultation")).text.div as string;
     assert.ok(div.includes("Asha &lt;Test&gt; &amp; Rao"));

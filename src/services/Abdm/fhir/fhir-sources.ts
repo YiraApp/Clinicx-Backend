@@ -31,6 +31,10 @@ export interface OrganizationSource {
     hfrId?: string | null;
     phone?: string | null;
     email?: string | null;
+    website?: string | null;
+    address?: { line?: string | null; city?: string | null; state?: string | null; postalCode?: string | null } | null;
+    /** The hospital's logo (PNG or JPEG), for the letterhead of the record's PDF; never in the bundle. */
+    logo?: Buffer | null;
 }
 
 /** The visit (appointment) a record was made at. */

@@ -208,13 +208,31 @@ export const organizationResource = (o: OrganizationSource): FhirResource => ({
         ? { type: { coding: [{ system: V2_0203, code: "PRN", display: "Provider number" }] }, system: "https://facility.ndhm.gov.in", value: o.hfrId }
         : { type: { coding: [{ system: V2_0203, code: "PRN", display: "Provider number" }] }, system: `${LOCAL_SYSTEM}/hospital`, value: String(o.id) }],
     name: o.name,
-    ...((o.phone || o.email) ? {
+    ...((o.phone || o.email || o.website) ? {
         telecom: [
             ...(o.phone ? [{ system: "phone", value: o.phone, use: "work" }] : []),
             ...(o.email ? [{ system: "email", value: o.email, use: "work" }] : []),
+            ...(o.website ? [{ system: "url", value: o.website, use: "work" }] : []),
         ],
     } : {}),
+    ...(addressOf(o.address) ? { address: [addressOf(o.address)] } : {}),
 });
+
+/** A postal address as FHIR keeps one; none when nothing of it is recorded. */
+const addressOf = (a: OrganizationSource["address"]) => {
+    const line = a?.line?.trim();
+    const parts = { city: a?.city?.trim(), state: a?.state?.trim(), postalCode: a?.postalCode?.trim() };
+    if (!line && !parts.city && !parts.state && !parts.postalCode) return null;
+    return {
+        use: "work",
+        type: "physical",
+        ...(line ? { line: [line] } : {}),
+        ...(parts.city ? { city: parts.city } : {}),
+        ...(parts.state ? { state: parts.state } : {}),
+        ...(parts.postalCode ? { postalCode: parts.postalCode } : {}),
+        country: "IN",
+    };
+};
 
 // Where the patient went, most specific first: "discharged to rehab" is rehabilitation, not home
 const DISPOSITIONS: Array<[RegExp, string, string]> = [
