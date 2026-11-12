@@ -85,7 +85,7 @@ const documentSource = (parties: RecordParties, d: DocumentSource, key: string):
 
 const INVOICEABLE = new Set(["Pending", "PartiallyPaid", "Paid"]);
 /** Issued: a bill with an invoice number. One still numbered DFT- has not been through Generate Invoice. */
-const issuedBill = (b: { BillStatus: string; BillNumber?: string | null }) =>
+export const issuedBill = (b: { BillStatus: string; BillNumber?: string | null }) =>
     INVOICEABLE.has(b.BillStatus) && Boolean(b.BillNumber) && !b.BillNumber!.startsWith("DFT-");
 
 /**
@@ -243,6 +243,8 @@ export class AbdmHealthRecordService {
             "visit" | "dischargeSummary" | "immunization" | "vitalsRecord" | "prescription" | "consultationRecord" | "clinicalNote" | "standaloneDocument"
             | "diagnosticReport" | "wellnessRecord"> = abdmHealthRecordRepository,
         private readonly now: () => Date = () => new Date(),
+        /** Strict: a record that can't be built says why (a PDF preview shows it) instead of being left out. */
+        private readonly strict = false,
     ) {}
 
     async forAppointment(appointmentId: number, hiTypes?: HiType[]): Promise<HealthRecordBundle[]> {
@@ -433,7 +435,7 @@ export class AbdmHealthRecordService {
                 const bundle = (BUILDERS[s.hiType] as (source: unknown, now: Date) => FhirBundle)(s.source, this.now());
                 out.push({ hiType: s.hiType, key: bundle.id, bundle });
             } catch (error) {
-                if (!(error instanceof FhirSourceError)) throw error;
+                if (!(error instanceof FhirSourceError) || this.strict) throw error;
                 console.warn(`[ABDM] ${s.hiType} not built: ${error.message}`);
             }
         }

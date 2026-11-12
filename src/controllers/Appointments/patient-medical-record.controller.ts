@@ -1,39 +1,12 @@
 import { Request, Response } from "express";
 import { patientMedicalRecordService } from "../../services/Appointments/patient-medical-record.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
+import { medicalRecordColumns } from "../../services/Appointments/medical-record-mapping.js";
 
 export class PatientMedicalRecordController {
     async addRecord(req: Request, res: Response): Promise<void> {
         try {
-            const body = req.body;
-            const data: any = {
-                PatientId: body.patientId || body.PatientId,
-                DoctorId: body.doctorId || body.DoctorId,
-                AppointmentId: body.appointmentId || body.AppointmentId,
-                Type: body.type || body.Type,
-                ChiefComplaint: body.chiefComplaint || body.ChiefComplaint,
-                ChiefComplaintConceptId: body.chiefComplaintConceptId || body.ChiefComplaintConceptId,
-                Symptoms: body.symptoms || body.Symptoms,
-                SymptomConceptId: body.symptomConceptId || body.SymptomConceptId,
-                PhysicalExamination: body.physicalExamination || body.examination || body.PhysicalExamination,
-                PhysicalExaminationConceptId: body.physicalExaminationConceptId || body.PhysicalExaminationConceptId,
-                Diagnosis: body.diagnosis || body.Diagnosis,
-                DiagnosisConceptId: body.diagnosisConceptId || body.DiagnosisConceptId,
-                Treatment: body.treatment || body.treatmentPlan || body.Treatment,
-                TreatmentConceptId: body.treatmentConceptId || body.TreatmentConceptId,
-                BloodPressure: body.bloodPressure || body.BloodPressure,
-                HeartRate: body.heartRate || body.HeartRate,
-                Temperature: body.temperature || body.Temperature,
-                Weight: body.weight || body.Weight,
-                Height: body.height || body.Height,
-                OrganizationId: body.organizationId || body.OrganizationId,
-                HospitalId: body.hospitalId || body.HospitalId,
-                Status: body.status || body.Status || "Completed",
-                CreatedBy: body.createdBy || body.CreatedBy
-            };
-
-            if (data.AppointmentId) data.AppointmentId = parseInt(String(data.AppointmentId));
-            
+            const data = medicalRecordColumns(req.body);
             const record = await patientMedicalRecordService.addRecord(data);
             res.status(201).json(ApiResponse.success(record, "Medical record added successfully"));
         } catch (error: any) {

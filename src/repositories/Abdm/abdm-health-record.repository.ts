@@ -38,8 +38,8 @@ export interface VisitRecords {
     medicalRecords: PatientMedicalRecord[];
     /** practitioner: the prescriber, when a registered doctor of the hospital other than the visit's. */
     prescriptions: Array<{ row: PatientPrescription; medications: MedicationSource[]; diagnoses: CodedText[]; pdf: Buffer | null; practitioner?: PractitionerSource | null }>;
-    /** The visit's clinical notes, each with when it was written. */
-    notes: Array<{ text: string; at: Date }>;
+    /** The visit's clinical notes, each with its id and when it was written. */
+    notes: Array<{ id?: number; text: string; at: Date }>;
     documents: Array<DocumentSource & { category: string }>;
     bills: AppointmentBill[];
     immunizations: PatientImmunization[];
@@ -271,7 +271,7 @@ export class AbdmHealthRecordRepository {
             registration: { allergies: registration?.Allergies?.trim() || null, medicalHistory: registration?.MedicalHistory?.trim() || null },
             medicalRecords,
             prescriptions,
-            notes: notes.filter((n) => n.Notes?.trim()).map((n) => ({ text: n.Notes!, at: rowTime(n.CreatedAt, n.CreatedBy !== PULSE_NOTE) })),
+            notes: notes.filter((n) => n.Notes?.trim()).map((n) => ({ id: Number(n.Id), text: n.Notes!, at: rowTime(n.CreatedAt, n.CreatedBy !== PULSE_NOTE) })),
             documents: [...documents, ...postVisitDocuments],
             bills,
             immunizations,
@@ -471,7 +471,7 @@ export class AbdmHealthRecordRepository {
     }
 
     /** The visit a record names, when it is the same patient's at the same hospital: every record of a visit shares its encounter. */
-    private async visitRef(appointmentId: number | null | undefined, patientId: string, hospitalId: number): Promise<VisitRef | null> {
+    async visitRef(appointmentId: number | null | undefined, patientId: string, hospitalId: number): Promise<VisitRef | null> {
         if (!appointmentId) return null;
         return visitOf(await AppDataSource.getRepository(Appointment).findOne({ where: { Id: appointmentId } }), patientId, hospitalId);
     }
@@ -484,7 +484,23 @@ export class AbdmHealthRecordRepository {
         return { parties, document };
     }
 
-    private medication(m: { Id: string; Medication: string; ConceptId?: string; Dosage?: string; DurationValue?: number; DurationUnit?: string; FrequencyType?: string; Route?: string; Instructions?: string }, prescriptionNotes?: string | null): MedicationSource {
+    /** An appointment bill with its items, a Draft one too (an invoice is previewed before it is issued). */
+    async bill(id: string): Promise<AppointmentBill> {
+        const bill = await AppDataSource.getRepository(AppointmentBill).findOne({ where: { AppointmentBillId: id, IsDeleted: false }, relations: { BillItems: true } });
+        if (!bill) throw new Error(`Bill ${id} not found.`);
+        return bill;
+    }
+
+    /** A prescription's medicines and diagnoses, as a discharge summary carries them. */
+    async prescriptionParts(id: string): Promise<{ medications: MedicationSource[]; diagnoses: CodedText[] }> {
+        const p = await AppDataSource.getRepository(PatientPrescription).findOne({ where: { Id: id }, relations: { Medications: true, Diagnoses: true } });
+        return {
+            medications: (p?.Medications ?? []).map((m) => this.medication(m, p?.Notes)),
+            diagnoses: (p?.Diagnoses ?? []).flatMap((d) => codedText(d.Diagnosis, d.DiagnosisConceptId)),
+        };
+    }
+
+    medication(m: { Id: string; Medication: string; ConceptId?: string; Dosage?: string; DurationValue?: number; DurationUnit?: string; FrequencyType?: string; Route?: string; Instructions?: string }, prescriptionNotes?: string | null): MedicationSource {
         return {
             id: `prescription-medication-${m.Id}`,
             name: m.Medication,
@@ -499,7 +515,7 @@ export class AbdmHealthRecordRepository {
         };
     }
 
-    private async certificates(rows: PatientImmunization[]): Promise<Map<number, DocumentSource>> {
+    async certificates(rows: Array<Pick<PatientImmunization, "CertificateDocumentId">>): Promise<Map<number, DocumentSource>> {
         const ids = rows.map((r) => r.CertificateDocumentId).filter((x): x is number => Boolean(x));
         const out = new Map<number, DocumentSource>();
         if (!ids.length) return out;
@@ -510,7 +526,7 @@ export class AbdmHealthRecordRepository {
         return out;
     }
 
-    private async document(id: number): Promise<DocumentSource | null> {
+    async document(id: number): Promise<DocumentSource | null> {
         const d = await AppDataSource.getRepository(MedicalDocument).findOne({ where: { Id: id, IsDeleted: false } });
         if (!d) return null;
         const data = await this.tryRead(d.BlobUrl);

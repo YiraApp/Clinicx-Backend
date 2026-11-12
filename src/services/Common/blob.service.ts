@@ -131,6 +131,19 @@ export class BlobService {
     }
 
     /**
+     * Uploads a Buffer to [containerName], creating it first if missing with no public access: its
+     * blobs are read back only through the API (downloadFile). For health records kept for later.
+     */
+    async uploadPrivate(containerName: string, blobPath: string, buffer: Buffer, contentType: string): Promise<string> {
+        const container = this.blobServiceClient.getContainerClient(containerName.toLowerCase());
+        // No access option: the container is private
+        await container.createIfNotExists();
+        const blockBlobClient = container.getBlockBlobClient(blobPath);
+        await blockBlobClient.uploadData(buffer, { blobHTTPHeaders: { blobContentType: contentType } });
+        return blockBlobClient.url;
+    }
+
+    /**
      * Downloads a file from an external URL and uploads it to Azure Blob Storage.
      * @param url The external URL to download
      * @param userName User directory name in blob

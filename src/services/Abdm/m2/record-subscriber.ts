@@ -32,8 +32,28 @@ export const recordRefOf = (table: string, row: any): RecordRef | null => {
     return ref.appointmentId || (ref.patientId && ref.hospitalId) ? ref : null;
 };
 
+/** The saved row itself, as far as it says: its table, its id, and for a medical record whether it is a vitals check. */
+export interface RecordSource {
+    table: string;
+    id: string | null;
+    vitals?: boolean;
+}
+
+/** Which row was saved: a prescription line stands for its prescription. */
+export const recordSourceOf = (table: string, row: any): RecordSource | null => {
+    if (!row) return null;
+    if (PRESCRIPTION_PARTS.has(table)) {
+        const prescriptionId = text(row.PrescriptionId);
+        return prescriptionId ? { table: "PatientPrescription", id: prescriptionId } : null;
+    }
+    if (!RECORD_TABLES.has(table)) return null;
+    const source: RecordSource = { table, id: text(row.Id ?? row.AppointmentBillId) };
+    if (table === "PatientMedicalRecord" && row.Type !== undefined) source.vitals = /vital/i.test(String(row.Type ?? ""));
+    return source;
+};
+
 export class AbdmRecordSubscriber implements EntitySubscriberInterface<any> {
-    constructor(private readonly onSaved: (ref: RecordRef) => void) {}
+    constructor(private readonly onSaved: (ref: RecordRef, source: RecordSource | null) => void) {}
 
     afterInsert(event: InsertEvent<any>) {
         this.seen(event.metadata.tableName, event.entity);
@@ -50,7 +70,7 @@ export class AbdmRecordSubscriber implements EntitySubscriberInterface<any> {
     private seen(table: string, row: any, followRecent = false) {
         try {
             const ref = recordRefOf(table, row) ?? (followRecent ? { recentIn: table, since: new Date(Date.now() - RECENT_WINDOW_MS) } : null);
-            if (ref) this.onSaved(ref);
+            if (ref) this.onSaved(ref, recordSourceOf(table, row));
         } catch (error: any) {
             // Never fail the save that told us
             console.warn(`[ABDM] a saved ${table} row could not be queued for linking: ${error?.message}`);

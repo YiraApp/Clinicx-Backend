@@ -89,6 +89,10 @@ test("every M2 patient route is behind the hospital guard; the M1 ABHA link keep
         "/patients/:userId/care-contexts/:reference/records/:key/pdf",
         "/patients/:userId/consents",
         "/patients/:userId/link",
+        "/patients/:userId/record-pdf/:type/:id",
+        "/patients/:userId/record-pdf/:type/:id/versions",
+        "/patients/:userId/record-pdf/:type/:id/versions/:versionId",
+        "/patients/:userId/record-pdf/preview",
         "/patients/:userId/sms-notify",
     ]);
     for (const r of m2) assert.equal(r.guarded, true, `${r.path} is guarded`);

@@ -29,7 +29,12 @@ const startServer = async () => {
         const { AppDataSource } = await import("./config/database.js");
         const { autoLinker } = await import("./services/Abdm/m2/index.js");
         const { AbdmRecordSubscriber } = await import("./services/Abdm/m2/record-subscriber.js");
-        AppDataSource.subscribers.push(new AbdmRecordSubscriber((ref) => autoLinker.recordSaved(ref)));
+        // ...and every version of the PDF it carries is kept in the private blob container, at every facility
+        const { recordPdfArchive } = await import("./services/Abdm/m2/record-pdf-archive.js");
+        AppDataSource.subscribers.push(new AbdmRecordSubscriber((ref, source) => {
+            autoLinker.recordSaved(ref);
+            recordPdfArchive.recordSaved(ref, source);
+        }));
 
         // ABDM M2: link new care contexts and announce new records on a schedule, for each hospital
         // whose facility has AutoLink on. Opt in per deployment too (ABDM_AUTO_LINK=true), so every

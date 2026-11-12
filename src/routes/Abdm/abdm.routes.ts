@@ -6,6 +6,7 @@ import { abdmHospitalStaff } from "../../middlewares/abdm-hospital-staff.middlew
 import { hiuRouter } from "./hiu.routes.js";
 import { abdmHealthRecordController } from "../../controllers/Abdm/abdm-health-record.controller.js";
 import { abdmM2Controller } from "../../controllers/Abdm/abdm-m2.controller.js";
+import { recordPdfController } from "../../controllers/Abdm/record-pdf.controller.js";
 
 const abdmRouter = Router();
 const c = abhaEnrolmentController;
@@ -40,6 +41,13 @@ abdmRouter.get("/patients/:userId/care-contexts/:reference/records/:key/pdf", ab
 abdmRouter.get("/patients/:userId/consents", abdmHospitalStaff, m2.consents.bind(m2));
 abdmRouter.post("/patients/:userId/link", abdmHospitalStaff, m2.link.bind(m2));
 abdmRouter.post("/patients/:userId/sms-notify", abdmHospitalStaff, m2.smsNotify.bind(m2));
+// The PDF each record carries to ABDM: previewed from a form before saving, viewed for a saved
+// record at any time, and every version of it kept in the private blob container
+const rp = recordPdfController;
+abdmRouter.post("/patients/:userId/record-pdf/preview", abdmHospitalStaff, rp.preview.bind(rp));
+abdmRouter.get("/patients/:userId/record-pdf/:type/:id", abdmHospitalStaff, rp.saved.bind(rp));
+abdmRouter.get("/patients/:userId/record-pdf/:type/:id/versions", abdmHospitalStaff, rp.versions.bind(rp));
+abdmRouter.get("/patients/:userId/record-pdf/:type/:id/versions/:versionId", abdmHospitalStaff, rp.version.bind(rp));
 
 // M1: create or retrieve an ABHA with an Aadhaar OTP
 abdmRouter.post("/enrolment/otp", c.requestOtp.bind(c));

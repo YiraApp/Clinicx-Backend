@@ -82,21 +82,25 @@ const buildPrescriptionHeader = (source: any) => {
     };
 };
 
+/** A prescription the clinic's PDF can be made from: a saved one, or a draft being previewed (not saved). */
+export interface ClinicPrescription {
+    Id: string;
+    PatientId: string;
+    DoctorId?: string | null;
+    HospitalId?: number | null;
+    PrescriptionNumber?: any;
+    CreatedAt?: Date | null;
+    AppointmentId?: string | number | null;
+    Notes?: string | null;
+    Medications?: any[];
+    Diagnoses?: any[];
+}
+
 /**
- * Helper to generate prescription PDF and upload it directly to Azure Blob Storage.
- * Returns the public Azure Blob URL.
+ * The clinic's own prescription PDF for [prescription], and the patient's blob folder. Reads the
+ * doctor, hospital and patient; writes nothing, so the ABDM preview can show it before saving.
  */
-export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overrides?: any): Promise<string> {
-    const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
-    const prescription = await prescriptionRepo.findOne({
-        where: { Id: String(prescriptionId) },
-        relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
-    });
-
-    if (!prescription) {
-        throw new Error(`Prescription with ID ${prescriptionId} not found`);
-    }
-
+export async function renderClinicPrescriptionPdf(prescription: ClinicPrescription, overrides?: any): Promise<{ pdf: Buffer; patientFolder: string }> {
     const patientId = prescription.PatientId;
     const doctorId = prescription.DoctorId;
 
@@ -274,6 +278,27 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             notes: prescription.Notes || overrides?.notes || overrides?.Notes || undefined
         }
     });
+    return { pdf: pdfBuffer, patientFolder };
+}
+
+/**
+ * Helper to generate prescription PDF and upload it directly to Azure Blob Storage.
+ * Returns the public Azure Blob URL.
+ */
+export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overrides?: any): Promise<string> {
+    const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
+    const prescription = await prescriptionRepo.findOne({
+        where: { Id: String(prescriptionId) },
+        relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
+    });
+
+    if (!prescription) {
+        throw new Error(`Prescription with ID ${prescriptionId} not found`);
+    }
+
+    const patientId = prescription.PatientId;
+    const doctorId = prescription.DoctorId;
+    const { pdf: pdfBuffer, patientFolder } = await renderClinicPrescriptionPdf(prescription, overrides);
 
     // 5. Upload to Azure Blob Storage
     const blobPath = `${patientFolder}/prescriptions/Prescription_${prescription.Id}.pdf`;

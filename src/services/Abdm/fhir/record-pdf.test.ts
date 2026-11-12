@@ -116,6 +116,10 @@ test("the PDF says what the bundle says: its title, the patient, the doctor and 
         const view = recordView({ hiType: p.hiType, bundle: { ...bundle, entry: bundle.entry.filter((e) => !tagged(bundle).includes(e.resource)) } });
         assert.ok(text.includes(printable(view.title)), `${p.name}: the title`);
         assert.ok(text.includes("Asha <Test> & Rao"), `${p.name}: the patient's name, as text`);
+        // The fixture's made-up ABHA number and address
+        assert.ok(text.includes("91-0000-0000-0000"), `${p.name}: the ABHA number`);
+        assert.ok(text.includes("asha.test@sbx"), `${p.name}: the ABHA address`);
+        assert.ok(text.indexOf("ABHA number") < text.indexOf("ABHA address"), `${p.name}: the number, then the address`);
         assert.ok(text.includes("Dr. Kiran Test"), `${p.name}: the doctor`);
         assert.ok(text.includes("Ocimum Dental Clinic"), `${p.name}: the facility`);
         for (const s of view.sections) {

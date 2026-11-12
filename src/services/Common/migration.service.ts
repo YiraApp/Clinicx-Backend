@@ -446,6 +446,28 @@ export class MigrationService {
                 Value NVARCHAR(500) NOT NULL,
                 UpdatedAt DATETIME NOT NULL DEFAULT GETDATE()
             );`,
+
+            // Every version of the PDF each shared record carries, kept in the private blob container
+            // (record-pdf-archive.ts): one row per distinct PDF of a record (Sha1), newest by CreatedAt.
+            // RecordKey is the record's bundle id within its care context.
+            `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AbdmRecordPdfs')
+            CREATE TABLE AbdmRecordPdfs (
+                Id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                HospitalId INT NOT NULL,
+                PatientUserId NVARCHAR(64) NOT NULL,
+                CareContextReference NVARCHAR(64) NOT NULL,
+                HiType VARCHAR(40) NOT NULL,
+                RecordKey VARCHAR(64) NOT NULL,
+                Source VARCHAR(16) NOT NULL,
+                Sha1 CHAR(40) NOT NULL,
+                Bytes INT NOT NULL,
+                BlobUrl NVARCHAR(1024) NOT NULL,
+                CreatedAt DATETIME2 NOT NULL
+            );`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UX_AbdmRecordPdfs_Version' AND object_id = OBJECT_ID('AbdmRecordPdfs'))
+            CREATE UNIQUE INDEX UX_AbdmRecordPdfs_Version ON AbdmRecordPdfs (HospitalId, CareContextReference, RecordKey, Sha1);`,
+            `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AbdmRecordPdfs_Patient' AND object_id = OBJECT_ID('AbdmRecordPdfs'))
+            CREATE INDEX IX_AbdmRecordPdfs_Patient ON AbdmRecordPdfs (PatientUserId, CreatedAt);`,
         ];
 
         for (const statement of statements) {

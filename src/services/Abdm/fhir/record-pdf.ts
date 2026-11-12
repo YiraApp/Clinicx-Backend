@@ -106,6 +106,8 @@ export const renderRecordPdf = (hiType: HiType, bundle: FhirBundle): Buffer => {
         ["Patient", patient?.name?.[0]?.text ?? null],
         ["Gender", patient?.gender && patient.gender !== "unknown" ? patient.gender[0].toUpperCase() + patient.gender.slice(1) : null],
         ["Date of birth", when(patient?.birthDate, false)],
+        // The Patient carries the ABHA number as HIN (and as MR under healthid.ndhm.gov.in), the address as ABHA
+        ["ABHA number", (patient?.identifier ?? []).find((i: any) => i.type?.coding?.[0]?.code === "HIN" || i.system === "https://healthid.ndhm.gov.in")?.value ?? null],
         ["ABHA address", (patient?.identifier ?? []).find((i: any) => i.type?.coding?.[0]?.code === "ABHA")?.value ?? null],
         ["Doctor", author ? [author.name?.[0]?.text, author.identifier?.[0]?.type?.coding?.[0]?.code === "MD" ? `Reg. no. ${author.identifier[0].value}` : null].filter(Boolean).join(", ") : null],
     ];
