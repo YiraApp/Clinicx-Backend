@@ -72,6 +72,14 @@ test("create answers 202 with the summary, passes only the known fields and the 
     assert.deepEqual(ctx, CTX);
     assert.equal("abhaAddress" in input, false);
     assert.equal("hospitalId" in input, false);
+    // Sending past open requests names them, by whole-number id; anything else counts as none.
+    assert.deepEqual(input.acknowledgedOpenRequestIds, []);
+    reset();
+    await run(c.create, { body: { patientUserId: "p", acknowledgedOpenRequestIds: "32" } });
+    assert.deepEqual((calls[0]!.args as [any, any])[1].acknowledgedOpenRequestIds, []);
+    reset();
+    await run(c.create, { body: { patientUserId: "p", acknowledgedOpenRequestIds: [32, "33", 1.5, 34] } });
+    assert.deepEqual((calls[0]!.args as [any, any])[1].acknowledgedOpenRequestIds, [32, 34]);
 });
 
 test("list, detail, refresh-status, patient ABHA and records reach their service with parsed ids", async () => {

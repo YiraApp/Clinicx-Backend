@@ -54,6 +54,8 @@ let gatewayFault: ((call: AbdmCall) => Error | null | Promise<Error | null>) | n
 /** Per artefact: consent/fetch calls claimed, and when its fetch claim last changed (UpdatedAt). */
 let fetchAttempts: Map<number, number>;
 let touchedAt: Map<number, number>;
+/** A request's UpdatedAt, as the clock read when it was last changed. */
+let requestTouchedAt: Map<number, number>;
 /** The open-request lock: each key's queue of waiting raises. */
 let locks: Map<string, Promise<unknown>>;
 let requesterFault: boolean;
@@ -107,9 +109,28 @@ const store: HiuConsentStore = {
         await new Promise((resolve) => setImmediate(resolve));
         const id = requests.length + 1;
         requests.push({ ...row, id, consentRequestId: null, statusRequestId: null, abdmErrorCode: null, abdmError: null, createdAt: row.statusAt, patientName: null, artefactCount: 0 });
+        requestTouchedAt.set(id, now);
         return id;
     },
-    async updateRequest(id, changes) { Object.assign(requests.find((row) => row.id === id)!, changes); },
+    async updateRequest(id, changes) {
+        Object.assign(requests.find((row) => row.id === id)!, changes);
+        requestTouchedAt.set(id, now);
+    },
+    async listWaitingRequests({ raisedAfter, raisedBefore, checkedBefore, limit }) {
+        return requests.filter((row) => row.status === "REQUESTED" && row.consentRequestId && row.hiuId
+            && new Date(row.createdAt).getTime() <= raisedBefore.getTime() && new Date(row.createdAt).getTime() >= raisedAfter.getTime()
+            && (requestTouchedAt.get(row.id) ?? 0) <= checkedBefore.getTime())
+            .sort((a, b) => (requestTouchedAt.get(a.id) ?? 0) - (requestTouchedAt.get(b.id) ?? 0) || a.id - b.id)
+            .slice(0, limit).map(withName);
+    },
+    async claimStatusCheck({ id, requestId, at, checkedBefore }) {
+        // One atomic UPDATE in the database: the check and the change happen together.
+        const row = requests.find((r) => r.id === id)!;
+        if (row.status !== "REQUESTED" || (requestTouchedAt.get(id) ?? 0) > checkedBefore.getTime()) return false;
+        row.statusRequestId = requestId;
+        requestTouchedAt.set(id, at.getTime());
+        return true;
+    },
     async updateSendingRequest(id, changes) {
         const row = requests.find((r) => r.id === id)!;
         if (row.status !== "SENDING" || row.consentRequestId) return false;
@@ -313,6 +334,7 @@ beforeEach(() => {
     endedElsewhere = new Map();
     fetchAttempts = new Map();
     touchedAt = new Map();
+    requestTouchedAt = new Map();
     locks = new Map();
     savedCareContexts.clear();
     let next = 0;
@@ -469,6 +491,122 @@ test("an open request for the same patient, purpose and an overlapping type is a
     assert.equal(calls.length, 4);
 });
 
+test("the refusal names the waiting request, the types it already asks for and the types still free", async () => {
+    const first = await raised();
+    const refused = await service.create(ctx, input({ hiTypes: ["OPConsultation", "Invoice", "Prescription", "WellnessRecord"] })).catch((error) => error);
+    assert.ok(refused instanceof HiuError && refused.kind === "conflict" && refused.status === 409);
+    assert.equal(refused.message, "An earlier request for this patient and purpose is still waiting for their answer, and it already asks for OP consultation and Prescription.");
+    assert.deepEqual(refused.details, {
+        id: first.id,
+        status: "REQUESTED",
+        waitingSince: first.createdAt.toISOString(),
+        openRequests: 1,
+        openIds: [first.id],
+        overlappingHiTypes: ["OPConsultation", "Prescription"],
+        freeHiTypes: ["Invoice", "WellnessRecord"],
+    });
+    assert.equal(calls.length, 1);
+});
+
+test("with two open requests the refusal names the oldest and counts the record types of both", async () => {
+    const first = await raised();
+    now += 60_000;
+    await service.create(ctx, input({ hiTypes: ["Invoice"] }));
+    const refused = await service.create(ctx, input({ hiTypes: ["Invoice", "OPConsultation", "WellnessRecord"] })).catch((error) => error);
+    assert.ok(refused instanceof HiuError && refused.kind === "conflict");
+    assert.equal(refused.message, "Earlier requests for this patient and purpose are still open, and they already ask for Invoice and OP consultation.");
+    const details = refused.details!;
+    assert.equal(details.id, first.id);
+    assert.equal(details.openRequests, 2);
+    assert.deepEqual(details.overlappingHiTypes, ["Invoice", "OPConsultation"]);
+    assert.deepEqual(details.freeHiTypes, ["WellnessRecord"]);
+});
+
+test("staff told of an open request may send anyway, and the patient gets both", async () => {
+    const first = await raised();
+    const warned = await service.create(ctx, input({ hiTypes: ["OPConsultation", "Invoice"] })).catch((error) => error);
+    assert.deepEqual(warned.details.openIds, [first.id]);
+    const second = await service.create(ctx, input({ hiTypes: ["OPConsultation", "Invoice"], acknowledgedOpenRequestIds: warned.details.openIds }));
+    assert.equal(second.status, "SENDING");
+    assert.equal(requests.length, 2);
+    assert.deepEqual(pathsCalled(), ["request/init", "request/init"]);
+    // The audit says it was sent past the open request staff were shown.
+    assert.ok(audits.some((event) => event.event === "CONSENT_INIT" && event.outcome === "OK" && event.detail === `CAREMGT 2 types; sent past open #${first.id}`));
+});
+
+test("send anyway goes past only the open requests staff were shown; one raised meanwhile warns again", async () => {
+    const first = await raised();
+    const warned = await service.create(ctx, input({ hiTypes: ["OPConsultation", "Invoice"] })).catch((error) => error);
+    // Meanwhile another member of staff raises an Invoice request for the same patient and purpose.
+    now += 60_000;
+    const meanwhile = await service.create(ctx, input({ hiTypes: ["Invoice"], acknowledgedOpenRequestIds: [] }));
+    now += 60_000;
+    const again = await service.create(ctx, input({ hiTypes: ["OPConsultation", "Invoice"], acknowledgedOpenRequestIds: warned.details.openIds })).catch((error) => error);
+    assert.ok(again instanceof HiuError && again.kind === "conflict");
+    assert.deepEqual(again.details!.openIds, [first.id, meanwhile.id]);
+    assert.equal(requests.length, 2);
+    await service.create(ctx, input({ hiTypes: ["OPConsultation", "Invoice"], acknowledgedOpenRequestIds: [first.id, meanwhile.id] }));
+    assert.equal(requests.length, 3);
+});
+
+test("the same request is never sent twice: not on a second press of Send, nor while ABDM has not confirmed it", async () => {
+    const first = await service.create(ctx, input());
+    now += 3_000;
+    const again = await service.create(ctx, input({ acknowledgedOpenRequestIds: [first.id] })).catch((error) => error);
+    assert.ok(again instanceof HiuError && again.kind === "conflict" && again.status === 409);
+    assert.equal(again.message, "The same request was sent a moment ago. Check the list before sending it again.");
+    assert.deepEqual(again.details, { id: first.id });
+    // Past the 10 seconds, but ABDM has still not confirmed it: it may have reached the patient.
+    now += 8_000;
+    const unconfirmed = await service.create(ctx, input({ acknowledgedOpenRequestIds: [first.id] })).catch((error) => error);
+    assert.equal(unconfirmed.message, "The same request is still being sent to ABDM, which has not confirmed it yet. Check the list in a few minutes before sending it again.");
+    assert.equal(requests.length, 1);
+    // Once ABDM has confirmed it, staff told of it may raise it again.
+    await service.onInit({ consentRequest: { id: CONSENT_REQUEST }, error: null, response: { requestId: requests[0]!.initRequestId } }, headers("cb-init"));
+    await service.create(ctx, input({ acknowledgedOpenRequestIds: [first.id] }));
+    assert.equal(requests.length, 2);
+});
+
+test("the same record types with other dates is another request, not a second press of Send", async () => {
+    const first = await service.create(ctx, input());
+    now += 2_000;
+    const warned = await service.create(ctx, input({ dateFrom: "2026-06-01" })).catch((error) => error);
+    assert.deepEqual(warned.details.openIds, [first.id]);
+    await service.create(ctx, input({ dateFrom: "2026-06-01", acknowledgedOpenRequestIds: [first.id] }));
+    assert.equal(requests.length, 2);
+});
+
+test("two presses of Send anyway at once send the patient one request", async () => {
+    const first = await raised();
+    now += 60_000;
+    const extra = { hiTypes: ["OPConsultation", "Invoice"], acknowledgedOpenRequestIds: [first.id] };
+    const results = await Promise.allSettled([service.create(ctx, input(extra)), service.create(ctx, input(extra))]);
+    assert.deepEqual(results.map((result) => result.status).sort(), ["fulfilled", "rejected"]);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(pathsCalled(), ["request/init", "request/init"]);
+});
+
+test("a refusal for a request ABDM has not confirmed says it is still being sent", async () => {
+    gatewayFault = () => initTimeout();
+    await service.create(ctx, input()).catch(() => null);
+    gatewayFault = null;
+    const refused = await service.create(ctx, input({ hiTypes: ["Prescription"] })).catch((error) => error);
+    assert.equal(refused.message, "An earlier request for this patient and purpose is still being sent to ABDM, and it already asks for Prescription.");
+    assert.equal(refused.details.status, "SENDING");
+});
+
+test("a request still REQUESTED after its delete-by time no longer blocks a new one", async () => {
+    await raised();
+    assert.equal(requests[0]!.status, "REQUESTED");
+    const warned = await service.create(ctx, input({ dataEraseAt: "2027-01-31T23:59:00+05:30" })).catch((error) => error);
+    assert.equal(warned.details.openRequests, 1);
+    // ABDM sent no lapse notice, so it is still REQUESTED here, but its delete-by time has passed.
+    now = requests[0]!.dataEraseAt.getTime() + 1;
+    await service.create(ctx, input({ dataEraseAt: "2027-01-31T23:59:00+05:30" }));
+    assert.equal(calls.length, 2);
+    assert.equal(requests[0]!.status, "REQUESTED");
+});
+
 test("an ABDM refusal marks the request FAILED with ABDM's code and message and is rethrown", async () => {
     gatewayFault = () => new AbdmApiError({ status: 400, kind: "rejected", operation: "consent/v3/request/init", code: "ABDM-9999", message: "Invalid consent purpose refURI" });
     await assert.rejects(service.create(ctx, input()), AbdmApiError);
@@ -529,9 +667,12 @@ test("an init whose answer timed out after on-init came keeps REQUESTED, so the 
     assert.equal(requests[0]!.status, "REQUESTED");
     assert.equal(requests[0]!.consentRequestId, CONSENT_REQUEST);
     assert.equal(requests[0]!.abdmError, null);
-    // It still blocks a duplicate request for the same need.
+    // It still counts as open for a new request for the same need, after the double-submit window.
     gatewayFault = null;
-    await assertRefused(service.create(ctx, input()), "conflict", 409);
+    now += 11_000;
+    const warned = await service.create(ctx, input()).catch((error) => error);
+    assert.ok(warned instanceof HiuError && warned.kind === "conflict" && warned.status === 409);
+    assert.deepEqual(warned.details!.openIds, [requests[0]!.id]);
 });
 
 test("an init with no answer stays SENDING for its on-init; only a refusal marks it FAILED", async () => {
@@ -610,6 +751,143 @@ test("refresh-status sends request/status with X-HIU-ID and its REQUEST-ID store
     assert.equal(row.status, "GRANTED");
 
     await assertRefused(service.refreshStatus(otherHospital, row.id), "not-found", 404);
+});
+
+const statusCalls = () => calls.filter(({ call }) => call.path === "/api/hiecm/consent/v3/request/status").map(({ call }) => call);
+
+test("a request still waiting an hour after it was raised is asked about by the sweep, every 15 minutes, until ABDM ends it", async () => {
+    const row = await raised();
+    now += 30 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0, "not before an hour");
+    now += 31 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    const [first] = statusCalls();
+    assert.equal(first!.headers?.["X-HIU-ID"], HIU_ID);
+    assert.deepEqual(first!.body, { consentRequestId: CONSENT_REQUEST });
+    assert.equal(row.statusRequestId, first!.requestId);
+    // A sweep's check writes no audit row of its own: its answer is audited as ON_STATUS.
+    assert.ok(!audits.some((event) => event.event === "STATUS_REQUEST"));
+    assert.equal(await service.checkWaitingRequests(), 0, "asked once, not on every sweep");
+
+    // ABDM still says REQUESTED: asked again 15 minutes later, not before.
+    await service.onStatus({ consentRequest: { id: CONSENT_REQUEST, status: "REQUESTED" }, error: null, response: { requestId: first!.requestId } }, headers("cb-s1"));
+    now += 14 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    now += 2 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    const second = statusCalls()[1]!;
+
+    // ABDM has ended it: Expired here too, and never asked about again.
+    await service.onStatus({ consentRequest: { id: CONSENT_REQUEST, status: "EXPIRED" }, error: null, response: { requestId: second.requestId } }, headers("cb-s2"));
+    assert.equal(row.status, "EXPIRED");
+    assert.ok(audits.some((event) => event.event === "ON_STATUS" && event.outcome === "EXPIRED"));
+    now += 16 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    assert.equal(statusCalls().length, 2);
+});
+
+test("a waiting request is asked about less often as it ages: hourly from 3 hours, every 6 hours from its second day", async () => {
+    await raised();
+    now += 4 * 60 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    now += 30 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0, "hourly at 4 hours old");
+    now += 31 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    now += 2 * 24 * 60 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    now += 5 * 60 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0, "every 6 hours from the second day");
+    now += 61 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    assert.equal(statusCalls().length, 4);
+});
+
+test("a request staff refreshed less than 15 minutes ago is not asked about again by the sweep", async () => {
+    const row = await raised();
+    now += 55 * 60_000;
+    await service.refreshStatus(ctx, row.id);
+    now += 10 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    now += 6 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 1);
+    assert.equal(statusCalls().length, 2);
+});
+
+test("a request answered between the sweep's read and its claim is not asked about", async () => {
+    const row = await raised();
+    now += 61 * 60_000;
+    const read = store.listWaitingRequests;
+    store.listWaitingRequests = async (input) => {
+        const rows = await read(input);
+        row.status = "GRANTED";
+        return rows;
+    };
+    try {
+        assert.equal(await service.checkWaitingRequests(), 0);
+    } finally {
+        store.listWaitingRequests = read;
+    }
+    assert.equal(statusCalls().length, 0);
+});
+
+test("the sweep asks only as the hospital's HIU today, and never about a request with no HIU id", async () => {
+    const row = await raised();
+    now += 61 * 60_000;
+    row.hiuId = null;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    // Raised as an HIU id that is now another hospital's: an answer to it would be refused.
+    row.hiuId = HIU_B;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    assert.equal(statusCalls().length, 0);
+    row.hiuId = HIU_ID;
+    assert.equal(await service.checkWaitingRequests(), 1);
+});
+
+test("when ABDM gives no answer the sweep stops asking until its next run", async () => {
+    await raised();
+    const other = await service.create(ctx, input({ purposeCode: "PATRQT" }));
+    const otherRow = requests.find((r) => r.id === other.id)!;
+    await service.onInit({ consentRequest: { id: "cr-other" }, error: null, response: { requestId: otherRow.initRequestId } }, headers("cb-other"));
+    gatewayFault = (call) => (call.path.endsWith("/request/status") ? initTimeout() : null);
+    now += 61 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    assert.equal(statusCalls().length, 1, "the second request waits for the next sweep");
+    assert.ok(audits.some((event) => event.event === "STATUS_REQUEST" && event.outcome === "FAILED" && event.staffUserId === null));
+});
+
+test("two sweeps at once, as from two instances, ask ABDM about a waiting request once", async () => {
+    await raised();
+    now += 61 * 60_000;
+    const asked = await Promise.all([service.checkWaitingRequests(), service.checkWaitingRequests()]);
+    assert.equal(asked[0] + asked[1], 1);
+    assert.equal(statusCalls().length, 1);
+});
+
+test("the sweep leaves alone requests raised over a week ago, and does nothing while the HIU is not configured", async () => {
+    await raised();
+    now += 61 * 60_000;
+    settings = { ...settings, configured: false };
+    assert.equal(await service.checkWaitingRequests(), 0);
+    settings = { ...settings, configured: true };
+    now += 8 * 24 * 60 * 60_000;
+    assert.equal(await service.checkWaitingRequests(), 0);
+    assert.equal(statusCalls().length, 0);
+});
+
+test("a status check ABDM refuses is audited, and the sweep still asks about the other waiting requests", async () => {
+    await raised();
+    const other = await service.create(ctx, input({ purposeCode: "PATRQT" }));
+    const otherRow = requests.find((r) => r.id === other.id)!;
+    await service.onInit({ consentRequest: { id: "cr-other" }, error: null, response: { requestId: otherRow.initRequestId } }, headers("cb-other"));
+    gatewayFault = (call) => (call.path.endsWith("/request/status") && (call.body as any).consentRequestId === CONSENT_REQUEST
+        ? new AbdmApiError({ status: 400, kind: "rejected", operation: "consent/v3/request/status", code: "ABDM-1001", message: "Invalid request" })
+        : null);
+    now += 61 * 60_000;
+    // One refused, one sent: only the one sent counts.
+    assert.equal(await service.checkWaitingRequests(), 1);
+    assert.deepEqual(statusCalls().map((call) => (call.body as any).consentRequestId).sort(), [CONSENT_REQUEST, "cr-other"].sort());
+    assert.ok(audits.some((event) => event.event === "STATUS_REQUEST" && event.outcome === "REJECTED" && event.staffUserId === null));
 });
 
 test("refresh-status is refused (no call) before ABDM has given the request an id", async () => {

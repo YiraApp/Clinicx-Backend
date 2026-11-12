@@ -47,6 +47,31 @@ export const SELECT_REQUEST = `
     LEFT JOIN Users u ON u.Id = r.PatientUserId`;
 
 /**
+ * Requests still REQUESTED with an ABDM id and HIU id, raised between @1 and @0, unchanged since @2,
+ * the longest unchanged first, at most @3. Parameters in that order: waitingRequestsParams.
+ */
+export const LIST_WAITING_REQUESTS = `${SELECT_REQUEST}
+    WHERE r.Status = 'REQUESTED' AND r.ConsentRequestId IS NOT NULL AND r.HiuId IS NOT NULL
+      AND r.CreatedAt <= @0 AND r.CreatedAt >= @1 AND COALESCE(r.UpdatedAt, r.CreatedAt) <= @2
+    ORDER BY COALESCE(r.UpdatedAt, r.CreatedAt), r.Id
+    OFFSET 0 ROWS FETCH NEXT @3 ROWS ONLY`;
+
+export const waitingRequestsParams = <T>(input: { raisedAfter: Date; raisedBefore: Date; checkedBefore: Date; limit: number }, time: (date: Date) => T): unknown[] =>
+    [time(input.raisedBefore), time(input.raisedAfter), time(input.checkedBefore), input.limit];
+
+/**
+ * Makes @1 request @0's status check at @2, only while it is still REQUESTED and unchanged since @3.
+ * One statement, so two instances never both claim it. Parameters in that order: statusCheckParams.
+ */
+export const CLAIM_STATUS_CHECK = `UPDATE AbdmHiuConsentRequests
+    SET StatusRequestId = @1, UpdatedAt = @2
+    OUTPUT inserted.Id
+    WHERE Id = @0 AND Status = 'REQUESTED' AND COALESCE(UpdatedAt, CreatedAt) <= @3`;
+
+export const statusCheckParams = <T>(input: { id: number; requestId: string; at: Date; checkedBefore: Date }, time: (date: Date) => T): unknown[] =>
+    [input.id, input.requestId, time(input.at), time(input.checkedBefore)];
+
+/**
  * An artefact's (alias a) record count as the records view shows it: the entries of one transfer,
  * its latest RECEIVED transfer holding entries, else its latest transfer holding entries (as
  * hiu-data.repository's SHOWN_TRANSFER), never the marker row of a page with no entries.

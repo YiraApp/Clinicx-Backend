@@ -1,7 +1,7 @@
 import { abdmConfig } from "../../config/abdm.config.js";
 import { AbdmApiError, abdmGatewayService, abdmNotConfiguredError, type AbdmGatewayService } from "./abdm-gateway.service.js";
 import { abdmCryptoService, type AbdmCryptoService } from "./abdm-crypto.service.js";
-import { AbhaSessionStore, type AbhaSession, type AbhaProfileSummary, type LoginAccount } from "./abha-session.store.js";
+import { AbhaSessionStore, MOBILE_CHANGE_LIMIT, mobileKey, type AbhaSession, type AbhaProfileSummary, type LoginAccount } from "./abha-session.store.js";
 import {
     AADHAAR_INVALID_MESSAGE,
     AbhaJourneyError,
@@ -10,12 +10,16 @@ import {
     consentRecord,
     OTP_RESEND_COOLDOWN_MS,
     assertCanResend,
+    afterOtpAccepted,
     findLinkedPatient,
+    mobileChangeLimitError,
     requireSession,
+    rereadProfile,
     sessionAbhaAddresses,
     text,
     textOrNull,
     toProfileSummary,
+    trailingFourDigits,
     withCertificateCheck,
     type AbhaConsentInput,
     type AbhaEnrolmentStore,
@@ -344,7 +348,7 @@ export class AbhaLoginService {
      */
     async verifyLoginOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<LoginResult> {
         const session = requireSession(this.sessions, input.sessionId, input.staffUserId);
-        if (this.awaitingProfile(session)) return this.finishWithProfile(session, "OTP verified successfully");
+        if (this.awaitingProfile(session)) return afterOtpAccepted(() => this.finishWithProfile(session, "OTP verified successfully"));
         const login = session.login;
         if (!login) throw new AbhaJourneyError(409, "state", "Send the OTP first.");
         if (session.verified) throw new AbhaJourneyError(409, "state", "This ABHA is already verified.");
@@ -365,6 +369,12 @@ export class AbhaLoginService {
         if (authResult && authResult !== "success") {
             throw new AbhaJourneyError(422, "rejected", "ABDM did not verify the OTP.", { abdmMessage: textOrNull(response.message) });
         }
+        // ABDM accepted the OTP: what fails from here (the token, the exchange, the profile) is not a wrong OTP.
+        return afterOtpAccepted(() => this.afterLoginOtp(session, login, response, input.staffUserId));
+    }
+
+    /** The rest of verifyLoginOtp, once ABDM accepted the OTP. */
+    private async afterLoginOtp(session: AbhaSession, login: NonNullable<AbhaSession["login"]>, response: Record<string, any>, staffUserId: string): Promise<LoginResult> {
         session.txnId = text(response.txnId) || session.txnId;
         const message = text(response.message) || "OTP verified successfully";
         // The PHR verify sends the user token inside tokens{token, expiresIn}; the ABHA login at the top level.
@@ -398,7 +408,7 @@ export class AbhaLoginService {
         }
         session.loginAccounts = accounts;
         if (accounts.length === 1) {
-            return this.selectAccount({ sessionId: session.id, staffUserId: input.staffUserId, abhaNumber: accounts[0]!.abhaNumber });
+            return this.selectAccount({ sessionId: session.id, staffUserId, abhaNumber: accounts[0]!.abhaNumber });
         }
         return { status: "choose-account", message, accounts };
     }
@@ -502,13 +512,15 @@ export class AbhaLoginService {
             const wanted = normalizeAbhaNumber(session.abhaNumber);
             const account = (Array.isArray(response.accounts) ? response.accounts : []).find((candidate: any) => normalizeAbhaNumber(candidate?.ABHANumber) === wanted);
             if (!account) throw new AbhaJourneyError(409, "state", "ABDM did not list this ABHA for that OTP, so its mobile can't be changed here.");
-            const user = await this.gateway.call<Record<string, any>>({
+            // ABDM accepted the OTP: a failed exchange is not a wrong OTP.
+            const shortLived = token;
+            const user = await afterOtpAccepted(() => this.gateway.call<Record<string, any>>({
                 operation: "profile/login/verify/user (before a mobile update)",
                 method: "POST",
                 path: "/abha/api/v3/profile/login/verify/user",
-                headers: { "T-token": `Bearer ${token}` },
+                headers: { "T-token": `Bearer ${shortLived}` },
                 body: { ABHANumber: text(account.ABHANumber), txnId: text(response.txnId) || pending.txnId },
-            });
+            }));
             token = textOrNull(user.token);
             expiresIn = user.expiresIn;
             if (!token) throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "profile/login/verify/user", message: "ABDM sent no user token for this ABHA." });
@@ -529,7 +541,15 @@ export class AbhaLoginService {
         const { session, xToken } = this.profileMobileToken(input.sessionId, input.staffUserId);
         const mobile = String(input.mobile ?? "");
         if (!/^\d{10}$/.test(mobile)) throw new AbhaJourneyError(400, "validation", "Enter a valid 10-digit mobile number.", { field: "mobile" });
-        if (session.profileMobile?.last4 === mobile.slice(-4)) assertCanResend(session.profileMobile.otp, this.clock());
+        // The same number again is a resend, on its transaction and under the resend rules. Another
+        // number (the whole number, not its last 4) is a fresh send, at most MOBILE_CHANGE_LIMIT times.
+        // A number already sent to since the last update (going back to one too) is a resend on its
+        // own transaction, under its own counter and cooldown.
+        const key = mobileKey(mobile);
+        const resend = session.profileMobileSent[key] ?? null;
+        if (resend) assertCanResend(resend.otp, this.clock());
+        const changing = !!session.profileMobile && session.profileMobile.key !== key;
+        if (changing && session.profileMobileChanges >= MOBILE_CHANGE_LIMIT) throw mobileChangeLimitError();
 
         const encryptedMobile = await this.crypto.encrypt(mobile);
         const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
@@ -542,22 +562,37 @@ export class AbhaLoginService {
                 loginHint: "mobile",
                 loginId: encryptedMobile,
                 otpSystem: "abdm",
-                ...(session.profileMobile?.last4 === mobile.slice(-4) ? { txnId: session.profileMobile.txnId } : {}),
+                ...(resend ? { txnId: resend.txnId } : {}),
             },
         }));
-        const previous = session.profileMobile?.last4 === mobile.slice(-4) ? session.profileMobile.otp : null;
         session.profileMobile = {
             txnId: this.requireTxnId(response.txnId, "profile/account/request/otp"),
             last4: mobile.slice(-4),
-            otp: previous ? { sentAt: this.clock(), resends: previous.resends + 1 } : { sentAt: this.clock(), resends: 0 },
+            key,
+            otp: resend ? { sentAt: this.clock(), resends: resend.otp.resends + 1 } : { sentAt: this.clock(), resends: 0 },
         };
+        session.profileMobileSent[key] = { txnId: session.profileMobile.txnId, otp: session.profileMobile.otp };
+        if (changing) session.profileMobileChanges += 1;
+        // A new update is under way: a repeated verify no longer answers for the previous one.
+        session.profileMobileDone = null;
         return this.otpSent(session, text(response.message) || `OTP sent to the mobile number ending with ${mobile.slice(-4)}.`, session.profileMobile.otp.resends);
     }
 
-    async verifyProfileMobileOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<{ updated: true; message: string }> {
+    /**
+     * Verifies the OTP to the new mobile, which updates the ABHA's mobile, then reads the profile
+     * again so the desk sees what ABDM now holds: profile is null when that read failed, and
+     * profileShowsNewMobile says whether the profile's mobile ends in the new number's digits (null
+     * when it does not show them).
+     */
+    async verifyProfileMobileOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<{ updated: true; message: string; profile: AbhaProfileSummary | null; profileShowsNewMobile: boolean | null }> {
         const { session, xToken } = this.profileMobileToken(input.sessionId, input.staffUserId);
         const pending = session.profileMobile;
-        if (!pending) throw new AbhaJourneyError(409, "state", "Send the OTP to the new mobile number first.");
+        if (!pending) {
+            // Asked again after ABDM confirmed it (the browser gave up on the first answer): the same answer.
+            const done = session.profileMobileDone;
+            if (done) return { updated: true, message: done.message, profile: done.reread ? session.profile : null, profileShowsNewMobile: done.shows };
+            throw new AbhaJourneyError(409, "state", "Send the OTP to the new mobile number first.");
+        }
         const otp = String(input.otp ?? "");
         if (!/^\d{6}$/.test(otp)) throw new AbhaJourneyError(400, "validation", "Enter the 6-digit OTP.", { field: "otp" });
 
@@ -576,7 +611,16 @@ export class AbhaLoginService {
             throw new AbhaJourneyError(422, "rejected", "ABDM did not update the mobile number.", { abdmMessage: textOrNull(response.message) });
         }
         session.profileMobile = null;
-        return { updated: true, message: text(response.message) || "Mobile number linked successfully" };
+        // Updated: a later update starts afresh, numbers and all.
+        session.profileMobileSent = {};
+        const message = text(response.message) || "Mobile number linked successfully";
+        // Recorded before the profile read, so a repeated verify during it is answered too.
+        session.profileMobileDone = { message, last4: pending.last4, reread: false, shows: null };
+        const profile = await rereadProfile(this.gateway, session, xToken);
+        const shownLast4 = profile ? trailingFourDigits(profile.mobile) : null;
+        const shows = shownLast4 === null ? null : shownLast4 === pending.last4;
+        session.profileMobileDone = { message, last4: pending.last4, reread: profile !== null, shows };
+        return { updated: true, message, profile, profileShowsNewMobile: shows };
     }
 
     private holdUserToken(session: AbhaSession, token: string, expiresIn: unknown, kind: "abha" | "phr"): void {

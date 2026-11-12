@@ -136,6 +136,9 @@ const newRequestInput = (body: any): NewConsentRequestInput => ({
     dateTo: body?.dateTo,
     dataEraseAt: body?.dataEraseAt,
     accessMode: body?.accessMode,
+    acknowledgedOpenRequestIds: Array.isArray(body?.acknowledgedOpenRequestIds)
+        ? body.acknowledgedOpenRequestIds.filter((id: unknown) => Number.isInteger(id))
+        : [],
 });
 
 /**

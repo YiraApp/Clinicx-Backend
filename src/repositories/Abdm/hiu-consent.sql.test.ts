@@ -1,6 +1,35 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARTEFACT_RECORD_COUNT, END_ARTEFACT, findPatientIn, PATIENT_ROLE_ID, SELECT_REQUEST, toRequestRow } from "./hiu-consent.sql.js";
+import {
+    ARTEFACT_RECORD_COUNT,
+    CLAIM_STATUS_CHECK,
+    END_ARTEFACT,
+    findPatientIn,
+    LIST_WAITING_REQUESTS,
+    PATIENT_ROLE_ID,
+    SELECT_REQUEST,
+    statusCheckParams,
+    toRequestRow,
+    waitingRequestsParams,
+} from "./hiu-consent.sql.js";
+
+test("the waiting-request read binds raised-before, raised-after, checked-before and the limit to the clauses that use them", () => {
+    const [raisedAfter, raisedBefore, checkedBefore] = [new Date("2026-11-03T00:00:00Z"), new Date("2026-11-10T09:00:00Z"), new Date("2026-11-10T09:45:00Z")];
+    assert.deepEqual(waitingRequestsParams({ raisedAfter, raisedBefore, checkedBefore, limit: 100 }, (date) => date), [raisedBefore, raisedAfter, checkedBefore, 100]);
+    assert.ok(LIST_WAITING_REQUESTS.startsWith(SELECT_REQUEST));
+    assert.match(LIST_WAITING_REQUESTS, /r\.Status = 'REQUESTED' AND r\.ConsentRequestId IS NOT NULL AND r\.HiuId IS NOT NULL/);
+    assert.match(LIST_WAITING_REQUESTS, /r\.CreatedAt <= @0 AND r\.CreatedAt >= @1 AND COALESCE\(r\.UpdatedAt, r\.CreatedAt\) <= @2/);
+    assert.match(LIST_WAITING_REQUESTS, /ORDER BY COALESCE\(r\.UpdatedAt, r\.CreatedAt\), r\.Id\s+OFFSET 0 ROWS FETCH NEXT @3 ROWS ONLY$/);
+    assert.ok(!/GETDATE/i.test(LIST_WAITING_REQUESTS), "times come from JS, never the database clock");
+});
+
+test("claiming a status check is one guarded UPDATE: only a REQUESTED request unchanged since checked-before", () => {
+    const [at, checkedBefore] = [new Date("2026-11-10T10:00:00Z"), new Date("2026-11-10T09:45:00Z")];
+    assert.deepEqual(statusCheckParams({ id: 7, requestId: "r-1", at, checkedBefore }, (date) => date), [7, "r-1", at, checkedBefore]);
+    assert.match(CLAIM_STATUS_CHECK, /^UPDATE AbdmHiuConsentRequests\s+SET StatusRequestId = @1, UpdatedAt = @2\s+OUTPUT inserted\.Id/);
+    assert.match(CLAIM_STATUS_CHECK, /WHERE Id = @0 AND Status = 'REQUESTED' AND COALESCE\(UpdatedAt, CreatedAt\) <= @3$/);
+    assert.ok(!/GETDATE/i.test(CLAIM_STATUS_CHECK));
+});
 
 test("ending an artefact is one short transaction, artefact row first, that deletes no records", () => {
     assert.match(END_ARTEFACT, /^SET XACT_ABORT ON;\s+BEGIN TRANSACTION;/);

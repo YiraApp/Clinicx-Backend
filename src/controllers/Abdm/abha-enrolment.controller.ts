@@ -71,8 +71,10 @@ const statusFor = (kind: AbdmErrorKind): number => {
 };
 
 const sendError = (res: Response, error: any) => {
+    // "after-otp": ABDM had accepted the OTP before this failed (afterOtpAccepted), so it is not a wrong OTP.
+    const stage = error?.stage === "after-otp" ? { stage: "after-otp" } : {};
     if (error instanceof AbhaJourneyError) {
-        return res.status(error.status).json(ApiResponse.error(error.message, { kind: error.kind, ...error.details }));
+        return res.status(error.status).json(ApiResponse.error(error.message, { kind: error.kind, ...error.details, ...stage }));
     }
     if (error instanceof AbdmApiError) {
         return res.status(statusFor(error.kind)).json(ApiResponse.error(SUMMARIES[error.kind], {
@@ -82,6 +84,7 @@ const sendError = (res: Response, error: any) => {
             abdmCode: error.code,
             field: error.field,
             requestId: error.requestId,
+            ...stage,
         }));
     }
     console.error("[ABDM] Unexpected error in ABHA enrolment:", error?.message);
@@ -221,7 +224,7 @@ export class AbhaEnrolmentController {
 
     async requestMobileOtp(req: Request, res: Response) {
         try {
-            const result = await abhaEnrolmentService.requestMobileOtp(req.body?.sessionId, staffUserId(req));
+            const result = await abhaEnrolmentService.requestMobileOtp(req.body?.sessionId, staffUserId(req), req.body?.mobile);
             return res.json(ApiResponse.success(result, result.message));
         } catch (error) {
             return sendError(res, error);

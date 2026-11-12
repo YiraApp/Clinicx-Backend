@@ -6,7 +6,18 @@ import { HiuConsentArtefact } from "../../models/Abdm/hiu-consent-artefact.model
 import { hiuDataRepository } from "./hiu-data.repository.js";
 import { User } from "../../models/Account/user.model.js";
 import type { ArtefactStatus } from "../../services/Abdm/hiu/hiu-enums.js";
-import { ARTEFACT_RECORD_COUNT, END_ARTEFACT, findPatientIn, jsonList, SELECT_REQUEST, toRequestRow } from "./hiu-consent.sql.js";
+import {
+    ARTEFACT_RECORD_COUNT,
+    CLAIM_STATUS_CHECK,
+    END_ARTEFACT,
+    findPatientIn,
+    jsonList,
+    LIST_WAITING_REQUESTS,
+    SELECT_REQUEST,
+    statusCheckParams,
+    toRequestRow,
+    waitingRequestsParams,
+} from "./hiu-consent.sql.js";
 import { retryTransient } from "../../services/Abdm/hiu/hiu-db-errors.js";
 import type {
     ArtefactRow,
@@ -170,6 +181,16 @@ export class HiuConsentRepository implements HiuConsentStore {
             [at(input.createdBefore), at(input.at), input.message.slice(0, 500)],
         );
         return (Array.isArray(rows) ? rows : []).map((row: any) => ({ id: Number(row.Id), hospitalId: Number(row.HospitalId), initRequestId: row.InitRequestId }));
+    }
+
+    async listWaitingRequests(input: { raisedAfter: Date; raisedBefore: Date; checkedBefore: Date; limit: number }): Promise<ConsentRequestRow[]> {
+        const rows = await AppDataSource.query(LIST_WAITING_REQUESTS, waitingRequestsParams(input, at));
+        return (Array.isArray(rows) ? rows : []).map(toRequestRow);
+    }
+
+    async claimStatusCheck(input: { id: number; requestId: string; at: Date; checkedBefore: Date }): Promise<boolean> {
+        const rows = await AppDataSource.query(CLAIM_STATUS_CHECK, statusCheckParams(input, at));
+        return Array.isArray(rows) && rows.length === 1;
     }
 
     private async oneRequest(where: string, params: unknown[]): Promise<ConsentRequestRow | null> {
@@ -368,11 +389,15 @@ export class HiuConsentRepository implements HiuConsentStore {
         const artefactIds = input.artefactIds.slice(0, 200);
         if (artefactIds.length > 0) matches.push(`e.ArtefactId IN (${artefactIds.map(place).join(", ")})`);
         if (matches.length === 0) return [];
+        // The newest 500, oldest first: a request with a long history keeps its latest events on screen.
         const rows = await AppDataSource.query(
-            `SELECT TOP 500 e.At, e.Event, e.Outcome
-             FROM AbdmHiuAuditEvents e
-             WHERE e.HospitalId = @0 AND (${matches.join(" OR ")})
-             ORDER BY e.At, e.Id`,
+            `SELECT latest.At, latest.Event, latest.Outcome FROM (
+                SELECT TOP 500 e.Id, e.At, e.Event, e.Outcome
+                FROM AbdmHiuAuditEvents e
+                WHERE e.HospitalId = @0 AND (${matches.join(" OR ")})
+                ORDER BY e.At DESC, e.Id DESC
+             ) latest
+             ORDER BY latest.At, latest.Id`,
             params,
         );
         return (rows as any[]).map((row) => ({ at: row.At, event: row.Event, outcome: row.Outcome }));

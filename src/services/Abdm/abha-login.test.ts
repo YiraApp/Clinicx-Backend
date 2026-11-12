@@ -91,6 +91,8 @@ test("an ABHA number login sends the dashed number encrypted, with the chosen OT
 test("an Aadhaar login sends the number only after the patient's consent, recorded first, as on Create (VRFY_ABHA_401)", async () => {
     await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
     await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF, consent: { ...CONSENT, staffConfirmed: false } }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
+    // The beneficiary's name, typed on the consent screen, is part of the consent.
+    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF, consent: { ...CONSENT, beneficiaryName: " " } }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400 && error.kind === "consent");
     assert.equal(calls.length, 0, "nothing reaches ABDM without the consent");
     assert.equal(consents.length, 0);
 
@@ -356,12 +358,18 @@ test("a login OTP resend reuses the transaction and stops after two", async () =
     assert.equal(calls.length, 3);
 });
 
-test("the profile mobile is updated with the user token, after an OTP to the new number", async () => {
-    answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/profile/account/request/otp")
-        ? { txnId: "txn-mobile", message: "OTP sent" }
-        : call.path.endsWith("/profile/account/verify")
-            ? { txnId: "txn-mobile", authResult: "success", message: "Mobile Number linked successfully" }
-            : normal(call))(answer);
+test("the profile mobile is updated with the user token, after an OTP to the new number, and the profile is read again", async () => {
+    let linked = false;
+    answer = ((normal) => (call: AbdmCall) => {
+        if (call.path.endsWith("/profile/account/request/otp")) return { txnId: "txn-mobile", message: "OTP sent" };
+        if (call.path.endsWith("/profile/account/verify")) {
+            linked = true;
+            return { txnId: "txn-mobile", authResult: "success", message: "Mobile Number linked successfully" };
+        }
+        // ABDM's profile shows the new mobile once it is linked.
+        if (call.path.endsWith("/profile/account") && linked) return { ...accountProfile, mobile: "******1111" };
+        return normal(call);
+    })(answer);
     const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
     await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
 
@@ -371,8 +379,43 @@ test("the profile mobile is updated with the user token, after an OTP to the new
     assert.deepEqual(request.body, { scope: ["abha-profile", "mobile-verify"], loginHint: "mobile", loginId: "enc(9000011111)", otpSystem: "abdm" });
 
     const updated = await service.verifyProfileMobileOtp({ sessionId, staffUserId: STAFF, otp: "654321" });
-    assert.deepEqual(calls.at(-1)!.body, { scope: ["abha-profile", "mobile-verify"], authData: { authMethods: ["otp"], otp: { txnId: "txn-mobile", otpValue: "enc(654321)" } } });
+    const verify = calls.find((call) => call.path.endsWith("/profile/account/verify"))!;
+    assert.deepEqual(verify.body, { scope: ["abha-profile", "mobile-verify"], authData: { authMethods: ["otp"], otp: { txnId: "txn-mobile", otpValue: "enc(654321)" } } });
     assert.equal(updated.updated, true);
+
+    // Read again with the same token: the desk sees what ABDM now holds, not what was typed.
+    const reread = calls.at(-1)!;
+    assert.equal(reread.method, "GET");
+    assert.equal(reread.path, "/abha/api/v3/profile/account");
+    assert.equal(reread.headers?.["X-token"], `Bearer ${X_TOKEN}`);
+    assert.equal(updated.profile?.mobile, "******1111");
+    assert.equal(updated.profileShowsNewMobile, true);
+    assert.equal(sessions.get(sessionId, STAFF)!.profile?.mobile, "******1111", "the session's profile is the fresh one");
+});
+
+test("a profile that still shows the old mobile after the update is reported, and a failed re-read keeps the update", async () => {
+    let rereadFails = false;
+    answer = ((normal) => (call: AbdmCall) => {
+        if (call.path.endsWith("/profile/account/request/otp")) return { txnId: "txn-mobile", message: "OTP sent" };
+        if (call.path.endsWith("/profile/account/verify")) return { authResult: "success", message: "Mobile Number linked successfully" };
+        if (call.path.endsWith("/profile/account") && rereadFails) return new AbdmApiError({ status: 503, kind: "unavailable", operation: "profile/account", message: "Service Unavailable" });
+        return normal(call);
+    })(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+
+    // ABDM's profile still ends in the old digits (0903), not the new number's (1111).
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
+    const stale = await service.verifyProfileMobileOtp({ sessionId, staffUserId: STAFF, otp: "654321" });
+    assert.equal(stale.updated, true);
+    assert.equal(stale.profileShowsNewMobile, false);
+
+    rereadFails = true;
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000022222" });
+    const unread = await service.verifyProfileMobileOtp({ sessionId, staffUserId: STAFF, otp: "654321" });
+    assert.equal(unread.updated, true, "ABDM confirmed the update; a failed read after it does not undo it");
+    assert.equal(unread.profile, null);
+    assert.equal(unread.profileShowsNewMobile, null);
 });
 
 /** An ABHA-address (PHR) login whose profile carries ABHA_NUMBER, on top of the default answers. */
@@ -471,4 +514,95 @@ test("identifiers normalise the way ABDM validates them", () => {
     assert.equal(normalizeAbhaAddress("Asha.K", "@sbx"), "asha.k@sbx");
     assert.equal(normalizeAbhaAddress("asha@abdm", "@sbx"), "asha@abdm");
     assert.equal(normalizeAbhaAddress("as ha", "@sbx"), null);
+});
+
+/** A verified Aadhaar login whose profile mobile can be updated, with ABDM answering the Profile API. */
+const verifiedForMobileUpdate = async () => {
+    let txn = 0;
+    answer = ((normal) => (call: AbdmCall) => {
+        if (call.path.endsWith("/profile/account/request/otp")) return { txnId: `txn-mobile-${++txn}`, message: "OTP sent" };
+        if (call.path.endsWith("/profile/account/verify")) return { authResult: "success", message: "Mobile Number linked successfully" };
+        return normal(call);
+    })(answer);
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
+    return sessionId;
+};
+
+test("a profile-mobile resend is the same whole number on its transaction; another number, even with the same last 4, is a fresh send", async () => {
+    const sessionId = await verifiedForMobileUpdate();
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
+    assert.equal((calls.at(-1)!.body as any).txnId, undefined, "a first send carries no transaction");
+
+    await assert.rejects(service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" }), (error: unknown) => error instanceof AbhaJourneyError && error.kind === "resend-wait");
+    now += 60_000;
+    const resent = await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
+    assert.equal((calls.at(-1)!.body as any).txnId, "txn-mobile-1", "a resend keeps its transaction");
+    assert.equal(resent.resendsLeft, 1);
+
+    // A typo fixed in the middle digits keeps the last 4: still a different number.
+    const fixed = await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9100011111" });
+    assert.equal((calls.at(-1)!.body as any).txnId, undefined, "never the old number's transaction");
+    assert.equal((calls.at(-1)!.body as any).loginId, "enc(9100011111)");
+    assert.equal(fixed.resendsLeft, 2);
+});
+
+test("one session sends the profile-mobile OTP to at most 3 other numbers", async () => {
+    const sessionId = await verifiedForMobileUpdate();
+    for (const mobile of ["9000011111", "9000022222", "9000033333", "9000044444"]) await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile });
+    const sent = calls.length;
+    await assert.rejects(service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000055555" }), (error: unknown) => error instanceof AbhaJourneyError && error.kind === "change-limit");
+    assert.equal(calls.length, sent);
+});
+
+test("a profile-mobile verify asked again after ABDM confirmed it answers the same, without calling ABDM", async () => {
+    const sessionId = await verifiedForMobileUpdate();
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
+    const first = await service.verifyProfileMobileOtp({ sessionId, staffUserId: STAFF, otp: "654321" });
+    const sent = calls.length;
+
+    const again = await service.verifyProfileMobileOtp({ sessionId, staffUserId: STAFF, otp: "654321" });
+    assert.equal(calls.length, sent);
+    assert.deepEqual(again, first);
+
+    // A new update under way: the earlier answer no longer stands in for it.
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000022222" });
+    await assert.rejects(service.verifyProfileMobileOtp({ sessionId, staffUserId: STAFF, otp: "12" }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
+});
+
+test("going back to a profile mobile already sent to is a resend on its own transaction and counter", async () => {
+    const sessionId = await verifiedForMobileUpdate();
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
+    await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000022222" });
+
+    // Back to the first number inside its cooldown: refused; after it, a resend on its transaction.
+    await assert.rejects(service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" }), (error: unknown) => error instanceof AbhaJourneyError && error.kind === "resend-wait");
+    now += 60_000;
+    const back = await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
+    assert.equal((calls.at(-1)!.body as any).txnId, "txn-mobile-1");
+    assert.equal(back.resendsLeft, 1);
+});
+
+test("a failure after ABDM accepted the login OTP is marked after-otp; a refused OTP is not", async () => {
+    // A refused OTP: no mark, so the screen may call it a wrong OTP.
+    answer = ((normal) => (call: AbdmCall) => (call.path.endsWith("/profile/login/verify")
+        ? { authResult: "failed", message: "Please enter a valid OTP. Entered OTP is either expired or incorrect." }
+        : normal(call)))(answer);
+    let { sessionId } = await service.requestLoginOtp({ method: "abha-number", identifier: ABHA_NUMBER, otpSystem: "abdm", staffUserId: STAFF });
+    await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: any) => error instanceof AbhaJourneyError && (error as { stage?: string }).stage === undefined);
+
+    // The OTP accepted, then the profile read fails with an empty body: marked, so it never reads as a wrong OTP.
+    calls = [];
+    sessions = new AbhaSessionStore(() => now);
+    service = new AbhaLoginService(consentStore({ findPatientByAbhaNumber: async () => null, findPatientByAbhaAddresses: async () => null }), sessions, gateway, fakeCrypto, () => now);
+    answer = (call) => {
+        if (call.path.endsWith("/profile/login/request/otp")) return { txnId: "txn-login", message: "OTP sent to mobile number ending with ******0903" };
+        if (call.path.endsWith("/profile/login/verify")) return { txnId: "txn-login", authResult: "success", message: "OTP verified successfully", token: X_TOKEN, refreshToken: "r", expiresIn: 1800 };
+        if (call.path.endsWith("/profile/account")) return new AbdmApiError({ status: 400, kind: "rejected", operation: "profile/account", message: "ABDM answered with HTTP 400 and no message." });
+        throw new Error(`unexpected call ${call.path}`);
+    };
+    ({ sessionId } = await service.requestLoginOtp({ method: "abha-number", identifier: ABHA_NUMBER, otpSystem: "abdm", staffUserId: STAFF }));
+    await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: any) => error instanceof AbdmApiError && (error as { stage?: string }).stage === "after-otp");
+    // The repeat finishes from the token held: still after the OTP.
+    await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: any) => error.stage === "after-otp");
 });

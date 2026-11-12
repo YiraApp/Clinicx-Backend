@@ -9,6 +9,7 @@ import { defaultOrganizationRouter } from "./Organizations/default-organization.
 import { hospitalRouter } from "./Organizations/hospital.routes.js";
 import { hospitalSettingsRouter } from "./Organizations/hospital-settings.routes.js";
 import dashboardRouter from "./Common/dashboard.routes.js";
+import { ceoDashboardRouter } from "./Common/ceo-dashboard.routes.js";
 import mailRouter from "./Common/mail.routes.js";
 import { apiLogRouter } from "./Logs/apilog.routes.js";
 import masterRouter from "./Masters/master.routes.js";
@@ -57,6 +58,8 @@ router.use("/default-organizations", defaultOrganizationRouter);
 router.use("/hospitals", hospitalRouter);
 router.use("/hospitals", hospitalSettingsRouter);
 router.use("/dashboard", dashboardRouter);
+// CEO dashboard: Yira System Admin only (checked in the router)
+router.use("/ceo-dashboard", ceoDashboardRouter);
 router.use("/mail", mailRouter);
 router.use("/logs", apiLogRouter);
 router.use("/masters", masterRouter);

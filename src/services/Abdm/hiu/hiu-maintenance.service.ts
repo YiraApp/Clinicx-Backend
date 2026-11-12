@@ -14,6 +14,8 @@ import type { HiuDataFlowService } from "./hiu-data-flow.service.js";
  *   5. Fail consent requests whose on-init never came (still SENDING after 15 minutes).
  *   6. Fetch again granted artefacts whose details never came (a refused or unanswered
  *      consent/fetch: the notify is already acknowledged, so ABDM will not repeat it).
+ *   7. Ask ABDM about consent requests still waiting for the patient an hour after they were raised
+ *      (ABDM ends an unanswered request on its own clock and sends no notice of it).
  *
  * Safe with several instances: every step is one atomic statement, and a timed-out transfer is
  * notified only by the instance whose claim on NotifiedAt succeeds (HiuDataFlowService).
@@ -38,7 +40,7 @@ export interface HiuMaintenanceDeps {
     store: HiuMaintenanceStore;
     dataFlow: Pick<HiuDataFlowService, "failTransfer">;
     /** The consent side's sweep steps; left out, those steps are skipped. */
-    consent?: Pick<HiuConsentService, "failStaleSending" | "retryFetches">;
+    consent?: Pick<HiuConsentService, "failStaleSending" | "retryFetches" | "checkWaitingRequests">;
     audit: HiuAudit;
     clock?: () => number;
 }
@@ -49,7 +51,7 @@ const TIMEOUT_BATCH = 50;
 export class HiuMaintenanceService {
     private readonly store: HiuMaintenanceStore;
     private readonly dataFlow: Pick<HiuDataFlowService, "failTransfer">;
-    private readonly consent: Pick<HiuConsentService, "failStaleSending" | "retryFetches"> | null;
+    private readonly consent: Pick<HiuConsentService, "failStaleSending" | "retryFetches" | "checkWaitingRequests"> | null;
     private readonly audit: HiuAudit;
     private readonly clock: () => number;
     private running: Promise<void> | null = null;
@@ -107,6 +109,11 @@ export class HiuMaintenanceService {
         await this.step("artefact fetches", async () => {
             const sent = await consent.retryFetches(now.getTime());
             if (sent) console.log(`[ABDM HIU] maintenance: ${sent} consent artefacts fetched again`);
+        });
+
+        await this.step("waiting consent requests", async () => {
+            const asked = await consent.checkWaitingRequests(now.getTime());
+            if (asked) console.log(`[ABDM HIU] maintenance: ABDM asked about ${asked} consent requests still waiting for the patient`);
         });
     }
 

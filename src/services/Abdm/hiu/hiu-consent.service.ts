@@ -15,6 +15,7 @@ import {
     HIU_PURPOSE_REF_URI,
     HiuError,
     abdmDateTime,
+    hiTypeLabel,
     hiuFacilityNotConfiguredError,
     hiuNotConfiguredError,
     isAbhaAddress,
@@ -89,6 +90,11 @@ export interface NewConsentRequestInput {
     /** ISO date-time with a zone: when the records must be deleted (the form's "consent expiry", plan D7). */
     dataEraseAt: string;
     accessMode: string;
+    /**
+     * The open requests for the same need staff were shown and chose to send this one past ("Send
+     * anyway"). An open request not among them refuses it again, with a fresh warning.
+     */
+    acknowledgedOpenRequestIds?: number[];
 }
 
 export interface ConsentRequestSummary {
@@ -254,6 +260,16 @@ export interface HiuConsentStore {
     updateSendingRequest(id: number, changes: ConsentRequestChanges): Promise<boolean>;
     /** Marks FAILED, with [message], every SENDING request without an ABDM id created at or before [createdBefore]. */
     failStaleSending(input: { createdBefore: Date; at: Date; message: string }): Promise<{ id: number; hospitalId: number; initRequestId: string }[]>;
+    /**
+     * REQUESTED requests with an ABDM id and HIU id, raised between [raisedAfter] and [raisedBefore],
+     * unchanged since [checkedBefore]; the longest unchanged first, at most [limit].
+     */
+    listWaitingRequests(input: { raisedAfter: Date; raisedBefore: Date; checkedBefore: Date; limit: number }): Promise<ConsentRequestRow[]>;
+    /**
+     * Makes [requestId] the request's status check, only while it is still REQUESTED and unchanged
+     * since [checkedBefore]; false when another instance, or an answer, got there first.
+     */
+    claimStatusCheck(input: { id: number; requestId: string; at: Date; checkedBefore: Date }): Promise<boolean>;
     /** Staff read: only within [hospitalId]. */
     findRequest(hospitalId: number, id: number): Promise<ConsentRequestRow | null>;
     findRequestById(id: number): Promise<ConsentRequestRow | null>;
@@ -353,6 +369,26 @@ export const REQUESTER_IDENTIFIER_SYSTEM = "https://facility.abdm.gov.in";
 const CLINIC_UTC_OFFSET_MS = 330 * 60_000;
 /** A SENDING request older than this (its on-init never came) no longer blocks a new one. */
 const STALE_SENDING_MS = 15 * 60_000;
+/** The same record types for the same need again within this long is a second press of Send, never sent twice. */
+const DOUBLE_SUBMIT_MS = 10_000;
+/**
+ * ABDM ends a request the patient has not answered on its own clock, about an hour after it was
+ * raised in the sandbox whatever its delete-by time, and sends no notice: the sweep asks it about
+ * each request still REQUESTED this long after it was raised.
+ */
+const WAITING_CHECK_AFTER_MS = 60 * 60_000;
+/** A waiting request is asked about again at most this often: in its first 3 hours. */
+const WAITING_RECHECK_MS = 15 * 60_000;
+/** How long a waiting request waits for its next check, by how long ago it was raised. */
+const waitingRecheckMs = (age: number): number =>
+    age < 3 * 60 * 60_000 ? WAITING_RECHECK_MS : age < 24 * 60 * 60_000 ? 60 * 60_000 : 6 * 60 * 60_000;
+/** Asked about for this long after it was raised, then left to "Refresh status". */
+const WAITING_CHECK_FOR_MS = 7 * 24 * 60 * 60_000;
+/** Waiting requests read per sweep, of which at most WAITING_CHECK_BATCH are asked about. */
+const WAITING_LIST_BATCH = 100;
+const WAITING_CHECK_BATCH = 20;
+/** The step stops starting checks after this long, so the rest of the sweep is not held up. */
+const WAITING_CHECK_BUDGET_MS = 60_000;
 /** A granted artefact whose details have not come this long after its last fetch is fetched again by the sweep. */
 const FETCH_RETRY_AFTER_MS = 5 * 60_000;
 /** consent/fetch calls per artefact, the first included; after these the sweep stops asking. */
@@ -373,6 +409,13 @@ export const clinicDate = (date: Date): string => new Date(date.getTime() + CLIN
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 const iso = (date: Date | null | undefined): string | null => (date ? new Date(date).toISOString() : null);
 const isoOr = (date: Date | null | undefined): string => iso(date) ?? "";
+/** The clinic's calendar day (IST) of an instant, as YYYY-MM-DD. */
+const clinicDay = (date: Date): string => new Date(new Date(date).getTime() + CLINIC_UTC_OFFSET_MS).toISOString().slice(0, 10);
+/** For the CONSENT_INIT audit detail: the open requests staff chose to send this one past. */
+const pastNote = (ids: number[]): string => (ids.length ? `; sent past open ${ids.map((id) => `#${id}`).join(", ")}` : "");
+/** "A", "A and B", "A, B and C". */
+const listOf = (items: string[]): string =>
+    items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 
 /** ABDM's ids as stored and logged: only the spec's character set, never free text. */
 const abdmId = (value: unknown): string | null => {
@@ -621,18 +664,65 @@ export class HiuConsentService {
         const initRequestId = this.newId();
         const at = new Date(now);
         const need = { hospitalId: ctx.hospitalId, patientUserId, purposeCode: input.purposeCode };
+        /** The open requests staff sent this one past, for the audit. */
+        let sentPast: number[] = [];
         // The check and the insert hold one lock, so a double submit cannot send the patient two requests.
         const id = await this.store.withOpenRequestLock(need, async () => {
-            // "Do not raise a second request for the same need while the first is open."
+            // ABDM's guidance: do not raise a second request for the same need while the first is open.
+            // Staff are warned and may still send it past the open requests they were shown, as several
+            // requests for one patient at once is allowed. The same request is never sent twice: not on a
+            // second press of Send, nor while ABDM has not confirmed it. A request still REQUESTED after
+            // its delete-by time is no longer open: a consent granted then would let no records be kept.
+            // ABDM closes it only some time later (it can still answer REQUESTED after the delete-by
+            // time) and does not always notify that, so it stays REQUESTED here.
             const open = await this.store.findOpenRequests(need);
-            const clash = open.find((row) =>
-                (row.status === "REQUESTED" || (row.status === "SENDING" && now - new Date(row.createdAt).getTime() < STALE_SENDING_MS))
-                && row.hiTypes.some((type) => hiTypes.includes(type as never)));
-            if (clash) {
-                throw new HiuError("conflict", "An open request for this patient, purpose and record type is already waiting for the patient.", {
-                    details: { id: clash.id },
+            const clashes = open
+                .filter((row) =>
+                    ((row.status === "REQUESTED" && new Date(row.dataEraseAt).getTime() > now)
+                        || (row.status === "SENDING" && now - new Date(row.createdAt).getTime() < STALE_SENDING_MS))
+                    && row.hiTypes.some((type) => hiTypes.includes(type as never)))
+                .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || a.id - b.id);
+            const sameAsThis = (row: ConsentRequestRow) =>
+                row.hiTypes.length === hiTypes.length && hiTypes.every((type) => row.hiTypes.includes(type))
+                && row.accessMode === input.accessMode
+                && new Date(row.dataEraseAt).getTime() === dataEraseAt.getTime()
+                && new Date(row.dateFrom).getTime() === range.from.getTime()
+                && clinicDay(row.dateTo) === clinicDay(range.to);
+            const repeat = clashes.find((row) => sameAsThis(row)
+                && (row.status === "SENDING" || now - new Date(row.createdAt).getTime() < DOUBLE_SUBMIT_MS));
+            if (repeat) {
+                const moment = now - new Date(repeat.createdAt).getTime() < DOUBLE_SUBMIT_MS;
+                throw new HiuError("conflict", moment
+                    ? "The same request was sent a moment ago. Check the list before sending it again."
+                    : "The same request is still being sent to ABDM, which has not confirmed it yet. Check the list in a few minutes before sending it again.", {
+                    details: { id: repeat.id },
                 });
             }
+            const acknowledged = new Set(input.acknowledgedOpenRequestIds ?? []);
+            if (clashes.some((row) => !acknowledged.has(row.id))) {
+                // The oldest is named; the record types are counted across every open request.
+                const [oldest] = clashes;
+                const asked = new Set(clashes.flatMap((row) => row.hiTypes));
+                const overlapping = hiTypes.filter((type) => asked.has(type));
+                const types = listOf(overlapping.map(hiTypeLabel));
+                const message = clashes.length > 1
+                    ? `Earlier requests for this patient and purpose are still open, and they already ask for ${types}.`
+                    : oldest.status === "SENDING"
+                        ? `An earlier request for this patient and purpose is still being sent to ABDM, and it already asks for ${types}.`
+                        : `An earlier request for this patient and purpose is still waiting for their answer, and it already asks for ${types}.`;
+                throw new HiuError("conflict", message, {
+                    details: {
+                        id: oldest.id,
+                        status: oldest.status,
+                        waitingSince: isoOr(oldest.createdAt),
+                        openRequests: clashes.length,
+                        openIds: clashes.map((row) => row.id),
+                        overlappingHiTypes: overlapping,
+                        freeHiTypes: hiTypes.filter((type) => !asked.has(type)),
+                    },
+                });
+            }
+            sentPast = clashes.map((row) => row.id);
             return this.store.createRequest({
                 initRequestId,
                 hospitalId: ctx.hospitalId,
@@ -695,7 +785,7 @@ export class HiuConsentService {
                 event: HIU_AUDIT_EVENTS.CONSENT_INIT,
                 requestId: initRequestId,
                 outcome: abdm?.kind === "rejected" ? HIU_AUDIT_OUTCOMES.REJECTED : HIU_AUDIT_OUTCOMES.FAILED,
-                detail: code ?? abdm?.kind ?? "error",
+                detail: `${code ?? abdm?.kind ?? "error"}${pastNote(sentPast)}`,
             });
             console.warn(`[ABDM HIU] consent init REQUEST-ID=${initRequestId} request=${id} failed: ${code ?? abdm?.kind ?? error?.name ?? "error"}`);
             // The row is kept (SENDING): say so, with its id, so staff reload the list rather than raise it again.
@@ -709,7 +799,7 @@ export class HiuConsentService {
             event: HIU_AUDIT_EVENTS.CONSENT_INIT,
             requestId: initRequestId,
             outcome: HIU_AUDIT_OUTCOMES.OK,
-            detail: `${input.purposeCode} ${hiTypes.length} types`,
+            detail: `${input.purposeCode} ${hiTypes.length} types${pastNote(sentPast)}`,
         });
         console.log(`[ABDM HIU] consent init REQUEST-ID=${initRequestId} request=${id} sent`);
 
@@ -761,20 +851,31 @@ export class HiuConsentService {
 
         const statusRequestId = this.newId();
         await this.store.updateRequest(row.id, { statusRequestId });
+        await this.sendStatusRequest(row, statusRequestId, ctx.staffUserId);
+        return this.summary((await this.store.findRequest(ctx.hospitalId, row.id)) ?? { ...row, statusRequestId });
+    }
+
+    /**
+     * consent/request/status for [row] under [statusRequestId], already stored as its status check;
+     * ABDM answers by on-status. Audited for [staffUserId]. A sweep's check (no staff) is audited only
+     * when it fails: its answer is audited as ON_STATUS, and a row per check would crowd the request's
+     * history. Throws what the gateway throws.
+     */
+    private async sendStatusRequest(row: ConsentRequestRow, statusRequestId: string, staffUserId: string | null): Promise<void> {
         try {
             await this.gateway.call({
                 operation: "consent/v3/request/status",
                 method: "POST",
                 host: "gateway",
                 path: "/api/hiecm/consent/v3/request/status",
-                headers: { "X-HIU-ID": row.hiuId },
+                headers: { "X-HIU-ID": row.hiuId! },
                 body: { consentRequestId: row.consentRequestId },
                 requestId: statusRequestId,
             });
         } catch (error: any) {
             await this.audit.record({
                 hospitalId: row.hospitalId,
-                staffUserId: ctx.staffUserId,
+                staffUserId,
                 event: HIU_AUDIT_EVENTS.STATUS_REQUEST,
                 consentRequestId: row.consentRequestId,
                 requestId: statusRequestId,
@@ -783,16 +884,17 @@ export class HiuConsentService {
             });
             throw error;
         }
-        await this.audit.record({
-            hospitalId: row.hospitalId,
-            staffUserId: ctx.staffUserId,
-            event: HIU_AUDIT_EVENTS.STATUS_REQUEST,
-            consentRequestId: row.consentRequestId,
-            requestId: statusRequestId,
-            outcome: HIU_AUDIT_OUTCOMES.OK,
-        });
-        console.log(`[ABDM HIU] status REQUEST-ID=${statusRequestId} consentRequestId=${row.consentRequestId} sent`);
-        return this.summary((await this.store.findRequest(ctx.hospitalId, row.id)) ?? { ...row, statusRequestId });
+        if (staffUserId) {
+            await this.audit.record({
+                hospitalId: row.hospitalId,
+                staffUserId,
+                event: HIU_AUDIT_EVENTS.STATUS_REQUEST,
+                consentRequestId: row.consentRequestId,
+                requestId: statusRequestId,
+                outcome: HIU_AUDIT_OUTCOMES.OK,
+            });
+        }
+        console.log(`[ABDM HIU] status REQUEST-ID=${statusRequestId} consentRequestId=${row.consentRequestId} sent${staffUserId ? "" : " (sweep)"}`);
     }
 
     // ---- Sweep steps (HiuMaintenanceService runs these once a minute; they never throw past it) ----
@@ -819,6 +921,49 @@ export class HiuConsentService {
             console.warn(`[ABDM HIU] consent init REQUEST-ID=${row.initRequestId} request=${row.id} had no on-init; FAILED`);
         }
         return failed.length;
+    }
+
+    /**
+     * Asks ABDM about each request still REQUESTED an hour after it was raised, as "Refresh status"
+     * does: ABDM ends an unanswered request on its own clock and sends no notice, so without this it
+     * stays Requested here while the patient's app shows it ended. Every 15 minutes in its first 3
+     * hours, then hourly, then every 6 hours from its second day, until a week after it was raised.
+     * Only while the request's hospital still has the HIU id it was raised as (the callbacks refuse
+     * an answer for any other). Each check is claimed first, so with several instances only one asks.
+     * At most WAITING_CHECK_BATCH per sweep, within WAITING_CHECK_BUDGET_MS, and none after ABDM
+     * fails to answer one. Returns how many were sent.
+     */
+    async checkWaitingRequests(now: number = this.clock()): Promise<number> {
+        if (!this.settings().configured) return 0;
+        const due = await this.store.listWaitingRequests({
+            raisedAfter: new Date(now - WAITING_CHECK_FOR_MS),
+            raisedBefore: new Date(now - WAITING_CHECK_AFTER_MS),
+            checkedBefore: new Date(now - WAITING_RECHECK_MS),
+            limit: WAITING_LIST_BATCH,
+        });
+        const started = this.clock();
+        let asked = 0;
+        let failed = 0;
+        for (const row of due) {
+            if (asked + failed >= WAITING_CHECK_BATCH || this.clock() - started >= WAITING_CHECK_BUDGET_MS) break;
+            if (!row.consentRequestId || !row.hiuId) continue;
+            if ((await this.directory.hiuById(row.hiuId).catch(() => null))?.hospitalId !== row.hospitalId) continue;
+            const checkedBefore = new Date(now - waitingRecheckMs(now - new Date(row.createdAt).getTime()));
+            const statusRequestId = this.newId();
+            if (!(await this.store.claimStatusCheck({ id: row.id, requestId: statusRequestId, at: new Date(this.clock()), checkedBefore }))) continue;
+            try {
+                await this.sendStatusRequest(row, statusRequestId, null);
+                asked += 1;
+            } catch (error) {
+                // Audited by sendStatusRequest; the request is asked about again at its next turn.
+                failed += 1;
+                // Anything but ABDM refusing this one request (no answer, unavailable, our credentials)
+                // would fail the rest too: they wait for the next sweep.
+                if (!(error instanceof AbdmApiError && error.kind === "rejected")) break;
+            }
+        }
+        if (failed) console.warn(`[ABDM HIU] waiting-request check: ${failed} status calls failed`);
+        return asked;
     }
 
     /**

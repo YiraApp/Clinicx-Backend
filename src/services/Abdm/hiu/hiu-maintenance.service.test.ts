@@ -70,7 +70,7 @@ test("one sweep purges due records with an audit per artefact, fails timed-out t
     assert.ok(logged.some((line) => line.includes("4 records deleted from 2 artefacts")));
 });
 
-test("with the consent service, the sweep also fails requests with no on-init and fetches stuck artefacts again", async () => {
+test("with the consent service, the sweep also fails requests with no on-init, fetches stuck artefacts again and asks about waiting requests", async () => {
     const consent = {
         async failStaleSending(now: number) {
             steps.push(`stale-sending ${new Date(now).toISOString()}`);
@@ -79,19 +79,26 @@ test("with the consent service, the sweep also fails requests with no on-init an
         },
         async retryFetches(now: number) {
             steps.push(`refetch ${new Date(now).toISOString()}`);
+            if (faults.has("refetch")) throw Object.assign(new Error("db down"), { code: "ETIMEOUT" });
             return 2;
+        },
+        async checkWaitingRequests(now: number) {
+            steps.push(`waiting ${new Date(now).toISOString()}`);
+            return 3;
         },
     };
     const service = new HiuMaintenanceService({ store, dataFlow, consent, audit });
     await service.runOnce(NOW);
-    assert.deepEqual(steps.slice(-2), [`stale-sending ${NOW.toISOString()}`, `refetch ${NOW.toISOString()}`]);
+    assert.deepEqual(steps.slice(-3), [`stale-sending ${NOW.toISOString()}`, `refetch ${NOW.toISOString()}`, `waiting ${NOW.toISOString()}`]);
     assert.ok(logged.some((line) => line.includes("1 consent requests with no on-init marked failed")));
     assert.ok(logged.some((line) => line.includes("2 consent artefacts fetched again")));
+    assert.ok(logged.some((line) => line.includes("ABDM asked about 3 consent requests still waiting for the patient")));
 
     steps = [];
     faults.add("stale-sending");
+    faults.add("refetch");
     await service.runOnce(NOW);
-    assert.equal(steps.at(-1), `refetch ${NOW.toISOString()}`, "a failing step does not stop the re-fetch");
+    assert.equal(steps.at(-1), `waiting ${NOW.toISOString()}`, "failing steps do not stop the check of waiting requests");
 });
 
 test("a failing step is logged by code and the other steps still run", async () => {

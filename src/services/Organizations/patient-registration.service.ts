@@ -200,6 +200,9 @@ export class PatientRegistrationService {
         const effectiveHospitalId = hospitalId || activeDefault?.HospitalId || 19;
 
         let registration = await patientRegistrationRepository.findByUserId(userId, effectiveOrgId);
+        // A patient with no live registration at this organization is being registered now; saving one
+        // that already has one is an update of their details (the desk's "Save Changes").
+        const isNewRegistration = !registration;
         if (!registration) {
             registration = new PatientRegistration();
             registration.UserId = userId;
@@ -292,19 +295,22 @@ export class PatientRegistrationService {
             }
         }
 
-        // Send clinic_reg WhatsApp template in background
-        (async () => {
-            try {
-                const u = await userRepository.findById(userId);
-                if (u) {
-                    await this.sendPatientRegistrationWhatsApp(u, registration.TokenNumber || u.TokenNumber || undefined);
+        // The clinic_reg WhatsApp welcome goes to a newly registered patient only, in the background;
+        // updating an existing patient's details sends nothing.
+        if (isNewRegistration) {
+            (async () => {
+                try {
+                    const u = await userRepository.findById(userId);
+                    if (u) {
+                        await this.sendPatientRegistrationWhatsApp(u, registration.TokenNumber || u.TokenNumber || undefined);
+                    }
+                } catch (err) {
+                    console.error("[WhatsApp clinic_reg] Background trigger error:", err);
                 }
-            } catch (err) {
-                console.error("[WhatsApp clinic_reg] Background trigger error:", err);
-            }
-        })();
+            })();
+        }
 
-        return { message: "Patient details saved successfully.", tokenNumber: registration.TokenNumber };
+        return { message: "Patient details saved successfully.", tokenNumber: registration.TokenNumber, newRegistration: isNewRegistration };
     }
 
     async getPatients(page: number, pageSize: number, filters: any): Promise<any> {

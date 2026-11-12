@@ -1,4 +1,13 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
+
+/**
+ * Tells two mobile numbers apart without keeping the number itself: a resend goes to the same
+ * key, a corrected number has another. In memory only, with the session.
+ */
+export const mobileKey = (mobile: string): string => createHash("sha256").update(`abha-mobile:${mobile}`).digest("hex");
+
+/** How many times one journey may send a mobile OTP to a different number. */
+export const MOBILE_CHANGE_LIMIT = 3;
 
 /**
  * Server-side state of one ABHA journey at the front desk: creating an ABHA, verifying an existing
@@ -95,13 +104,33 @@ export interface AbhaSession {
     abhaAddress: string | null;
     /** An ABHA-address login: the address the patient gave, which the record keeps over the preferred one. */
     loginAbhaAddress: string | null;
-    /** Create journey: the communication mobile, when it is not the Aadhaar-linked one. */
-    communicationMobile: { encrypted: string; last4: string; otp: OtpState | null; verified: boolean } | null;
+    /**
+     * Create journey: the communication mobile, when it is not the Aadhaar-linked one. [key] tells
+     * a corrected number from a resend to the same one; [changes] counts corrections; [reread]: the
+     * profile was read again after it was verified.
+     */
+    communicationMobile: {
+        encrypted: string;
+        last4: string;
+        key: string;
+        otp: OtpState | null;
+        /** Every number sent to in this journey, by key: going back to one carries on its resends and cooldown. */
+        sent: Record<string, OtpState>;
+        verified: boolean;
+        changes: number;
+        reread: boolean;
+    } | null;
     login: PendingLogin | null;
     foundAccounts: FoundAccount[] | null;
     loginAccounts: LoginAccount[] | null;
-    /** Updating the mobile on a verified ABHA profile. */
-    profileMobile: { txnId: string; last4: string; otp: OtpState } | null;
+    /** Updating the mobile on a verified ABHA profile: the OTP pending for one number ([key], see mobileKey). */
+    profileMobile: { txnId: string; last4: string; key: string; otp: OtpState } | null;
+    /** How many times the desk sent the profile-mobile OTP to a different number in this session. */
+    profileMobileChanges: number;
+    /** Every number the profile-mobile OTP went to since the last update, by key: going back to one is a resend on its transaction. */
+    profileMobileSent: Record<string, { txnId: string; otp: OtpState }>;
+    /** The last confirmed profile-mobile update, so a repeated verify (after a timed-out answer) is not refused. */
+    profileMobileDone: { message: string; last4: string; reread: boolean; shows: boolean | null } | null;
     /**
      * After an ABHA-address login: ABDM updates the profile mobile only with an ABHA-number login's
      * token, so the desk verifies that number too. The OTP login in progress, then its token, used
@@ -147,6 +176,9 @@ export class AbhaSessionStore {
             foundAccounts: null,
             loginAccounts: null,
             profileMobile: null,
+            profileMobileChanges: 0,
+            profileMobileSent: {},
+            profileMobileDone: null,
             mobileLogin: null,
             mobileXToken: null,
             mobileXTokenExpiresAt: null,

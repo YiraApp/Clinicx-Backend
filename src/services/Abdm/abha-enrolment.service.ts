@@ -1,7 +1,7 @@
 import { abdmConfig } from "../../config/abdm.config.js";
 import { AbdmApiError, abdmGatewayService, abdmNotConfiguredError, type AbdmFile, type AbdmGatewayService } from "./abdm-gateway.service.js";
 import { abdmCryptoService, type AbdmCryptoService } from "./abdm-crypto.service.js";
-import { AbhaSessionStore, type AbhaSession, type AbhaProfileSummary, type OtpState } from "./abha-session.store.js";
+import { AbhaSessionStore, MOBILE_CHANGE_LIMIT, mobileKey, type AbhaSession, type AbhaProfileSummary, type OtpState } from "./abha-session.store.js";
 
 /**
  * ABDM M1, Create ABHA by Aadhaar OTP, for the front desk:
@@ -134,13 +134,31 @@ export interface VerifyOtpResult {
     abhaNumber: string | null;
     abhaAddress: string | null;
     profile: AbhaProfileSummary;
+    /** A new ABHA whose communication mobile is not the Aadhaar-linked one: ABDM verifies it by OTP next. */
     mobileVerificationNeeded: boolean;
+    /**
+     * An existing ABHA (isNew false) whose own mobile is not the communication mobile: ABDM keeps the
+     * ABHA's mobile, so the desk is offered to update it through the Profile API (profile/mobile/otp).
+     */
+    mobileUpdateOffered: boolean;
+    /** The last 4 digits of the mobile ABDM holds on the ABHA, when its profile shows them. */
+    abhaMobileLast4: string | null;
     communicationMobileLast4: string | null;
     linkedPatient: LinkedPatient | null;
 }
 
+/** The last 4 digits in a message such as "OTP sent to ... ending with ******0903." */
 const lastFourDigits = (text: string | null | undefined): string | null => {
     const match = (text || "").match(/(\d{4})\D*$/);
+    return match ? match[1]! : null;
+};
+
+/**
+ * The last 4 digits of a mobile as ABDM shows it ("******0903", or a full number). Null when it
+ * does not end in 4 digits, such as a mask that hides the end: unknown, never a guess.
+ */
+export const trailingFourDigits = (mobile: string | null | undefined): string | null => {
+    const match = (mobile || "").trim().match(/(\d{4})$/);
     return match ? match[1]! : null;
 };
 
@@ -229,19 +247,173 @@ export const toProfileSummary = (response: Record<string, any>): AbhaProfileSumm
     };
 };
 
-export type AbhaAddressRule = "length" | "characters" | "oneDot" | "oneUnderscore" | "edges" | "notMobile";
+/**
+ * Reads the ABHA profile again after its mobile changed, so the desk sees what ABDM now holds
+ * instead of what was typed. The addresses and ABHA number the session already knows stay (an
+ * address login's own address, one created a moment ago). A failed read returns null and leaves
+ * the session's profile as it was: the mobile change itself stands.
+ */
+export const rereadProfile = async (
+    gateway: Pick<AbdmGatewayService, "call">,
+    session: Pick<AbhaSession, "abhaAddress" | "profile">,
+    xToken: string,
+    timeoutMs: number = PROFILE_REREAD_TIMEOUT_MS,
+): Promise<AbhaProfileSummary | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const read = gateway.call<Record<string, any>>({
+            operation: "profile/account (after a mobile change)",
+            method: "GET",
+            path: "/abha/api/v3/profile/account",
+            headers: { "X-token": `Bearer ${xToken}` },
+        });
+        // A late failure after the bound has nowhere to go: it is dropped, not left unhandled.
+        read.catch(() => undefined);
+        const timedOut = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
+        const response = await Promise.race([read, timedOut]);
+        if (response === null) {
+            console.warn(`[ABDM] The ABHA profile was not read again after its mobile changed: no answer within ${timeoutMs / 1000} s`);
+            return null;
+        }
+        const fresh = toProfileSummary(response);
+        const known = [session.abhaAddress, ...(session.profile?.abhaAddresses ?? [])];
+        for (const value of known) {
+            const address = text(value);
+            if (address && !fresh.abhaAddresses.some((held) => held.toLowerCase() === address.toLowerCase())) fresh.abhaAddresses.push(address);
+        }
+        fresh.abhaNumber = fresh.abhaNumber ?? session.profile?.abhaNumber ?? null;
+        session.profile = fresh;
+        return fresh;
+    } catch (error: any) {
+        console.warn(`[ABDM] Could not read the ABHA profile again after its mobile changed (${error?.message ?? error})`);
+        return null;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+};
 
 /**
- * The ABHA address rules functional testing prints beside the field (CRT_ABHA_112): 8 to 18
- * characters including the @sbx or @abdm suffix, letters and digits, at most one dot and one
- * underscore, neither first nor last. A mobile number cannot be an address.
- * Returns the local part (without suffix) and the rules it breaks.
+ * How long the profile read after a mobile change may take. The change itself is already
+ * confirmed, and the browser gives the whole request 30 s, so the read gives up well before.
  */
-export const checkAbhaAddress = (input: string, suffix: string): { localPart: string; broken: AbhaAddressRule[] } => {
+export const PROFILE_REREAD_TIMEOUT_MS = 8_000;
+
+/** How many address suggestions the desk is offered (CRT_ABHA_112 asks for at least 3; the desk wants 10 to 12). */
+export const ADDRESS_SUGGESTIONS_WANTED = 12;
+
+const lettersOf = (value: string | null | undefined): string => (value ?? "").toLowerCase().replace(/[^a-z]/g, "");
+
+/**
+ * The address suggestions the desk is shown, each meeting the ABHA address rules printed beside the
+ * field (checkAbhaAddress: 8 to 18 characters before the suffix, one dot and one underscore at
+ * most, neither first nor last, letters and digits) and starting with a letter (ABDM's address
+ * policy). ABDM's own suggestions come first, those that meet the rules. While fewer than
+ * ADDRESS_SUGGESTIONS_WANTED remain, addresses built from the patient's name and date of birth are
+ * added. ABDM may answer that one of those is taken; the address step offers another then.
+ */
+export const addressSuggestions = (fromAbdm: unknown[], profile: AbhaProfileSummary | null, suffix: string, held: string[] = []): string[] => {
+    const heldLocal = new Set(held.map((address) => text(address).toLowerCase().replace(/@(sbx|abdm)$/i, "")));
+    const shown: string[] = [];
+    const offer = (candidate: unknown) => {
+        const local = text(candidate).replace(/@(sbx|abdm)$/i, "");
+        if (!local || !/^[a-z]/i.test(local) || checkAbhaAddress(local, suffix).broken.length > 0) return;
+        const key = local.toLowerCase();
+        if (heldLocal.has(key) || shown.some((address) => address.toLowerCase() === key)) return;
+        shown.push(local);
+    };
+    fromAbdm.forEach(offer);
+    if (shown.length >= ADDRESS_SUGGESTIONS_WANTED || !profile) return shown;
+
+    // The name's letters only (no spaces, digits or marks), from its parts or, failing those, the full name.
+    const fullParts = text(profile.fullName).split(/\s+/).map(lettersOf).filter(Boolean);
+    const first = lettersOf(profile.firstName) || fullParts[0] || "";
+    const last = lettersOf(profile.lastName) || (fullParts.length > 1 ? fullParts[fullParts.length - 1]! : "");
+    if (!first) return shown;
+    const middle = lettersOf(profile.middleName);
+    const fi = first[0]!;
+    const li = last.slice(0, 1);
+    const dob = (profile.dateOfBirth ?? "").match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    const [dd, mm, yyyy] = dob ? [dob[1]!, dob[2]!, dob[3]!] : ["", "", ""];
+    const yy = yyyy.slice(2);
+    // Digits to add: from the date of birth, then those ABDM put at the end of its own suggestions,
+    // then a few plain ones so a one-word name with no date of birth still gets a full choice.
+    const abdmTails = fromAbdm.map((candidate) => text(candidate).replace(/@(sbx|abdm)$/i, "").match(/(\d{2,4})$/)?.[1] ?? "");
+    // Longer plain ones too, so a short name still reaches the 8-character minimum.
+    const tails = [...new Set([yy, dd && mm ? dd + mm : "", mm && yy ? mm + yy : "", yyyy, dd, ...abdmTails,
+        "01", "07", "11", "21", "99", "123", "0101", "1234", "2121", "7777", "9090"].filter(Boolean))];
+
+    // Whole names only: an address never cuts a name in the middle while a whole one still fits.
+    const maxLocal = ABHA_ADDRESS_MAX;
+    const whole = (candidate: string): string => (candidate.length <= maxLocal ? candidate : "");
+    // Forms that need a last name (or a middle one) are left out without one, never built half empty.
+    const withLast = (...forms: string[]): string[] => (last ? forms : []);
+    const nameOnly = [
+        ...withLast(first + last, `${first}.${last}`, `${first}_${last}`),
+        ...withLast(last + first, `${last}.${first}`, `${last}_${first}`),
+        ...withLast(fi + last, `${fi}.${last}`, `${fi}_${last}`),
+        ...withLast(`${first}.${li}`, `${first}_${li}`, first + li),
+        ...(middle ? [first + middle, `${first}.${middle}`] : []),
+        first,
+        ...withLast(last),
+    ].map(whole);
+    const heads = [first, ...withLast(`${first}.${li}`, `${first}_${last}`, first + last, fi + last, `${first}.${last}`, `${last}_${fi}`, last)];
+    const withDigits = tails.flatMap((tail) => [
+        ...heads.map((head) => whole(head + tail)),
+        whole(`${first}.${tail}`), whole(`${first}_${tail}`),
+    ]);
+    // A mix: a name, then a name with digits, so the list is not ten spellings of one form.
+    const mixed: string[] = [];
+    for (let i = 0; i < Math.max(nameOnly.length, withDigits.length); i += 1) mixed.push(nameOnly[i] ?? "", withDigits[i] ?? "");
+    // Last of all, names shortened to fit, for names too long for any whole form.
+    const fit = (head: string, tail = ""): string => head.slice(0, Math.max(0, maxLocal - tail.length)).replace(/[._]+$/, "") + tail;
+    const shortened = [
+        ...withLast(fit(first + last), fit(`${first}.${last}`), fit(`${first}_${last}`)),
+        ...tails.flatMap((tail) => [fit(first, tail), fit(first, `.${tail}`), fit(first, `_${tail}`)]),
+        ...withLast(...tails.map((tail) => fit(first + last, tail))),
+    ];
+
+    for (const candidate of [...mixed, ...shortened]) {
+        if (shown.length >= ADDRESS_SUGGESTIONS_WANTED) break;
+        if (candidate) offer(candidate);
+    }
+    return shown;
+};
+
+/**
+ * Runs what follows an OTP ABDM has accepted (a token exchange, a profile read): a failure in it
+ * is marked stage "after-otp", which the response carries, so the screen never calls it a wrong OTP.
+ */
+export const afterOtpAccepted = async <T>(step: () => Promise<T>): Promise<T> => {
+    try {
+        return await step();
+    } catch (error) {
+        if (error && typeof error === "object") (error as { stage?: string }).stage = "after-otp";
+        throw error;
+    }
+};
+
+/** A different number sent too often in one journey. */
+export const mobileChangeLimitError = (): AbhaJourneyError =>
+    new AbhaJourneyError(429, "change-limit", "The mobile number has been changed too many times in this journey. Go on without it, or start again.");
+
+export type AbhaAddressRule = "length" | "characters" | "oneDot" | "oneUnderscore" | "edges" | "notMobile";
+
+/** An ABHA address is 8 to 18 characters before its @sbx or @abdm suffix (see checkAbhaAddress). */
+export const ABHA_ADDRESS_MIN = 8;
+export const ABHA_ADDRESS_MAX = 18;
+
+/**
+ * The ABHA address rules printed beside the field (CRT_ABHA_112): 8 to 18 characters, letters and
+ * digits, at most one dot and one underscore, neither first nor last; not a mobile number.
+ * The length is counted without the @sbx or @abdm suffix, as ABDM's sandbox enforces it: it
+ * refused "Invalid ABHA Address" for 7 characters before @sbx (2026-11-11), and issues and
+ * suggests addresses of 18 characters before it (CRT_ABHA_112 run, 2026-10-27). The sheet's
+ * "(including @sbx)" does not match ABDM. Returns the local part (without suffix) and the rules it breaks.
+ */
+export const checkAbhaAddress = (input: string, _suffix: string): { localPart: string; broken: AbhaAddressRule[] } => {
     const localPart = input.trim().replace(/@(sbx|abdm)$/i, "");
     const broken: AbhaAddressRule[] = [];
-    const length = localPart.length + suffix.length;
-    if (length < 8 || length > 18) broken.push("length");
+    if (localPart.length < ABHA_ADDRESS_MIN || localPart.length > ABHA_ADDRESS_MAX) broken.push("length");
     if (!/^[A-Za-z0-9._]+$/.test(localPart)) broken.push("characters");
     if ((localPart.match(/\./g) || []).length > 1) broken.push("oneDot");
     if ((localPart.match(/_/g) || []).length > 1) broken.push("oneUnderscore");
@@ -249,6 +421,9 @@ export const checkAbhaAddress = (input: string, suffix: string): { localPart: st
     if (/^[6-9]\d{9}$/.test(localPart)) broken.push("notMobile");
     return { localPart, broken };
 };
+
+/** The consent record's BeneficiaryName column holds 200 characters. */
+export const BENEFICIARY_NAME_MAX = 200;
 
 export const assertConsent = (consent: AbhaConsentInput | undefined): void => {
     const d = consent?.declarations;
@@ -260,6 +435,15 @@ export const assertConsent = (consent: AbhaConsentInput | undefined): void => {
     }
     if (d!.otherDocument === true) {
         throw new AbhaJourneyError(400, "consent", "Creating an ABHA with a document other than Aadhaar is not available here yet.");
+    }
+    // The beneficiary's confirmation names them (typed on the consent screen, as ABDM's review
+    // asked), and the record keeps who consented: a consent with no name is not recorded.
+    const name = text(consent!.beneficiaryName);
+    if (!name) {
+        throw new AbhaJourneyError(400, "consent", "Enter the beneficiary's name on the consent screen before the Aadhaar number is sent.");
+    }
+    if (name.length > BENEFICIARY_NAME_MAX) {
+        throw new AbhaJourneyError(400, "consent", `Keep the beneficiary's name to ${BENEFICIARY_NAME_MAX} characters.`);
     }
 };
 
@@ -442,6 +626,11 @@ export class AbhaEnrolmentService {
             },
         }));
 
+        // A 200 that says the OTP failed is a refused OTP, never an ABHA (the transaction is kept for a retry).
+        const authResult = text(response.authResult).toLowerCase();
+        if (authResult && authResult !== "success") {
+            throw new AbhaJourneyError(422, "rejected", "ABDM did not verify the OTP.", { abdmMessage: textOrNull(response.message) });
+        }
         const tokens = response.tokens ?? response.jwtResponse ?? (response.token ? { token: response.token } : null);
         const profile = toProfileSummary(response);
         // The flag decides what the desk is told; the message is only a fallback when ABDM omits it.
@@ -449,10 +638,16 @@ export class AbhaEnrolmentService {
         const isNew = newFlag === undefined ? /created/i.test(text(response.message)) : newFlag === true || newFlag === "true";
 
         // A new ABHA whose communication mobile is not the Aadhaar-linked one verifies it next.
-        // Everything that can still fail runs before ABDM's answer is committed to the session,
-        // so a failure here can be retried instead of stranding an ABHA that now exists.
-        const linkedLast4 = session.aadhaarMobileLast4 ?? lastFourDigits(profile.mobile);
+        // An existing ABHA keeps the mobile it already has (ABDM does not take this one for it), so
+        // a different communication mobile is offered as an update of the ABHA's mobile instead
+        // (CRT_ABHA_109 for an Aadhaar that already holds an ABHA). An ABHA mobile ABDM does not
+        // show counts as different. Everything that can still fail runs before ABDM's answer is
+        // committed to the session, so a failure here can be retried instead of stranding an ABHA
+        // that now exists.
+        const abhaMobileLast4 = trailingFourDigits(profile.mobile);
+        const linkedLast4 = session.aadhaarMobileLast4 ?? abhaMobileLast4;
         const mobileVerificationNeeded = isNew && linkedLast4 !== mobile.slice(-4);
+        const mobileUpdateOffered = !isNew && abhaMobileLast4 !== mobile.slice(-4);
         const encryptedMobile = mobileVerificationNeeded ? await this.crypto.encrypt(mobile) : null;
         const linkedPatient = await findLinkedPatient(this.store, profile.abhaNumber, sessionAbhaAddresses({ abhaAddress: null, profile }));
 
@@ -468,7 +663,7 @@ export class AbhaEnrolmentService {
         session.abhaNumber = profile.abhaNumber;
         session.abhaAddress = textOrNull(response.preferredAbhaAddress) ?? profile.abhaAddresses[0] ?? null;
         if (encryptedMobile) {
-            session.communicationMobile = { encrypted: encryptedMobile, last4: mobile.slice(-4), otp: null, verified: false };
+            session.communicationMobile = { encrypted: encryptedMobile, last4: mobile.slice(-4), key: mobileKey(mobile), otp: null, sent: {}, verified: false, changes: 0, reread: false };
         }
 
         if (profile.abhaNumber && session.consentId !== null) {
@@ -484,38 +679,75 @@ export class AbhaEnrolmentService {
             abhaAddress: session.abhaAddress,
             profile,
             mobileVerificationNeeded,
+            mobileUpdateOffered,
+            abhaMobileLast4,
             communicationMobileLast4: session.communicationMobile?.last4 ?? null,
             linkedPatient,
         };
     }
 
-    /** Sends (or resends) the OTP that verifies the communication mobile. */
-    async requestMobileOtp(sessionId: string, staffUserId: string): Promise<{ message: string; resendsLeft: number; resendAvailableInSeconds: number }> {
+    /**
+     * Sends (or resends) the OTP that verifies a new ABHA's communication mobile. [newMobile] is the
+     * number on the mobile step: the same one again is a resend, under the resend rules; a corrected
+     * one is a fresh send to that number (ABDM: only Resend counts toward the limit), at most
+     * MOBILE_CHANGE_LIMIT times in a journey.
+     */
+    async requestMobileOtp(sessionId: string, staffUserId: string, newMobile?: unknown): Promise<{ message: string; resendsLeft: number; resendAvailableInSeconds: number; communicationMobileLast4: string }> {
         const session = this.session(sessionId, staffUserId);
         const mobile = session.communicationMobile;
         if (!mobile) throw new AbhaJourneyError(409, "state", "This ABHA does not need its mobile number verified.");
         if (mobile.verified) throw new AbhaJourneyError(409, "state", "The mobile number is already verified.");
-        if (mobile.otp) assertCanResend(mobile.otp, this.clock());
+        let target = { encrypted: mobile.encrypted, last4: mobile.last4, key: mobile.key };
+        if (newMobile !== undefined && newMobile !== null && newMobile !== "") {
+            const typed = String(newMobile);
+            if (!/^\d{10}$/.test(typed)) {
+                throw new AbhaJourneyError(400, "validation", "Enter a valid 10-digit mobile number for ABHA communication.", { field: "mobile" });
+            }
+            if (mobileKey(typed) !== mobile.key) {
+                if (mobile.changes >= MOBILE_CHANGE_LIMIT) throw mobileChangeLimitError();
+                target = { encrypted: await this.crypto.encrypt(typed), last4: typed.slice(-4), key: mobileKey(typed) };
+            }
+        }
+        const changed = target.key !== mobile.key;
+        // A number already sent to in this journey (this one, or one the desk goes back to) is a
+        // resend under its own counter and cooldown; only a number never sent to starts afresh.
+        const earlier = mobile.sent[target.key] ?? null;
+        if (earlier) assertCanResend(earlier, this.clock());
 
         const response = await withCertificateCheck(this.crypto, () => this.gateway.call<{ txnId?: string; message?: string }>({
             operation: "enrollment/request/otp (mobile-verify)",
             method: "POST",
             path: "/abha/api/v3/enrollment/request/otp",
-            body: { txnId: session.txnId, scope: ["abha-enrol", "mobile-verify"], loginHint: "mobile", loginId: mobile.encrypted, otpSystem: "abdm" },
+            body: { txnId: session.txnId, scope: ["abha-enrol", "mobile-verify"], loginHint: "mobile", loginId: target.encrypted, otpSystem: "abdm" },
         }));
+        // Only now is the corrected number the journey's: a failed send leaves the previous one, and its OTP, as they were.
+        mobile.encrypted = target.encrypted;
+        mobile.last4 = target.last4;
+        mobile.key = target.key;
+        if (changed) mobile.changes += 1;
         session.txnId = text(response.txnId) || session.txnId;
-        mobile.otp = mobile.otp ? { sentAt: this.clock(), resends: mobile.otp.resends + 1 } : { sentAt: this.clock(), resends: 0 };
+        mobile.otp = earlier ? { sentAt: this.clock(), resends: earlier.resends + 1 } : { sentAt: this.clock(), resends: 0 };
+        mobile.sent[target.key] = mobile.otp;
 
         return {
             message: text(response.message) || `OTP sent to the mobile number ending with ${mobile.last4}.`,
             resendsLeft: OTP_MAX_RESENDS - mobile.otp.resends,
             resendAvailableInSeconds: OTP_RESEND_COOLDOWN_MS / 1000,
+            communicationMobileLast4: mobile.last4,
         };
     }
 
-    async verifyMobileOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<{ verified: true; message: string }> {
+    /**
+     * Verifies the new ABHA's communication mobile, then reads the profile again so the desk sees
+     * the mobile ABDM now holds (profile is null when that read failed; the mobile stays verified).
+     * Asked again once verified (the browser gave up on the first answer), it answers the same.
+     */
+    async verifyMobileOtp(input: { sessionId: string; staffUserId: string; otp: string }): Promise<{ verified: true; message: string; profile: AbhaProfileSummary | null }> {
         const session = this.session(input.sessionId, input.staffUserId);
         const mobile = session.communicationMobile;
+        if (mobile?.verified) {
+            return { verified: true, message: "Mobile number verified.", profile: mobile.reread ? session.profile : null };
+        }
         if (!mobile?.otp) throw new AbhaJourneyError(409, "state", "Send the mobile OTP first.");
         if (!/^\d{6}$/.test(String(input.otp ?? ""))) {
             throw new AbhaJourneyError(400, "validation", "Enter the 6-digit OTP.", { field: "otp" });
@@ -536,7 +768,9 @@ export class AbhaEnrolmentService {
         }
         session.txnId = text(response.txnId) || session.txnId;
         mobile.verified = true;
-        return { verified: true, message: text(response.message) || "Mobile number verified." };
+        const profile = session.xToken ? await rereadProfile(this.gateway, session, session.xToken) : null;
+        mobile.reread = profile !== null;
+        return { verified: true, message: text(response.message) || "Mobile number verified.", profile };
     }
 
     async getAddressSuggestions(sessionId: string, staffUserId: string): Promise<{ suggestions: string[]; suffix: string }> {
@@ -548,10 +782,11 @@ export class AbhaEnrolmentService {
             headers: { TRANSACTION_ID: session.txnId },
         });
         session.txnId = text(response.txnId) || session.txnId;
-        const suggestions = Array.isArray(response.abhaAddressList)
-            ? response.abhaAddressList.filter((address): address is string => typeof address === "string")
-            : [];
-        return { suggestions, suffix: abdmConfig.abhaAddressSuffix };
+        const fromAbdm = Array.isArray(response.abhaAddressList) ? response.abhaAddressList : [];
+        const suffix = abdmConfig.abhaAddressSuffix;
+        // Only addresses that meet the rules beside the field (and this server's own check on create).
+        const suggestions = addressSuggestions(fromAbdm, session.profile, suffix, sessionAbhaAddresses(session));
+        return { suggestions, suffix };
     }
 
     async createAbhaAddress(input: { sessionId: string; staffUserId: string; abhaAddress: string }): Promise<{ abhaNumber: string | null; abhaAddress: string }> {
