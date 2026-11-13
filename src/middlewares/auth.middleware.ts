@@ -34,11 +34,14 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
             return;
         }
 
-        // Check if token is revoked in database for immediate reflection of status/role changes
-        const tokenRecord = await tokenRepository.findByAccessToken(token);
-        if (!tokenRecord) {
-            res.status(401).json({ error: "Token revoked or session ended. Please login again." });
-            return;
+        // Check if token is revoked in database for immediate reflection of status/role changes.
+        // loggingMiddleware has already done so for this request when it marked this same token.
+        if ((req as any).sessionCheckedToken !== token) {
+            const tokenRecord = await tokenRepository.findByAccessToken(token, payload.userId);
+            if (!tokenRecord) {
+                res.status(401).json({ error: "Token revoked or session ended. Please login again." });
+                return;
+            }
         }
 
         // Attach user info to the request for subsequent handlers

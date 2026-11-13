@@ -540,7 +540,132 @@ export class MigrationService {
         await seedMenu(run, ABDM_FACILITIES_MENU, [ABDM_FACILITIES_ROLE], "the system admin role");
         console.log("ABDM HIU schema guaranteed.");
     }
+
+    /**
+     * Indexes for the hottest reads (PERFORMANCE_INDEXES). Started after the server is listening
+     * (index.ts) and never awaited there: on a large table a build can take minutes, which must
+     * neither delay startup nor hit the 30 s requestTimeout. So each index runs on its own, under
+     * its own 15-minute limit, built ONLINE where the engine has it (Azure SQL, Enterprise and
+     * Developer) so writes to the table go on meanwhile. A failure (another instance building the
+     * same index at the same moment, say) is logged and the next index still runs.
+     */
+    static async ensurePerformanceIndexes() {
+        const { timedQuery } = await import("../../repositories/Abdm/hiu-data.repository.js");
+        const run = timedQuery(() => 15 * 60_000);
+        const [edition] = await AppDataSource.query("SELECT CAST(SERVERPROPERTY('EngineEdition') AS int) AS engine");
+        const online = [3, 5, 8].includes(Number(edition?.engine));
+        let created = 0;
+        for (const index of PERFORMANCE_INDEXES) {
+            const build = (withOnline: boolean) => `IF OBJECT_ID('dbo.${index.table}', 'U') IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${index.name}' AND object_id = OBJECT_ID('dbo.${index.table}'))
+            BEGIN
+                CREATE NONCLUSTERED INDEX ${index.name} ON dbo.${index.table} (${index.on})${index.include ? ` INCLUDE (${index.include})` : ""}${withOnline ? " WITH (ONLINE = ON)" : ""};
+                SELECT 1 AS created;
+            END`;
+            try {
+                const started = Date.now();
+                let result: any;
+                try {
+                    result = await run(build(online));
+                } catch (error: any) {
+                    // 1712: this edition builds offline only
+                    if (!online || Number(error?.number) !== 1712) throw error;
+                    result = await run(build(false));
+                }
+                if (Array.isArray(result) && result.length) {
+                    created++;
+                    console.log(`Performance index ${index.name} created in ${Date.now() - started} ms.`);
+                }
+            } catch (error: any) {
+                console.error(`Performance index ${index.name} failed:`, error?.message);
+            }
+        }
+        console.log(`Performance indexes guaranteed (${created} new).`);
+    }
 }
+
+/**
+ * Indexes for the reads that scanned whole tables (performance audit, 12 Nov 2026). Measured on a
+ * copy of the dev database scaled to 200k appointments, 500k slots, 100k sessions and 50k patients.
+ * Each names the queries it serves; most of these tables had no index but their primary key.
+ */
+export const PERFORMANCE_INDEXES: { table: string; name: string; on: string; include?: string; why: string }[] = [
+    // Appointments: every doctor, patient and hospital screen filters on one of these three, then on the date.
+    { table: "Appointments", name: "IX_Appointments_DoctorId_Date", on: "DoctorId, AppointmentDate DESC, StartTime DESC", include: "UserId, OrgId, HospitalId, Status",
+        why: "doctor dashboards (web and mobile), appointment-dashboard, /appointments/doctor/:id, the patient list's EXISTS(appointment with this doctor)" },
+    { table: "Appointments", name: "IX_Appointments_UserId_Date", on: "UserId, AppointmentDate DESC, StartTime DESC", include: "DoctorId, OrgId, HospitalId, Status",
+        why: "patient overview, /appointments/patient/:id, visit counts in patient lists, family appointments" },
+    { table: "Appointments", name: "IX_Appointments_HospitalId_Date", on: "HospitalId, AppointmentDate DESC", include: "OrgId, DoctorId, UserId, Status, StartTime",
+        why: "front-desk and hospital dashboards, GET /appointments, consent daily status" },
+    { table: "Appointments", name: "IX_Appointments_Date_StartTime", on: "AppointmentDate, StartTime", include: "Status, UserId, DoctorId, HospitalId, OrgId",
+        why: "appointment reminder scheduler: today's appointments, every 60 s on every server" },
+    // Sessions: revoking and finding a user's sessions; and the token check, once it filters on the JWT's userId too.
+    { table: "UserTokens", name: "IX_UserTokens_UserId_IsRevoked", on: "UserId, IsRevoked",
+        why: "revokeAllUserTokens, revokePreviousSession, findActiveSession (dev's missing-index report names it)" },
+    { table: "Users", name: "IX_Users_ParentUserId", on: "ParentUserId", include: "IsDeleted",
+        why: "family members: notifications, appointment dashboard, patient overview" },
+    { table: "Users", name: "IX_Users_PhoneNumber", on: "PhoneNumber", include: "IsDeleted, IsPrimary",
+        why: "login, OTP and accounts-by-phone look a user up by phone" },
+    { table: "UserRoles", name: "IX_UserRoles_Org_Role", on: "OrganizationId, RoleId", include: "UserId, HospitalId, IsDeleted, Status",
+        why: "staff and patient counts per organization, patient lists filtered by the patient role" },
+    { table: "PatientRegistrations", name: "IX_PatientRegistrations_UserId", on: "UserId, OrganizationId, HospitalId", include: "IsDeleted, CreatedAt",
+        why: "a patient's registration (overview, appointment lists' batch lookup, patient list join)" },
+    { table: "PatientRegistrations", name: "IX_PatientRegistrations_Org_Hospital", on: "OrganizationId, HospitalId, CreatedAt DESC", include: "UserId, IsDeleted",
+        why: "GET /patients/getpatients and the mobile patient list, newest first" },
+    { table: "PatientInsurances", name: "IX_PatientInsurances_UserId", on: "UserId, IsDeleted",
+        why: "insurance shown with the patient in overview and appointment lists" },
+    // Slots: dev's missing-index report puts this first (90% impact); slot lists and regeneration.
+    { table: "HealthcareProviderScheduleSlots", name: "IX_HPScheduleSlots_Provider_Hospital_Date", on: "ProviderId, HospitalId, IsDeleted, SlotDate",
+        include: "OrganizationId, StartTime, EndTime, IsAvailable, IsBooked, Status, CreatedAt, UpdatedAt",
+        why: "a provider's slots for a date range, and the UPDATE that clears unbooked slots before regenerating" },
+    // Clinical records: always read for one patient, newest first, or for one appointment.
+    { table: "PatientPrescription", name: "IX_PatientPrescription_PatientId", on: "PatientId, CreatedAt DESC",
+        why: "/prescriptions/patient/:id (web and mobile), patient overview" },
+    { table: "PatientPrescription", name: "IX_PatientPrescription_AppointmentId", on: "AppointmentId",
+        why: "the prescription of an appointment" },
+    { table: "PrescriptionMedication", name: "IX_PrescriptionMedication_PrescriptionId", on: "PrescriptionId",
+        why: "medications joined to every prescription read" },
+    { table: "PrescriptionDiagnosis", name: "IX_PrescriptionDiagnosis_PrescriptionId", on: "PrescriptionId",
+        why: "diagnoses joined to every prescription read" },
+    { table: "PatientClinicalNotes", name: "IX_PatientClinicalNotes_PatientId", on: "PatientId, CreatedAt DESC",
+        why: "/clinical-notes/patient/:id, patient overview" },
+    { table: "PatientClinicalNotes", name: "IX_PatientClinicalNotes_AppointmentId", on: "AppointmentId",
+        why: "the notes of an appointment" },
+    { table: "MedicalDocuments", name: "IX_MedicalDocuments_PatientId", on: "PatientId, CreatedAt DESC", include: "HospitalId, OrganizationId, IsDeleted",
+        why: "/medical-documents/patient/:id (web and mobile), patient overview" },
+    { table: "PatientMedicalRecord", name: "IX_PatientMedicalRecord_PatientId", on: "PatientId, Date DESC, CreatedAt DESC",
+        why: "latest vitals in patient overview, medical records list (NVARCHAR column; the entity binds NVARCHAR via text-key.transformer)" },
+    { table: "PatientMedicalRecord", name: "IX_PatientMedicalRecord_AppointmentId", on: "AppointmentId",
+        why: "the vitals of a visit: ABDM care contexts and record sharing load them per appointment" },
+    // Needs disableAsciiToUnicodeParamConversion (database.ts): with an NVARCHAR parameter on this VARCHAR column it is only scanned
+    { table: "AppNotifications", name: "IX_AppNotifications_Type_IsRead", on: "Type, IsRead, CreatedAt",
+        why: "WhatsApp pending-booking queue: every 30 s on every server, unread rows of one type" },
+    // Billing
+    { table: "AppointmentBills", name: "IX_AppointmentBills_HospitalId", on: "HospitalId, IsDeleted",
+        include: "AppointmentId, PatientId, BillStatus, TotalAmount, PaidAmount, DueAmount, CreatedAt, UpdatedAt",
+        why: "GET /payments/bills and its collected/pending totals" },
+    { table: "AppointmentBills", name: "IX_AppointmentBills_AppointmentId", on: "AppointmentId",
+        why: "the bill of an appointment (payments, by-appointment, follow-up root bill)" },
+    { table: "AppointmentBills", name: "IX_AppointmentBills_PatientId", on: "PatientId",
+        why: "a patient's bills (mobile patient billing)" },
+    { table: "AppointmentBillItems", name: "IX_AppointmentBillItems_BillId", on: "AppointmentBillId",
+        why: "items joined to every bill read" },
+    { table: "Payments", name: "IX_Payments_AppointmentId", on: "AppointmentId",
+        why: "payments of an appointment (looked up once per row of the bills list)" },
+    { table: "Payments", name: "IX_Payments_AppointmentBillId", on: "AppointmentBillId",
+        why: "payments of a bill (looked up once per row of the bills list)" },
+    // Consents and check-in, looked up per appointment in the appointment lists
+    { table: "ConsentRequests", name: "IX_ConsentRequests_AppointmentId", on: "AppointmentId",
+        why: "consent daily status: requests for the listed appointments" },
+    { table: "PatientConsents", name: "IX_PatientConsents_AppointmentId", on: "AppointmentId",
+        why: "/consent/appointment/:id" },
+    { table: "PatientVerifications", name: "IX_PatientVerifications_AppointmentId", on: "AppointmentId",
+        why: "joined to every row of GET /appointments and the consent daily status" },
+    { table: "AppointmentTreatmentPlans", name: "IX_AppointmentTreatmentPlans_AppointmentId", on: "AppointmentId",
+        why: "treatment plans of the listed appointments" },
+    { table: "PatientAccessConsents", name: "IX_PatientAccessConsents_Patient_Doctor", on: "PatientId, DoctorId",
+        why: "requirePatientRecordAccess: has this patient let this doctor see their records" },
+];
 
 /** The staff page's sidebar item (D9). */
 export const ABDM_HIU_MENU = { name: "ABDM Record Request", route: "/abdm/record-request", icon: "FileSearch", orderNo: 900 } as const;

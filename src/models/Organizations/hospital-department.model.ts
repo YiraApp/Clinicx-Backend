@@ -21,7 +21,7 @@ export class HospitalDepartment {
     @JoinColumn({ name: "MainDepartmentId" })
     MainDepartment?: MainDepartment;
 
-    @Column({ type: "varchar", length: 150 })
+    @Column({ type: "nvarchar", length: 150 })
     Name: string;
 
     @Column({ type: "bit", default: true })

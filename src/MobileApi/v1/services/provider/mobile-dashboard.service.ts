@@ -155,22 +155,28 @@ export class MobileDashboardService {
             recentQuery.andWhere("appointment.OrgId = :orgId", { orgId });
         }
 
-        const recentAppointments = await recentQuery
+        recentQuery
             .orderBy("appointment.AppointmentDate", "DESC")
             .addOrderBy("appointment.StartTime", "DESC")
-            .getMany();
+            .addOrderBy("appointment.Id", "DESC");
 
-        // Keep only the latest unique patient appointments (limit to 6)
+        // Keep only the latest unique patient appointments (limit to 6). Read newest first, 50 at a
+        // time, until 6 patients are found: the doctor's whole history was loaded for these 6.
         const uniqueAppointments: any[] = [];
         const seenPatientIds = new Set<string>();
-        for (const apt of recentAppointments) {
-            if (apt.UserId && !seenPatientIds.has(apt.UserId)) {
-                seenPatientIds.add(apt.UserId);
-                uniqueAppointments.push(apt);
-                if (uniqueAppointments.length >= 6) {
-                    break;
+        const RECENT_BATCH = 50;
+        for (let offset = 0; uniqueAppointments.length < 6; offset += RECENT_BATCH) {
+            const batch = await recentQuery.clone().offset(offset).limit(RECENT_BATCH).getMany();
+            for (const apt of batch) {
+                if (apt.UserId && !seenPatientIds.has(apt.UserId)) {
+                    seenPatientIds.add(apt.UserId);
+                    uniqueAppointments.push(apt);
+                    if (uniqueAppointments.length >= 6) {
+                        break;
+                    }
                 }
             }
+            if (batch.length < RECENT_BATCH) break;
         }
 
         const formatDateSlash = (dateInput: Date | string) => {
@@ -208,46 +214,18 @@ export class MobileDashboardService {
         let totalPatients = 0;
         let newPatientsThisWeek = 0;
         try {
-            const patientsResult = await this.getPatientsList(userId, orgId, hospId);
-            const allPatients = patientsResult?.patients || [];
-            totalPatients = patientsResult?.total !== undefined ? patientsResult.total : allPatients.length;
-
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-            // New patients this week: patients whose first appointment or registration with this doctor is in the last 7 days
-            const earliestApptsQuery = appointmentRepo.createQueryBuilder("a")
-                .select("a.UserId", "UserId")
-                .addSelect("MIN(a.AppointmentDate)", "firstDate")
-                .where("a.DoctorId = :doctorId", { doctorId: userId })
-                .andWhere("a.UserId IS NOT NULL");
-            if (hospId && hospId > 0) {
-                earliestApptsQuery.andWhere("a.HospitalId = :hospId", { hospId });
-            }
-            if (orgId && orgId > 0) {
-                earliestApptsQuery.andWhere("a.OrgId = :orgId", { orgId });
-            }
-            const earliestAppts = await earliestApptsQuery
-                .groupBy("a.UserId")
-                .getRawMany();
-
-            const earliestMap = new Map<string, Date>();
-            earliestAppts.forEach(r => {
-                if (r.UserId && r.firstDate) {
-                    earliestMap.set(r.UserId.toLowerCase(), new Date(r.firstDate));
-                }
-            });
-
-            newPatientsThisWeek = allPatients.filter((p: any) => {
-                const uid = (p.patientUserId || p.id || "").toLowerCase();
-                const firstDate = earliestMap.get(uid);
-                if (firstDate && firstDate >= sevenDaysAgo) return true;
-                if (!firstDate && p.registeredDate) {
-                    const regDate = new Date(p.registeredDate);
-                    return !isNaN(regDate.getTime()) && regDate >= sevenDaysAgo;
-                }
-                return false;
-            }).length;
+            // Counted in SQL over the same rows the Patients List shows (patientRegistrationRepository's
+            // filters). New this week: first appointment with this doctor (here) in the last 7 days, or
+            // none here and registered in the last 7 days.
+            const counts = await patientRegistrationRepository.countPatients(
+                { organizationId: orgId, hospitalId: hospId, doctorId: userId },
+                { doctorId: userId, since: sevenDaysAgo, hospitalId: hospId, organizationId: orgId }
+            );
+            totalPatients = counts.total;
+            newPatientsThisWeek = counts.newSince;
         } catch (patErr) {
             console.error("Error calculating provider patients metrics:", patErr);
             const totalPatientsQuery = appointmentRepo.createQueryBuilder("appointment")

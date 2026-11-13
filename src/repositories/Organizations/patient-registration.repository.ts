@@ -24,9 +24,37 @@ export class PatientRegistrationRepository {
         return await this.repo.save(registration);
     }
 
-    async getPatients(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
-        const skip = (page - 1) * pageSize;
+    /**
+     * How many rows getPatients lists for [filters] (its total), and, with [fresh], how many of them
+     * are new since [fresh.since] for that doctor: their first appointment with the doctor (at
+     * hospitalId / in organizationId when given) is on or after it, or they have none there and
+     * registered on or after it. Two COUNTs, where the doctor dashboard used to load a page of up to
+     * 1,000 patients with their appointments to work these out (and saw only that page).
+     */
+    async countPatients(
+        filters: any,
+        fresh?: { doctorId: string; since: Date; hospitalId?: number; organizationId?: number }
+    ): Promise<{ total: number; newSince: number }> {
+        const query = this.patientListQuery(filters);
+        const total = await query.clone().getCount();
+        if (!fresh) return { total, newSince: 0 };
 
+        const scope = ["a2.UserId = u.Id", "a2.DoctorId = :freshDoctorId"];
+        if (fresh.hospitalId && fresh.hospitalId > 0) scope.push("a2.HospitalId = :freshHospitalId");
+        if (fresh.organizationId && fresh.organizationId > 0) scope.push("a2.OrgId = :freshOrgId");
+        const inScope = scope.join(" AND ");
+        const newSince = await query.clone()
+            .andWhere(
+                `((SELECT MIN(a2.AppointmentDate) FROM Appointments a2 WHERE ${inScope}) >= :freshSince
+                  OR (NOT EXISTS (SELECT 1 FROM Appointments a2 WHERE ${inScope}) AND pr.CreatedAt >= :freshSince))`,
+                { freshDoctorId: fresh.doctorId, freshHospitalId: fresh.hospitalId, freshOrgId: fresh.organizationId, freshSince: fresh.since }
+            )
+            .getCount();
+        return { total, newSince };
+    }
+
+    /** The patient list's rows for [filters] (getPatients, countPatients), unordered and unpaged. */
+    private patientListQuery(filters: any) {
         const query = this.repo.createQueryBuilder("pr")
             .innerJoinAndSelect("pr.User", "u")
             .innerJoinAndSelect("u.UserRoles", "ur", "ur.IsDeleted = 0 AND ur.Status = 1 AND ur.RoleId = :patientRoleId AND ur.OrganizationId = pr.OrganizationId", { patientRoleId: "4FC67429-28AE-4106-93EF-436228282ED0" })
@@ -78,7 +106,14 @@ export class PatientRegistrationRepository {
             );
         }
 
+        return query;
+    }
 
+    async getPatients(page: number = 1, pageSize: number = 10, filters: any): Promise<any> {
+        const skip = (page - 1) * pageSize;
+
+        const query = this.patientListQuery(filters);
+        const abhaCondition = abhaPatientCondition(parseAbhaPatientFilter(filters.abha), "pr");
 
         query.orderBy("pr.CreatedAt", "DESC");
 
@@ -97,16 +132,18 @@ export class PatientRegistrationRepository {
             insurances.forEach(ins => insuranceMap.set(ins.UserId.toUpperCase(), ins));
         }
 
-        // Batch-load total and completed appointment counts for each patient in the current org/hospital context
+        // Batch-load total and completed appointment counts for each patient in the current org/hospital context.
+        // a.UserId is compared as it is (UNIQUEIDENTIFIER, case-insensitive): UPPER(a.UserId) turned every
+        // appointment's id into text, so no index could be used and every row was compared with every id.
         const totalVisitsMap = new Map<string, number>();
         const completedVisitsMap = new Map<string, number>();
         if (userIds.length > 0) {
             const appointmentQuery = AppDataSource.getRepository(Appointment)
                 .createQueryBuilder("a")
-                .select("UPPER(a.UserId)", "userId")
+                .select("a.UserId", "userId")
                 .addSelect("COUNT(*)", "totalVisits")
                 .addSelect("SUM(CASE WHEN LOWER(a.Status) = LOWER(:completedStatus) THEN 1 ELSE 0 END)", "completedVisits")
-                .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) });
+                .where("a.UserId IN (:...userIds)", { userIds });
 
             if (filters.organizationId) {
                 appointmentQuery.andWhere("a.OrgId = :orgId", { orgId: filters.organizationId });
@@ -117,7 +154,7 @@ export class PatientRegistrationRepository {
 
             const appointmentsRaw = await appointmentQuery
                 .setParameter("completedStatus", AppointmentStatus.Completed)
-                .groupBy("UPPER(a.UserId)")
+                .groupBy("a.UserId")
                 .getRawMany();
             appointmentsRaw.forEach((row: any) => {
                 const key = (row.userId || "").toUpperCase();
@@ -131,9 +168,9 @@ export class PatientRegistrationRepository {
         if (userIds.length > 0) {
             const nextAptQuery = AppDataSource.getRepository(Appointment)
                 .createQueryBuilder("a")
-                .select("UPPER(a.UserId)", "userId")
+                .select("a.UserId", "userId")
                 .addSelect("MIN(a.AppointmentDate)", "nextDate")
-                .where("UPPER(a.UserId) IN (:...userIds)", { userIds: userIds.map((id: string) => id.toUpperCase()) })
+                .where("a.UserId IN (:...userIds)", { userIds })
                 .andWhere("a.AppointmentDate >= CAST(GETDATE() AS DATE)")
                 .andWhere("LOWER(a.Status) NOT IN (:...cancelledStatuses)", { cancelledStatuses: ["cancelled", "noshow", "completed"] });
 
@@ -145,7 +182,7 @@ export class PatientRegistrationRepository {
             }
 
             const nextAptRaw = await nextAptQuery
-                .groupBy("UPPER(a.UserId)")
+                .groupBy("a.UserId")
                 .getRawMany();
             nextAptRaw.forEach((row: any) => {
                 const key = (row.userId || "").toUpperCase();

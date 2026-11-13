@@ -309,7 +309,7 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
             }
 
             // Step 3: Database check for token revocation
-            const tokenRecord = await findByAccessToken(token!);
+            const tokenRecord = await findByAccessToken(token!, payload.userId);
             if (!tokenRecord || tokenRecord.IsRevoked) {
                 res.status(401).json({ error: "Token has been revoked" });
                 return;
@@ -318,6 +318,8 @@ export const loggingMiddleware = async (req: Request, res: Response, next: NextF
             // Attach user ID to the request object
             (req as any).userId = payload.userId;
             (req as any).user = payload; // For compatibility
+            // authMiddleware on the route need not look this same token up again
+            (req as any).sessionCheckedToken = token;
         }
 
         next();

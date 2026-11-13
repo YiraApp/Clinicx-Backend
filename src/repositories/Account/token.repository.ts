@@ -15,10 +15,16 @@ export class TokenRepository implements ITokenRepository {
         return await this.db.save(newToken);
     }
 
-    async findByAccessToken(accessToken: string): Promise<UserToken | null> {
+    /**
+     * The live session an access token belongs to, or null. AccessToken is NVARCHAR(MAX), which no
+     * index can hold, so a lookup by it alone reads every session. Pass the token's verified userId:
+     * the lookup then seeks IX_UserTokens_UserId_IsRevoked and compares the token only against that
+     * user's sessions (every session row is saved with its token's userId). The user is not loaded:
+     * no caller reads it.
+     */
+    async findByAccessToken(accessToken: string, userId?: string): Promise<UserToken | null> {
         return await this.db.findOne({
-            where: { AccessToken: accessToken, IsRevoked: false },
-            relations: ["user"]
+            where: { AccessToken: accessToken, IsRevoked: false, ...(userId ? { UserId: userId } : {}) },
         });
     }
 
@@ -76,7 +82,7 @@ export const tokenRepository = new TokenRepository();
 
 // Maintain functional exports for existing code (compatibility)
 export const createToken = (data: any) => tokenRepository.createToken(data);
-export const findByAccessToken = (token: string) => tokenRepository.findByAccessToken(token);
+export const findByAccessToken = (token: string, userId?: string) => tokenRepository.findByAccessToken(token, userId);
 export const findByRefreshToken = (token: string) => tokenRepository.findByRefreshToken(token);
 export const updateToken = (id: number, data: any) => tokenRepository.updateToken(id, data);
 export const revokeToken = (id: number) => tokenRepository.revokeToken(id);

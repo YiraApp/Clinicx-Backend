@@ -87,6 +87,9 @@ const startServer = async () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);
         });
 
+        // Read-path indexes, built in the background: a large table may take minutes (see the method)
+        MigrationService.ensurePerformanceIndexes().catch((error) => console.error("Performance indexes failed:", error?.message));
+
     } catch (error) {
         console.error("Failed to start server:", error);
         process.exit(1);

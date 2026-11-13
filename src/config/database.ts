@@ -176,6 +176,11 @@ export const AppDataSource = new DataSource({
     ],
     connectionTimeout: 30000,
     requestTimeout,
+    // A column the entity declares VARCHAR is bound as VARCHAR, not NVARCHAR: against a VARCHAR
+    // column under this database's SQL_Latin1_General collation an NVARCHAR parameter converts the
+    // column on every row, so its index can only be scanned. Entities must declare a Unicode column
+    // as nvarchar (as the DB has it), or its non-Latin text would be lost on write.
+    options: { disableAsciiToUnicodeParamConversion: true },
     extra: {
         encrypt: true,
         trustServerCertificate: true,

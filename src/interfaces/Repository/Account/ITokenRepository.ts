@@ -6,7 +6,7 @@ import { UserToken } from "../../../models/Account/usertoken.model.js";
  */
 export interface ITokenRepository {
     createToken(tokenData: Partial<UserToken>): Promise<UserToken>;
-    findByAccessToken(accessToken: string): Promise<UserToken | null>;
+    findByAccessToken(accessToken: string, userId?: string): Promise<UserToken | null>;
     findByRefreshToken(refreshToken: string): Promise<UserToken | null>;
     updateToken(tokenId: number, data: Partial<UserToken>): Promise<any>;
     revokeToken(tokenId: number): Promise<any>;

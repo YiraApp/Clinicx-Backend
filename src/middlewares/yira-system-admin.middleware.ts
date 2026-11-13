@@ -15,7 +15,7 @@ const databaseChecks: YiraSystemAdminChecks = {
         const payload = verifyAccessToken(token);
         if (!payload?.userId) return null;
         const { tokenRepository } = await import("../repositories/Account/token.repository.js");
-        const record = await tokenRepository.findByAccessToken(token);
+        const record = await tokenRepository.findByAccessToken(token, String(payload.userId));
         return record && !record.IsRevoked ? String(payload.userId) : null;
     },
 

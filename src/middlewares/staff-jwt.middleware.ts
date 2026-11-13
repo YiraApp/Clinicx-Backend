@@ -18,7 +18,7 @@ const databaseChecks: StaffJwtChecks = {
 
     async isActiveToken(token: string) {
         const { tokenRepository } = await import("../repositories/Account/token.repository.js");
-        const record = await tokenRepository.findByAccessToken(token);
+        const record = await tokenRepository.findByAccessToken(token, verifyAccessToken(token)?.userId);
         return !!record && !record.IsRevoked;
     },
 
