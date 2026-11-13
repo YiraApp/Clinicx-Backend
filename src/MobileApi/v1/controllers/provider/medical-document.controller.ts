@@ -134,7 +134,23 @@ export class MobileMedicalDocumentController {
             const id = parseInt(req.params.id as string);
             if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid document ID"));
             const force = String(req.body?.force ?? req.query?.force ?? "false") === "true";
-            const analysis = await medicalReportAiService.analyzeDocument(id, this.requesterId(req), force);
+            const loaded = await medicalReportAiService.loadStoredReport(id, this.requesterId(req), force);
+            if ("cached" in loaded) return res.json(ApiResponse.success(loaded.cached, "Report analysed."));
+
+            const { report, category } = loaded;
+            // MedSense reads it in the background and the patient gets a push; Gemini reads it now if MedSense can't.
+            if (medSenseService.handles(category, report.buffer.length)) {
+                try {
+                    const pdf = await medicalReportAiService.asPdf(report);
+                    await medSenseService.submit(id, pdf, report.fileName);
+                    // The same reply as asking while a job runs, which both apps already show as "analysing".
+                    return res.status(409).json(ApiResponse.error(ANALYSIS_PENDING_MESSAGE, { code: "ANALYSIS_PENDING" }));
+                } catch (err: any) {
+                    console.error("[MobileMedicalDocument] MedSense submit failed, reading with Gemini:", err?.message);
+                }
+            }
+            const analysis = await medicalReportAiService.analyzeBuffer(report.buffer, report.mimeType, report.pageCount);
+            await medicalReportAiService.saveAnalysis(id, analysis);
             return res.json(ApiResponse.success(analysis, "Report analysed."));
         } catch (error: any) {
             return this.sendError(res, error, "Mobile Medical Document Analyze Error");
