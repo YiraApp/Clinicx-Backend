@@ -20,6 +20,7 @@ import { patientFitnessController } from "../controllers/patient-fitness.control
 import { patientWalletController } from "../controllers/patient-wallet.controller.js";
 import { patientMedicationReminderController } from "../controllers/patient-medication-reminder.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
+import { scanPrescription } from "../controllers/provider/prescription-scan.controller.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
@@ -114,6 +115,7 @@ authRouter.delete("/prescriptions/:id", authMiddleware, (req, res) => mobilePres
 authRouter.get("/medical-documents/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobileMedicalDocumentController.getPatientDocuments(req, res));
 authRouter.post("/medical-documents", authMiddleware, upload.array("files"), (req, res) => mobileMedicalDocumentController.uploadDocuments(req, res));
 authRouter.post("/medical-documents/report", authMiddleware, upload.array("files", 10), (req, res) => mobileMedicalDocumentController.uploadReport(req, res));
+authRouter.post("/prescriptions/scan", authMiddleware, upload.single("file"), scanPrescription);
 authRouter.post("/medical-documents/:id/analyze", authMiddleware, (req, res) => mobileMedicalDocumentController.analyzeDocument(req, res));
 authRouter.get("/medical-documents/:id/analysis", authMiddleware, (req, res) => mobileMedicalDocumentController.getAnalysis(req, res));
 authRouter.delete("/medical-documents/:id", authMiddleware, (req, res) => mobileMedicalDocumentController.deleteDocument(req, res));
