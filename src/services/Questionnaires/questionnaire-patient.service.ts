@@ -142,7 +142,7 @@ export class QuestionnairePatientService {
                           ORDER BY a.SentAt) pa
              WHERE f.IsDeleted = 0 ${onlyId ? "AND f.Id = @1" : ""}
                AND (
-                    (f.Status = 'Published' AND (pa.Id IS NOT NULL OR (${memberOfHospitalSql("@0", "f.HospitalId")} AND ${genderFitsSql("u.Gender", "f.TargetGender")})))
+                    (f.Status = 'Published' AND (pa.Id IS NOT NULL OR (f.OwnerUserId IS NULL AND ${memberOfHospitalSql("@0", "f.HospitalId")} AND ${genderFitsSql("u.Gender", "f.TargetGender")})))
                  OR EXISTS (SELECT 1 FROM QuestionnaireSubmissions s WHERE s.QuestionnaireId = f.Id AND s.PatientUserId = @0 AND s.IsDeleted = 0)
                )`,
             onlyId ? [patientId, onlyId] : [patientId]

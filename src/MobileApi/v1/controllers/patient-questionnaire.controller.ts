@@ -96,8 +96,8 @@ export const patientQuestionnaireController = {
     /** The hospital's published questionnaires for one patient, so a doctor can pick one to send. */
     async sendableForDoctor(req: Request, res: Response) {
         try {
-            const { hospitalId, patientId } = await staffContext(req);
-            return res.json(ApiResponse.success(await adminService.forPatient(hospitalId, patientId), "Questionnaires fetched."));
+            const { hospitalId, patientId, staffId } = await staffContext(req);
+            return res.json(ApiResponse.success(await adminService.forPatient(hospitalId, patientId, staffId), "Questionnaires fetched."));
         } catch (error) {
             return fail(res, error);
         }

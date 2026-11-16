@@ -150,7 +150,7 @@ export class QuestionnaireAdminService {
 
     async listQuestions(hospitalId: number, filter: { categoryId?: number; typeId?: number; search?: string; includeInactive?: boolean } = {}) {
         const params: any[] = [hospitalId];
-        const where = ["q.HospitalId = @0", "q.IsDeleted = 0"];
+        const where = ["q.HospitalId = @0", "q.IsDeleted = 0", "q.OwnerUserId IS NULL"];
         if (!filter.includeInactive) where.push("q.IsActive = 1");
         if (filter.categoryId) { params.push(filter.categoryId); where.push(`q.CategoryId = @${params.length - 1}`); }
         if (filter.typeId) { params.push(filter.typeId); where.push(`q.QuestionTypeId = @${params.length - 1}`); }
@@ -262,7 +262,7 @@ export class QuestionnaireAdminService {
     async updateQuestion(hospitalId: number, userId: string, id: number, input: QuestionInput) {
         const [current] = await AppDataSource.query(
             `SELECT q.*, (SELECT COUNT(*) FROM QuestionnaireAnswers a WHERE a.QuestionId = q.Id) AS AnswerCount
-             FROM QuestionnaireQuestions q WHERE q.Id = @0 AND q.HospitalId = @1 AND q.IsDeleted = 0`,
+             FROM QuestionnaireQuestions q WHERE q.Id = @0 AND q.HospitalId = @1 AND q.IsDeleted = 0 AND q.OwnerUserId IS NULL`,
             [id, hospitalId]
         );
         if (!current) throw new QuestionnaireError("Question not found.", 404);
@@ -325,7 +325,7 @@ export class QuestionnaireAdminService {
         if (use.N > 0) throw new QuestionnaireError("This question is on a draft or published questionnaire. Remove it there first, or mark it inactive.");
         const result = await AppDataSource.query(
             `UPDATE QuestionnaireQuestions SET IsDeleted = 1, UpdatedAt = DATEADD(MINUTE, 330, GETUTCDATE()) OUTPUT INSERTED.Id
-             WHERE Id = @0 AND HospitalId = @1 AND IsDeleted = 0`,
+             WHERE Id = @0 AND HospitalId = @1 AND IsDeleted = 0 AND OwnerUserId IS NULL`,
             [id, hospitalId]
         );
         if (!result.length) throw new QuestionnaireError("Question not found.", 404);
@@ -335,7 +335,7 @@ export class QuestionnaireAdminService {
 
     async listQuestionnaires(hospitalId: number, filter: { status?: string; categoryId?: number } = {}) {
         const params: any[] = [hospitalId];
-        const where = ["f.HospitalId = @0", "f.IsDeleted = 0"];
+        const where = ["f.HospitalId = @0", "f.IsDeleted = 0", "f.OwnerUserId IS NULL"];
         if (filter.status) { params.push(filter.status); where.push(`f.Status = @${params.length - 1}`); }
         if (filter.categoryId) { params.push(filter.categoryId); where.push(`f.CategoryId = @${params.length - 1}`); }
         const rows = await AppDataSource.query(
@@ -388,7 +388,7 @@ export class QuestionnaireAdminService {
         if (!ids.length) return [];
         const rows = await AppDataSource.query(
             `SELECT Id, IsRequired FROM QuestionnaireQuestions
-             WHERE HospitalId = @0 AND IsDeleted = 0 AND Id IN (${ids.map((_, n) => `@${n + 1}`).join(",")})`,
+             WHERE HospitalId = @0 AND IsDeleted = 0 AND OwnerUserId IS NULL AND Id IN (${ids.map((_, n) => `@${n + 1}`).join(",")})`,
             [hospitalId, ...ids]
         );
         if (rows.length !== ids.length) throw new QuestionnaireError("Some questions weren't found in this hospital's question bank.");
@@ -438,7 +438,7 @@ export class QuestionnaireAdminService {
 
     private async current(hospitalId: number, id: number) {
         const [row] = await AppDataSource.query(
-            `SELECT * FROM Questionnaires WHERE Id = @0 AND HospitalId = @1 AND IsDeleted = 0`,
+            `SELECT * FROM Questionnaires WHERE Id = @0 AND HospitalId = @1 AND IsDeleted = 0 AND OwnerUserId IS NULL`,
             [id, hospitalId]
         );
         if (!row) throw new QuestionnaireError("Questionnaire not found.", 404);
@@ -560,8 +560,9 @@ export class QuestionnaireAdminService {
     /**
      * The hospital's published questionnaires as seen for one patient, for staff choosing one to send:
      * whether it's already waiting for them, when they last filled it, and whether it fits them.
+     * [staffId]'s own templates come first, marked "mine"; other doctors' templates are left out.
      */
-    async forPatient(hospitalId: number, patientId: string) {
+    async forPatient(hospitalId: number, patientId: string, staffId?: string | null) {
         const [patient] = await AppDataSource.query(
             `SELECT u.Id, LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))) AS Name, u.Gender
              FROM Users u WHERE u.Id = @0 AND u.IsDeleted = 0 AND ${memberOfHospitalSql("u.Id", "@1")}`,
@@ -570,6 +571,7 @@ export class QuestionnaireAdminService {
         if (!patient) throw new QuestionnaireError("This patient isn't registered at this hospital.", 404);
         const rows = await AppDataSource.query(
             `SELECT f.Id, f.Title, f.Description, f.TargetGender, f.AllowMultiple, f.RepeatAfterDays, c.Name AS CategoryName,
+                    CASE WHEN f.OwnerUserId IS NULL THEN 0 ELSE 1 END AS Mine,
                     (SELECT COUNT(*) FROM QuestionnaireItems i WHERE i.QuestionnaireId = f.Id AND i.IsDeleted = 0) AS QuestionCount,
                     CASE WHEN ${genderFitsSql("u.Gender", "f.TargetGender")} THEN 1 ELSE 0 END AS GenderFits,
                     pa.SentAt AS PendingSentAt, pa.DueAt AS PendingDueAt, pa.SentByName,
@@ -585,8 +587,9 @@ export class QuestionnaireAdminService {
              OUTER APPLY (SELECT COUNT(*) AS Attempts, MAX(s.SubmittedAt) AS LastSubmittedAt FROM QuestionnaireSubmissions s
                           WHERE s.QuestionnaireId = f.Id AND s.PatientUserId = @1 AND s.IsDeleted = 0) ls
              WHERE f.HospitalId = @0 AND f.Status = 'Published' AND f.IsDeleted = 0
-             ORDER BY f.Title`,
-            [hospitalId, patientId]
+               AND (f.OwnerUserId IS NULL ${staffId ? "OR f.OwnerUserId = @2" : ""})
+             ORDER BY CASE WHEN f.OwnerUserId IS NULL THEN 1 ELSE 0 END, f.Title`,
+            staffId ? [hospitalId, patientId, staffId] : [hospitalId, patientId]
         );
         return {
             patient: { id: patient.Id, name: patient.Name || "Patient", gender: normalizeGender(patient.Gender) },
@@ -602,6 +605,7 @@ export class QuestionnaireAdminService {
                     targetGender: targetGenderOf(r.TargetGender),
                     allowMultiple: !!r.AllowMultiple,
                     repeatAfterDays: r.RepeatAfterDays ?? null,
+                    mine: !!r.Mine,
                     attempts: r.Attempts ?? 0,
                     lastSubmittedAt: r.LastSubmittedAt ?? null,
                     pending,
@@ -621,10 +625,14 @@ export class QuestionnaireAdminService {
      * A questionnaire meant to be filled once can be sent again; the patient then fills it again.
      */
     async sendToPatient(hospitalId: number, userId: string, id: number, patientId: string, input: { dueInDays?: number | null } = {}) {
-        const current = await this.current(hospitalId, id);
+        const [current] = await AppDataSource.query(
+            `SELECT * FROM Questionnaires WHERE Id = @0 AND HospitalId = @1 AND IsDeleted = 0 AND (OwnerUserId IS NULL OR OwnerUserId = @2)`,
+            [id, hospitalId, userId || null]
+        );
+        if (!current) throw new QuestionnaireError("Questionnaire not found.", 404);
         if (current.Status !== "Published") throw new QuestionnaireError("Only published questionnaires can be sent.");
         if (!patientId) throw new QuestionnaireError("Choose a patient.");
-        const { patient, questionnaires } = await this.forPatient(hospitalId, patientId);
+        const { patient, questionnaires } = await this.forPatient(hospitalId, patientId, userId);
         const item = questionnaires.find((q: any) => q.id === id);
         if (!item) throw new QuestionnaireError("Questionnaire not found.", 404);
         if (!item.canSend) throw new QuestionnaireError(item.reason ?? "This questionnaire can't be sent to this patient.", 409);

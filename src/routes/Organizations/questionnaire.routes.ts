@@ -2,7 +2,7 @@ import { Router } from "express";
 import { questionnaireController as c } from "../../controllers/Organizations/questionnaire.controller.js";
 import { authMiddleware } from "../../middlewares/auth.middleware.js";
 
-/** Mounted at /api/hospitals. Every route is for the hospital's admins, except the two for one patient at the end. */
+/** Mounted at /api/hospitals. Every route is for the hospital's admins, except the ones for one patient and for staff's own templates at the end. */
 const questionnaireRouter = Router();
 const base = "/:hospitalId/questionnaire";
 
@@ -43,5 +43,12 @@ questionnaireRouter.post(`${base}s/:id/send`, authMiddleware, c.send);
 // For any staff member at the hospital: pick a questionnaire for one patient and send it.
 questionnaireRouter.get(`${base}-patients/:patientId`, authMiddleware, c.forPatient);
 questionnaireRouter.post(`${base}s/:id/send-to-patient`, authMiddleware, c.sendToPatient);
+
+// A staff member's own questionnaires (doctors make them from the send dialog).
+questionnaireRouter.get(`${base}-templates`, authMiddleware, c.listTemplates);
+questionnaireRouter.post(`${base}-templates`, authMiddleware, c.createTemplate);
+questionnaireRouter.get(`${base}-templates/:id`, authMiddleware, c.getTemplate);
+questionnaireRouter.put(`${base}-templates/:id`, authMiddleware, c.updateTemplate);
+questionnaireRouter.delete(`${base}-templates/:id`, authMiddleware, c.removeTemplate);
 
 export { questionnaireRouter };

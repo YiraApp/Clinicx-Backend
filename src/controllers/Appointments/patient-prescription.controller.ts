@@ -159,7 +159,11 @@ export class PatientPrescriptionController {
             const id = req.params.id as string;
             const body = req.body;
             console.info("updatePrescription called", { id, body });
-            const prescription = buildPrescriptionHeader(body);
+            const prescription: any = buildPrescriptionHeader(body);
+            // An edit that doesn't send the visit or the doctor (e.g. from the Patients page) keeps the
+            // saved ones: writing null cleared the link, and the PDF then printed "Appt ID: #NA".
+            if (body.appointmentId === undefined && body.AppointmentId === undefined) delete prescription.AppointmentId;
+            if (body.doctorId === undefined && body.DoctorId === undefined) delete prescription.DoctorId;
 
             await patientPrescriptionService.updatePrescription(id, prescription);
 

@@ -120,6 +120,14 @@ const TABLES: Array<[string, string]> = [
         CreatedAt DATETIME NOT NULL DEFAULT DATEADD(MINUTE, 330, GETUTCDATE())`],
 ];
 
+/** Columns added after the tables first shipped: [table, column, definition]. */
+const COLUMNS: Array<[string, string, string]> = [
+    // A doctor's own questionnaire and its questions. Null means the hospital's (made by its admins).
+    // Only the owner sends it, and patients see it only once it's sent to them.
+    ["Questionnaires", "OwnerUserId", "UNIQUEIDENTIFIER NULL"],
+    ["QuestionnaireQuestions", "OwnerUserId", "UNIQUEIDENTIFIER NULL"],
+];
+
 const INDEXES: Array<[string, string, string]> = [
     ["IX_QCategories_Hospital", "QuestionnaireCategories", "(HospitalId, IsDeleted)"],
     ["IX_QQuestions_Hospital", "QuestionnaireQuestions", "(HospitalId, IsDeleted, CategoryId)"],
@@ -132,6 +140,7 @@ const INDEXES: Array<[string, string, string]> = [
     ["IX_QSubmissions_Hospital", "QuestionnaireSubmissions", "(HospitalId, SubmittedAt, IsDeleted)"],
     ["IX_QAnswers_Submission", "QuestionnaireAnswers", "(SubmissionId)"],
     ["IX_QAnswers_Question", "QuestionnaireAnswers", "(QuestionId)"],
+    ["IX_Questionnaires_Owner", "Questionnaires", "(OwnerUserId, HospitalId, IsDeleted)"],
 ];
 
 export class QuestionnaireMigrationService {
@@ -145,6 +154,15 @@ export class QuestionnaireMigrationService {
                 );
             } catch (error: any) {
                 console.error(`[QuestionnaireMigration] ${name}: ${error.message}`);
+            }
+        }
+        for (const [table, column, definition] of COLUMNS) {
+            try {
+                await AppDataSource.query(
+                    `IF COL_LENGTH('${table}', '${column}') IS NULL BEGIN ALTER TABLE ${table} ADD ${column} ${definition}; END;`
+                );
+            } catch (error: any) {
+                console.error(`[QuestionnaireMigration] ${table}.${column}: ${error.message}`);
             }
         }
         for (const [index, table, columns] of INDEXES) {

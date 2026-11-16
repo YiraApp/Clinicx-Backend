@@ -61,10 +61,10 @@ export class QuestionnaireAnalyticsService {
 
         const [counts] = await AppDataSource.query(
             `SELECT
-                (SELECT COUNT(*) FROM Questionnaires WHERE HospitalId = @0 AND IsDeleted = 0 AND Status = 'Published') AS Published,
-                (SELECT COUNT(*) FROM Questionnaires WHERE HospitalId = @0 AND IsDeleted = 0 AND Status = 'Draft') AS Drafts,
-                (SELECT COUNT(*) FROM Questionnaires WHERE HospitalId = @0 AND IsDeleted = 0 AND Status = 'Closed') AS Closed,
-                (SELECT COUNT(*) FROM QuestionnaireQuestions WHERE HospitalId = @0 AND IsDeleted = 0) AS BankQuestions,
+                (SELECT COUNT(*) FROM Questionnaires WHERE HospitalId = @0 AND IsDeleted = 0 AND OwnerUserId IS NULL AND Status = 'Published') AS Published,
+                (SELECT COUNT(*) FROM Questionnaires WHERE HospitalId = @0 AND IsDeleted = 0 AND OwnerUserId IS NULL AND Status = 'Draft') AS Drafts,
+                (SELECT COUNT(*) FROM Questionnaires WHERE HospitalId = @0 AND IsDeleted = 0 AND OwnerUserId IS NULL AND Status = 'Closed') AS Closed,
+                (SELECT COUNT(*) FROM QuestionnaireQuestions WHERE HospitalId = @0 AND IsDeleted = 0 AND OwnerUserId IS NULL) AS BankQuestions,
                 (SELECT COUNT(*) FROM Users u WHERE u.IsDeleted = 0 AND ${memberOfHospitalSql("u.Id", "@0")}) AS HospitalPatients`,
             [hospitalId]
         );

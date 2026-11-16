@@ -358,12 +358,13 @@ export class PrescriptionPdfService {
 
                 const rawApptId = data.prescription.appointmentId && data.prescription.appointmentId.trim() !== "0" && data.prescription.appointmentId.trim() !== ""
                     ? data.prescription.appointmentId.trim()
-                    : "NA";
+                    : "";
 
+                // A prescription written outside a booked visit says so, instead of "Appt ID: #NA".
                 doc.fontSize(8)
-                   .font("Helvetica-Bold")
-                   .fillColor("#0284C7")
-                   .text(`Appt ID: #${rawApptId}`, margin + 370, cursorY + 6, {
+                   .font(rawApptId ? "Helvetica-Bold" : "Helvetica")
+                   .fillColor(rawApptId ? "#0284C7" : "#64748B")
+                   .text(rawApptId ? `Appt ID: #${rawApptId}` : "Without appointment", margin + 370, cursorY + 6, {
                        width: contentWidth - 380,
                        align: "right"
                    });

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { questionnaireAdminService as admin } from "../../services/Questionnaires/questionnaire-admin.service.js";
 import { questionnaireAiService as ai } from "../../services/Questionnaires/questionnaire-ai.service.js";
+import { questionnaireTemplateService as templates } from "../../services/Questionnaires/questionnaire-template.service.js";
 import { questionnaireAnalyticsService as analytics, type AnalyticsFilter } from "../../services/Questionnaires/questionnaire-analytics.service.js";
 import { QuestionnaireError } from "../../services/Questionnaires/questionnaire-shared.js";
 import { canManageHospital, isHospitalStaff, isSystemAdmin } from "../../utils/hospital-admin-access.js";
@@ -42,7 +43,7 @@ function route(handler: Handler, message = "Done.", status = 200, who: "admins" 
             const allowed = who === "staff" ? await isHospitalStaff(userId, hospitalId) : await canManageHospital(userId, hospitalId);
             if (!userId || !allowed) {
                 return res.status(403).json(ApiResponse.error(
-                    who === "staff" ? "Only this hospital's staff can send questionnaires to its patients." : "Only this hospital's admins can manage its questionnaires."
+                    who === "staff" ? "Only this hospital's staff can do this." : "Only this hospital's admins can manage its questionnaires."
                 ));
             }
             const result = await handler({ req, res, hospitalId, userId, id: Number(req.params.id) });
@@ -99,7 +100,7 @@ export const questionnaireController = {
     send: route(({ req, hospitalId, userId, id }) => admin.send(hospitalId, userId, id, req.body ?? {}), "Questionnaire sent."),
 
     // One patient, for any staff member at the hospital (front desk, doctors, admins).
-    forPatient: route(({ req, hospitalId }) => admin.forPatient(hospitalId, String(req.params.patientId || "").trim()), "Questionnaires fetched.", 200, "staff"),
+    forPatient: route(({ req, hospitalId, userId }) => admin.forPatient(hospitalId, String(req.params.patientId || "").trim(), userId), "Questionnaires fetched.", 200, "staff"),
     sendToPatient: route(
         ({ req, hospitalId, userId, id }) =>
             admin.sendToPatient(hospitalId, userId, id, String(req.body?.patientId || "").trim(), { dueInDays: req.body?.dueInDays }),
@@ -107,6 +108,13 @@ export const questionnaireController = {
         201,
         "staff"
     ),
+
+    // A staff member's own questionnaires (templates), for sending to their patients.
+    listTemplates: route(({ hospitalId, userId }) => templates.listMine(hospitalId, userId), "Questionnaires fetched.", 200, "staff"),
+    getTemplate: route(({ hospitalId, userId, id }) => templates.getMine(hospitalId, userId, id), "Questionnaire fetched.", 200, "staff"),
+    createTemplate: route(({ req, hospitalId, userId }) => templates.createMine(hospitalId, userId, req.body ?? {}), "Questionnaire saved.", 201, "staff"),
+    updateTemplate: route(({ req, hospitalId, userId, id }) => templates.updateMine(hospitalId, userId, id, req.body ?? {}), "Questionnaire saved.", 200, "staff"),
+    removeTemplate: route(({ hospitalId, userId, id }) => templates.removeMine(hospitalId, userId, id), "Questionnaire removed.", 200, "staff"),
 
     // Submissions
     listSubmissions: route(({ req, hospitalId }) => admin.listSubmissions(hospitalId, {
