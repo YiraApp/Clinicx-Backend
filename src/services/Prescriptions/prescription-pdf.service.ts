@@ -592,7 +592,7 @@ export class PrescriptionPdfService {
                        .font("Helvetica")
                        .fillColor("#64748B")
                        .text(
-                           data.prescription.labTests?.length ? "No medicines prescribed. See the lab tests below." : "No medications recorded.",
+                           data.prescription.labTests?.length ? "No medicines prescribed. See the investigations below." : "No medications recorded.",
                            margin + 10,
                            cursorY + 9
                        );
@@ -725,7 +725,7 @@ export class PrescriptionPdfService {
                     ensureRoom(26 + 20 + labRows[0].height);
                     doc.roundedRect(margin, cursorY, 30, 20, 4).fill("#1E3A8A");
                     doc.font("Helvetica-Bold").fontSize(9).fillColor("#FFFFFF").text("Lab", margin, cursorY + 5.5, { width: 30, align: "center" });
-                    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#1E3A8A").text("LAB TESTS ADVISED", margin + 38, cursorY + 5);
+                    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#1E3A8A").text("INVESTIGATIONS ADVISED", margin + 38, cursorY + 5);
                     cursorY += 26;
                     drawLabHeader();
 

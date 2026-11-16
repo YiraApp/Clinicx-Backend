@@ -251,7 +251,8 @@ export class DietPlanPdfService {
                 const start = pdfDate(data.plan.startDate);
                 const end = pdfDate(data.plan.endDate);
                 const validity = start ? (end ? `Valid: ${start} to ${end}` : `From ${start}, no end date`) : "";
-                doc.font("Helvetica-Bold").fontSize(8.5).fillColor(NAVY).text(`Plan No: ${data.plan.id}`, MARGIN + 10, y + 7, { lineBreak: false });
+                // A draft being previewed has no number yet.
+                doc.font("Helvetica-Bold").fontSize(8.5).fillColor(NAVY).text(data.plan.id ? `Plan No: ${data.plan.id}` : "Preview - not saved", MARGIN + 10, y + 7, { lineBreak: false });
                 doc.font("Helvetica").fontSize(8).fillColor(BODY)
                     .text(`Prescribed: ${pdfDate(data.plan.prescribedOn) || "NA"}`, MARGIN + 130, y + 7, { lineBreak: false });
                 doc.font("Helvetica-Bold").fontSize(8).fillColor(SKY)

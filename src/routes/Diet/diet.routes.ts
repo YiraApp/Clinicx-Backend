@@ -32,6 +32,8 @@ dietRouter.put("/my/plans/:planId", authMiddleware, mobilePatientDietController.
 
 // Patient Diet Plans
 dietRouter.post("/plans", authMiddleware, dietController.assignPlan.bind(dietController));
+// The PDF a plan would get, before it is prescribed (nothing is saved)
+dietRouter.post("/plans/preview", authMiddleware, dietController.previewPlanPdf.bind(dietController));
 dietRouter.get("/plans/patient/:patientId", authMiddleware, dietController.getPatientPlans.bind(dietController));
 dietRouter.get("/plans/:id", authMiddleware, dietController.getPlanDetails.bind(dietController));
 dietRouter.put("/plans/:id", authMiddleware, dietController.updatePlan.bind(dietController));

@@ -3,6 +3,7 @@ import { patientMedicalRecordService } from "../../services/Appointments/patient
 import { ApiResponse } from "../../utils/response.utils.js";
 import { clinicalNoteFields } from "../../utils/clinical-note-fields.js";
 import { refreshAppointmentPrescriptionPdfs } from "../../services/Prescriptions/prescription-pdf-refresh.service.js";
+import { editLockMessage } from "../../utils/edit-window.js";
 
 export class PatientMedicalRecordController {
     async addRecord(req: Request, res: Response): Promise<void> {
@@ -70,6 +71,8 @@ export class PatientMedicalRecordController {
         try {
             const { id } = req.params;
             const body = req.body;
+            const locked = await editLockMessage("record", String(id));
+            if (locked) { res.status(403).json(ApiResponse.error(locked)); return; }
             
             const data: any = {};
             if (body.patientId !== undefined) data.PatientId = body.patientId;

@@ -2,8 +2,9 @@ import { Request, Response } from "express";
 import { patientPrescriptionService } from "../../services/Appointments/patient-prescription.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
 import { AppDataSource } from "../../config/database.js";
-import { uploadPrescriptionPdfToBlob } from "../../MobileApi/v1/controllers/provider/prescription.controller.js";
+import { renderPrescriptionPdf, uploadPrescriptionPdfToBlob } from "../../MobileApi/v1/controllers/provider/prescription.controller.js";
 import { normalizeLabTests } from "../../utils/prescription-lab-tests.utils.js";
+import { editLockMessage } from "../../utils/edit-window.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -159,6 +160,8 @@ export class PatientPrescriptionController {
             const id = req.params.id as string;
             const body = req.body;
             console.info("updatePrescription called", { id, body });
+            const locked = await editLockMessage("prescription", id);
+            if (locked) { res.status(403).json(ApiResponse.error(locked)); return; }
             const prescription: any = buildPrescriptionHeader(body);
             // An edit that doesn't send the visit or the doctor (e.g. from the Patients page) keeps the
             // saved ones: writing null cleared the link, and the PDF then printed "Appt ID: #NA".
@@ -181,6 +184,53 @@ export class PatientPrescriptionController {
         } catch (error: any) {
             console.error("Error in updatePrescription:", error);
             res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * The PDF a prescription would get, drawn from the unsaved draft (the same body the page saves),
+     * so the doctor can check it and go back to edit before saving. Nothing is stored.
+     */
+    async previewPrescription(req: Request, res: Response): Promise<void> {
+        try {
+            const body = req.body ?? {};
+            if (!body.patientId && !body.PatientId) {
+                res.status(400).json(ApiResponse.error("Patient is required."));
+                return;
+            }
+            const header: any = buildPrescriptionHeader(body);
+            const draft = { ...header, Id: undefined, PrescriptionNumber: null, CreatedAt: new Date() };
+
+            // The draft's investigations, with the hospital catalogue's code, sample and preparation as a saved one gets.
+            const tests: any[] = header.LabTests || [];
+            const catalogIds = tests.map((t) => Number(t.HospitalLabTestId)).filter((id) => id > 0);
+            const catalog: any[] = catalogIds.length
+                ? await AppDataSource.query(
+                    `SELECT Id, TestCode, SampleType, Preparation, Category FROM HospitalLabTests WHERE Id IN (${catalogIds.map((_, i) => `@${i}`).join(",")})`,
+                    catalogIds
+                )
+                : [];
+            const labTests = tests.map((t) => {
+                const c = catalog.find((row) => Number(row.Id) === Number(t.HospitalLabTestId));
+                return {
+                    name: t.TestName,
+                    code: c?.TestCode ?? null,
+                    category: t.Category || c?.Category || null,
+                    sampleType: c?.SampleType ?? null,
+                    preparation: c?.Preparation ?? null,
+                    priority: t.Priority || undefined,
+                    instructions: t.Instructions,
+                };
+            });
+
+            const { pdfBuffer } = await renderPrescriptionPdf(draft, body, labTests);
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", 'inline; filename="Prescription_preview.pdf"');
+            res.setHeader("Cache-Control", "no-store");
+            res.send(pdfBuffer);
+        } catch (error: any) {
+            console.error("Error in previewPrescription:", error);
+            res.status(500).json(ApiResponse.error(error.message || "Couldn't draw the preview."));
         }
     }
 

@@ -6,6 +6,8 @@ import { mobilePrescriptionController } from "../../MobileApi/v1/controllers/pro
 const router = Router();
 
 router.post("/", patientPrescriptionController.addPrescription);
+// The PDF a draft would get, before it is saved (nothing is stored)
+router.post("/preview", (req, res) => patientPrescriptionController.previewPrescription(req, res));
 router.get("/:id/pdf", (req, res) => mobilePrescriptionController.getPrescriptionPdf(req, res));
 router.put("/:id", patientPrescriptionController.updatePrescription);
 router.get("/appointment/:appointmentId", patientPrescriptionController.getPrescriptionsByAppointment);

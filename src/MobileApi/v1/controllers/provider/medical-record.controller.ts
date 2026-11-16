@@ -6,6 +6,7 @@ import { User } from "../../../../models/Account/user.model.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
 import { clinicalNoteFields } from "../../../../utils/clinical-note-fields.js";
 import { refreshAppointmentPrescriptionPdfs } from "../../../../services/Prescriptions/prescription-pdf-refresh.service.js";
+import { editLockMessage } from "../../../../utils/edit-window.js";
 
 export class MobileMedicalRecordController {
     async getPatientRecords(req: Request, res: Response) {
@@ -108,6 +109,8 @@ export class MobileMedicalRecordController {
             if (!id) {
                 return res.status(400).json(ApiResponse.error("Record ID is required"));
             }
+            const locked = await editLockMessage("record", String(id));
+            if (locked) return res.status(403).json(ApiResponse.error(locked));
 
             const data: any = {};
             if (body.patientId !== undefined) data.PatientId = body.patientId;

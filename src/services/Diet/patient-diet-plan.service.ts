@@ -99,45 +99,11 @@ export class PatientDietPlanService {
      * Assign a diet plan to a patient (from template OR manual meal construction).
      * Enforces organization scoping and deep-copies meals into PatientDietPlanMeals.
      */
-    async assignPlan(data: {
-        patientId: string;
-        doctorId: string;
-        organizationId: number;
-        hospitalId?: number;
-        appointmentId?: number;
-        sourceTemplateId?: number;
-        planName: string;
-        description?: string;
-        condition?: string;
-        totalDays?: number;
-        startDate?: string | Date;
-        endDate?: string | Date;
-        targetCalories?: number;
-        targetProteinG?: number;
-        targetCarbsG?: number;
-        targetFatG?: number;
-        dietType?: string;
-        doctorNotes?: string;
-        foodsToAvoid?: string[] | string;
-        foodsToPrefer?: string[] | string;
-        meals?: Array<{
-            dayNumber?: number;
-            mealSlot: string;
-            mealTime: string;
-            foodItemId?: number;
-            foodName: string;
-            quantity: number;
-            unit?: string;
-            weightAmount?: number;
-            weightUnit?: string;
-            calories?: number;
-            proteinG?: number;
-            carbsG?: number;
-            fatG?: number;
-            notes?: string;
-            sortOrder?: number;
-        }>;
-    }) {
+    /**
+     * Checks a plan the doctor is prescribing and builds it as it will be saved (meals from the request,
+     * or from the source template). Shared by assignPlan and the PDF preview, so both read it the same way.
+     */
+    private async preparePlan(data: Parameters<PatientDietPlanService["assignPlan"]>[0]) {
         if (!data.organizationId) {
             throw new DietValidationError("OrganizationId is required to assign a diet plan.");
         }
@@ -212,6 +178,68 @@ export class PatientDietPlanService {
             FoodsToPrefer: preferJson,
             Status: "active"
         });
+        return { newPlan, mealsToInsert, planName };
+    }
+
+    /**
+     * The plan exactly as assignPlan would save it, without saving anything: for the doctor's PDF
+     * preview. Meals carry their food's calories per serving, so estimates match the saved PDF.
+     */
+    async draftPlan(data: Parameters<PatientDietPlanService["assignPlan"]>[0]) {
+        const { newPlan, mealsToInsert } = await this.preparePlan(data);
+        const meals = this.toMealEntities(0, mealsToInsert);
+        const foodIds = [...new Set(meals.map((m) => Number(m.FoodItemId)).filter((id) => id > 0))];
+        const foods: Array<{ Id: number; CaloriesPerServing: number }> = foodIds.length
+            ? await AppDataSource.query(`SELECT Id, CaloriesPerServing FROM DietFoodItems WHERE Id IN (${foodIds.map((_, i) => `@${i}`).join(",")})`, foodIds)
+            : [];
+        return {
+            ...newPlan,
+            Id: 0,
+            CreatedAt: new Date(),
+            Meals: meals.map((m) => ({ ...m, FoodItem: foods.find((f) => Number(f.Id) === Number(m.FoodItemId)) })),
+        };
+    }
+
+    async assignPlan(data: {
+        patientId: string;
+        doctorId: string;
+        organizationId: number;
+        hospitalId?: number;
+        appointmentId?: number;
+        sourceTemplateId?: number;
+        planName: string;
+        description?: string;
+        condition?: string;
+        totalDays?: number;
+        startDate?: string | Date;
+        endDate?: string | Date;
+        targetCalories?: number;
+        targetProteinG?: number;
+        targetCarbsG?: number;
+        targetFatG?: number;
+        dietType?: string;
+        doctorNotes?: string;
+        foodsToAvoid?: string[] | string;
+        foodsToPrefer?: string[] | string;
+        meals?: Array<{
+            dayNumber?: number;
+            mealSlot: string;
+            mealTime: string;
+            foodItemId?: number;
+            foodName: string;
+            quantity: number;
+            unit?: string;
+            weightAmount?: number;
+            weightUnit?: string;
+            calories?: number;
+            proteinG?: number;
+            carbsG?: number;
+            fatG?: number;
+            notes?: string;
+            sortOrder?: number;
+        }>;
+    }) {
+        const { newPlan, mealsToInsert, planName } = await this.preparePlan(data);
 
         // Replacing the previous active plan and saving the new one succeed or fail together.
         const savedPlan = await AppDataSource.transaction(async (manager) => {

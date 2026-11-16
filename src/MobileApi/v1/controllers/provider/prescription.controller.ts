@@ -16,6 +16,7 @@ import { medicalDocumentRepository } from "../../../../repositories/Appointments
 import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
 import { normalizeLabTests } from "../../../../utils/prescription-lab-tests.utils.js";
 import { sortMedications } from "../../../../utils/prescription-medications.js";
+import { editLockMessage } from "../../../../utils/edit-window.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -161,17 +162,12 @@ async function clinicalRecordForPdf(prescription: PatientPrescription) {
     };
 }
 
-export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overrides?: any): Promise<string> {
-    const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
-    const prescription = await prescriptionRepo.findOne({
-        where: { Id: String(prescriptionId) },
-        relations: ["Diagnoses", "LabTests", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
-    });
-
-    if (!prescription) {
-        throw new Error(`Prescription with ID ${prescriptionId} not found`);
-    }
-
+/**
+ * Draws a prescription's PDF: the hospital letterhead, doctor, patient, the visit's medical record,
+ * medicines, investigations and notes. [prescription] is a saved row, or a draft shaped like one for
+ * the preview; a draft passes its investigations as [draftLabTests] since they aren't saved yet.
+ */
+export async function renderPrescriptionPdf(prescription: any, overrides?: any, draftLabTests?: Array<{ name: string; code?: string | null; category?: string | null; sampleType?: string | null; preparation?: string | null; priority?: string; instructions?: string | null }>) {
     const patientId = prescription.PatientId;
     const doctorId = prescription.DoctorId;
 
@@ -353,10 +349,26 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             appointmentId: prescription.AppointmentId && String(prescription.AppointmentId).trim() !== "0" ? String(prescription.AppointmentId).trim() : undefined,
             diagnoses,
             medications,
-            labTests: await prescriptionLabTestsForPdf(String(prescription.Id)),
+            labTests: draftLabTests ?? await prescriptionLabTestsForPdf(String(prescription.Id)),
             notes: prescription.Notes || overrides?.notes || overrides?.Notes || undefined
         }
     });
+
+    return { pdfBuffer, patientId, doctorId, doctorName, patientFolder };
+}
+
+export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overrides?: any): Promise<string> {
+    const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
+    const prescription = await prescriptionRepo.findOne({
+        where: { Id: String(prescriptionId) },
+        relations: ["Diagnoses", "LabTests", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
+    });
+
+    if (!prescription) {
+        throw new Error(`Prescription with ID ${prescriptionId} not found`);
+    }
+
+    const { pdfBuffer, patientId, doctorId, doctorName, patientFolder } = await renderPrescriptionPdf(prescription, overrides);
 
     // 5. Upload to Azure Blob Storage
     const blobPath = `${patientFolder}/prescriptions/Prescription_${prescription.Id}.pdf`;
@@ -602,6 +614,8 @@ export class MobilePrescriptionController {
             if (!id) {
                 return res.status(400).json(ApiResponse.error("Prescription ID is required"));
             }
+            const locked = await editLockMessage("prescription", String(id));
+            if (locked) return res.status(403).json(ApiResponse.error(locked));
 
             const prescription = buildPrescriptionHeader(body);
             await patientPrescriptionService.updatePrescription(String(id), prescription);

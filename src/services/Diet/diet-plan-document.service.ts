@@ -192,6 +192,11 @@ export class DietPlanDocumentService {
         };
     }
 
+    /** The PDF of a plan that isn't saved yet (a draft from draftPlan), for the doctor's preview. */
+    async previewPdf(draft: Plan): Promise<Buffer> {
+        return dietPlanPdfService.generateDietPlanPdf(await this.pdfInput(draft, await this.hospitalIdFor(draft)));
+    }
+
     /** The plan's PDF, built fresh from what is saved now. Null when there is no such plan. */
     async buildPdf(planId: number): Promise<{ buffer: Buffer; fileName: string; plan: Plan } | null> {
         const plan = await patientDietPlanService.getPlanDetails(planId);

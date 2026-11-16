@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Relation, AfterLoad } from "typeorm/index.js";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Relation, AfterLoad, BeforeInsert } from "typeorm/index.js";
 import { compareMedications } from "../../utils/prescription-medications.js";
 import { User } from "../Account/user.model.js";
 import { PrescriptionDiagnosis } from "./prescription-diagnosis.model.js";
@@ -34,6 +34,16 @@ export class PatientPrescription {
 
     @Column({ type: "datetime", nullable: true, default: () => "GETDATE()" })
     CreatedAt?: Date;
+
+    /**
+     * New rows take the app's clock, as every time the app writes does (India time; the driver runs with
+     * useUTC: false). The column's GETDATE() default is UTC on Azure SQL, which made a new row read as
+     * 5.5 hours old and closed the one-hour edit window at once.
+     */
+    @BeforeInsert()
+    stampCreatedAt() {
+        if (!this.CreatedAt) this.CreatedAt = new Date();
+    }
 
     @Column({ type: "datetime", nullable: true })
     UpdatedAt?: Date;

@@ -7,6 +7,8 @@ import { DietFoodImagesService } from "../../services/Diet/diet-food-images.serv
 import { DietValidationError } from "../../services/Diet/diet-validation.js";
 import { dietPlanDocumentService } from "../../services/Diet/diet-plan-document.service.js";
 import { sendPdf } from "../../utils/send-pdf.js";
+import { editLockMessage } from "../../utils/edit-window.js";
+import { AppDataSource } from "../../config/database.js";
 
 function getOrganizationId(req: Request): number | undefined {
     const orgId = req.headers["x-org-id"] 
@@ -286,6 +288,25 @@ export class DietController {
         }
     }
 
+    /**
+     * POST /plans/preview: the PDF the plan in the body would get (same body as POST /plans), drawn
+     * without saving anything, so the doctor can check it and go back to edit.
+     */
+    async previewPlanPdf(req: Request, res: Response) {
+        try {
+            const organizationId = getOrganizationId(req);
+            if (!organizationId) return res.status(400).json({ error: "OrganizationId is required." });
+            const doctorId = getDoctorId(req);
+            if (!doctorId) return res.status(400).json({ error: "DoctorId is required." });
+            const draft = await patientDietPlanService.draftPlan({ ...req.body, organizationId, doctorId });
+            const buffer = await dietPlanDocumentService.previewPdf(draft as any);
+            res.setHeader("Cache-Control", "no-store");
+            sendPdf(res, buffer, "Diet Plan - preview.pdf", false);
+        } catch (error: any) {
+            sendError(res, error, "Couldn't create the preview.", "previewPlanPdf");
+        }
+    }
+
     /** The patient themself, or a doctor holding an active access consent. */
     private async canSeeFullHistory(req: Request, patientId: string): Promise<boolean> {
         const user = (req as any).user;
@@ -354,6 +375,9 @@ export class DietController {
             }
 
             const id = parseInt(String(req.params.id), 10);
+            // A doctor's change is allowed only within an hour of prescribing.
+            const locked = Number.isInteger(id) ? await editLockMessage("dietPlan", id) : null;
+            if (locked) return res.status(403).json({ error: locked });
             const updated = await patientDietPlanService.updatePlan(id, req.body, organizationId);
             // The PDF in the patient's documents follows the plan.
             const document = updated ? await dietPlanDocumentService.saveToDocumentsQuietly(id) : null;
@@ -369,6 +393,13 @@ export class DietController {
             const id = parseInt(String(req.params.id), 10);
             if (!id || isNaN(id)) {
                 return res.status(400).json({ error: "Invalid diet plan id." });
+            }
+
+            // Pausing or stopping is the patient's choice: doctors prescribe (a new plan replaces the active one).
+            const [owner] = await AppDataSource.query(`SELECT PatientId FROM PatientDietPlans WHERE Id = @0`, [id]);
+            const requester = (getAuthUserId(req) || "").toLowerCase();
+            if (!owner || String(owner.PatientId).toLowerCase() !== requester) {
+                return res.status(403).json({ error: "Doctors can't pause or stop a diet plan. Prescribe a new plan instead; it replaces the current one." });
             }
 
             const result = await patientDietPlanService.updatePlanStatus(id, req.body?.status, organizationId);
