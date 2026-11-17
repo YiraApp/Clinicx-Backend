@@ -30,29 +30,33 @@ const startServer = async () => {
         const { initFirebaseAdmin } = await import("./services/Notifications/firebase-admin.service.js");
         initFirebaseAdmin();
 
+        // SCHEDULED NOTIFICATIONS ARE OFF on this branch (production, 2026-11-17): the schedulers below that
+        // send push notifications (and the WhatsApp appointment reminder) are commented out. Uncomment to turn
+        // them back on. The slot generator, MedSense timeout checker and log retention still run.
+
         // Start automated background appointment reminder scheduler (checks every 60s for 10-minute reminders)
-        const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
-        appointmentReminderService.startScheduler(60);
+        // const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
+        // appointmentReminderService.startScheduler(60);
 
         // Repeating questionnaires: request the next attempt once it's due (hourly, daytime only)
-        const { questionnairePatientService } = await import("./services/Questionnaires/questionnaire-patient.service.js");
-        questionnairePatientService.startRepeatScheduler(60);
+        // const { questionnairePatientService } = await import("./services/Questionnaires/questionnaire-patient.service.js");
+        // questionnairePatientService.startRepeatScheduler(60);
 
         // Start automated background slot generator scheduler (syncs rolling slots for active hospitals)
         const { hospitalSettingsService } = await import("./services/Organizations/hospital-settings.service.js");
         hospitalSettingsService.startDailySlotScheduler(6);
 
         // Start automated push notification campaign scheduler (checks every 60s for scheduled & recurring notifications)
-        const { pushCampaignService } = await import("./services/Notifications/push-campaign.service.js");
-        pushCampaignService.startScheduler(60);
+        // const { pushCampaignService } = await import("./services/Notifications/push-campaign.service.js");
+        // pushCampaignService.startScheduler(60);
 
         // Start automated background document upload booking link scheduler (checks every 30s)
-        const { medicalDocumentService } = await import("./services/Appointments/medical-document.service.js");
-        medicalDocumentService.startBookingScheduler(30);
+        // const { medicalDocumentService } = await import("./services/Appointments/medical-document.service.js");
+        // medicalDocumentService.startBookingScheduler(30);
 
         // Start automated medication reminder pill alarm scheduler (checks every 60s in IST timezone)
-        const { medicationReminderService } = await import("./services/Appointments/medication-reminder.service.js");
-        medicationReminderService.startScheduler(60);
+        // const { medicationReminderService } = await import("./services/Appointments/medication-reminder.service.js");
+        // medicationReminderService.startScheduler(60);
 
         // Start MedSense timeout checker (reads a report with Gemini if MedSense hasn't answered in time)
         const { medSenseService } = await import("./services/Appointments/medsense.service.js");
