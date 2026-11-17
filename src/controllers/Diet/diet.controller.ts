@@ -416,7 +416,12 @@ export class DietController {
             const userId = getAuthUserId(req);
             const plan = await patientDietPlanService.getPlanDetails(id);
             const isPatient = !!plan && !!userId && String(plan.PatientId).toLowerCase() === userId.toLowerCase();
-            if (!plan || !(isPatient || (await dietPlanDocumentService.canStaffOpen(userId, plan)))) {
+            // A doctor the patient gave access to their full records sees every plan in the list
+            // (self-made ones and other organisations' too), so may open each plan's PDF as well.
+            const allowed = !!plan && (isPatient
+                || (await dietPlanDocumentService.canStaffOpen(userId, plan))
+                || (await this.canSeeFullHistory(req, String(plan.PatientId))));
+            if (!plan || !allowed) {
                 return res.status(404).json({ error: "Diet plan not found." });
             }
             const pdf = await dietPlanDocumentService.buildPdf(id);
