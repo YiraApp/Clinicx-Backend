@@ -47,6 +47,8 @@ export class HospitalSettingsService {
                 AppointmentBookingTemplate: false,
                 SendBookingAfterDocument: false,
                 BookingAfterDocumentMinutes: 20,
+                EnableEmployeeId: false,
+                SendInfoMailToYira: false,
                 AdditionalFlags: null,
                 Version: 0,
                 IsActive: true,
@@ -94,6 +96,14 @@ export class HospitalSettingsService {
                 ? data.BookingAfterDocumentMinutes
                 : (data as any).bookingAfterDocumentMinutes;
 
+            const enableEmpIdVal = data.EnableEmployeeId !== undefined
+                ? data.EnableEmployeeId
+                : (data as any).enableEmployeeId;
+
+            const sendYiraMailVal = data.SendInfoMailToYira !== undefined
+                ? data.SendInfoMailToYira
+                : (data as any).sendInfoMailToYira;
+
             const newSetting = this.settingsRepo.create({
                 HospitalId: hospitalId,
                 OrganizationId: hospital.OrganizationId,
@@ -114,6 +124,8 @@ export class HospitalSettingsService {
                 AppointmentBookingTemplate: apptBookingVal !== undefined ? Boolean(apptBookingVal) : false,
                 SendBookingAfterDocument: sendBookingDocVal !== undefined ? Boolean(sendBookingDocVal) : false,
                 BookingAfterDocumentMinutes: bookingDocMinsVal !== undefined ? Number(bookingDocMinsVal) : 20,
+                EnableEmployeeId: enableEmpIdVal !== undefined ? Boolean(enableEmpIdVal) : false,
+                SendInfoMailToYira: sendYiraMailVal !== undefined ? Boolean(sendYiraMailVal) : false,
                 AdditionalFlags: data.AdditionalFlags 
                     ? (typeof data.AdditionalFlags === "string" ? data.AdditionalFlags : JSON.stringify(data.AdditionalFlags)) 
                     : null,
@@ -174,6 +186,8 @@ export class HospitalSettingsService {
             AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
             SendBookingAfterDocument: setting.SendBookingAfterDocument,
             BookingAfterDocumentMinutes: setting.BookingAfterDocumentMinutes,
+            EnableEmployeeId: setting.EnableEmployeeId,
+            SendInfoMailToYira: setting.SendInfoMailToYira,
             AdditionalFlags: setting.AdditionalFlags
         };
 
@@ -256,6 +270,20 @@ export class HospitalSettingsService {
             changedFields.push("BookingAfterDocumentMinutes");
             setting.BookingAfterDocumentMinutes = Number(bookingDocMinsVal);
         }
+        const enableEmpIdVal = data.EnableEmployeeId !== undefined 
+            ? data.EnableEmployeeId 
+            : (data as any).enableEmployeeId;
+        if (enableEmpIdVal !== undefined && Boolean(enableEmpIdVal) !== setting.EnableEmployeeId) {
+            changedFields.push("EnableEmployeeId");
+            setting.EnableEmployeeId = Boolean(enableEmpIdVal);
+        }
+        const sendYiraMailVal = data.SendInfoMailToYira !== undefined 
+            ? data.SendInfoMailToYira 
+            : (data as any).sendInfoMailToYira;
+        if (sendYiraMailVal !== undefined && Boolean(sendYiraMailVal) !== setting.SendInfoMailToYira) {
+            changedFields.push("SendInfoMailToYira");
+            setting.SendInfoMailToYira = Boolean(sendYiraMailVal);
+        }
         if (data.AdditionalFlags !== undefined && data.AdditionalFlags !== setting.AdditionalFlags) {
             changedFields.push("AdditionalFlags");
             setting.AdditionalFlags = typeof data.AdditionalFlags === "string" 
@@ -290,6 +318,8 @@ export class HospitalSettingsService {
             AppointmentBookingTemplate: setting.AppointmentBookingTemplate,
             SendBookingAfterDocument: setting.SendBookingAfterDocument,
             BookingAfterDocumentMinutes: setting.BookingAfterDocumentMinutes,
+            EnableEmployeeId: setting.EnableEmployeeId,
+            SendInfoMailToYira: setting.SendInfoMailToYira,
             AdditionalFlags: setting.AdditionalFlags
         };
 

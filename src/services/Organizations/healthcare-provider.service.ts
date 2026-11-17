@@ -59,7 +59,8 @@ export class HealthcareProviderService {
                 Gender: data.gender,
                 DateOfBirth: data.dateOfBirth && data.dateOfBirth !== "" ? data.dateOfBirth : null,
                 workspaces,
-                revokeTokens: false
+                revokeTokens: false,
+                skipProviderSync: true
             });
 
             // 4. Extract Final User ID directly from update result
@@ -364,7 +365,7 @@ export class HealthcareProviderService {
                 userUpdateData.Country = data.country;
             }
 
-            await userService.updateUser({ ...userUpdateData, revokeTokens: false });
+            await userService.updateUser({ ...userUpdateData, revokeTokens: false, skipProviderSync: true });
 
             // 2. Update Provider Profile (Professional Details)
             const providerUpdateData: Partial<HealthcareProvider> = {

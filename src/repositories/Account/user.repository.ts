@@ -23,7 +23,7 @@ export class UserRepository implements IUserRepository {
             }
             if (filters.search) {
                 baseQuery.andWhere(
-                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search OR u.EmployeeId LIKE :search OR u.TokenNumber LIKE :search)',
                     { search: `%${filters.search}%` }
                 );
             }
@@ -62,7 +62,7 @@ export class UserRepository implements IUserRepository {
             if (filters.hospitalId) roleCountsRaw.andWhere('ur.HospitalId = :hospitalId', { hospitalId: filters.hospitalId });
             if (filters.search) {
                 roleCountsRaw.andWhere(
-                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search OR u.EmployeeId LIKE :search OR u.TokenNumber LIKE :search)',
                     { search: `%${filters.search}%` }
                 );
             }
@@ -120,7 +120,7 @@ export class UserRepository implements IUserRepository {
                 query.andWhere('u.Id = :uuidSearch', { uuidSearch: filters.search.trim() });
             } else {
                 query.andWhere(
-                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                    '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search OR u.EmployeeId LIKE :search OR u.TokenNumber LIKE :search)',
                     { search: `%${filters.search}%` }
                 );
             }
@@ -235,6 +235,8 @@ export class UserRepository implements IUserRepository {
                 isParentOrgUser: u.IsPrimary,
                 lastLogin: u.LastLoginTime,
                 createdAt: joinedDate,
+                employeeId: u.EmployeeId || null,
+                tokenNumber: u.TokenNumber || null,
                 appointments: u.Appointments || [],
                 roles: Array.from(rolesMap.values()).map(r => ({
                     RoleId: r.RoleId,
@@ -394,7 +396,7 @@ export class UserRepository implements IUserRepository {
         // Apply Filters
         if (filters?.search) {
             query.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search OR u.EmployeeId LIKE :search OR u.TokenNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -453,7 +455,7 @@ export class UserRepository implements IUserRepository {
 
         if (filters?.search) {
             summaryCountQuery.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search OR u.EmployeeId LIKE :search OR u.TokenNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -473,7 +475,7 @@ export class UserRepository implements IUserRepository {
 
         if (filters?.search) {
             roleSummaryQuery.andWhere(
-                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search)',
+                '(u.FirstName LIKE :search OR u.LastName LIKE :search OR (COALESCE(u.FirstName, \'\') + \' \' + COALESCE(u.LastName, \'\')) LIKE :search OR u.Email LIKE :search OR u.PhoneNumber LIKE :search OR u.EmployeeId LIKE :search OR u.TokenNumber LIKE :search)',
                 { search: `%${filters.search}%` }
             );
         }
@@ -558,6 +560,8 @@ export class UserRepository implements IUserRepository {
                 height: u.Height,
                 weight: u.Weight,
                 imagePath: u.ImagePath,
+                employeeId: u.EmployeeId || null,
+                tokenNumber: u.TokenNumber || null,
                 lastLogin: u.LastLoginTime,
                 createdAt: u.CreatedAt,
                 appointments: u.Appointments || [],

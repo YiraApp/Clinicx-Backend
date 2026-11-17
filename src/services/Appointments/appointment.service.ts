@@ -442,8 +442,19 @@ export class AppointmentService {
             (appointment as any).appointmentNumber = appointment.AppointmentNumber;
         }
 
-        // Email Notification: Send booking alert ONLY for appointments booked via the public page (/book-appointment)
-        if (data.createdBy === "DefaultOrgPublicBooking") {
+        // Email Notification: Send booking alert if booked via public page OR if SendInfoMailToYira is enabled for this hospital
+        let hospitalSendMail = false;
+        try {
+            if (data.hospitalId) {
+                const { hospitalSettingsService } = await import("../Organizations/hospital-settings.service.js");
+                const settings = await hospitalSettingsService.getSettings(data.hospitalId);
+                hospitalSendMail = Boolean(settings?.SendInfoMailToYira);
+            }
+        } catch (settingsErr) {
+            // Ignore settings fetch error
+        }
+
+        if (data.createdBy === "DefaultOrgPublicBooking" || hospitalSendMail) {
             try {
                 await this.sendPublicBookingNotificationEmail({
                     appointment,
@@ -452,7 +463,7 @@ export class AppointmentService {
                     assignedToken
                 });
             } catch (notifyErr: any) {
-                console.error("[Public Booking Notification] Failed to send email notification:", notifyErr?.message || notifyErr);
+                console.error("[Booking Notification to Yira] Failed to send email notification:", notifyErr?.message || notifyErr);
             }
         }
 
@@ -514,6 +525,10 @@ export class AppointmentService {
 
         const orgId = data.orgId;
         const hospitalId = data.hospitalId;
+
+        // Only Active treatment plans can be attached to a new booking
+        const { treatmentPlanService } = await import("../Payments/treatment-plan.service.js");
+        await treatmentPlanService.assertBookable(data.treatmentPlanIds);
 
         const newAppointment = await AppDataSource.transaction(async (manager) => {
             // 1. Check if slot exists and is available
@@ -1096,6 +1111,8 @@ export class AppointmentService {
             }
         });
 
+        await this.closeCancelledAppointmentCharges(appointmentId);
+
         // Trigger WhatsApp cancellation notification (clinix_appointment_cancel)
         try {
             await this.sendAppointmentCancellationWhatsApp(appointmentId);
@@ -1104,6 +1121,21 @@ export class AppointmentService {
         }
 
         return result;
+    }
+
+    /**
+     * A cancelled visit's charges come off its bill (left as is once money was taken), so Billing does
+     * not keep showing them as due. Never blocks the cancellation itself.
+     */
+    async closeCancelledAppointmentCharges(appointmentId: number): Promise<void> {
+        try {
+            const outcome = await appointmentBillRepository.cancelAppointmentCharges(appointmentId);
+            if (outcome === "kept-paid") {
+                console.warn(`[AppointmentService] Appointment #${appointmentId} was cancelled but its bill has payments; bill left for staff to settle.`);
+            }
+        } catch (err: any) {
+            console.error(`[AppointmentService] Could not take cancelled appointment #${appointmentId} off its bill:`, err?.message || err);
+        }
     }
 
     async sendAppointmentCancellationWhatsApp(appointmentId: number): Promise<any> {
@@ -1300,6 +1332,7 @@ export class AppointmentService {
         });
 
         if (status && status.toLowerCase() === AppointmentStatus.Cancelled.toLowerCase()) {
+            await this.closeCancelledAppointmentCharges(appointmentId);
             try {
                 await this.sendAppointmentCancellationWhatsApp(appointmentId);
             } catch (err: any) {

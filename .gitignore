@@ -33,3 +33,6 @@ serviceAccountKey.json
 firebase-service-account.json
 *.pem
 certs/
+
+# India Post pincode directory download (loaded with npm run import-pincodes)
+data/*.csv

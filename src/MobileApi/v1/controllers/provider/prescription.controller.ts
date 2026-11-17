@@ -13,6 +13,7 @@ import { HealthcareProvider } from "../../../../models/Organizations/healthcare-
 import { MedicalDocument } from "../../../../models/Appointments/medical-document.model.js";
 import { medicalDocumentRepository } from "../../../../repositories/Appointments/medical-document.repository.js";
 import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
+import { normalizeLabTests } from "../../../../utils/prescription-lab-tests.utils.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -77,6 +78,7 @@ const buildPrescriptionHeader = (source: any) => {
         UpdatedAt: source.updatedAt ? new Date(source.updatedAt) : undefined,
         Diagnoses: diagnoses,
         Medications: medications,
+        ...(normalizeLabTests(source) ? { LabTests: normalizeLabTests(source) } : {}),
         Notes: source.notes || source.Notes || source.prescriptionNotes || null,
         PdfUrl: source.pdfUrl || source.PdfUrl || null
     };
@@ -94,6 +96,7 @@ export interface ClinicPrescription {
     Notes?: string | null;
     Medications?: any[];
     Diagnoses?: any[];
+    LabTests?: any[];
 }
 
 /**
@@ -116,8 +119,12 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
         if (docUser && !doctorName) {
             doctorName = `${docUser.FirstName || ""} ${docUser.LastName || ""}`.trim();
         }
+        // A doctor can work at several hospitals, each with its own record (registration, department):
+        // use the one for this prescription's hospital.
         const hpRepo = AppDataSource.getRepository(HealthcareProvider);
-        const hp = await hpRepo.findOne({ where: { UserId: doctorId } });
+        const rxHospitalId = Number(prescription.HospitalId) || 0;
+        const hp = (rxHospitalId ? await hpRepo.findOne({ where: { UserId: doctorId, HospitalId: rxHospitalId, IsDeleted: false } as any }) : null)
+            ?? await hpRepo.findOne({ where: { UserId: doctorId } });
         if (hp) {
             if (hp.Qualification && !doctorQual) doctorQual = hp.Qualification.trim();
             if ((hp.Specialty || hp.Department) && !doctorSpec) doctorSpec = (hp.Specialty || hp.Department).trim();
@@ -211,9 +218,9 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
     }
 
     // 4. Medications & Diagnoses
-    const medications = (prescription.Medications || []).map((m: any, idx: number) => {
+    const medications = (prescription.Medications || []).map((m: any) => {
         const overrideMed = Array.isArray(overrides?.medications)
-            ? (overrides.medications[idx] || overrides.medications.find((om: any) => (om.medication || om.name || om.Medication) === (m.Medication || m.medication)))
+            ? overrides.medications.find((om: any) => (om.medication || om.name || om.Medication) === (m.Medication || m.medication))
             : null;
 
         let dur = "";
@@ -281,6 +288,11 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
             appointmentId: prescription.AppointmentId && String(prescription.AppointmentId).trim() !== "0" ? String(prescription.AppointmentId).trim() : undefined,
             diagnoses,
             medications,
+            labTests: (prescription.LabTests || []).map((test: any) => ({
+                name: test.TestName,
+                priority: test.Priority,
+                instructions: test.Instructions
+            })),
             notes: prescription.Notes || overrides?.notes || overrides?.Notes || undefined
         }
     });
@@ -295,7 +307,7 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
     const prescriptionRepo = AppDataSource.getRepository(PatientPrescription);
     const prescription = await prescriptionRepo.findOne({
         where: { Id: String(prescriptionId) },
-        relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
+        relations: ["Diagnoses", "LabTests", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"]
     });
 
     if (!prescription) {
@@ -572,6 +584,18 @@ export class MobilePrescriptionController {
             const { id } = req.params;
             if (!id) {
                 return res.status(400).json(ApiResponse.error("Prescription ID is required"));
+            }
+
+            // Only the record's author, or the patient for records they added themselves.
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { PatientPrescription } = await import("../../../../models/Appointments/patient-prescription.model.js");
+            const { canDeleteRecord, requesterIdOf } = await import("../../../../middlewares/record-ownership.js");
+            const existing = await AppDataSource.getRepository(PatientPrescription).findOne({ where: { Id: String(id) } as any });
+            if (!existing) {
+                return res.status(404).json(ApiResponse.error("Prescription not found"));
+            }
+            if (!(await canDeleteRecord(requesterIdOf(req), existing as any))) {
+                return res.status(403).json(ApiResponse.error("You can only delete prescriptions you added."));
             }
 
             await patientPrescriptionService.deletePrescription(String(id));

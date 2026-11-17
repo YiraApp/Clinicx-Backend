@@ -8,6 +8,7 @@ import app from "./app.js";
 import { initializeDatabase } from "./config/database.js";
 import { MigrationService } from "./services/Common/migration.service.js";
 import { DietMigrationService } from "./services/Diet/diet-migration.service.js";
+import { QuestionnaireMigrationService } from "./services/Questionnaires/questionnaire-migration.service.js";
 
 const port = process.env.PORT || 8080;
 
@@ -18,6 +19,7 @@ const startServer = async () => {
         await MigrationService.ensureAbdmSchema();
         await MigrationService.ensureAbdmHiuSchema();
         await DietMigrationService.runMigrationsAndSeed();
+        await QuestionnaireMigrationService.run();
 
         // ABDM calls answered on a callback are recorded before they are sent
         const { abdmGatewayService } = await import("./services/Abdm/abdm-gateway.service.js");
@@ -59,6 +61,10 @@ const startServer = async () => {
         const { appointmentReminderService } = await import("./services/Appointments/appointment-reminder.service.js");
         appointmentReminderService.startScheduler(60);
 
+        // Repeating questionnaires: request the next attempt once it's due (hourly, daytime only)
+        const { questionnairePatientService } = await import("./services/Questionnaires/questionnaire-patient.service.js");
+        questionnairePatientService.startRepeatScheduler(60);
+
         // Start automated background slot generator scheduler (syncs rolling slots for active hospitals)
         const { hospitalSettingsService } = await import("./services/Organizations/hospital-settings.service.js");
         hospitalSettingsService.startDailySlotScheduler(6);
@@ -82,6 +88,9 @@ const startServer = async () => {
         // Start the ABDM HIU housekeeping sweep (every 60s: purge records past dataEraseAt, fail timed-out transfers, delete private keys)
         const { startHiuMaintenance } = await import("./controllers/Abdm/hiu.controller.js");
         await startHiuMaintenance();
+        // Start API log retention scheduler (deletes logs older than 3 months, runs at midnight IST)
+        const { apiLogRetentionService } = await import("./services/Logs/apilog-retention.service.js");
+        apiLogRetentionService.startScheduler();
 
         app.listen(Number(port), "0.0.0.0", () => {
             console.log(`Server is running on port ${port} (0.0.0.0)`);

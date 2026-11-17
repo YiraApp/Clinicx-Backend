@@ -41,6 +41,8 @@ export class PatientRegistration {
     /** Registered at this hospital through ABHA: a verified ABHA at the desk, or Scan and Share. */
     @Column({ type: "bit", default: false })
     RegisteredViaAbha: boolean;
+    @Column({ type: "nvarchar", length: 100, nullable: true })
+    EmployeeId?: string;
 
     @Column({ type: "bit", default: true })
     Status: boolean;

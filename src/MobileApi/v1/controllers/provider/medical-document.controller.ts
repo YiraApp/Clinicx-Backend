@@ -17,7 +17,14 @@ export class MobileMedicalDocumentController {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
-            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit);
+            let result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit);
+
+            // In a hospital's view, staff see what was added there, not the
+            // patient's own uploads that are not tied to a visit.
+            const requesterId = String((req as any).user?.userId || (req as any).user?.id || "");
+            if (hospitalId && !appointmentId && requesterId.toLowerCase() !== String(patientId).toLowerCase()) {
+                result = result.filter((d: any) => !(d.IsPatientUploaded && !d.AppointmentId));
+            }
             return res.json(ApiResponse.success(result, "Patient documents fetched successfully."));
         } catch (error: any) {
             console.error("Mobile Medical Document Get Error:", error);
@@ -162,13 +169,24 @@ export class MobileMedicalDocumentController {
     async deleteDocument(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);
-            const { userId } = req.query;
-
             if (isNaN(id)) {
                 return res.status(400).json(ApiResponse.error("Invalid document ID"));
             }
 
-            await medicalDocumentService.deleteDocument(id, userId as string);
+            // Only the record's author, or the patient for records they added themselves.
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { MedicalDocument } = await import("../../../../models/Appointments/medical-document.model.js");
+            const { canDeleteRecord, requesterIdOf } = await import("../../../../middlewares/record-ownership.js");
+            const existing = await AppDataSource.getRepository(MedicalDocument).findOne({ where: { Id: id } as any });
+            if (!existing) {
+                return res.status(404).json(ApiResponse.error("Document not found"));
+            }
+            if (!(await canDeleteRecord(requesterIdOf(req), existing as any))) {
+                return res.status(403).json(ApiResponse.error("You can only delete documents you added."));
+            }
+
+            // Record who deleted it from the login, not from a query parameter.
+            await medicalDocumentService.deleteDocument(id, requesterIdOf(req));
             return res.json(ApiResponse.success(null, "Document deleted successfully."));
         } catch (error: any) {
             console.error("Mobile Medical Document Delete Error:", error);

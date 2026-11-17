@@ -109,7 +109,7 @@ class MedicalReportAiService {
     }
 
     private get model(): string {
-        return (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+        return (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
     }
 
     private get thinkingBudget(): number {

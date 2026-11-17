@@ -148,6 +148,18 @@ export class MobileMedicalRecordController {
                 return res.status(400).json(ApiResponse.error("Record ID is required"));
             }
 
+            // Only the record's author, or the patient for records they added themselves.
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { PatientMedicalRecord } = await import("../../../../models/Appointments/patient-medical-record.model.js");
+            const { canDeleteRecord, requesterIdOf } = await import("../../../../middlewares/record-ownership.js");
+            const existing = await AppDataSource.getRepository(PatientMedicalRecord).findOne({ where: { Id: String(id) } as any });
+            if (!existing) {
+                return res.status(404).json(ApiResponse.error("Medical record not found"));
+            }
+            if (!(await canDeleteRecord(requesterIdOf(req), existing as any))) {
+                return res.status(403).json(ApiResponse.error("You can only delete medical records you added."));
+            }
+
             await patientMedicalRecordService.deleteRecord(String(id));
             return res.json(ApiResponse.success(null, "Medical record deleted successfully"));
         } catch (error: any) {

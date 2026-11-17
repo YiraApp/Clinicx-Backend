@@ -2,10 +2,27 @@ import { AppDataSource } from "../../config/database.js";
 import { TreatmentPlan } from "../../models/Payments/treatment-plan.model.js";
 import { v4 as uuidv4 } from "uuid";
 
+/** A plan can be attached to a booking only while it is Active (an empty status counts as Active). */
+export const isActivePlan = (plan: Pick<TreatmentPlan, "Status">) => !plan.Status || plan.Status.trim().toLowerCase() === "active";
+
 export class TreatmentPlanRepository {
     private repo = AppDataSource.getRepository(TreatmentPlan);
 
-    async findByOrgAndHospital(orgId: number, hospitalId?: number, search: string = ""): Promise<TreatmentPlan[]> {
+    /** Plans by id, deleted ones left out. */
+    async findByIds(planIds: string[]): Promise<TreatmentPlan[]> {
+        if (planIds.length === 0) return [];
+        return await this.repo.createQueryBuilder("t")
+            .where("t.TreatmentPlanId IN (:...planIds)", { planIds })
+            .andWhere("t.IsDeleted = :isDeleted", { isDeleted: false })
+            .getMany();
+    }
+
+    /**
+     * The organisation's (and hospital's) plans. activeOnly leaves out Inactive ones, for booking;
+     * the Treatment Plans page lists them all. The defaults are seeded only when the organisation
+     * has no plans at all, never because its plans are all inactive.
+     */
+    async findByOrgAndHospital(orgId: number, hospitalId?: number, search: string = "", activeOnly: boolean = false): Promise<TreatmentPlan[]> {
         const qb = this.repo.createQueryBuilder("t")
             .where("(t.OrgId = :orgId OR t.OrgId IS NULL)", { orgId })
             .andWhere("t.IsDeleted = :isDeleted", { isDeleted: false });
@@ -56,7 +73,7 @@ export class TreatmentPlanRepository {
             plans = await qb.getMany();
         }
 
-        return plans;
+        return activeOnly ? plans.filter(isActivePlan) : plans;
     }
 
     async findById(planId: string): Promise<TreatmentPlan | null> {

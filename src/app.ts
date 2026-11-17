@@ -14,6 +14,9 @@ import path from 'path';
 const app: Application = express();
 
 
+// Entities with a joined User row must never send its password hash to a client.
+app.set('json replacer', (key: string, value: unknown) => (key === 'PasswordHash' ? undefined : value));
+
 app.use(cors());
 
 // ABDM M3 data push from HIPs (encrypted records). It has its own JSON parser with the
@@ -21,7 +24,12 @@ app.use(cors());
 // and before the login middleware: it is authenticated by the HIP's signed token and the push token.
 app.use('/api/v3/hiu/data-push', hiuDataPushRouter);
 
-app.use(express.json());
+app.use(express.json({
+    // Razorpay signs the exact bytes of its webhook, so keep them for the signature check
+    verify: (req, _res, buf) => {
+        if (req.url?.startsWith('/api/payments/webhook')) (req as any).rawBody = buf;
+    }
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use('/public', express.static(path.resolve(process.cwd(), 'public')));
 

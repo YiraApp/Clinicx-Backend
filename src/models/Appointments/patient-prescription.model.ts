@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMan
 import { User } from "../Account/user.model.js";
 import { PrescriptionDiagnosis } from "./prescription-diagnosis.model.js";
 import { PrescriptionMedication } from "./prescription-medication.model.js";
+import { PrescriptionLabTest } from "./prescription-lab-test.model.js";
 
 @Entity({ name: "PatientPrescription" })
 export class PatientPrescription {
@@ -59,4 +60,7 @@ export class PatientPrescription {
 
     @OneToMany(() => PrescriptionMedication, (medication) => medication.Prescription, { cascade: true })
     Medications?: Relation<PrescriptionMedication[]>;
+
+    @OneToMany(() => PrescriptionLabTest, (test) => test.Prescription, { cascade: true })
+    LabTests?: PrescriptionLabTest[];
 }

@@ -8,7 +8,11 @@
  */
 
 const MASK = "********";
-const ALWAYS_MASKED = ["password", "Password"];
+// Credentials, one-time codes and session tokens, on every route.
+const ALWAYS_MASKED = [
+    "password", "Password", "newPassword", "confirmPassword", "oldPassword", "currentPassword",
+    "otp", "OTP", "refreshToken", "accessToken", "token", "fcmToken",
+];
 // "identifier" carries the Aadhaar number (or ABHA number/address) on the verify routes.
 // The rest are M3 (HIU) record-request fields: care-context references, record content, key
 // material, the patient name and the per-transfer push address (it carries the push token).

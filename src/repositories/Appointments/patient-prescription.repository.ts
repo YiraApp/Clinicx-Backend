@@ -2,6 +2,7 @@ import { AppDataSource } from "../../config/database.js";
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { PrescriptionDiagnosis } from "../../models/Appointments/prescription-diagnosis.model.js";
 import { PrescriptionMedication } from "../../models/Appointments/prescription-medication.model.js";
+import { PrescriptionLabTest } from "../../models/Appointments/prescription-lab-test.model.js";
 
 export class PatientPrescriptionRepository {
     private repo = AppDataSource.getRepository(PatientPrescription);
@@ -19,7 +20,7 @@ export class PatientPrescriptionRepository {
 
         return await this.repo.find({
             where,
-            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"],
+            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor", "LabTests"],
             order: { CreatedAt: "DESC" }
         });
     }
@@ -38,7 +39,7 @@ export class PatientPrescriptionRepository {
 
         return await this.repo.find({
             where,
-            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor"],
+            relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days", "Doctor", "LabTests"],
             order: { CreatedAt: "DESC" }
         });
     }
@@ -234,12 +235,21 @@ export class PatientPrescriptionRepository {
             }
         }
 
+        // Replaced only when sent: older app versions do not send lab tests.
+        if (Array.isArray(data.LabTests)) {
+            const labRepo = AppDataSource.getRepository(PrescriptionLabTest);
+            await labRepo.delete({ PrescriptionId: id } as any);
+            if (data.LabTests.length > 0) {
+                await labRepo.save(data.LabTests.map((test) => labRepo.create({ ...test, PrescriptionId: id })));
+            }
+        }
+
         // clear collections to prevent cascade re-saving (already handled manually above)
         existing.Diagnoses = undefined as any;
         existing.Medications = undefined as any;
 
         // merge and save header fields only
-        const { Diagnoses, Medications, ...headerData } = data;
+        const { Diagnoses, Medications, LabTests, ...headerData } = data;
         const merged = this.repo.merge(existing, {
             ...headerData,
             UpdatedAt: new Date()
@@ -251,6 +261,7 @@ export class PatientPrescriptionRepository {
     async delete(id: string): Promise<void> {
         try {
             await AppDataSource.getRepository(PrescriptionDiagnosis).delete({ PrescriptionId: id } as any);
+            await AppDataSource.getRepository(PrescriptionLabTest).delete({ PrescriptionId: id } as any);
             await AppDataSource.getRepository(PrescriptionMedication).delete({ PrescriptionId: id } as any);
         } catch (e) {
             console.error("[patientPrescriptionRepository.delete] Error cleaning child records:", e);

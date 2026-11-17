@@ -36,6 +36,7 @@ export interface CreateUserRequest {
     Weight?: number | undefined;
     TokenNumber?: string | undefined;
     Token?: string | undefined;
+    EmployeeId?: string | undefined;
 
     PermanentAddress?: AddressDTO | undefined;
     TemporaryAddress?: AddressDTO | undefined;

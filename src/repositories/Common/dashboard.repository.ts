@@ -358,25 +358,39 @@ export class DashboardRepository {
     }
     async getFrontdeskDashboardStats(hospId: number) {
         // 1. Fetch Today's and Yesterday's Stats for Trends
+        // Today and yesterday by the India calendar. Each figure has its own subquery so a payment
+        // or queue row can't count an appointment twice (the old single join did).
+        // - Scheduled: every appointment that day except cancelled/rejected ones.
+        // - Checked in: the patient arrived (Arrived, InProgress, Completed) or was put in the queue.
+        // - Waiting: in the queue right now for a visit today.
+        // - Payments: successful payments made that day, for appointments at this hospital.
         const statsQuery = `
-            SELECT 
-                -- Today's Metrics (IST)
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayCheckIns,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) THEN 1 END) as todayScheduled,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as todayWaiting,
-                ISNULL(SUM(CASE WHEN CAST(p.TransactionDate AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE) AND p.Status = 'Success' THEN p.Amount ELSE 0 END), 0) as todayPayments,
-                
-                -- Yesterday's Metrics (IST)
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND a.Status = 'Arrived' THEN 1 END) as yesterdayCheckIns,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) THEN 1 END) as yesterdayScheduled,
-                COUNT(CASE WHEN CAST(a.AppointmentDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND q.Status = 'Waiting' THEN 1 END) as yesterdayWaiting,
-                ISNULL(SUM(CASE WHEN CAST(p.TransactionDate AS DATE) = CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE) AND p.Status = 'Success' THEN p.Amount ELSE 0 END), 0) as yesterdayPayments
-            FROM Appointments a WITH (NOLOCK)
-            LEFT JOIN Payments p WITH (NOLOCK) ON a.Id = p.AppointmentId AND p.IsDeleted = 0
-            LEFT JOIN PatientQueue q WITH (NOLOCK) ON a.Id = q.AppointmentId
-            WHERE a.HospitalId = ${hospId} 
-            AND a.AppointmentDate >= CAST(DATEADD(day, -1, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)
-            AND a.AppointmentDate <= CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE);
+            DECLARE @today DATE = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE);
+            DECLARE @yesterday DATE = DATEADD(DAY, -1, @today);
+            SELECT
+                (SELECT COUNT(*) FROM Appointments a WITH (NOLOCK)
+                  WHERE a.HospitalId = @0 AND CAST(a.AppointmentDate AS DATE) = @today
+                    AND a.Status NOT IN ('Cancelled', 'Canceled', 'Rejected')) AS todayScheduled,
+                (SELECT COUNT(*) FROM Appointments a WITH (NOLOCK)
+                  WHERE a.HospitalId = @0 AND CAST(a.AppointmentDate AS DATE) = @yesterday
+                    AND a.Status NOT IN ('Cancelled', 'Canceled', 'Rejected')) AS yesterdayScheduled,
+                (SELECT COUNT(*) FROM Appointments a WITH (NOLOCK)
+                  WHERE a.HospitalId = @0 AND CAST(a.AppointmentDate AS DATE) = @today
+                    AND (a.Status IN ('Arrived', 'InProgress', 'Completed')
+                         OR EXISTS (SELECT 1 FROM PatientQueue q WITH (NOLOCK) WHERE q.AppointmentId = a.Id))) AS todayCheckIns,
+                (SELECT COUNT(*) FROM Appointments a WITH (NOLOCK)
+                  WHERE a.HospitalId = @0 AND CAST(a.AppointmentDate AS DATE) = @yesterday
+                    AND (a.Status IN ('Arrived', 'InProgress', 'Completed')
+                         OR EXISTS (SELECT 1 FROM PatientQueue q WITH (NOLOCK) WHERE q.AppointmentId = a.Id))) AS yesterdayCheckIns,
+                (SELECT COUNT(DISTINCT q.AppointmentId) FROM PatientQueue q WITH (NOLOCK)
+                  JOIN Appointments a WITH (NOLOCK) ON a.Id = q.AppointmentId
+                  WHERE a.HospitalId = @0 AND CAST(a.AppointmentDate AS DATE) = @today AND q.Status = 'Waiting') AS todayWaiting,
+                (SELECT ISNULL(SUM(p.Amount), 0) FROM Payments p WITH (NOLOCK)
+                  JOIN Appointments a WITH (NOLOCK) ON a.Id = p.AppointmentId
+                  WHERE a.HospitalId = @0 AND p.IsDeleted = 0 AND p.Status = 'Success' AND CAST(p.TransactionDate AS DATE) = @today) AS todayPayments,
+                (SELECT ISNULL(SUM(p.Amount), 0) FROM Payments p WITH (NOLOCK)
+                  JOIN Appointments a WITH (NOLOCK) ON a.Id = p.AppointmentId
+                  WHERE a.HospitalId = @0 AND p.IsDeleted = 0 AND p.Status = 'Success' AND CAST(p.TransactionDate AS DATE) = @yesterday) AS yesterdayPayments;
         `;
 
         // 2. Fetch Recent Activity for the Hospital
@@ -416,9 +430,9 @@ export class DashboardRepository {
             WITH RankedAppointments AS (
                 SELECT 
                     a.UserId as id,
-                    u.FirstName + ' ' + u.LastName as name,
+                    NULLIF(LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))), '') as name,
                     u.Gender as gender,
-                    DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
+                    DATEDIFF(YEAR, u.DateOfBirth, DATEADD(MINUTE, 330, GETUTCDATE())) as age,
                     a.AppointmentDate as lastVisit,
                     a.Reason as condition,
                     a.Status as status,
@@ -461,7 +475,7 @@ export class DashboardRepository {
         `;
 
         const [statsResults, recentActivity, recentPatients, weeklyStats, monthlyStats] = await Promise.all([
-            AppDataSource.query(statsQuery),
+            AppDataSource.query(statsQuery, [Number(hospId)]),
             AppDataSource.query(recentActivityQuery),
             AppDataSource.query(recentPatientsQuery),
             AppDataSource.query(weeklyStatsQuery),
@@ -574,9 +588,9 @@ export class DashboardRepository {
             WITH RankedAppointments AS (
                 SELECT 
                     a.UserId as id,
-                    u.FirstName + ' ' + u.LastName as name,
+                    NULLIF(LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))), '') as name,
                     u.Gender as gender,
-                    DATEDIFF(YEAR, u.DateOfBirth, GETDATE()) as age,
+                    DATEDIFF(YEAR, u.DateOfBirth, DATEADD(MINUTE, 330, GETUTCDATE())) as age,
                     a.AppointmentDate as lastVisit,
                     a.Reason as condition,
                     a.Status as status,

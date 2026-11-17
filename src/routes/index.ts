@@ -43,6 +43,9 @@ import { feedbackRouter } from "./Feedback/feedback.routes.js";
 import { dietRouter } from "./Diet/diet.routes.js";
 import { abdmRouter } from "./Abdm/abdm.routes.js";
 import { m2CallbackRouter } from "./Abdm/abdm-callback.routes.js";
+import { hospitalLabTestRouter } from "./Organizations/hospital-lab-test.routes.js";
+import { labPackageRouter } from "./LabPackages/lab-package.routes.js";
+import { questionnaireRouter } from "./Organizations/questionnaire.routes.js";
 
 const router = Router();
 
@@ -57,6 +60,9 @@ router.use("/organizations", organizationRouter);
 router.use("/default-organizations", defaultOrganizationRouter);
 router.use("/hospitals", hospitalRouter);
 router.use("/hospitals", hospitalSettingsRouter);
+router.use("/hospitals", hospitalLabTestRouter);
+router.use("/hospitals", questionnaireRouter);
+router.use("/lab-packages", labPackageRouter);
 router.use("/dashboard", dashboardRouter);
 // CEO dashboard: Yira System Admin only (checked in the router)
 router.use("/ceo-dashboard", ceoDashboardRouter);

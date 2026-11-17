@@ -128,4 +128,16 @@ export class APILogRepository {
             .getRawOne();
         return result?.avg || 0;
     }
+
+    /**
+     * Deletes one batch of logs older than the given number of months.
+     * The query must start with "DELETE" for TypeORM to return the affected row count.
+     */
+    async deleteLogsOlderThan(months: number, batchSize: number): Promise<number> {
+        const [, deletedCount] = await AppDataSource.query(
+            "DELETE TOP (@0) FROM APILogs WHERE RequestedOn < DATEADD(MONTH, @1, GETUTCDATE())",
+            [batchSize, -months]
+        );
+        return deletedCount;
+    }
 }

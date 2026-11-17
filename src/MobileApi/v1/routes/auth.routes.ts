@@ -10,17 +10,22 @@ import { mobileMedicalRecordController } from "../controllers/provider/medical-r
 import { mobilePrescriptionController } from "../controllers/provider/prescription.controller.js";
 import { mobileMedicalDocumentController } from "../controllers/provider/medical-document.controller.js";
 import { patientAccessConsentController } from "../controllers/consent/patient-access-consent.controller.js";
+import { profileShareController } from "../controllers/consent/profile-share.controller.js";
 import { notificationController } from "../controllers/notification.controller.js";
 import { hospitalController } from "../../../controllers/Organizations/hospital.controller.js";
 import { mobileDoctorSuggestionController } from "../controllers/provider/doctor-suggestion.controller.js";
 import { getActiveOffers, getActivePopupAd } from "../controllers/offer-banner.controller.js";
 import { patientVitalsController } from "../controllers/patient-vitals.controller.js";
 import { patientFitnessController } from "../controllers/patient-fitness.controller.js";
+import { patientWalletController } from "../controllers/patient-wallet.controller.js";
 import { patientMedicationReminderController } from "../controllers/patient-medication-reminder.controller.js";
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
 import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
+import { hospitalLabTestController } from "../../../controllers/Organizations/hospital-lab-test.controller.js";
+import { labPackageController } from "../../../controllers/LabPackages/lab-package.controller.js";
+import { patientQuestionnaireController } from "../controllers/patient-questionnaire.controller.js";
 
 const authRouter = Router();
 
@@ -97,6 +102,7 @@ authRouter.put("/medical-records/:id", authMiddleware, (req, res) => mobileMedic
 authRouter.delete("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.deleteRecord(req, res));
 
 // Prescriptions
+authRouter.get("/hospitals/:hospitalId/lab-tests", authMiddleware, hospitalLabTestController.list.bind(hospitalLabTestController));
 authRouter.get("/prescriptions/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobilePrescriptionController.getPatientPrescriptions(req, res));
 authRouter.post("/prescriptions", authMiddleware, (req, res) => mobilePrescriptionController.addPrescription(req, res));
 authRouter.get("/prescriptions/:id/pdf", (req, res) => mobilePrescriptionController.getPrescriptionPdf(req, res));
@@ -118,6 +124,14 @@ authRouter.post("/patient-access/request", authMiddleware, (req, res) => patient
 authRouter.get("/patient-access/check", authMiddleware, (req, res) => patientAccessConsentController.checkAccess(req, res));
 authRouter.get("/patient-access/patient-consents", authMiddleware, (req, res) => patientAccessConsentController.getPatientConsents(req, res));
 authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patientAccessConsentController.respondToConsent(req, res));
+authRouter.post("/patient-access/grant", authMiddleware, (req, res) => profileShareController.grant(req, res));
+
+// Share my profile: read-only web links for doctors who are not on Yira
+authRouter.post("/patient/share-links", authMiddleware, (req, res) => profileShareController.create(req, res));
+authRouter.get("/patient/share-links", authMiddleware, (req, res) => profileShareController.list(req, res));
+authRouter.post("/patient/share-links/:id/revoke", authMiddleware, (req, res) => profileShareController.revoke(req, res));
+authRouter.get("/shared-profile/:token", (req, res) => profileShareController.view(req, res));
+authRouter.get("/provider/patients/:patientId/past-records", authMiddleware, (req, res) => profileShareController.pastRecords(req, res));
 
 // In-App Notifications & Alerts
 authRouter.get("/notifications", authMiddleware, notificationController.getNotifications);
@@ -143,6 +157,26 @@ authRouter.get("/patient/fitness/summary", authMiddleware, (req, res) => patient
 authRouter.get("/patient/fitness/status", authMiddleware, (req, res) => patientFitnessController.getFitnessStatus(req, res));
 authRouter.post("/patient/fitness/disconnect", authMiddleware, (req, res) => patientFitnessController.disconnectFitness(req, res));
 
+// My billing and My policies (patient and family accounts only)
+authRouter.get("/patient/billing", authMiddleware, (req, res) => patientWalletController.getBilling(req, res));
+authRouter.post("/patient/billing", authMiddleware, upload.single("file"), (req, res) => patientWalletController.addBill(req, res));
+authRouter.put("/patient/billing/:id", authMiddleware, upload.single("file"), (req, res) => patientWalletController.updateBill(req, res));
+authRouter.delete("/patient/billing/:id", authMiddleware, (req, res) => patientWalletController.deleteBill(req, res));
+authRouter.get("/patient/policies", authMiddleware, (req, res) => patientWalletController.getPolicies(req, res));
+authRouter.post("/patient/policies", authMiddleware, upload.single("file"), (req, res) => patientWalletController.addPolicy(req, res));
+authRouter.put("/patient/policies/:id", authMiddleware, upload.single("file"), (req, res) => patientWalletController.updatePolicy(req, res));
+authRouter.delete("/patient/policies/:id", authMiddleware, (req, res) => patientWalletController.deletePolicy(req, res));
+
+// Questionnaires: patients (and their family accounts) fill them in; doctors read them
+authRouter.get("/patient/questionnaires", authMiddleware, (req, res) => patientQuestionnaireController.list(req, res));
+authRouter.get("/patient/questionnaires/:id", authMiddleware, (req, res) => patientQuestionnaireController.get(req, res));
+authRouter.post("/patient/questionnaires/:id/submit", authMiddleware, (req, res) => patientQuestionnaireController.submit(req, res));
+authRouter.get("/patient/questionnaire-submissions/:id", authMiddleware, (req, res) => patientQuestionnaireController.getSubmission(req, res));
+authRouter.get("/provider/patients/:patientId/questionnaires", authMiddleware, requirePatientRecordAccess, (req, res) => patientQuestionnaireController.forDoctor(req, res));
+// Staff at the patient's hospital pick a questionnaire and send it to this one patient (?hospitalId / body.hospitalId).
+authRouter.get("/provider/patients/:patientId/questionnaires/sendable", authMiddleware, (req, res) => patientQuestionnaireController.sendableForDoctor(req, res));
+authRouter.post("/provider/patients/:patientId/questionnaires/:id/send", authMiddleware, (req, res) => patientQuestionnaireController.sendFromDoctor(req, res));
+
 // Online Payments & Razorpay (Teleconsultation & In-Person Prepayments)
 authRouter.post("/payments/create-order", authMiddleware, (req, res) => paymentController.createOrder(req, res));
 authRouter.post("/payments/verify", authMiddleware, (req, res) => paymentController.verify(req, res));
@@ -153,5 +187,18 @@ authRouter.post("/patient/medication-reminders", authMiddleware, (req, res) => p
 authRouter.get("/patient/medication-reminders", authMiddleware, (req, res) => patientMedicationReminderController.getReminders(req, res));
 authRouter.delete("/patient/medication-reminders/:id", authMiddleware, (req, res) => patientMedicationReminderController.deleteReminder(req, res));
 authRouter.post("/patient/medication-reminders/sync", authMiddleware, (req, res) => patientMedicationReminderController.syncReminders(req, res));
+
+// Lab packages (patient): list by pincode, hospitals, Razorpay order + verify with the hospital's keys, my orders, reports
+authRouter.post("/lab-packages", authMiddleware, labPackageController.patientPackages.bind(labPackageController));
+authRouter.post("/lab-packages/hospitals", authMiddleware, labPackageController.patientHospitals.bind(labPackageController));
+authRouter.post("/lab-packages/order", authMiddleware, labPackageController.patientCreateOrder.bind(labPackageController));
+authRouter.post("/lab-packages/verify", authMiddleware, labPackageController.patientVerifyPayment.bind(labPackageController));
+authRouter.get("/lab-packages/my-orders", authMiddleware, labPackageController.patientOrders.bind(labPackageController));
+authRouter.get("/lab-packages/orders/:id/report", authMiddleware, labPackageController.patientReport.bind(labPackageController));
+// Visit slots: bookable slots (for an order or a hospital), and pick/reschedule a paid order's slot
+authRouter.post("/lab-packages/slots", authMiddleware, labPackageController.patientSlots.bind(labPackageController));
+authRouter.post("/lab-packages/orders/:id/slot", authMiddleware, labPackageController.patientSetSlot.bind(labPackageController));
+// Saved addresses to pick for sample collection, when the hospital asks for one
+authRouter.post("/lab-packages/addresses", authMiddleware, labPackageController.patientAddresses.bind(labPackageController));
 
 export { authRouter };

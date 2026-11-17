@@ -36,6 +36,9 @@ import { PatientQueue } from "../models/Appointments/patient-queue.model.js";
 import { PatientConsent } from "../models/Consent/patient-consent.model.js";
 import { ConsentRequest } from "../models/Consent/consent-request.model.js";
 import { PatientAccessConsent } from "../models/Consent/patient-access-consent.model.js";
+import { PatientProfileShareLink } from "../models/Consent/profile-share-link.model.js";
+import { PatientManualBill } from "../models/Wallet/patient-manual-bill.model.js";
+import { PatientPolicy } from "../models/Wallet/patient-policy.model.js";
 import { PatientVerification } from "../models/Appointments/patient-verification.model.js";
 import { PatientVerificationDocument } from "../models/Appointments/patient-verification-document.model.js";
 import { ClinicalNote } from "../models/Appointments/clinical-note.model.js";
@@ -45,6 +48,15 @@ import { Visit } from "../models/Appointments/visit.model.js";
 import { PatientDocument } from "../models/Appointments/patient-document.model.js";
 import { PatientPrescription } from "../models/Appointments/patient-prescription.model.js";
 import { PrescriptionDiagnosis } from "../models/Appointments/prescription-diagnosis.model.js";
+import { PrescriptionLabTest } from "../models/Appointments/prescription-lab-test.model.js";
+import { HospitalLabTest } from "../models/Organizations/hospital-lab-test.model.js";
+import { LabPackage } from "../models/LabPackages/lab-package.model.js";
+import { LabPackageHospital } from "../models/LabPackages/lab-package-hospital.model.js";
+import { LabPackageOrder } from "../models/LabPackages/lab-package-order.model.js";
+import { LabPackagePayment } from "../models/LabPackages/lab-package-payment.model.js";
+import { PincodeDirectory } from "../models/LabPackages/pincode-directory.model.js";
+import { LabSlotTiming } from "../models/LabPackages/lab-slot-timing.model.js";
+import { LabPackageSetting } from "../models/LabPackages/lab-package-setting.model.js";
 import { PrescriptionMedication } from "../models/Appointments/prescription-medication.model.js";
 import { PrescriptionMedicationSchedule } from "../models/Appointments/prescription-medication-schedule.model.js";
 import { PrescriptionMedicationDays } from "../models/Appointments/prescription-medication-days.model.js";
@@ -135,10 +147,11 @@ export const AppDataSource = new DataSource({
         PatientRegistration, PatientInsurance, UserRegistrationLink,
         ConsentTemplate, ConsentTemplateField,
         Appointment, PatientQueue,
-        PatientConsent, ConsentRequest, PatientAccessConsent,
+        PatientConsent, ConsentRequest, PatientAccessConsent, PatientProfileShareLink, PatientManualBill, PatientPolicy,
         PatientVerification, PatientVerificationDocument,
         ClinicalNote, MedicalRecord, PatientMedicalRecord, Visit, PatientDocument, PatientPrescription,
-        PrescriptionDiagnosis, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
+        PrescriptionDiagnosis, PrescriptionLabTest, HospitalLabTest, PrescriptionMedication, PrescriptionMedicationSchedule, PrescriptionMedicationDays,
+        LabPackage, LabPackageHospital, LabPackageOrder, LabPackagePayment, PincodeDirectory, LabSlotTiming, LabPackageSetting,
         PostVisitDocument, AppointmentShareLink, MedicalDocument,
         Payment, PaymentLog, HospitalPaymentConfiguration, AppointmentBill, AppointmentBillItem,
         TreatmentPlan, AppointmentTreatmentPlan,

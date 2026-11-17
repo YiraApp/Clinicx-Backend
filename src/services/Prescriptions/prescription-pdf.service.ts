@@ -49,6 +49,11 @@ export interface PrescriptionPdfInput {
             instructions?: string;
             note?: string;
         }>;
+        labTests?: Array<{
+            name: string;
+            priority?: string;
+            instructions?: string | null;
+        }>;
         notes?: string;
     };
 }
@@ -60,6 +65,19 @@ function isValidImageBuffer(buf: Buffer): boolean {
     // JPEG signature: FF D8 FF
     const isJpg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
     return isPng || isJpg;
+}
+
+// One clean instruction per line: tidies the separators doctors type between lines, keeps every word.
+function formatAdviceLines(notes?: string | null): string[] {
+    const text = (notes || "").trim();
+    if (!text || text.toLowerCase() === "null" || text.toLowerCase() === "undefined") return [];
+    return text
+        .split(/\r?\n/)
+        .map(line => line
+            .replace(/\s+/g, " ")
+            .replace(/,\s*&/g, " &")
+            .replace(/^[\s,;.\u2022\u2026]+|[\s,;.\u2022\u2026]+$/g, ""))
+        .filter(line => line.length > 0);
 }
 
 export class PrescriptionPdfService {
@@ -75,6 +93,7 @@ export class PrescriptionPdfService {
                     size: "A4",
                     margins: { top: 30, bottom: 30, left: 36, right: 36 },
                     autoFirstPage: true,
+                    bufferPages: true,
                     info: {
                         Title: `Prescription - ${data.patient.name || "Patient"}`,
                         Author: data.doctor.name || "Doctor",
@@ -122,12 +141,21 @@ export class PrescriptionPdfService {
                 const pageWidth = 595.28;
                 const margin = 36;
                 const contentWidth = pageWidth - (margin * 2); // 523.28
+                const footerY = 720;
 
                 // ── Top Header Brand Accent Stripe ──
                 doc.rect(0, 0, pageWidth, 5).fill("#1E3A8A");
 
                 // ── Hospital Header Section ──
                 let cursorY = 22;
+
+                // Start a new page when the next block would run into the footer.
+                const ensureRoom = (needed: number) => {
+                    if (cursorY + needed > footerY - 14) {
+                        doc.addPage();
+                        cursorY = 36;
+                    }
+                };
 
                 // Hospital Logo (Real Logo)
                 if (logoBuffer) {
@@ -238,11 +266,26 @@ export class PrescriptionPdfService {
 
                 // ── Two-Column Patient & Doctor Identity Card ──
                 cursorY += 28;
-                const cardHeight = 84;
+                // Doctor details, worked out first so the card is tall enough to show them in full.
+                const halfWidth = contentWidth / 2;
+                const docColWidth = halfWidth - 24;
+                const docQual = (data.doctor.qualification && data.doctor.qualification.trim()) ? data.doctor.qualification.trim() : "NA";
+                const docSpec = (data.doctor.specialty && data.doctor.specialty.trim())
+                    ? data.doctor.specialty.trim()
+                    : ((data.doctor.department && data.doctor.department.trim()) ? data.doctor.department.trim() : "NA");
+                const docReg = (data.doctor.registrationNumber && data.doctor.registrationNumber.trim())
+                    ? data.doctor.registrationNumber.trim()
+                    : "NA";
+                doc.fontSize(8).font("Helvetica");
+                const qualHeight = doc.heightOfString(`Qual: ${docQual}`, { width: docColWidth });
+                const deptHeight = doc.heightOfString(`Dept: ${docSpec}`, { width: docColWidth });
+                doc.font("Helvetica-Bold");
+                const regHeight = doc.heightOfString(`Reg No: ${docReg}`, { width: docColWidth });
+                // 8 top + 13 label + 14 name + lines with small gaps + 10 bottom
+                const cardHeight = Math.max(84, Math.ceil(8 + 13 + 14 + qualHeight + 2 + deptHeight + 3 + regHeight + 10));
                 doc.roundedRect(margin, cursorY, contentWidth, cardHeight, 6).fillAndStroke("#F8FAFC", "#E2E8F0");
 
                 // Vertical Separator
-                const halfWidth = contentWidth / 2;
                 doc.moveTo(margin + halfWidth, cursorY + 6)
                    .lineTo(margin + halfWidth, cursorY + cardHeight - 6)
                    .strokeColor("#E2E8F0")
@@ -291,7 +334,7 @@ export class PrescriptionPdfService {
                 doc.fontSize(8)
                    .font("Helvetica")
                    .fillColor("#64748B")
-                   .text(`Patient ID: ${realPatientId}  •  Ph: ${realPhone}`, pX, pY, {
+                   .text(`Patient ID: ${realPatientId}  |  Ph: ${realPhone}`, pX, pY, {
                        width: halfWidth - 24,
                        ellipsis: true
                    });
@@ -313,26 +356,21 @@ export class PrescriptionPdfService {
                    .fillColor("#0F172A")
                    .text(`${docPrefix}${docRawName}`, dX, dY, { width: halfWidth - 24, ellipsis: true });
 
+                // Qualification, department and registration each on their own line, wrapping when long,
+                // so nothing is cut short or printed over the line below.
                 dY += 14;
-                const docQual = (data.doctor.qualification && data.doctor.qualification.trim()) ? data.doctor.qualification.trim() : "NA";
-                const docSpec = (data.doctor.specialty && data.doctor.specialty.trim())
-                    ? data.doctor.specialty.trim()
-                    : ((data.doctor.department && data.doctor.department.trim()) ? data.doctor.department.trim() : "NA");
-
                 doc.fontSize(8)
                    .font("Helvetica")
                    .fillColor("#334155")
-                   .text(`Qual: ${docQual}  •  Dept: ${docSpec}`, dX, dY, { width: halfWidth - 24, ellipsis: true });
-
-                dY += 14;
-                const docReg = (data.doctor.registrationNumber && data.doctor.registrationNumber.trim())
-                    ? data.doctor.registrationNumber.trim()
-                    : "NA";
+                   .text(`Qual: ${docQual}`, dX, dY, { width: docColWidth });
+                dY = doc.y + 2;
+                doc.text(`Dept: ${docSpec}`, dX, dY, { width: docColWidth });
+                dY = doc.y + 3;
 
                 doc.fontSize(8)
                    .font("Helvetica-Bold")
                    .fillColor("#1E40AF")
-                   .text(`Reg No: ${docReg}`, dX, dY);
+                   .text(`Reg No: ${docReg}`, dX, dY, { width: docColWidth });
 
                 cursorY += cardHeight + 10;
 
@@ -361,7 +399,14 @@ export class PrescriptionPdfService {
 
                 // ── Diagnoses Section (if present) ──
                 if (data.prescription.diagnoses && data.prescription.diagnoses.length > 0) {
-                    const validDiag = data.prescription.diagnoses.filter(d => d && String(d).trim().length > 0);
+                    // Split, trim and de-duplicate so stray separators (",viral pyrexia") don't show.
+                    const validDiag: string[] = [];
+                    for (const d of data.prescription.diagnoses) {
+                        for (const part of String(d ?? "").split(/[,;]/)) {
+                            const clean = part.trim();
+                            if (clean && !validDiag.some(v => v.toLowerCase() === clean.toLowerCase())) validDiag.push(clean);
+                        }
+                    }
                     if (validDiag.length > 0) {
                         doc.fontSize(8)
                            .font("Helvetica-Bold")
@@ -437,13 +482,27 @@ export class PrescriptionPdfService {
                     doc.fontSize(8)
                        .font("Helvetica")
                        .fillColor("#64748B")
-                       .text("No medications recorded.", margin + 10, cursorY + 9);
+                       .text(
+                           data.prescription.labTests?.length ? "No medicines prescribed. See the lab tests below." : "No medications recorded.",
+                           margin + 10,
+                           cursorY + 9
+                       );
                     cursorY += 26;
                 } else {
                     for (let i = 0; i < meds.length; i++) {
                         const med = meds[i];
-                        const rowHeight = 30;
+                        const medName = (med.name && med.name.trim()) ? med.name.trim() : "NA";
+                        const rawNote = (med.instructions && med.instructions.trim())
+                            ? med.instructions.trim()
+                            : ((med.note && med.note.trim()) ? med.note.trim() : "");
+                        const noteText = rawNote.length > 0 ? rawNote : "NA";
+                        // Grow the row so a long name or note wraps instead of overlapping the next line.
+                        const nameHeight = doc.fontSize(8.5).font("Helvetica-Bold").heightOfString(medName, { width: colMedWidth - 8 });
+                        const noteHeight = doc.fontSize(7.5).font("Helvetica").heightOfString(noteText, { width: colNoteWidth - 8 });
+                        const rowHeight = Math.max(30, Math.ceil(nameHeight) + 20, Math.ceil(noteHeight) + 12);
                         const isEven = i % 2 === 0;
+
+                        ensureRoom(rowHeight);
 
                         // Row background
                         doc.rect(margin, cursorY, contentWidth, rowHeight)
@@ -462,19 +521,18 @@ export class PrescriptionPdfService {
                            .fillColor("#475569")
                            .text(String(i + 1), colX.sno, cursorY + 9, { width: colSnoWidth, align: "center" });
 
-                        // Medicine Name
-                        const medName = (med.name && med.name.trim()) ? med.name.trim() : "NA";
+                        // Medicine Name (wraps; the row is tall enough)
                         doc.fontSize(8.5)
                            .font("Helvetica-Bold")
                            .fillColor("#0F172A")
-                           .text(medName, colX.med + 5, cursorY + 5, { width: colMedWidth - 8, ellipsis: true });
+                           .text(medName, colX.med + 5, cursorY + 5, { width: colMedWidth - 8 });
 
-                        // Route subtext
+                        // Route subtext, under the name however many lines it took
                         const routeText = (med.route && med.route.trim()) ? `Route: ${med.route.trim()}` : "Route: NA";
                         doc.fontSize(7)
                            .font("Helvetica")
                            .fillColor("#64748B")
-                           .text(routeText, colX.med + 5, cursorY + 17, { width: colMedWidth - 8 });
+                           .text(routeText, colX.med + 5, cursorY + 7 + Math.ceil(nameHeight), { width: colMedWidth - 8 });
 
                         // Dosage
                         const dosageText = (med.dosage && med.dosage.trim()) ? med.dosage.trim() : "NA";
@@ -493,8 +551,8 @@ export class PrescriptionPdfService {
                         // Duration (Ensure display or "NA")
                         let rawDur = (med.duration && String(med.duration).trim()) ? String(med.duration).trim() : "";
                         let durText = "NA";
-                        if (rawDur.length > 0 && rawDur !== "0" && rawDur !== "0 Days") {
-                            durText = rawDur.toLowerCase().includes("day") ? rawDur : `${rawDur} Days`;
+                        if (rawDur.length > 0 && rawDur !== "0" && rawDur !== "0 Days" && rawDur.toLowerCase() !== "days") {
+                            durText = /^\d+(\.\d+)?$/.test(rawDur) ? `${rawDur} Days` : rawDur;
                         }
                         doc.fontSize(8)
                            .font("Helvetica")
@@ -502,29 +560,47 @@ export class PrescriptionPdfService {
                            .text(durText, colX.dur + 2, cursorY + 9, { width: colDurWidth - 4, align: "center" });
 
                         // Note / Instructions (or "NA" if not available)
-                        const rawNote = (med.instructions && med.instructions.trim()) 
-                            ? med.instructions.trim() 
-                            : ((med.note && med.note.trim()) ? med.note.trim() : "");
-                        const noteText = rawNote.length > 0 ? rawNote : "NA";
-
                         doc.fontSize(7.5)
                            .font("Helvetica")
                            .fillColor(noteText === "NA" ? "#94A3B8" : "#334155")
-                           .text(noteText, colX.note + 4, cursorY + 6, {
-                               width: colNoteWidth - 8,
-                               height: 20,
-                               ellipsis: true
-                           });
+                           .text(noteText, colX.note + 4, cursorY + 6, { width: colNoteWidth - 8 });
 
                         cursorY += rowHeight;
                     }
                 }
 
+                // ── Lab Tests Section (Only when the doctor ordered tests) ──
+                const labTests = data.prescription.labTests || [];
+                if (labTests.length > 0) {
+                    cursorY += 14;
+                    ensureRoom(24);
+                    doc.fontSize(9).font("Helvetica-Bold").fillColor("#1E3A8A")
+                       .text("LAB TESTS ADVISED", margin, cursorY);
+                    cursorY = doc.y + 5;
+                    labTests.forEach((test, index) => {
+                        const urgent = (test.priority || "").toLowerCase() === "urgent";
+                        const line = `${index + 1}. ${test.name}${urgent ? " (Urgent)" : ""}${test.instructions ? ` - ${test.instructions}` : ""}`;
+                        doc.fontSize(8.5).font("Helvetica");
+                        ensureRoom(doc.heightOfString(line, { width: contentWidth }) + 4);
+                        doc.fillColor("#334155").text(line, margin, cursorY, { width: contentWidth });
+                        cursorY = doc.y + 3;
+                    });
+                }
+
                 // ── Additional Notes / Advice Section (Only if present in DB) ──
                 cursorY += 14;
-                const notes = data.prescription.notes ? data.prescription.notes.trim() : "";
-                if (notes.length > 0 && notes.toLowerCase() !== "null" && notes.toLowerCase() !== "undefined") {
-                    const adviceBoxHeight = 52;
+                const adviceLines = formatAdviceLines(data.prescription.notes);
+                if (adviceLines.length > 0) {
+                    const adviceTextWidth = contentWidth - 24;
+                    doc.fontSize(8.5).font("Helvetica");
+                    const adviceTextHeight = adviceLines.reduce(
+                        (total, line) => total + doc.heightOfString(line, { width: adviceTextWidth }) + 3,
+                        0
+                    );
+                    const adviceBoxHeight = 26 + Math.ceil(adviceTextHeight);
+
+                    ensureRoom(adviceBoxHeight);
+
                     doc.roundedRect(margin, cursorY, contentWidth, adviceBoxHeight, 5)
                        .fillAndStroke("#FFFBEB", "#FDE68A");
 
@@ -538,12 +614,13 @@ export class PrescriptionPdfService {
 
                     doc.fontSize(8.5)
                        .font("Helvetica")
-                       .fillColor("#78350F")
-                       .text(notes, margin + 12, cursorY + 20, {
-                           width: contentWidth - 24,
-                           height: 28,
-                           ellipsis: true
-                       });
+                       .fillColor("#78350F");
+
+                    let adviceY = cursorY + 20;
+                    for (const line of adviceLines) {
+                        doc.text(line, margin + 12, adviceY, { width: adviceTextWidth });
+                        adviceY = doc.y + 3;
+                    }
 
                     cursorY += adviceBoxHeight + 14;
                 } else {
@@ -551,8 +628,6 @@ export class PrescriptionPdfService {
                 }
 
                 // ── Footer Section: Positioned safely at bottom ──
-                const footerY = 720;
-
                 // Separator line above footer
                 doc.rect(margin, footerY - 10, contentWidth, 0.75).fill("#CBD5E1");
 
@@ -612,13 +687,17 @@ export class PrescriptionPdfService {
                    });
 
                 // Bottom Page Tracker
-                doc.fontSize(7)
-                   .font("Helvetica")
-                   .fillColor("#94A3B8")
-                   .text("Page 1 of 1  •  Official Electronic Health Record", margin, 794, {
-                       width: contentWidth,
-                       align: "center"
-                   });
+                const { start: firstPage, count: pageCount } = doc.bufferedPageRange();
+                for (let i = 0; i < pageCount; i++) {
+                    doc.switchToPage(firstPage + i);
+                    doc.fontSize(7)
+                       .font("Helvetica")
+                       .fillColor("#94A3B8")
+                       .text(`Page ${i + 1} of ${pageCount}  |  Official Electronic Health Record`, margin, 794, {
+                           width: contentWidth,
+                           align: "center"
+                       });
+                }
 
                 doc.end();
             } catch (err) {

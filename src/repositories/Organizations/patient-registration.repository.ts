@@ -84,7 +84,7 @@ export class PatientRegistrationRepository {
 
         if (filters.search) {
             query.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search OR u.EmployeeId LIKE :search OR pr.EmployeeId LIKE :search)",
                 { search: `%${filters.search}%` }
             );
         }
@@ -141,7 +141,8 @@ export class PatientRegistrationRepository {
             const appointmentQuery = AppDataSource.getRepository(Appointment)
                 .createQueryBuilder("a")
                 .select("a.UserId", "userId")
-                .addSelect("COUNT(*)", "totalVisits")
+                // Cancelled and rejected bookings are not visits.
+                .addSelect("SUM(CASE WHEN LOWER(COALESCE(a.Status, '')) IN ('cancelled', 'canceled', 'rejected') THEN 0 ELSE 1 END)", "totalVisits")
                 .addSelect("SUM(CASE WHEN LOWER(a.Status) = LOWER(:completedStatus) THEN 1 ELSE 0 END)", "completedVisits")
                 .where("a.UserId IN (:...userIds)", { userIds });
 
@@ -212,7 +213,7 @@ export class PatientRegistrationRepository {
 
         if (filters.search) {
             statsQuery.andWhere(
-                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search)",
+                "(u.FirstName LIKE :search OR u.LastName LIKE :search OR (u.FirstName + ' ' + u.LastName) LIKE :search OR u.PhoneNumber LIKE :search OR u.Email LIKE :search OR CAST(pr.Id AS NVARCHAR(MAX)) LIKE :search OR CAST(u.Id AS NVARCHAR(MAX)) LIKE :search OR u.TokenNumber LIKE :search OR pr.TokenNumber LIKE :search OR u.EmployeeId LIKE :search OR pr.EmployeeId LIKE :search)",
                 { search: `%${filters.search}%` }
             );
         }
@@ -269,6 +270,7 @@ export class PatientRegistrationRepository {
                 // address not at all: this list is also served to callers without a login.
                 registeredViaAbha: !!pr.RegisteredViaAbha,
                 abhaNumber: pr.User?.AbhaNumber ? `xx-xxxx-xxxx-${pr.User.AbhaNumber.slice(-4)}` : null,
+                employeeId: pr.EmployeeId || pr.User?.EmployeeId || null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,
                 insuranceStatus: ins?.Status ?? null,

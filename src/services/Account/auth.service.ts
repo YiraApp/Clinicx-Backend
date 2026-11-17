@@ -9,15 +9,47 @@ import { userRepository } from "../../repositories/Account/user.repository.js";
 import { passwordResetTokenRepository } from "../../repositories/Account/password-reset-token.repository.js";
 import { mailService } from "../../services/Mail/mail.service.js";
 import type { IAuthService } from "../../interfaces/Service/Account/IAuthService.js";
+import { userOTPRepository } from "../../repositories/Account/userotp.repository.js";
+import { OTPPurpose, OTPType } from "../../enums/OTPType.enum.js";
 
 /**
  * Authentication service implementation.
  * Encapsulates the business logic for token lifecycle and user login.
  */
+export interface LoginOtpProof {
+    otp?: string;
+    sessionId?: string;
+    countryCode?: string;
+}
+
 export class AuthService implements IAuthService {
     private userRepository = AppDataSource.getRepository(User);
 
-    async login(identity: string, password?: string, roleId?: string | string[], deviceInfo?: string, ipAddress?: string): Promise<{
+    /**
+     * Checks a LOGIN one-time code against the session it was sent for.
+     * The code must have been sent to the same phone or email the caller signs in with.
+     * Returns the kind of contact the code was delivered to.
+     */
+    private async verifyLoginOtp(identity: string, proof: LoginOtpProof): Promise<OTPType> {
+        const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+        let contact = identity.trim();
+        if (!isEmail) {
+            // OTP records store the bare national number, as the OTP service sends it.
+            const countryCode = (proof.countryCode || "91").replace(/\D/g, "") || "91";
+            const digits = contact.replace(/\D/g, "");
+            contact = digits.length > 10 && digits.startsWith(countryCode)
+                ? digits.slice(countryCode.length)
+                : digits.length > 10 ? digits.slice(-10) : digits;
+        }
+
+        const verification = await userOTPRepository.verifyOTP(String(proof.sessionId), contact, String(proof.otp), OTPPurpose.LOGIN);
+        if (!verification.success) {
+            throw new Error(verification.message || "Invalid OTP.");
+        }
+        return verification.contactType ?? (isEmail ? OTPType.EMAIL : OTPType.MOBILE);
+    }
+
+    async login(identity: string, password?: string, roleId?: string | string[], deviceInfo?: string, ipAddress?: string, otpProof?: LoginOtpProof): Promise<{
         accessToken: string,
         refreshToken: string,
         accessTokenExpiry: Date,
@@ -78,14 +110,34 @@ export class AuthService implements IAuthService {
             throw new Error("Your account is inactive. Contact admin.");
         }
 
-        // Check password if provided and stored
-        if (password && user.PasswordHash) {
+        // Every login must prove the caller owns the account: either the password,
+        // or a one-time code sent to the account's phone or email for this session.
+        let otpVerifiedContactType: OTPType | undefined;
+        if (password) {
+            if (!user.PasswordHash) {
+                throw new Error("Account setup incomplete. Please contact support.");
+            }
             const isMatch = await bcrypt.compare(password, user.PasswordHash);
             if (!isMatch) {
                 throw new Error("Invalid Password");
             }
-        } else if (password && !user.PasswordHash) {
-            throw new Error("Account setup incomplete. Please contact support.");
+        } else if (otpProof?.otp && otpProof?.sessionId) {
+            otpVerifiedContactType = await this.verifyLoginOtp(identity, otpProof);
+        } else {
+            throw new Error("Password or OTP is required to sign in.");
+        }
+
+        // Fetch User Roles
+        const userRoles = await userRoleRepository.findByUserId(user.Id);
+
+        // Verify the requested roleId(s) are assigned before issuing a session
+        if (roleId) {
+            const requestedRoleIds = (Array.isArray(roleId) ? roleId : [roleId]).map(id => String(id).toUpperCase());
+            const hasAnyRole = userRoles.some(ur => ur.RoleId && requestedRoleIds.includes(String(ur.RoleId).toUpperCase()));
+
+            if (!hasAnyRole) {
+                throw new Error("Specified role is not assigned to this account.");
+            }
         }
 
         const payload = { userId: user.Id, email: user.Email };
@@ -111,25 +163,15 @@ export class AuthService implements IAuthService {
             ...(ipAddress && { IPAddress: ipAddress })
         });
 
-        // Update LastLoginTime and ensure mobile is marked verified for OTP-based logins
+        // Update LastLoginTime. A code delivered to the phone or email proves that contact.
         user.LastLoginTime = new Date();
-        if (!password && !user.IsMobileVerified) {
+        if (otpVerifiedContactType === OTPType.MOBILE && !user.IsMobileVerified) {
             user.IsMobileVerified = true;
         }
-        await this.userRepository.save(user);
-
-        // Fetch User Roles
-        const userRoles = await userRoleRepository.findByUserId(user.Id);
-
-        // Verify if the requested roleId(s) are assigned to the user
-        if (roleId) {
-            const requestedRoleIds = Array.isArray(roleId) ? roleId : [roleId];
-            const hasAnyRole = userRoles.some(ur => requestedRoleIds.includes(ur.RoleId));
-
-            if (!hasAnyRole) {
-                throw new Error("Specified role is not assigned to this account.");
-            }
+        if (otpVerifiedContactType === OTPType.EMAIL && !user.IsEmailVerified) {
+            user.IsEmailVerified = true;
         }
+        await this.userRepository.save(user);
 
         // Fetch family relations by shared phone number or parentId link
         const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';

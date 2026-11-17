@@ -5,14 +5,16 @@ import { ApiResponse } from "../../utils/response.utils.js";
 export class TreatmentPlanController {
     async getPlans(req: Request, res: Response) {
         try {
-            const { orgId, hospitalId, search } = req.query;
+            const { orgId, hospitalId, search, activeOnly } = req.query;
             if (!orgId) {
                 return res.status(400).json(ApiResponse.error("Organization ID is required"));
             }
             const data = await treatmentPlanService.getPlans(
                 parseInt(orgId as string),
                 hospitalId ? parseInt(hospitalId as string) : undefined,
-                search as string || ""
+                search as string || "",
+                // booking screens ask for Active plans only; the Treatment Plans page gets them all
+                String(activeOnly).toLowerCase() === "true"
             );
             return res.json(ApiResponse.success(data, "Treatment plans fetched successfully."));
         } catch (error: any) {

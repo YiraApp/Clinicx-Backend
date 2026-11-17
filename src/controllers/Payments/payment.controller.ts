@@ -23,9 +23,11 @@ export class PaymentController {
 
     async webhook(req: Request, res: Response) {
         try {
-            const signature = req.headers["x-razorpay-signature"] as string;
-            const result = await paymentService.handleWebhook(req.body, signature);
-            return res.json(result);
+            const signature = req.headers["x-razorpay-signature"] as string | undefined;
+            // The exact bytes Razorpay signed, kept by express.json in app.ts
+            const rawBody = (req as any).rawBody as Buffer | undefined;
+            const result = await paymentService.handleWebhook(rawBody, signature);
+            return res.status(result.success ? 200 : 400).json(result);
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));
         }
@@ -188,6 +190,15 @@ export class PaymentController {
             }
             const result = await paymentService.updateBillDetails(billId as string, req.body);
             return res.json(ApiResponse.success(result, "Bill details updated successfully."));
+        } catch (error: any) {
+            return res.status(400).json(ApiResponse.error(error.message));
+        }
+    }
+
+    async createManualBill(req: Request, res: Response) {
+        try {
+            const result = await paymentService.createManualBill(req.body);
+            return res.status(201).json(ApiResponse.success(result, "Bill created successfully."));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));
         }

@@ -23,6 +23,7 @@ export interface UpdateUserRequest {
     BloodGroup?: string | undefined;
     TokenNumber?: string | undefined;
     Token?: string | undefined;
+    EmployeeId?: string | undefined;
     Relation?: string | undefined;
     ParentUserId?: string | undefined;
     Status?: boolean | undefined;
@@ -48,4 +49,5 @@ export interface UpdateUserRequest {
     workspaces: UserRoleAssignment[];
     revokeTokens?: boolean | undefined;
     preserveExistingRoles?: boolean | undefined;
+    skipProviderSync?: boolean | undefined;
 }

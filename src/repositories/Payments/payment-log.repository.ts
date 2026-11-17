@@ -18,6 +18,10 @@ export class PaymentLogRepository {
         });
         return await this.repo.save(logEntry);
     }
+
+    async hasEvent(paymentId: string, eventType: string): Promise<boolean> {
+        return (await this.repo.count({ where: { PaymentId: paymentId, EventType: eventType } })) > 0;
+    }
 }
 
 export const paymentLogRepository = new PaymentLogRepository();

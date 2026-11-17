@@ -7,11 +7,14 @@ import { ApiResponse } from "../../utils/response.utils.js";
  */
 export const login = async (req: Request, res: Response) => {
     try {
-        const { identity, password, roleId } = req.body;
+        const { identity, password, roleId, otp, sessionId, countryCode } = req.body || {};
+        if (!identity || typeof identity !== "string") {
+            return res.status(400).json(ApiResponse.error("Email or phone number is required."));
+        }
         const deviceInfo = req.headers["x-device-info"] as string;
         const ipAddress = req.headers["x-ip-address"] as string;
 
-        const result = await authService.login(identity, password, roleId, deviceInfo, ipAddress);
+        const result = await authService.login(identity.trim(), password, roleId, deviceInfo, ipAddress, { otp, sessionId, countryCode });
         return res.json(ApiResponse.success(result, "Login successful"));
     } catch (error: any) {
         return res.status(401).json(ApiResponse.error(error.message));

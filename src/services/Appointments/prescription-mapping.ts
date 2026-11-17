@@ -3,6 +3,7 @@
  * Shared by POST/PUT /api/prescriptions and the ABDM PDF preview, so a preview shows exactly what
  * saving would store.
  */
+import { normalizeLabTests } from "../../utils/prescription-lab-tests.utils.js";
 
 export const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -63,6 +64,7 @@ export const buildPrescriptionHeader = (source: any) => {
         UpdatedAt: source.updatedAt ? new Date(source.updatedAt) : undefined,
         Diagnoses: diagnoses,
         Medications: medications,
+        ...(normalizeLabTests(source) ? { LabTests: normalizeLabTests(source) } : {}),
         Notes: source.notes || source.Notes || source.prescriptionNotes || null,
         PdfUrl: source.pdfUrl || source.PdfUrl || null
     };
