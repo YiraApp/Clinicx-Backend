@@ -11,7 +11,9 @@ import {
     OTP_RESEND_COOLDOWN_MS,
     assertCanResend,
     afterOtpAccepted,
+    asInvalidAadhaar,
     findLinkedPatient,
+    isValidAadhaarNumber,
     mobileChangeLimitError,
     requireSession,
     rereadProfile,
@@ -173,7 +175,7 @@ export class AbhaLoginService {
             scope = ["abha-login", verifyCheck];
         } else if (input.method === "aadhaar") {
             const aadhaar = String(input.identifier ?? "");
-            if (!/^\d{12}$/.test(aadhaar)) throw new AbhaJourneyError(400, "validation", AADHAAR_INVALID_MESSAGE, { field: "identifier" });
+            if (!isValidAadhaarNumber(aadhaar)) throw new AbhaJourneyError(400, "validation", AADHAAR_INVALID_MESSAGE, { field: "identifier" });
             assertConsent(input.consent);
             identifier = aadhaar;
             loginHint = "aadhaar";
@@ -206,7 +208,10 @@ export class AbhaLoginService {
             method: "POST",
             path: requestPath,
             body: requestBody,
-        }));
+        })).catch((error: unknown) => {
+            // An Aadhaar ABDM refuses reads as the case asks (VRFY_ABHA_401); an ABHA number's refusal stays ABDM's.
+            throw input.method === "aadhaar" ? asInvalidAadhaar(error, "identifier") : error;
+        });
 
         const session = this.sessions.create({
             staffUserId: input.staffUserId,

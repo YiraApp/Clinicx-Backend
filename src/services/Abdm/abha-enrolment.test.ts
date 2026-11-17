@@ -13,6 +13,7 @@ import {
     ADDRESS_SUGGESTIONS_WANTED,
     addressSuggestions,
     checkAbhaAddress,
+    isValidAadhaarNumber,
     toProfileSummary,
     type AbhaConsentInput,
     type AbhaEnrolmentStore,
@@ -25,7 +26,7 @@ import { AbhaLoginService } from "./abha-login.service.js";
 const STAFF = "11111111-1111-1111-1111-111111111111";
 const PATIENT = "22222222-2222-2222-2222-222222222222";
 const OTHER_PATIENT = "33333333-3333-3333-3333-333333333333";
-const AADHAAR = "123412341234";
+const AADHAAR = "234123412346";
 const X_TOKEN = "user-x-token-stays-on-the-server";
 const ABHA_NUMBER = "91-1111-2222-3333";
 
@@ -167,7 +168,8 @@ beforeEach(() => {
 });
 
 test("an invalid Aadhaar number is refused on our side and nothing is sent or stored", async () => {
-    for (const aadhaar of ["12341234123", "1234123412345", "12341234123a", "1234-1234-12"]) {
+    // Wrong length or characters, a leading 0 or 1, or a failed check digit: refused here, nothing sent.
+    for (const aadhaar of ["12341234123", "1234123412345", "12341234123a", "1234-1234-12", "123412341234", "034123412346", "234123412345", "234123412364"]) {
         await assert.rejects(
             service.requestAadhaarOtp({ aadhaar, consent, staffUserId: STAFF }),
             (error: unknown) => error instanceof AbhaJourneyError && error.message === AADHAAR_INVALID_MESSAGE,
@@ -845,4 +847,33 @@ test("a two-part name gets 12 varied suggestions: names in either order, initial
     assert.ok(shown.some((address) => address.includes(".")) && shown.some((address) => address.includes("_")), "dots and underscores");
     // A cut name would leave "krishna" without its "n", or "rames" without its "h".
     assert.ok(!shown.some((address) => /krishna(?!n)|rames(?!h)/.test(address)), "no name cut short");
+});
+
+test("an Aadhaar ABDM refuses reads as \"Aadhaar Number is not valid\" (CRT_ABHA_104), never ABDM's \"Invalid LoginId\"", async () => {
+    for (const refusal of [
+        new AbdmApiError({ status: 400, kind: "rejected", operation: "enrollment/request/otp", message: "Invalid LoginId", field: "loginId" }),
+        new AbdmApiError({ status: 422, kind: "rejected", operation: "enrollment/request/otp", message: "UIDAI Error code : 998 : Invalid Aadhaar Number" }),
+    ]) {
+        answer = ((normal) => (call: AbdmCall) => (call.path.endsWith("/enrollment/request/otp") ? refusal : normal(call)))(answer);
+        await assert.rejects(
+            startJourney(),
+            (error: unknown) => error instanceof AbhaJourneyError && error.status === 400 && error.kind === "validation"
+                && error.message === AADHAAR_INVALID_MESSAGE && !("abdmMessage" in error.details),
+        );
+    }
+    // Any other refusal stays ABDM's.
+    answer = ((normal) => (call: AbdmCall) => (call.path.endsWith("/enrollment/request/otp")
+        ? new AbdmApiError({ status: 429, kind: "rejected", operation: "enrollment/request/otp", message: "Too many requests" })
+        : normal(call)))(answer);
+    await assert.rejects(startJourney(), (error: unknown) => error instanceof AbdmApiError && error.message === "Too many requests");
+});
+
+test("a real Aadhaar's check digit: every made-up test number used here passes, a changed digit fails", () => {
+    for (const valid of ["234123412346", "999999999999", "523456789015"]) assert.equal(isValidAadhaarNumber(valid), true, valid);
+    // Any single digit changed breaks the check digit.
+    for (let position = 0; position < 12; position += 1) {
+        const digits = [..."234123412346"];
+        digits[position] = String((Number(digits[position]) + 1) % 10);
+        assert.equal(isValidAadhaarNumber(digits.join("")), false, digits.join(""));
+    }
 });

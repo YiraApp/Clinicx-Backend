@@ -22,6 +22,46 @@ export const OTP_MAX_RESENDS = 2;
 export const RESEND_LIMIT_MESSAGE = "Maximum OTP resend attempts reached. Please try again after 30 mins";
 export const AADHAAR_INVALID_MESSAGE = "Aadhaar Number is not valid";
 
+// Verhoeff, the check digit every Aadhaar number ends in.
+const VERHOEFF_D = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+];
+const VERHOEFF_P = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+];
+
+/**
+ * A number that can be an Aadhaar: 12 digits, not starting with 0 or 1, ending in its Verhoeff
+ * check digit. A mistyped number fails here with "Aadhaar Number is not valid" (CRT_ABHA_104)
+ * before anything goes to ABDM.
+ */
+export const isValidAadhaarNumber = (value: string): boolean => {
+    if (!/^[2-9]\d{11}$/.test(value)) return false;
+    let check = 0;
+    [...value].reverse().forEach((digit, index) => {
+        check = VERHOEFF_D[check]![VERHOEFF_P[index % 8]![Number(digit)]!]!;
+    });
+    return check === 0;
+};
+
+/**
+ * ABDM refused the Aadhaar number itself ({"loginId": "Invalid LoginId"}, or a UIDAI "invalid
+ * Aadhaar" answer): the desk is told what CRT_ABHA_104 asks for, and ABDM's words go to the log.
+ */
+export const asInvalidAadhaar = (error: unknown, field: string): unknown => {
+    if (!(error instanceof AbdmApiError) || error.kind !== "rejected") return error;
+    // No ABHA on a valid Aadhaar (ABDM-1114) is an answer the Verify page turns into "Create ABHA".
+    if (error.code === "ABDM-1114") return error;
+    const refusesAadhaar = error.field === "loginId"
+        || /invalid\s*login\s*id|invalid\s+aadhaar|aadhaar[^.]*(?:not\s+valid|does\s+not\s+exist|invalid)/i.test(error.message);
+    if (!refusesAadhaar) return error;
+    console.warn(`[ABDM] ABDM refused the Aadhaar number (${error.message}, REQUEST-ID=${error.requestId ?? "-"})`);
+    return new AbhaJourneyError(400, "validation", AADHAAR_INVALID_MESSAGE, { field });
+};
+
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Encrypted request fields: when ABDM refuses one, the cached certificate may be stale. */
@@ -498,7 +538,7 @@ export class AbhaEnrolmentService {
         organizationId?: number | null;
     }): Promise<{ sessionId: string; message: string; resendsLeft: number; resendAvailableInSeconds: number }> {
         const aadhaar = String(input.aadhaar ?? "");
-        if (!/^\d{12}$/.test(aadhaar)) {
+        if (!isValidAadhaarNumber(aadhaar)) {
             throw new AbhaJourneyError(400, "validation", AADHAAR_INVALID_MESSAGE, { field: "aadhaar" });
         }
         assertConsent(input.consent);
@@ -518,7 +558,9 @@ export class AbhaEnrolmentService {
             method: "POST",
             path: "/abha/api/v3/enrollment/request/otp",
             body: { scope: ["abha-enrol"], loginHint: "aadhaar", loginId: encryptedAadhaar, otpSystem: "aadhaar" },
-        }));
+        })).catch((error: unknown) => {
+            throw asInvalidAadhaar(error, "aadhaar");
+        });
         const txnId = text(response.txnId);
         if (!txnId) {
             throw new AbdmApiError({ status: 502, kind: "unavailable", operation: "enrollment/request/otp", message: "ABDM sent no transaction id with the OTP." });

@@ -89,14 +89,14 @@ test("an ABHA number login sends the dashed number encrypted, with the chosen OT
 });
 
 test("an Aadhaar login sends the number only after the patient's consent, recorded first, as on Create (VRFY_ABHA_401)", async () => {
-    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
-    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF, consent: { ...CONSENT, staffConfirmed: false } }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
+    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", staffUserId: STAFF }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
+    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", staffUserId: STAFF, consent: { ...CONSENT, staffConfirmed: false } }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400);
     // The beneficiary's name, typed on the consent screen, is part of the consent.
-    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF, consent: { ...CONSENT, beneficiaryName: " " } }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400 && error.kind === "consent");
+    await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", staffUserId: STAFF, consent: { ...CONSENT, beneficiaryName: " " } }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 400 && error.kind === "consent");
     assert.equal(calls.length, 0, "nothing reaches ABDM without the consent");
     assert.equal(consents.length, 0);
 
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", staffUserId: STAFF, consent: CONSENT });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", staffUserId: STAFF, consent: CONSENT });
     assert.equal(consents.length, 1);
     assert.equal(consents[0]!.at, 0, "recorded before the call to ABDM");
     assert.equal(consents[0]!.staffUserId, STAFF);
@@ -110,8 +110,8 @@ test("an Aadhaar login sends the number only after the patient's consent, record
 });
 
 test("an Aadhaar login always uses the Aadhaar OTP", async () => {
-    await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, otpSystem: "abdm", staffUserId: STAFF });
-    assert.deepEqual(calls[0]!.body, { scope: ["abha-login", "aadhaar-verify"], loginHint: "aadhaar", loginId: "enc(123412341234)", otpSystem: "aadhaar" });
+    await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, otpSystem: "abdm", staffUserId: STAFF });
+    assert.deepEqual(calls[0]!.body, { scope: ["abha-login", "aadhaar-verify"], loginHint: "aadhaar", loginId: "enc(234123412346)", otpSystem: "aadhaar" });
     await assert.rejects(service.requestLoginOtp({ method: "aadhaar", identifier: "12341234", staffUserId: STAFF }), (error: unknown) => error instanceof AbhaJourneyError && error.message === "Aadhaar Number is not valid");
 });
 
@@ -197,7 +197,7 @@ test("an ABHA address without an ABHA number finds its patient by the address", 
 });
 
 test("a login answer with a refresh token is final: the profile is read with it", async () => {
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
 
     assert.deepEqual(calls[1]!.body, { scope: ["abha-login", "aadhaar-verify"], authData: { authMethods: ["otp"], otp: { txnId: "txn-login", otpValue: "enc(123456)" } } });
@@ -247,7 +247,7 @@ test("one account behind a short-lived token is exchanged without asking", async
 test("nobody holds an ABHA: ABDM-1114 reaches the desk unchanged", async () => {
     const notFound = new AbdmApiError({ status: 404, kind: "rejected", operation: "login/verify", code: "ABDM-1114", message: "No ABHA user registered with this Aadhaar number." });
     answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/profile/login/verify") ? notFound : normal(call))(answer);
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: unknown) => error === notFound);
 });
 
@@ -256,7 +256,7 @@ test("a profile read that fails after the OTP verified is retried from the held 
     answer = ((normal) => (call: AbdmCall) => call.path.endsWith("/profile/account") && profileFails
         ? new AbdmApiError({ status: 503, kind: "unavailable", operation: "profile/account", message: "Service Unavailable" })
         : normal(call))(answer);
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: unknown) => error instanceof AbdmApiError && error.kind === "unavailable");
     await assert.rejects(service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" }), (error: unknown) => error instanceof AbhaJourneyError && error.message === "Verify the ABHA first.", "not verified before the profile is read");
 
@@ -292,7 +292,7 @@ test("choosing the same account again finishes from the held token when the prof
 test("a failed clinic lookup does not strand a verified login", async (t) => {
     t.mock.method(console, "error", () => {});
     service = new AbhaLoginService(consentStore({ findPatientByAbhaNumber: async () => { throw new Error("connection lost"); }, findPatientByAbhaAddresses: async () => null }), sessions, gateway, fakeCrypto, () => now);
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     const result = await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
     assert.equal(result.status, "verified");
     if (result.status === "verified") assert.equal(result.linkedPatient, null);
@@ -346,7 +346,7 @@ test("find by mobile never reports no ABHA on an answer that did not say so", as
 });
 
 test("a login OTP resend reuses the transaction and stops after two", async () => {
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     await assert.rejects(service.resendLoginOtp({ sessionId, staffUserId: STAFF }), (error: unknown) => error instanceof AbhaJourneyError && error.kind === "resend-wait");
     now += 60_000;
     await service.resendLoginOtp({ sessionId, staffUserId: STAFF });
@@ -370,7 +370,7 @@ test("the profile mobile is updated with the user token, after an OTP to the new
         if (call.path.endsWith("/profile/account") && linked) return { ...accountProfile, mobile: "******1111" };
         return normal(call);
     })(answer);
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
 
     await service.requestProfileMobileOtp({ sessionId, staffUserId: STAFF, mobile: "9000011111" });
@@ -401,7 +401,7 @@ test("a profile that still shows the old mobile after the update is reported, an
         if (call.path.endsWith("/profile/account") && rereadFails) return new AbdmApiError({ status: 503, kind: "unavailable", operation: "profile/account", message: "Service Unavailable" });
         return normal(call);
     })(answer);
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
 
     // ABDM's profile still ends in the old digits (0903), not the new number's (1111).
@@ -524,7 +524,7 @@ const verifiedForMobileUpdate = async () => {
         if (call.path.endsWith("/profile/account/verify")) return { authResult: "success", message: "Mobile Number linked successfully" };
         return normal(call);
     })(answer);
-    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "123412341234", consent: CONSENT, staffUserId: STAFF });
+    const { sessionId } = await service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF });
     await service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" });
     return sessionId;
 };
@@ -605,4 +605,26 @@ test("a failure after ABDM accepted the login OTP is marked after-otp; a refused
     await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: any) => error instanceof AbdmApiError && (error as { stage?: string }).stage === "after-otp");
     // The repeat finishes from the token held: still after the OTP.
     await assert.rejects(service.verifyLoginOtp({ sessionId, staffUserId: STAFF, otp: "123456" }), (error: any) => error.stage === "after-otp");
+});
+
+test("an Aadhaar ABDM refuses on Verify reads as \"Aadhaar Number is not valid\"; no ABHA (ABDM-1114) stays ABDM's answer", async () => {
+    answer = ((normal) => (call: AbdmCall) => (call.path.endsWith("/profile/login/request/otp")
+        ? new AbdmApiError({ status: 400, kind: "rejected", operation: "profile/login/request/otp", message: "Invalid LoginId", field: "loginId" })
+        : normal(call)))(answer);
+    await assert.rejects(
+        service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.message === "Aadhaar Number is not valid",
+    );
+    // An ABHA number ABDM refuses is not an Aadhaar: its words stay.
+    await assert.rejects(
+        service.requestLoginOtp({ method: "abha-number", identifier: ABHA_NUMBER, otpSystem: "abdm", staffUserId: STAFF }),
+        (error: unknown) => error instanceof AbdmApiError && error.message === "Invalid LoginId",
+    );
+    answer = ((normal) => (call: AbdmCall) => (call.path.endsWith("/profile/login/request/otp")
+        ? new AbdmApiError({ status: 400, kind: "rejected", operation: "profile/login/request/otp", message: "No ABHA found for this Aadhaar", code: "ABDM-1114", field: "loginId" })
+        : normal(call)))(answer);
+    await assert.rejects(
+        service.requestLoginOtp({ method: "aadhaar", identifier: "234123412346", consent: CONSENT, staffUserId: STAFF }),
+        (error: unknown) => error instanceof AbdmApiError && error.code === "ABDM-1114",
+    );
 });
