@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../config/database.js";
+import { dateOnly } from "./questionnaire-dates.js";
 import { notifyPatients } from "./questionnaire-admin.service.js";
 import {
     QuestionnaireError,
@@ -229,7 +230,7 @@ export class QuestionnairePatientService {
         if (!entry.canSubmit) {
             throw new QuestionnaireError(
                 entry.nextDueAt
-                    ? `You can fill this in again from ${entry.nextDueAt.toISOString().slice(0, 10)}.`
+                    ? `You can fill this in again from ${dateOnly(entry.nextDueAt)}.`
                     : "You've already filled in this questionnaire.",
                 409
             );
@@ -277,6 +278,18 @@ export class QuestionnairePatientService {
                  WHERE QuestionnaireId = @0 AND PatientUserId = @1 AND Status = 'Pending' AND IsDeleted = 0 ORDER BY SentAt`,
                 [questionnaireId, patientId]
             );
+            // The check above ran before this lock; a second submit sent at the same moment stops here.
+            if (!pending && count.N > 0) {
+                if (!form.allowMultiple) throw new QuestionnaireError("You've already filled in this questionnaire.", 409);
+                if (form.repeatAfterDays) {
+                    const [last] = await m.query(
+                        `SELECT MAX(SubmittedAt) AS LastAt FROM QuestionnaireSubmissions WHERE QuestionnaireId = @0 AND PatientUserId = @1 AND IsDeleted = 0`,
+                        [questionnaireId, patientId]
+                    );
+                    const next = new Date(new Date(last.LastAt).getTime() + form.repeatAfterDays * DAY_MS);
+                    if (next.getTime() > Date.now()) throw new QuestionnaireError(`You can fill this in again from ${dateOnly(next)}.`, 409);
+                }
+            }
             const [row] = await m.query(
                 `INSERT INTO QuestionnaireSubmissions
                     (QuestionnaireId, HospitalId, OrganizationId, PatientUserId, AssignmentId, AttemptNo, PatientGender, SubmittedBy, CreatedBy)

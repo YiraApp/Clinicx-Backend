@@ -39,6 +39,14 @@ export interface QuestionnaireInput {
     items?: Array<{ questionId: number; isRequired?: boolean }>;
 }
 
+/** A "YYYY-MM-DD" filter, or a 400. */
+export function dateFilter(value: string, field: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(new Date(`${value}T00:00:00Z`).getTime())) {
+        throw new QuestionnaireError(`${field} must be a date like 2026-11-18.`);
+    }
+    return value;
+}
+
 export class QuestionnaireAdminService {
     // ───────────── Question types (system master) ─────────────
 
@@ -159,7 +167,9 @@ export class QuestionnaireAdminService {
             `SELECT q.*, t.Code AS TypeCode, t.Name AS TypeName, t.HasOptions, c.Name AS CategoryName,
                     (SELECT COUNT(*) FROM QuestionnaireAnswers a WHERE a.QuestionId = q.Id) AS AnswerCount,
                     (SELECT COUNT(*) FROM QuestionnaireItems i JOIN Questionnaires f ON f.Id = i.QuestionnaireId
-                      WHERE i.QuestionId = q.Id AND i.IsDeleted = 0 AND f.IsDeleted = 0) AS UsedIn
+                      WHERE i.QuestionId = q.Id AND i.IsDeleted = 0 AND f.IsDeleted = 0) AS UsedIn,
+                    (SELECT COUNT(*) FROM QuestionnaireItems i JOIN Questionnaires f ON f.Id = i.QuestionnaireId
+                      WHERE i.QuestionId = q.Id AND i.IsDeleted = 0 AND f.IsDeleted = 0 AND f.Status = 'Published') AS UsedInPublished
              FROM QuestionnaireQuestions q
              JOIN QuestionTypes t ON t.Id = q.QuestionTypeId
              LEFT JOIN QuestionnaireCategories c ON c.Id = q.CategoryId
@@ -192,6 +202,7 @@ export class QuestionnaireAdminService {
             isActive: !!r.IsActive,
             answerCount: r.AnswerCount,
             usedIn: r.UsedIn,
+            usedInPublished: Number(r.UsedInPublished ?? 0),
             options: options
                 .filter((o: any) => o.QuestionId === r.Id)
                 .map((o: any) => ({ id: o.Id, label: o.Label, order: o.OrderNo })),
@@ -271,6 +282,25 @@ export class QuestionnaireAdminService {
             throw new QuestionnaireError("Patients have answered this question, so its type can't change. Add a new question instead.");
         }
         const type = await this.typeOf(typeId);
+        // Patients may have the form open: its answer type, options and limits can't move under them.
+        const [live] = await AppDataSource.query(
+            `SELECT TOP 1 f.Title FROM QuestionnaireItems i JOIN Questionnaires f ON f.Id = i.QuestionnaireId
+             WHERE i.QuestionId = @0 AND i.IsDeleted = 0 AND f.IsDeleted = 0 AND f.Status = 'Published'`,
+            [id]
+        );
+        if (live) {
+            const sameOptions = input.options === undefined || await this.sameOptions(id, input.options);
+            // Compare the limits as they'd be stored (a rating is always 1-5, other non-number types have none).
+            const next = this.range(
+                { minValue: input.minValue === undefined ? current.MinValue : input.minValue, maxValue: input.maxValue === undefined ? current.MaxValue : input.maxValue },
+                type.Code
+            );
+            const same = (a: unknown, b: unknown) => (a == null ? null : Number(a)) === (b == null ? null : Number(b));
+            const sameRange = same(next.min, current.MinValue) && same(next.max, current.MaxValue);
+            if (Number(typeId) !== current.QuestionTypeId || !sameOptions || !sameRange) {
+                throw new QuestionnaireError(`This question is on "${live.Title}", which is published, so its answer type, options and limits can't change. Close that questionnaire first, or add a new question.`);
+            }
+        }
         const questionText = input.text === undefined ? current.Text : text(input.text, 1000, "Question", true);
         const categoryId = input.categoryId === undefined ? current.CategoryId : await this.assertCategory(hospitalId, input.categoryId);
         const { min, max } = this.range(
@@ -314,6 +344,16 @@ export class QuestionnaireAdminService {
             }
         });
         return (await this.listQuestions(hospitalId, { includeInactive: true })).find((q: any) => q.id === id);
+    }
+
+    /** Whether [options] are the question's current active options, unchanged and in order. */
+    private async sameOptions(questionId: number, options: QuestionInput["options"]) {
+        const rows = await AppDataSource.query(
+            `SELECT Id, Label FROM QuestionnaireQuestionOptions WHERE QuestionId = @0 AND IsDeleted = 0 ORDER BY OrderNo, Id`,
+            [questionId]
+        );
+        const given = (options ?? []).map((o) => ({ id: o?.id ? Number(o.id) : undefined, label: String(o?.label ?? "").trim() })).filter((o) => o.label);
+        return given.length === rows.length && given.every((o, i) => o.id === rows[i].Id && o.label === rows[i].Label);
     }
 
     async removeQuestion(hospitalId: number, id: number) {
@@ -375,6 +415,7 @@ export class QuestionnaireAdminService {
     }
 
     async getQuestionnaire(hospitalId: number, id: number) {
+        await this.current(hospitalId, id);
         const form = await loadForm(id, hospitalId);
         const summary = (await this.listQuestionnaires(hospitalId)).find((q: any) => q.id === id);
         return { ...summary, ...form };
@@ -449,7 +490,8 @@ export class QuestionnaireAdminService {
         const current = await this.current(hospitalId, id);
         if (current.Status === "Closed") throw new QuestionnaireError("This questionnaire is closed. Duplicate it to make a new version.");
         // Once published, patients may be answering it: only the wording around it can change.
-        if (current.Status === "Published" && (input.items !== undefined || input.targetGender !== undefined)) {
+        const audienceChanged = input.targetGender !== undefined && targetGenderOf(input.targetGender) !== targetGenderOf(current.TargetGender);
+        if (current.Status === "Published" && (input.items !== undefined || audienceChanged)) {
             throw new QuestionnaireError("A published questionnaire's questions and audience are locked. Close it and duplicate it to change them.");
         }
         const title = input.title === undefined ? current.Title : text(input.title, 200, "Title", true);
@@ -503,6 +545,14 @@ export class QuestionnaireAdminService {
     async duplicate(hospitalId: number, userId: string, id: number) {
         const current = await this.current(hospitalId, id);
         const form = await loadForm(id, hospitalId);
+        // A question deleted from the bank since (allowed once its questionnaires were closed) is left out.
+        const ids = form.questions.map((q) => q.id);
+        const kept = ids.length
+            ? new Set((await AppDataSource.query(
+                `SELECT Id FROM QuestionnaireQuestions WHERE IsDeleted = 0 AND Id IN (${ids.map((_, n) => `@${n}`).join(",")})`, ids
+            )).map((r: any) => r.Id))
+            : new Set();
+        form.questions = form.questions.filter((q) => kept.has(q.id));
         return this.createQuestionnaire(hospitalId, userId, {
             categoryId: current.CategoryId,
             title: `${current.Title} (copy)`.slice(0, 200),
@@ -683,10 +733,11 @@ export class QuestionnaireAdminService {
 
     async listSubmissions(hospitalId: number, filter: { questionnaireId?: number; from?: string; to?: string; page?: number; limit?: number } = {}) {
         const params: any[] = [hospitalId];
-        const where = ["s.HospitalId = @0", "s.IsDeleted = 0"];
+        const where = ["s.HospitalId = @0", "s.IsDeleted = 0",
+            "EXISTS (SELECT 1 FROM Questionnaires fo WHERE fo.Id = s.QuestionnaireId AND fo.OwnerUserId IS NULL)"];
         if (filter.questionnaireId) { params.push(filter.questionnaireId); where.push(`s.QuestionnaireId = @${params.length - 1}`); }
-        if (filter.from) { params.push(filter.from); where.push(`s.SubmittedAt >= @${params.length - 1}`); }
-        if (filter.to) { params.push(filter.to); where.push(`s.SubmittedAt < DATEADD(DAY, 1, CAST(@${params.length - 1} AS DATE))`); }
+        if (filter.from) { params.push(dateFilter(filter.from, "From")); where.push(`s.SubmittedAt >= @${params.length - 1}`); }
+        if (filter.to) { params.push(dateFilter(filter.to, "To")); where.push(`s.SubmittedAt < DATEADD(DAY, 1, CAST(@${params.length - 1} AS DATE))`); }
         const limit = Math.min(Math.max(Number(filter.limit) || 25, 1), 200);
         const page = Math.max(Number(filter.page) || 1, 1);
         const [count] = await AppDataSource.query(`SELECT COUNT(*) AS N FROM QuestionnaireSubmissions s WHERE ${where.join(" AND ")}`, params);
@@ -724,7 +775,7 @@ export class QuestionnaireAdminService {
             `SELECT s.*, f.Title, u.FirstName, u.LastName FROM QuestionnaireSubmissions s
              JOIN Questionnaires f ON f.Id = s.QuestionnaireId
              LEFT JOIN Users u ON u.Id = s.PatientUserId
-             WHERE s.Id = @0 AND s.HospitalId = @1 AND s.IsDeleted = 0`,
+             WHERE s.Id = @0 AND s.HospitalId = @1 AND s.IsDeleted = 0 AND f.OwnerUserId IS NULL`,
             [submissionId, hospitalId]
         );
         if (!row) throw new QuestionnaireError("Submission not found.", 404);

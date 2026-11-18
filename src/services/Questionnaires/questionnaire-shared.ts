@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../config/database.js";
+import { dateOnly } from "./questionnaire-dates.js";
 
 /** A problem with what was sent, shown to the user as is. */
 export class QuestionnaireError extends Error {
@@ -195,7 +196,7 @@ export function mapAnswer(row: any): SubmissionAnswer {
         labels = [];
     }
     const optionIds = String(row.OptionIds || "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
-    const date = row.DateValue ? new Date(row.DateValue).toISOString().slice(0, 10) : null;
+    const date = dateOnly(row.DateValue);
     const number = row.NumberValue ?? null;
     const display = labels.length ? labels.join(", ") : row.TextValue ?? (number != null ? String(number) : date ?? "");
     return {

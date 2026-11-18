@@ -1,4 +1,5 @@
 import { AppDataSource } from "../../config/database.js";
+import { dateOnly } from "./questionnaire-dates.js";
 import { QuestionnaireError, answersFor, genderFitsSql, loadForm, memberOfHospitalSql } from "./questionnaire-shared.js";
 
 export interface AnalyticsFilter {
@@ -16,7 +17,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** WHERE clauses for submissions (alias s) and the questionnaire (alias f). */
 function submissionWhere(hospitalId: number, filter: AnalyticsFilter) {
     const params: any[] = [hospitalId];
-    const where = ["s.HospitalId = @0", "s.IsDeleted = 0", "f.IsDeleted = 0"];
+    const where = ["s.HospitalId = @0", "s.IsDeleted = 0", "f.IsDeleted = 0", "f.OwnerUserId IS NULL"];
     const add = (sql: (p: string) => string, value: any) => {
         params.push(value);
         where.push(sql(`@${params.length - 1}`));
@@ -37,7 +38,7 @@ function submissionWhere(hospitalId: number, filter: AnalyticsFilter) {
 /** WHERE clauses for requests sent (alias a) with the same filters. */
 function assignmentWhere(hospitalId: number, filter: AnalyticsFilter) {
     const params: any[] = [hospitalId];
-    const where = ["a.HospitalId = @0", "a.IsDeleted = 0", "f.IsDeleted = 0"];
+    const where = ["a.HospitalId = @0", "a.IsDeleted = 0", "f.IsDeleted = 0", "f.OwnerUserId IS NULL"];
     const add = (sql: (p: string) => string, value: any) => {
         params.push(value);
         where.push(sql(`@${params.length - 1}`));
@@ -115,7 +116,7 @@ export class QuestionnaireAnalyticsService {
                     (SELECT COUNT(DISTINCT s.PatientUserId) FROM QuestionnaireSubmissions s WHERE s.QuestionnaireId = f.Id AND s.IsDeleted = 0) AS Respondents,
                     (SELECT MAX(s.SubmittedAt) FROM QuestionnaireSubmissions s WHERE s.QuestionnaireId = f.Id AND s.IsDeleted = 0) AS LastSubmittedAt
              FROM Questionnaires f
-             WHERE f.HospitalId = @0 AND f.IsDeleted = 0 AND f.Status <> 'Draft'
+             WHERE f.HospitalId = @0 AND f.IsDeleted = 0 AND f.Status <> 'Draft' AND f.OwnerUserId IS NULL
                ${filter.questionnaireId ? "AND f.Id = @1" : ""}
              ORDER BY f.Status, f.Title`,
             filter.questionnaireId ? [hospitalId, filter.questionnaireId] : [hospitalId]
@@ -239,7 +240,7 @@ export class QuestionnaireAnalyticsService {
                 };
             }
             if (q.typeCode === "DATE") {
-                const dates = answers.map((a: any) => (a.DateValue ? new Date(a.DateValue).toISOString().slice(0, 10) : null)).filter(Boolean).sort();
+                const dates = answers.map((a: any) => dateOnly(a.DateValue)).filter(Boolean).sort();
                 return { ...base, kind: "date" as const, earliest: dates[0] ?? null, latest: dates[dates.length - 1] ?? null };
             }
             return {
@@ -279,7 +280,7 @@ export class QuestionnaireAnalyticsService {
              WHERE ${a.where} GROUP BY ${bucket("a.SentAt")}`,
             a.params
         );
-        const key = (d: any) => new Date(d).toISOString().slice(0, 10);
+        const key = (d: any) => dateOnly(d) ?? "";
         const periods = new Map<string, any>();
         const row = (k: string) => periods.get(k) ?? { period: k, sent: 0, submissions: 0, respondents: 0, firstAttempts: 0, repeats: 0 };
         for (const r of subs) {

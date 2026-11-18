@@ -148,5 +148,6 @@ function pickFilter(body: any): Partial<AnalyticsFilter> {
     if (typeof body.from === "string") out.from = body.from;
     if (typeof body.to === "string") out.to = body.to;
     if (typeof body.gender === "string" && body.gender !== "All") out.gender = body.gender;
+    if (body.attempt === "first" || body.attempt === "latest" || body.attempt === "all") out.attempt = body.attempt;
     return out;
 }

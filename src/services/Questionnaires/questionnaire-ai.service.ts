@@ -1,4 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
+import { dateFilter } from "./questionnaire-admin.service.js";
+import { dateOnly } from "./questionnaire-dates.js";
 import { questionnaireAnalyticsService, type AnalyticsFilter } from "./questionnaire-analytics.service.js";
 import { QuestionnaireError, answersFor, loadForm } from "./questionnaire-shared.js";
 
@@ -21,6 +23,7 @@ Return JSON with exactly these keys:
 
 Rules:
 - Use only the data given. Do not invent numbers. If there is too little data, say so in the summary.
+- "today" is the current date (YYYY-MM-DD). Judge every date answer against it, not against your own sense of the date.
 - kpis: 4 to 8 measures that suit THIS questionnaire's content (for example share of patients reporting a symptom,
   average rating, improvement between attempts), computed from the data.
 - alerts: only submissions whose answers suggest the patient may need follow-up from the care team. Up to 20, most urgent first. Use refs exactly as given.
@@ -75,6 +78,12 @@ class QuestionnaireAiService {
         if (!filter.questionnaireId) throw new QuestionnaireError("Pick a questionnaire to analyse.");
         if (!this.isConfigured) throw new QuestionnaireError("AI insights aren't set up on this server (GEMINI_API_KEY is missing).", 503);
 
+        // Hospital questionnaires only; a doctor's own stays with that doctor.
+        const [own] = await AppDataSource.query(
+            `SELECT Id FROM Questionnaires WHERE Id = @0 AND HospitalId = @1 AND IsDeleted = 0 AND OwnerUserId IS NULL`,
+            [filter.questionnaireId, hospitalId]
+        );
+        if (!own) throw new QuestionnaireError("Questionnaire not found.", 404);
         const form = await loadForm(filter.questionnaireId, hospitalId);
         const kpis = await questionnaireAnalyticsService.kpis(hospitalId, filter);
         const breakdown = await questionnaireAnalyticsService.breakdown(hospitalId, { ...filter, attempt: filter.attempt ?? "all" });
@@ -82,9 +91,15 @@ class QuestionnaireAiService {
 
         const params: any[] = [hospitalId, filter.questionnaireId];
         const where = ["s.HospitalId = @0", "s.QuestionnaireId = @1", "s.IsDeleted = 0"];
-        if (filter.from) { params.push(filter.from); where.push(`s.SubmittedAt >= @${params.length - 1}`); }
-        if (filter.to) { params.push(filter.to); where.push(`s.SubmittedAt < DATEADD(DAY, 1, CAST(@${params.length - 1} AS DATE))`); }
+        if (filter.from) { params.push(dateFilter(filter.from, "From")); where.push(`s.SubmittedAt >= @${params.length - 1}`); }
+        if (filter.to) { params.push(dateFilter(filter.to, "To")); where.push(`s.SubmittedAt < DATEADD(DAY, 1, CAST(@${params.length - 1} AS DATE))`); }
         if (filter.gender) { params.push(filter.gender); where.push(`s.PatientGender = @${params.length - 1}`); }
+        // The same attempts the breakdown above counted.
+        if (filter.attempt === "first") where.push("s.AttemptNo = 1");
+        if (filter.attempt === "latest") {
+            where.push(`s.AttemptNo = (SELECT MAX(s2.AttemptNo) FROM QuestionnaireSubmissions s2
+                         WHERE s2.QuestionnaireId = s.QuestionnaireId AND s2.PatientUserId = s.PatientUserId AND s2.IsDeleted = 0)`);
+        }
         const subs = await AppDataSource.query(
             `SELECT TOP ${MAX_SUBMISSIONS} s.Id, s.PatientUserId, s.AttemptNo, s.SubmittedAt, s.PatientGender, u.DateOfBirth
              FROM QuestionnaireSubmissions s LEFT JOIN Users u ON u.Id = s.PatientUserId
@@ -95,6 +110,8 @@ class QuestionnaireAiService {
         const questionIndex = new Map(form.questions.map((q, n) => [q.id, `Q${n + 1}`]));
 
         const data = {
+            // Without it the model judges dates by its training cut-off (it called last month "the future").
+            today: dateOnly(new Date()),
             questionnaire: { title: form.title, description: form.description, targetGender: form.targetGender, repeatAfterDays: form.repeatAfterDays },
             questions: form.questions.map((q, n) => ({ id: `Q${n + 1}`, text: q.text, type: q.typeName, options: q.options.map((o) => o.label) })),
             summary: {
