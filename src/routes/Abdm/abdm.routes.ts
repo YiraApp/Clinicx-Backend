@@ -58,6 +58,8 @@ abdmRouter.post("/enrolment/mobile/verify", c.verifyMobileOtp.bind(c));
 abdmRouter.get("/enrolment/address-suggestions", c.addressSuggestions.bind(c));
 abdmRouter.post("/enrolment/address", c.createAddress.bind(c));
 abdmRouter.get("/enrolment/card", c.card.bind(c));
+// Clinic records that may be the verified ABHA's person but hold no ABHA yet (create, verify or find)
+abdmRouter.get("/enrolment/existing-patients", c.existingPatients.bind(c));
 
 // M1: verify an existing ABHA by ABHA number, ABHA address or Aadhaar
 abdmRouter.post("/login/abha-address/search", c.searchAbhaAddress.bind(c));

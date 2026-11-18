@@ -22,6 +22,7 @@ import {
 } from "./abha-enrolment.service.js";
 import { AbhaSessionStore } from "./abha-session.store.js";
 import { AbhaLoginService } from "./abha-login.service.js";
+import { CANDIDATE_ROWS, type PatientCandidateQuery, type PatientCandidateRow } from "./abha-patient-match.js";
 
 const STAFF = "11111111-1111-1111-1111-111111111111";
 const PATIENT = "22222222-2222-2222-2222-222222222222";
@@ -74,8 +75,9 @@ const store: AbhaEnrolmentStore = {
         return "Front Desk Priya";
     },
     async findPatientByAbhaNumber(abhaNumber): Promise<LinkedPatient | null> {
+        // As the repository reads it: dashed or bare digits, the same ABHA.
         for (const [userId, patient] of patients) {
-            if (patient.abhaNumber === abhaNumber) return { userId, name: patient.name, tokenNumber: null };
+            if (patient.abhaNumber && patient.abhaNumber.replace(/\D/g, "") === abhaNumber.replace(/\D/g, "")) return { userId, name: patient.name, tokenNumber: null };
         }
         return null;
     },
@@ -98,7 +100,19 @@ const store: AbhaEnrolmentStore = {
             linkedAtHospital: hospitalId,
         });
     },
+    async findPatientCandidates(query) {
+        candidateQueries.push(query);
+        return candidateRows;
+    },
 };
+
+let candidateQueries: PatientCandidateQuery[];
+let candidateRows: PatientCandidateRow[];
+/** A clinic record with the ABHA's date of birth and gender and no ABHA, as the store reads it. */
+const candidate = (userId: string, firstName: string, lastName: string, phone: string, registeredHere = true): PatientCandidateRow => ({
+    userId, firstName, lastName, dateOfBirth: "1990-08-05", gender: "Female", phone, email: null,
+    relation: "Self", isPrimary: true, bloodGroup: null, tokenNumber: null, registeredHere, primary: null,
+});
 
 const gateway = {
     async call<T>(call: AbdmCall): Promise<T> {
@@ -140,6 +154,8 @@ beforeEach(() => {
     process.env.ABDM_CLIENT_SECRET = "secret";
     events = [];
     calls = [];
+    candidateQueries = [];
+    candidateRows = [];
     now = 1_000_000;
     fakeCrypto.invalidated = 0;
     consents = new Map();
@@ -621,6 +637,25 @@ test("an ABHA that shares nothing with the record's ABHA is refused, whichever s
     assert.equal(patients.get(PATIENT)!.abhaNumber, ABHA_NUMBER);
 });
 
+test("the record's own ABHA saved as bare digits is the same ABHA, not a different one", async () => {
+    Object.assign(patients.get(PATIENT)!, { abhaNumber: "91111122223333", abhaAddress: null, abhaAddresses: [] });
+    const linked = await service.linkToPatient({ sessionId: verifiedAddressLogin(ABHA_NUMBER, "asha.kumari@sbx"), staffUserId: STAFF, userId: PATIENT });
+    assert.equal(linked.abhaNumber, ABHA_NUMBER);
+});
+
+test("a record holding another ABHA number is refused with the last 4 digits of both, never the whole numbers", async () => {
+    Object.assign(patients.get(PATIENT)!, { abhaNumber: "91-9999-8888-7777", abhaAddress: null, abhaAddresses: [] });
+    await assert.rejects(
+        service.linkToPatient({ sessionId: verifiedAddressLogin(ABHA_NUMBER, "asha.kumari@sbx"), staffUserId: STAFF, userId: PATIENT }),
+        (error: unknown) =>
+            error instanceof AbhaJourneyError && error.kind === "different-abha"
+            && /ending 7777/.test(error.message) && /ending 3333/.test(error.message)
+            && !error.message.includes("9999-8888") && !error.message.includes("1111-2222")
+            && error.details.recordAbhaLast4 === "7777" && error.details.abhaLast4 === "3333",
+    );
+    assert.equal(patients.get(PATIENT)!.abhaNumber, "91-9999-8888-7777", "the record keeps its own ABHA");
+});
+
 test("a database hiccup after ABDM created the ABHA does not strand the journey", async () => {
     const failing = { ...store, findPatientByAbhaNumber: async () => { throw new Error("connection reset"); }, updateConsent: async () => { throw new Error("connection reset"); } };
     service = new AbhaEnrolmentService(failing, gateway, fakeCrypto, () => now);
@@ -630,6 +665,73 @@ test("a database hiccup after ABDM created the ABHA does not strand the journey"
     assert.equal(result.abhaNumber, ABHA_NUMBER);
     assert.equal(result.mobileVerificationNeeded, true);
     assert.equal(result.linkedPatient, null);
+});
+
+test("a verified ABHA finds clinic records with its date of birth and gender that hold no ABHA yet", async () => {
+    const { sessionId } = await startJourney();
+    await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
+    candidateRows = [
+        candidate(OTHER_PATIENT, "Unrelated", "Person", "9000012345"),
+        candidate(PATIENT, "Asha", "Kumari", "+91 98765 40903", false),
+    ];
+
+    const result = await service.existingPatients({ sessionId, staffUserId: STAFF, hospitalId: 19, organizationId: 1 });
+
+    // The search reads the verified profile (05-08-1990, F, ******0903), never anything the browser sends.
+    assert.deepEqual(candidateQueries, [{
+        dateOfBirth: "1990-08-05", gender: "F", limit: CANDIDATE_ROWS, mobileLast4: "0903", nameWords: ["asha", "kumari"], hospitalId: 19, organizationId: 1,
+    }]);
+    assert.equal(result.searched, true);
+    assert.equal(result.reason, null);
+    assert.equal(result.truncated, false);
+    assert.deepEqual(result.matches.map((m) => [m.id, m.match.name, m.match.mobileLast4, m.isRegisteredAtHospital]), [[PATIENT, "same", true, false]]);
+    assert.equal(result.matches[0]!.phone, "+91 98765 40903", "the record's own number, so Register & Book fills the form");
+});
+
+test("existing patients are only looked up for a verified session of the same staff login", async () => {
+    const { sessionId } = await startJourney();
+    await assert.rejects(service.existingPatients({ sessionId, staffUserId: STAFF }), (error: unknown) => error instanceof AbhaJourneyError && error.status === 409);
+    await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
+    await assert.rejects(
+        service.existingPatients({ sessionId, staffUserId: "44444444-4444-4444-4444-444444444444" }),
+        (error: unknown) => error instanceof AbhaJourneyError && error.status === 410,
+    );
+    assert.equal(candidateQueries.length, 0);
+});
+
+test("a profile without a full date of birth is not searched: too little to tell people apart", async () => {
+    const sessionId = verifiedAddressLogin(ABHA_NUMBER, "asha.work@sbx");
+    const result = await service.existingPatients({ sessionId, staffUserId: STAFF });
+    assert.deepEqual(result, { searched: false, reason: "no-date-of-birth", linkedPatientId: null, truncated: false, matches: [] });
+    assert.equal(candidateQueries.length, 0);
+});
+
+test("a self-declared ABHA address (no KYC, no ABHA number) is never matched to clinic records by its details", async () => {
+    // Anyone can type a patient's name and date of birth into a PHR address; only a phone search may find them.
+    const sessionId = verifiedAddressLogin(null, "asha.nokyc@sbx");
+    sessions.get(sessionId, STAFF)!.profile!.dateOfBirth = "05-08-1990";
+    const result = await service.existingPatients({ sessionId, staffUserId: STAFF });
+    assert.equal(result.reason, "self-declared");
+    assert.equal(candidateQueries.length, 0);
+});
+
+test("an ABHA already on a record is reported as such, and no other record is offered", async () => {
+    patients.get(PATIENT)!.abhaNumber = "91111122223333";
+    const { sessionId } = await startJourney();
+    await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
+    candidateRows = [candidate(OTHER_PATIENT, "Asha", "Kumari", "9000012345")];
+    const result = await service.existingPatients({ sessionId, staffUserId: STAFF });
+    assert.deepEqual(result, { searched: false, reason: "already-linked", linkedPatientId: PATIENT, truncated: false, matches: [] });
+    assert.equal(candidateQueries.length, 0);
+});
+
+test("reading as many rows as the cap says the check may be incomplete", async () => {
+    const { sessionId } = await startJourney();
+    await service.verifyAadhaarOtp({ sessionId, staffUserId: STAFF, otp: "123456", mobile: "9876540903" });
+    candidateRows = Array.from({ length: CANDIDATE_ROWS }, (_, i) => candidate(`00000000-0000-0000-0000-${String(i).padStart(12, "0")}`, "Other", "Name", "9000000000"));
+    const result = await service.existingPatients({ sessionId, staffUserId: STAFF });
+    assert.equal(result.truncated, true);
+    assert.deepEqual(result.matches, []);
 });
 
 test("verification reports a patient that already holds this ABHA", async () => {

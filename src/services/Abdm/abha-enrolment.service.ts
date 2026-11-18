@@ -2,6 +2,19 @@ import { abdmConfig } from "../../config/abdm.config.js";
 import { AbdmApiError, abdmGatewayService, abdmNotConfiguredError, type AbdmFile, type AbdmGatewayService } from "./abdm-gateway.service.js";
 import { abdmCryptoService, type AbdmCryptoService } from "./abdm-crypto.service.js";
 import { AbhaSessionStore, MOBILE_CHANGE_LIMIT, mobileKey, type AbhaSession, type AbhaProfileSummary, type OtpState } from "./abha-session.store.js";
+import { CANDIDATE_ROWS, genderLetter, profileDateToSql, profileNameWords, rankPatientMatches, type AbhaPatientMatch, type PatientCandidateQuery, type PatientCandidateRow } from "./abha-patient-match.js";
+
+/** What the desk is told about clinic records that may be the verified ABHA's person. */
+export interface ExistingPatients {
+    searched: boolean;
+    /** Why nothing was searched: the ABHA is already on a record, its details are self-declared, or it has no full date of birth. */
+    reason: "already-linked" | "self-declared" | "no-date-of-birth" | null;
+    /** The record already holding this ABHA, when [reason] is already-linked. */
+    linkedPatientId: string | null;
+    /** More records share the date of birth than were read, so a match may have been missed. */
+    truncated: boolean;
+    matches: AbhaPatientMatch[];
+}
 
 /**
  * ABDM M1, Create ABHA by Aadhaar OTP, for the front desk:
@@ -129,6 +142,11 @@ export interface AbhaEnrolmentStore {
      * Adds [abhaAddresses] to the ones the user already holds; a null number or address keeps the stored one.
      */
     linkAbha(userId: string, abha: AbhaToLink, hospitalId: number | null): Promise<void>;
+    /**
+     * Live patients holding no ABHA number or address, born on [query.dateOfBirth], of
+     * [query.gender] or of none recorded: the clinic records an ABHA could still be linked to.
+     */
+    findPatientCandidates(query: PatientCandidateQuery): Promise<PatientCandidateRow[]>;
 }
 
 /** What a verified session links to a patient: an ABHA number, an address, or both. */
@@ -201,6 +219,9 @@ export const trailingFourDigits = (mobile: string | null | undefined): string | 
     const match = (mobile || "").trim().match(/(\d{4})$/);
     return match ? match[1]! : null;
 };
+
+/** An ABHA number as its bare digits, however it was saved: how two ABHA numbers are compared. */
+export const abhaDigits = (abhaNumber: string | null | undefined): string => String(abhaNumber ?? "").replace(/\D/g, "");
 
 export const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 export const textOrNull = (value: unknown): string | null => text(value) || null;
@@ -897,8 +918,16 @@ export class AbhaEnrolmentService {
             throw new AbhaJourneyError(409, "not-a-patient", "This record is not registered as a patient, so an ABHA can't be linked to it.");
         }
         // Never overwrite one ABHA with another: that is a different person, or a decision for ABDM.
-        if (patient.abhaNumber && abhaNumber && patient.abhaNumber !== abhaNumber) {
-            throw new AbhaJourneyError(409, "different-abha", "This patient record already holds a different ABHA number. Check you have the right patient; the ABHA was not linked.");
+        // Compared by digits: the same ABHA saved as 91-1234-5678-9012 or as 14 bare digits is one ABHA.
+        if (patient.abhaNumber && abhaNumber && abhaDigits(patient.abhaNumber) !== abhaDigits(abhaNumber)) {
+            const recordLast4 = abhaDigits(patient.abhaNumber).slice(-4);
+            const abhaLast4 = abhaDigits(abhaNumber).slice(-4);
+            throw new AbhaJourneyError(
+                409,
+                "different-abha",
+                `This patient record already holds a different ABHA number (ending ${recordLast4}), not the verified one (ending ${abhaLast4}). Check you have the right patient; the ABHA was not linked.`,
+                { recordAbhaLast4: recordLast4, abhaLast4 },
+            );
         }
         // Without an ABHA number on both sides, only a shared address shows it is the same ABHA.
         const recordHoldsAbha = !!patient.abhaNumber || patient.abhaAddresses.length > 0;
@@ -926,6 +955,48 @@ export class AbhaEnrolmentService {
             await this.store.updateConsent(session.consentId, { ...(abhaNumber ? { abhaNumber } : {}), patientUserId: input.userId });
         }
         return { abhaNumber, abhaAddress };
+    }
+
+    /**
+     * Clinic records that may be the person on the verified ABHA although they hold no ABHA yet,
+     * best first: the same date of birth and gender, with the same or a close name, or the mobile
+     * ending in the ABHA mobile's last 4 digits. Read from the verified session's profile, never
+     * from the browser. Not searched ([reason]) when a record already holds this ABHA, when the
+     * profile is a self-declared ABHA address's (its name and date of birth prove nothing), or when
+     * it has no full date of birth. [truncated]: more records share the date of birth than were read.
+     */
+    async existingPatients(input: { sessionId: string; staffUserId: string; hospitalId?: number | null; organizationId?: number | null }): Promise<ExistingPatients> {
+        const session = this.verifiedSession(input.sessionId, input.staffUserId);
+        const profile = session.profile;
+        const none = (reason: ExistingPatients["reason"], linkedPatientId: string | null = null): ExistingPatients =>
+            ({ searched: false, reason, linkedPatientId, truncated: false, matches: [] });
+
+        const holder = await this.holderOf(session.abhaNumber, sessionAbhaAddresses(session));
+        if (holder) return none("already-linked", holder.userId);
+        if (!profile) return none("no-date-of-birth");
+        // An ABHA address with no KYC and no ABHA number carries details its owner typed in the PHR app.
+        const selfDeclared = session.tokenKind === "phr" && profile.kycVerified !== true && abhaDigits(profile.abhaNumber ?? session.abhaNumber).length !== 14;
+        if (selfDeclared) return none("self-declared");
+        const dateOfBirth = profileDateToSql(profile.dateOfBirth);
+        if (!dateOfBirth) return none("no-date-of-birth");
+
+        const mobileLast4 = trailingFourDigits(profile.mobile);
+        const rows = await this.store.findPatientCandidates({
+            dateOfBirth,
+            gender: genderLetter(profile.gender),
+            limit: CANDIDATE_ROWS,
+            mobileLast4,
+            nameWords: profileNameWords(profile),
+            hospitalId: input.hospitalId ?? null,
+            organizationId: input.organizationId ?? null,
+        });
+        return {
+            searched: true,
+            reason: null,
+            linkedPatientId: null,
+            truncated: rows.length >= CANDIDATE_ROWS,
+            matches: rankPatientMatches(rows, profile, mobileLast4),
+        };
     }
 
     private async holderOf(abhaNumber: string | null, abhaAddresses: string[]): Promise<LinkedPatient | null> {

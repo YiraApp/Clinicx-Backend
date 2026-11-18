@@ -271,6 +271,27 @@ export class AbhaEnrolmentController {
         }
     }
 
+    /**
+     * Clinic records that may be the person on the session's verified ABHA but hold no ABHA yet,
+     * so the desk links the ABHA to the record they have instead of registering them again.
+     */
+    async existingPatients(req: Request, res: Response) {
+        try {
+            const result = await abhaEnrolmentService.existingPatients({
+                sessionId: String(req.query.sessionId ?? ""),
+                staffUserId: staffUserId(req),
+                hospitalId: headerNumber(req, "x-hospital-id"),
+                organizationId: headerNumber(req, "x-org-id"),
+            });
+            return res.json(ApiResponse.success(result));
+        } catch (error: any) {
+            if (error instanceof AbhaJourneyError) return sendError(res, error);
+            // A database failure, not ABDM's: said as such, and never mistaken for "no patient".
+            console.error("[ABDM] Could not look for existing patients matching the ABHA:", error?.message);
+            return res.status(500).json(ApiResponse.error("Existing patients could not be checked just now.", { kind: "unexpected" }));
+        }
+    }
+
     async linkToPatient(req: Request, res: Response) {
         try {
             const result = await abhaEnrolmentService.linkToPatient({
