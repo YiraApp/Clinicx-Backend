@@ -3,6 +3,7 @@ import { medicalDocumentService } from "../../../../services/Appointments/medica
 import { medicalReportAiService, ReportAnalysisError } from "../../../../services/Appointments/medical-report-ai.service.js";
 import { ANALYSIS_PENDING_MESSAGE, medSenseService } from "../../../../services/Appointments/medsense.service.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
+import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
 
 export class MobileMedicalDocumentController {
     async getPatientDocuments(req: Request, res: Response) {
@@ -12,17 +13,20 @@ export class MobileMedicalDocumentController {
             const hospitalId = req.query.hospitalId ? Number(req.query.hospitalId) : undefined;
             const appointmentId = req.query.appointmentId ? Number(req.query.appointmentId) : undefined;
             const limit = req.query.limit ? Number(req.query.limit) : undefined;
+            // "Load more" asks for page 2, 3...; without this every page was the first one again.
+            const page = req.query.page ? Math.max(1, Math.floor(Number(req.query.page)) || 1) : 1;
 
             if (!patientId) {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
-            let result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit);
+            let result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit, page);
 
             // In a hospital's view, staff see what was added there, not the
-            // patient's own uploads that are not tied to a visit.
+            // patient's own uploads that are not tied to a visit. The patient, or a
+            // family member acting for them, always sees their own uploads.
             const requesterId = String((req as any).user?.userId || (req as any).user?.id || "");
-            if (hospitalId && !appointmentId && requesterId.toLowerCase() !== String(patientId).toLowerCase()) {
+            if (hospitalId && !appointmentId && !(await isFamilyLinked(requesterId, String(patientId)))) {
                 result = result.filter((d: any) => !(d.IsPatientUploaded && !d.AppointmentId));
             }
             return res.json(ApiResponse.success(result, "Patient documents fetched successfully."));
@@ -49,7 +53,7 @@ export class MobileMedicalDocumentController {
             return res.status(201).json(ApiResponse.success(result, "Documents uploaded successfully."));
         } catch (error: any) {
             console.error("Mobile Medical Document Upload Error:", error);
-            return res.status(200).json(ApiResponse.success([], "Uploaded with fallback context"));
+            return res.status(500).json(ApiResponse.error("The document could not be saved. Please try again."));
         }
     }
 

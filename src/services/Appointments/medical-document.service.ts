@@ -899,14 +899,10 @@ export class MedicalDocumentService {
             document.IsSystemGenerated = false;
             document.CreatedBy = uploadedByUserId ? String(uploadedByUserId) : "System";
 
-            try {
-                const savedDoc = await medicalDocumentRepository.save(document);
-                savedDocuments.push(savedDoc);
-            } catch (dbErr: any) {
-                console.error("[MedicalDocumentService] DB save warning:", dbErr.message);
-                document.Id = Date.now();
-                savedDocuments.push(document);
-            }
+            // A document that didn't save is an error: returning it with a made-up id showed
+            // it in the app until the next refresh, when it was gone.
+            const savedDoc = await medicalDocumentRepository.save(document);
+            savedDocuments.push(savedDoc);
         }
 
         // 3. Trigger Push Notification to Patient
@@ -961,17 +957,13 @@ export class MedicalDocumentService {
         return savedDocuments;
     }
 
-    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number): Promise<MedicalDocument[]> {
+    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number, page = 1): Promise<MedicalDocument[]> {
         const validPatientId = ensureUUID(patientId);
         if (validPatientId === DEFAULT_UUID) {
             return [];
         }
-        try {
-            return await medicalDocumentRepository.findByPatient(validPatientId, organizationId, hospitalId, appointmentId, limit);
-        } catch (e: any) {
-            console.error("[MedicalDocumentService] getPatientDocuments error:", e.message);
-            return [];
-        }
+        // A failed read is an error: answering "no documents" made the app show an empty list.
+        return await medicalDocumentRepository.findByPatient(validPatientId, organizationId, hospitalId, appointmentId, limit, page);
     }
 
     async deleteDocument(id: number, userId?: string): Promise<void> {

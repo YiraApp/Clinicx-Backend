@@ -9,7 +9,7 @@ export class MedicalDocumentRepository {
         return await this.repo.save(document);
     }
 
-    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number): Promise<MedicalDocument[]> {
+    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number, page = 1): Promise<MedicalDocument[]> {
         const query: any = { PatientId: patientId, IsDeleted: false };
         if (appointmentId) {
             query.AppointmentId = appointmentId;
@@ -35,7 +35,9 @@ export class MedicalDocumentRepository {
             if (query.AppointmentId !== undefined) paged.andWhere("doc.AppointmentId = :appointmentId", { appointmentId: query.AppointmentId });
             if (query.OrganizationId !== undefined) paged.andWhere("doc.OrganizationId = :organizationId", { organizationId: query.OrganizationId });
             if (query.HospitalId !== undefined) paged.andWhere("doc.HospitalId = :hospitalId", { hospitalId: query.HospitalId });
-            return await paged.orderBy("doc.CreatedAt", "DESC").limit(limit).getMany();
+            // Id breaks ties so pages never overlap or skip a document.
+            return await paged.orderBy("doc.CreatedAt", "DESC").addOrderBy("doc.Id", "DESC")
+                .offset((Math.max(1, page) - 1) * limit).limit(limit).getMany();
         }
 
         return await this.repo.find({
