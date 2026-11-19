@@ -188,6 +188,8 @@ export class RecordPdfService {
             ? await this.renderPrescriptionPdf({
                 Id: id, PatientId: req.patientId, DoctorId: header.DoctorId, HospitalId: req.hospitalId,
                 PrescriptionNumber: editing?.row.PrescriptionNumber ?? null, CreatedAt: editing?.row.CreatedAt ?? now,
+                // The saved row's Date is read right already (repo.prescription), the time ABDM's record carries; a draft is now
+                IssuedAt: editing?.row.Date ?? now,
                 AppointmentId: appointmentId, Notes: header.Notes, Medications: header.Medications, Diagnoses: header.Diagnoses,
             })
             : null;

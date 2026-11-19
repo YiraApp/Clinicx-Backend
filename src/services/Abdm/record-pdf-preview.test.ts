@@ -136,6 +136,25 @@ test("a prescription by a doctor previews as the clinic's own PDF of it, which i
     assert.equal(rendered[0].Diagnoses[0].Diagnosis, "Dental caries");
 });
 
+test("the clinic PDF is issued now for a draft, and at the saved time read right for a saved one, never 5h30 early", async () => {
+    const draft: any[] = [];
+    await service({}, draft).preview({ ...ctx, type: "prescription", draft: rxDraft });
+    assert.equal(draft[0].IssuedAt.toISOString(), NOW.toISOString());
+
+    const savedAt = new Date("2026-10-20T10:38:55+05:30");
+    const saved: any[] = [];
+    const prescription = async () => ({
+        row: {
+            Id: "rx-1", PatientId: PATIENT, HospitalId: HOSPITAL, DoctorId: DOCTOR, PrescriptionNumber: "RX-1", AppointmentId: "101",
+            // repo.prescription has read Date right already; CreatedAt is the raw database stamp, 5h30 early
+            Date: savedAt, CreatedAt: new Date(savedAt.getTime() - 330 * 60_000),
+        },
+        parties: fixtureParties, pdf: null, medications: [], diagnoses: [],
+    });
+    await service({ prescription }, saved).preview({ ...ctx, type: "prescription", draft: rxDraft, recordId: "rx-1" });
+    assert.equal(saved[0].IssuedAt.toISOString(), savedAt.toISOString());
+});
+
 test("a manual prescription (no doctor) has no clinic PDF: it previews as the PDF built from it", async () => {
     const rendered: any[] = [];
     const { doctorId: _d, appointmentId: _a, ...manual } = rxDraft;

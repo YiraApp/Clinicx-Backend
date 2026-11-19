@@ -19,6 +19,7 @@ import { blobService } from "../../services/Common/blob.service.js";
 import { abdmFacilities } from "../../services/Abdm/abdm-facilities.service.js";
 import { recordLogos } from "../../services/Abdm/record-logo.js";
 import { codedText } from "../../services/Abdm/fhir/fhir-common.js";
+import { fromDbClock, prescriptionIssuedAt } from "../../utils/db-clock.js";
 import type {
     CodedText, DocumentSource, MedicationSource, OrganizationSource, PatientSource, PractitionerSource, RecordParties, VisitRef,
 } from "../../services/Abdm/fhir/fhir-sources.js";
@@ -71,14 +72,8 @@ export const documentContentType = (mime: string | null | undefined, extension: 
     return mime || "application/octet-stream";
 };
 
-/**
- * Azure SQL keeps UTC, so a datetime the database stamped itself (a GETDATE() default) holds the UTC
- * clock, and the driver reads every datetime as this process's clock (IST): such a value comes back
- * 5h30 early. This gives back the instant it was stamped. A time the app wrote from JS is IST already
- * and must not go through it.
- */
-export const fromDbClock = (d: Date): Date =>
-    new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()));
+// A database-stamped time read right (see utils/db-clock.ts); kept exported here for existing callers
+export { fromDbClock };
 
 /** Whether [value] was stamped by the database together with its row's CreatedAt (a default), rather than written by the app. */
 export const stampedWithRow = (value: Date | string, createdAt: Date | string | null | undefined): boolean =>
@@ -91,9 +86,8 @@ const rowTime = (value: Date | string, dbStamped: boolean): Date => (dbStamped ?
 const PULSE_DOCUMENT = "PulseWhatsApp";
 const PULSE_NOTE = "Pulse AI Parser";
 
-/** A prescription's date: the database's default, never written by the app. */
-const prescriptionDate = (row: Pick<PatientPrescription, "Date" | "CreatedAt">): Date | undefined =>
-    row.Date ? fromDbClock(new Date(row.Date)) : row.CreatedAt ?? undefined;
+/** A prescription's date: the database's default, never written by the app (the clinic PDF prints the same). */
+const prescriptionDate = (row: Pick<PatientPrescription, "Date" | "CreatedAt">): Date | undefined => prescriptionIssuedAt(row);
 
 /** A medical record's Date: the database's default, except a vitals check the mobile app stamps itself. */
 const medicalRecordDate = (row: Pick<PatientMedicalRecord, "Date" | "CreatedAt">): Date => rowTime(row.Date, stampedWithRow(row.Date, row.CreatedAt));

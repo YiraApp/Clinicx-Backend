@@ -14,6 +14,7 @@ import { MedicalDocument } from "../../../../models/Appointments/medical-documen
 import { medicalDocumentRepository } from "../../../../repositories/Appointments/medical-document.repository.js";
 import { PatientPrescription } from "../../../../models/Appointments/patient-prescription.model.js";
 import { normalizeLabTests } from "../../../../utils/prescription-lab-tests.utils.js";
+import { prescriptionIssuedAt } from "../../../../utils/db-clock.js";
 
 const normalizeMedication = (med: any) => {
     let durVal: number | undefined = undefined;
@@ -91,7 +92,11 @@ export interface ClinicPrescription {
     DoctorId?: string | null;
     HospitalId?: number | null;
     PrescriptionNumber?: any;
+    /** As the row holds it: stamped by the database (UTC read as IST), so read through prescriptionIssuedAt. */
+    Date?: Date | null;
     CreatedAt?: Date | null;
+    /** When it was issued, already read right (the ABDM preview's corrected Date, or now for a draft): wins over Date. */
+    IssuedAt?: Date | null;
     AppointmentId?: string | number | null;
     Notes?: string | null;
     Medications?: any[];
@@ -284,7 +289,9 @@ export async function renderClinicPrescriptionPdf(prescription: ClinicPrescripti
         prescription: {
             id: prescription.Id,
             prescriptionNumber: prescription.PrescriptionNumber,
-            date: prescription.CreatedAt || new Date(),
+            // "Issued" and "Signed": the database stamps the row's times on the UTC clock, so they are
+            // read right here, never printed raw (they came out 5h30 early, before the save time)
+            date: prescription.IssuedAt ?? prescriptionIssuedAt(prescription) ?? new Date(),
             appointmentId: prescription.AppointmentId && String(prescription.AppointmentId).trim() !== "0" ? String(prescription.AppointmentId).trim() : undefined,
             diagnoses,
             medications,

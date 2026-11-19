@@ -306,3 +306,16 @@ test("the ABDM Docs validator finds nothing in any bundle", { skip: process.env.
         assert.ok("findings" in report && (report.findings === null || report.findings.length === 0), `${c.name}: ${JSON.stringify(report.findings)}`);
     }
 });
+
+test("an immunization record is dated by the day only: never a '12:00 am' nobody recorded", () => {
+    // As the service dates it: midnight of the day the vaccine was given (AdministeredOn holds no time)
+    const atMidnight = pdfText(recordPdfOf(build("ImmunizationRecord", { ...FIXTURES.ImmunizationRecord, date: new Date("2026-10-20T00:00:00+05:30") }))!.data);
+    assert.ok(atMidnight.includes("Date: 20 Oct 2026"), "the reference bar's date");
+    assert.ok(atMidnight.includes("Recorded: 20 Oct 2026"), "the signature box's date");
+    assert.ok(!/12:00\s*am/i.test(atMidnight), "no made-up midnight");
+    assert.ok(!atMidnight.includes("Date: 20 Oct 2026, ") && !atMidnight.includes("Recorded: 20 Oct 2026, "), "no time at all");
+    // Every other record keeps its time
+    const op = pdfText(recordPdfOf(build("OPConsultation"))!.data);
+    assert.match(op, /Date: \d{2} \w{3} \d{4}, \d{1,2}:\d{2} [ap]m IST/);
+    assert.match(op, /Recorded: \d{2} \w{3} \d{4}, \d{1,2}:\d{2} [ap]m IST/);
+});

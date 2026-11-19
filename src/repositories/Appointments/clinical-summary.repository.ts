@@ -5,6 +5,7 @@ import { PatientMedicalRecord } from "../../models/Appointments/patient-medical-
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { PatientPrescription } from "../../models/Appointments/patient-prescription.model.js";
 import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
+import { prescriptionIssuedAt } from "../../utils/db-clock.js";
 
 export class ClinicalSummaryRepository {
     async getSummaryByAppointment(appointmentId: number) {
@@ -44,6 +45,12 @@ export class ClinicalSummaryRepository {
             where: { AppointmentId: String(appointmentId) },
             relations: ["Diagnoses", "Medications", "Medications.Schedules", "Medications.Days"]
         });
+        // Date is stamped by the database on the UTC clock and read 5h30 early: give the time it was
+        // issued, the one the prescription PDF prints, for the visit summary's "Prescription - <time>"
+        for (const p of prescriptions) {
+            const issuedAt = prescriptionIssuedAt(p);
+            if (issuedAt) p.Date = issuedAt;
+        }
 
         // 6. Get Post-Visit Generated Documents (Reports sent to patient)
         const postVisitDocRepo = AppDataSource.getRepository(PostVisitDocument);

@@ -159,6 +159,10 @@ export const renderRecordPdf = (hiType: HiType, bundle: FhirBundle, letterhead: 
     const facility = resolve(c.custodian?.reference);
     const encounter = resolve(c.encounter?.reference);
     const created = new Date(String(c.date ?? bundle.timestamp));
+    // The record's date as "Date:" and "Recorded:" print it. An immunization record is dated by the day
+    // its vaccines were given (a date with no time, kept as that day's midnight), so it shows the day only,
+    // never a "12:00 am" nobody recorded.
+    const recordDate = when(c.date, view.hiType !== "ImmunizationRecord");
     const facilityName = facility?.name ? String(facility.name) : "ClinicX";
     // A record nobody signed is authored by the facility's staff (abdm-health-record.repository.ts)
     const staff = (author?.identifier ?? []).some((i: any) => i?.type?.coding?.[0]?.code === "EI" && String(i.value ?? "").startsWith("hospital-"));
@@ -249,7 +253,7 @@ export const renderRecordPdf = (hiType: HiType, bundle: FhirBundle, letterhead: 
         const rightW = W * 0.4 - 16;
         const visit = VISITS[encounter?.class?.code] ?? null;
         const visitNo = String(encounter?.identifier?.[0]?.value ?? "").match(/^appointment-(\d+)$/)?.[1];
-        const rightLines = [when(c.date) && `Date: ${when(c.date)}`, join([visit, visitNo && `#${visitNo}`], " ")].filter(Boolean) as string[];
+        const rightLines = [recordDate && `Date: ${recordDate}`, join([visit, visitNo && `#${visitNo}`], " ")].filter(Boolean) as string[];
         const titleH = measure(view.title, leftW, "Helvetica-Bold", 9);
         const barH = Math.max(titleH, rightLines.length * 11) + 12;
         doc.roundedRect(M, y, W, barH, 4).lineWidth(1).fillAndStroke(C.bar, C.barStroke);
@@ -642,7 +646,7 @@ export const renderRecordPdf = (hiType: HiType, bundle: FhirBundle, letterhead: 
         put("RECORDED BY", x, at + 2, { font: "Helvetica-Bold", size: 7.5, color: C.green, width: boxW, align: "center" });
         put(name ? (!staff && !/^dr\b/i.test(name) ? `Dr. ${name}` : name) : facilityName, x + 6, at + 15, { font: "Helvetica-Bold", size: 9, color: C.ink, width: boxW - 12, align: "center", height: 12, ellipsis: true });
         if (registration) put(`Reg No: ${registration}`, x, at + 29, { size: 7, color: C.green, width: boxW, align: "center" });
-        put(`Recorded: ${when(c.date) ?? "—"}`, x, at + 40, { font: "Helvetica-Oblique", size: 6.5, color: C.muted, width: boxW, align: "center" });
+        put(`Recorded: ${recordDate ?? "—"}`, x, at + 40, { font: "Helvetica-Oblique", size: 6.5, color: C.muted, width: boxW, align: "center" });
     }
 
     // ── Page numbers ──

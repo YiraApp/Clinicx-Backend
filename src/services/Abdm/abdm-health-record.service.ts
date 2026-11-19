@@ -101,7 +101,10 @@ export const visitRecordDate = (v: VisitRecords): Date => {
         ...v.prescriptions.map((p) => p.row.Date ?? p.row.CreatedAt),
         ...v.documents.map((d) => d.createdAt),
         ...v.bills.map((b) => b.CreatedAt),
-        ...v.immunizations.map((i) => (i.AdministeredOn ? startOfDay(i.AdministeredOn) : null)),
+        // A vaccine holds a day, not a time: given on an earlier day it dates the visit that day; given
+        // on the visit's own day it leaves the visit at its slot, never at a midnight nobody recorded
+        ...v.immunizations.map((i) =>
+            i.AdministeredOn && startOfDay(i.AdministeredOn).getTime() < startOfDay(v.appointment.start).getTime() ? startOfDay(i.AdministeredOn) : null),
     ].map((d) => (d ? new Date(d) : null)).filter((d): d is Date => d !== null && !Number.isNaN(d.getTime()));
     return new Date(Math.min(...dates.map((d) => d.getTime())));
 };

@@ -158,6 +158,13 @@ test("a visit is dated by its earliest record: a bill paid today for tomorrow's 
     assert.equal(visitRecordDate(visit({ immunizations: [] })).getTime(), day.getTime(), "otherwise the appointment");
 });
 
+test("a vaccine given on the visit's day leaves the visit at its slot; one given on an earlier day dates it that day", () => {
+    // The fixture's vaccine is given on the slot's own day (2026-10-20)
+    assert.equal(visitRecordDate(visit()).getTime(), day.getTime(), "not that day's midnight");
+    const earlier = visit({ immunizations: [{ Id: 8, VaccineName: "Hepatitis B vaccine", AdministeredOn: "2026-10-18" } as any] });
+    assert.equal(visitRecordDate(earlier).toISOString(), new Date("2026-10-18T00:00:00+05:30").toISOString());
+});
+
 test("immunization input is checked before it is stored", () => {
     const valid = { patientId: "p", hospitalId: 12, vaccineName: "Tetanus toxoid vaccine", administeredOn: "2026-10-20" };
     assert.equal(immunizationColumns(valid).VaccineName, "Tetanus toxoid vaccine");
