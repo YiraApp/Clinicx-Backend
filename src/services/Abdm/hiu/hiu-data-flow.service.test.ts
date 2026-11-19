@@ -1122,6 +1122,39 @@ test("a transfer past its window is notified FAILED once, even with two sweeps a
     assert.equal((await service.acceptPush(pushTokenOf(), hipPage(2, 2, [{ reference: "CC-B", content: "{}" }]))).status, 409);
 });
 
+for (const status of ["CLOSED", "REVOKED", "EXPIRED"]) {
+    test(`a transfer whose consent ended (${status}) before anything arrived is closed FAILED with no notify, which ABDM would refuse empty`, async () => {
+        const service = makeService();
+        await openTransfer(service);
+        // Ending the artefact drops its care contexts (END_ARTEFACT): nothing would be left to report on.
+        artefacts.set(1, { ...artefacts.get(1)!, status, careContexts: null });
+        now = T0 + 21 * 60_000;
+        await service.failTransfer(requests[0].id);
+        assert.equal(requests[0].sessionStatus, "FAILED");
+        assert.equal(requests[0].privateKey, null);
+        assert.equal(requests[0].error, "The consent ended before the records arrived.");
+        assert.doesNotMatch(requests[0].error!, /expired/i);
+        assert.equal(notifies().length, 0, "no notify without statusResponses (ABDM-9999)");
+        assert.ok(audits.some((event) => event.event === "TRANSFER_TIMEOUT"));
+        assert.deepEqual(audits.filter((event) => event.event === "DATA_NOTIFY_SENT").map((event) => [event.outcome, event.detail]), [["IGNORED", "consent ended"]]);
+        assert.ok(!logged.some((line) => line.includes("CC-A")));
+    });
+}
+
+test("a transfer whose consent ended after an entry arrived still reports that entry to ABDM", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    await service.acceptPush(pushTokenOf(), hipPage(1, 2, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]));
+    await settle();
+    artefacts.set(1, { ...artefacts.get(1)!, status: "REVOKED", careContexts: null });
+    now = T0 + 21 * 60_000;
+    await service.failTransfer(requests[0].id);
+    assert.equal(notifies().length, 1);
+    const notification = (notifies()[0].body as any).notification;
+    assert.equal(notification.statusNotification.sessionStatus, "FAILED");
+    assert.deepEqual(notification.statusNotification.statusResponses.map((item: any) => [item.careContextReference, item.hiStatus]), [["CC-A", "OK"]]);
+});
+
 test("a transfer ABDM never acknowledged is closed FAILED without a notify", async () => {
     const service = makeService();
     await service.requestForArtefact(1);
@@ -1153,6 +1186,10 @@ test("records are refused after a revoke, after dataEraseAt, to another hospital
     assert.deepEqual(await service.records(STAFF, 1), { available: false, artefactId: 1, reason: "REVOKED" });
     artefacts.set(1, { ...artefacts.get(1)!, status: "EXPIRED" });
     assert.deepEqual(await service.records(STAFF, 1), { available: false, artefactId: 1, reason: "EXPIRED" });
+    // Closed by ClinicX with the rest of its request (another facility revoked or lapsed).
+    artefacts.set(1, { ...artefacts.get(1)!, status: "CLOSED" });
+    assert.deepEqual(await service.records(STAFF, 1), { available: false, artefactId: 1, reason: "CLOSED" });
+    assert.deepEqual(await service.record(STAFF, 1, 1), { available: false, artefactId: 1, reason: "CLOSED" });
     artefacts.set(1, { ...artefacts.get(1)!, status: "DENIED" });
     assert.deepEqual(await service.records(STAFF, 1), { available: false, artefactId: 1, reason: "NOT_GRANTED" });
     artefacts.set(1, { ...artefacts.get(1)!, status: "GRANTED", recordsPurgedAt: new Date(T0) });

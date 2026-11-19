@@ -65,8 +65,15 @@ export const HIU_AUDIT_EVENTS = {
     DATA_NOTIFY_SENT: "DATA_NOTIFY_SENT",
     /** A staff member opened an artefact's records. */
     RECORD_VIEWED: "RECORD_VIEWED",
-    /** Records deleted: past dataEraseAt, revoked or lapsed. */
+    /** Records deleted: past dataEraseAt, revoked, lapsed or closed. */
     RECORD_PURGED: "RECORD_PURGED",
+    /**
+     * ClinicX closed an artefact (CLOSED) because another facility of its request was revoked or
+     * lapsed, so the whole request ended. ClinicX's own act: ABDM is not told.
+     */
+    ARTEFACT_CLOSED: "ARTEFACT_CLOSED",
+    /** ClinicX ended a granted consent (EXPIRED) at its delete-by time: ABDM sends no notice of that. */
+    CONSENT_LAPSED: "CONSENT_LAPSED",
 } as const;
 
 export type HiuAuditEventName = (typeof HIU_AUDIT_EVENTS)[keyof typeof HIU_AUDIT_EVENTS];

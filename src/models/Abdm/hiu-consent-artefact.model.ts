@@ -27,7 +27,11 @@ export class HiuConsentArtefact {
     @Column({ type: "nvarchar", length: 200, nullable: true })
     HipName?: string | null;
 
-    /** GRANTED, REVOKED, EXPIRED or DENIED. */
+    /**
+     * GRANTED, REVOKED, EXPIRED or DENIED, as ABDM reported (EXPIRED also when ClinicX ended it at its
+     * DataEraseAt); or CLOSED, ClinicX's own: ended because another facility of the same request was
+     * revoked or lapsed. CLOSED is never sent to ABDM.
+     */
     @Column({ type: "varchar", length: 20 })
     Status: string;
 

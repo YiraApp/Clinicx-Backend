@@ -49,11 +49,20 @@ export type HiuFrequencyUnit = (typeof HIU_FREQUENCY_UNITS)[number];
 export const HIU_DEFAULT_FREQUENCY = { unit: "HOUR" as HiuFrequencyUnit, value: 1, repeats: 0 };
 
 /**
- * Our consent request's status. SENDING until on-init; FAILED when ABDM refused the init;
- * PARTLY_REVOKED when some but not all of its artefacts are revoked. The rest are ABDM's.
+ * Our consent request's status. SENDING until on-init; FAILED when ABDM refused the init. The rest
+ * are ABDM's. A request with artefacts takes its status from them (requestStatusFrom): one facility
+ * revoked, or one consent lapsed, ends the whole request.
  */
-export const CONSENT_STATUSES = ["SENDING", "REQUESTED", "GRANTED", "PARTLY_REVOKED", "DENIED", "EXPIRED", "REVOKED", "FAILED"] as const;
+export const CONSENT_STATUSES = ["SENDING", "REQUESTED", "GRANTED", "DENIED", "EXPIRED", "REVOKED", "FAILED"] as const;
 export type ConsentStatus = (typeof CONSENT_STATUSES)[number];
+/**
+ * Statuses earlier versions stored and this one never writes: PARTLY_REVOKED (some facilities
+ * revoked, the others kept open). Such a row still loads; the maintenance sweep settles it by
+ * today's rule (HiuConsentService.settleRequests). Not a status staff can filter by.
+ */
+export const LEGACY_CONSENT_STATUSES = ["PARTLY_REVOKED"] as const;
+/** A request's status as a stored row may hold it. */
+export type StoredConsentStatus = ConsentStatus | (typeof LEGACY_CONSENT_STATUSES)[number];
 /** A request in one of these states can still change; any other is final. */
 export const OPEN_CONSENT_STATUSES: readonly ConsentStatus[] = ["SENDING", "REQUESTED"];
 
@@ -61,9 +70,17 @@ export const OPEN_CONSENT_STATUSES: readonly ConsentStatus[] = ["SENDING", "REQU
 export const NOTIFY_CONSENT_STATUSES = ["GRANTED", "EXPIRED", "DENIED", "REQUESTED", "REVOKED"] as const;
 export type NotifyConsentStatus = (typeof NOTIFY_CONSENT_STATUSES)[number];
 
-/** A consent artefact's status (on-fetch consent.status). */
+/** A consent artefact's status as ABDM reports it (on-fetch consent.status). */
 export const ARTEFACT_STATUSES = ["GRANTED", "REVOKED", "EXPIRED", "DENIED"] as const;
 export type ArtefactStatus = (typeof ARTEFACT_STATUSES)[number];
+/**
+ * A consent artefact's status as we store it: ABDM's, or CLOSED, ClinicX's own. CLOSED is a
+ * facility the patient did not withdraw, ended because another facility of the same request was
+ * revoked or lapsed: the whole request ends with the first of them. ABDM still holds it as
+ * granted, so CLOSED is never sent to ABDM, and never taken from it (isArtefactStatus refuses it).
+ */
+export const STORED_ARTEFACT_STATUSES = [...ARTEFACT_STATUSES, "CLOSED"] as const;
+export type StoredArtefactStatus = (typeof STORED_ARTEFACT_STATUSES)[number];
 
 /** Our health-information transfer's state. */
 export const SESSION_STATUSES = ["REQUESTED", "RECEIVING", "RECEIVED", "FAILED"] as const;

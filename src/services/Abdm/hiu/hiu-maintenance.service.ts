@@ -5,17 +5,26 @@ import type { HiuDataFlowService } from "./hiu-data-flow.service.js";
 /**
  * The HIU's housekeeping sweep (plan sections 5, 10 and 13 S7), run once a minute:
  *
- *   1. Delete stored records past their DeleteAt (the artefact's dataEraseAt), and every record of
- *      an artefact that is no longer GRANTED (revoked or lapsed, or whose own purge stopped part
- *      way), one row at a time within a time budget, and stamp RecordsPurgedAt once none is left.
- *   2. Set our ephemeral private key to NULL once it passes KeyExpiresAt or its transfer ended.
- *   3. Fail transfers past their window with one health-information/notify FAILED.
- *   4. Close transfers whose notify was claimed but never settled (a crash in between).
- *   5. Fail consent requests whose on-init never came (still SENDING after 15 minutes).
- *   6. Fetch again granted artefacts whose details never came (a refused or unanswered
+ *   1. End, as EXPIRED, each granted consent past its delete-by time (ABDM ends it on its own clock
+ *      and tells nobody), and with it the whole request: its other facilities are CLOSED.
+ *   2. Settle each request whose stored status no longer follows its artefacts (a PARTLY_REVOKED
+ *      left by an earlier version, a handler that stopped part way or lost a race and wrote a later
+ *      ending, or a facility CLOSED after it had already lapsed): one facility revoked or lapsed
+ *      ends the whole request, as it ended first. These two run before the purge, so what they end
+ *      is deleted in the same sweep.
+ *   3. Delete stored records past their DeleteAt (the artefact's dataEraseAt), and every record of
+ *      an artefact that is no longer GRANTED (revoked, lapsed or closed, or whose own purge stopped
+ *      part way), one row at a time within a time budget, and stamp RecordsPurgedAt once none is left.
+ *   4. Set our ephemeral private key to NULL once it passes KeyExpiresAt or its transfer ended.
+ *   5. Fail transfers past their window with one health-information/notify FAILED.
+ *   6. Close transfers whose notify was claimed but never settled (a crash in between).
+ *   7. Fail consent requests whose on-init never came (still SENDING after 15 minutes).
+ *   8. Fetch again granted artefacts whose details never came (a refused or unanswered
  *      consent/fetch: the notify is already acknowledged, so ABDM will not repeat it).
- *   7. Ask ABDM about consent requests still waiting for the patient an hour after they were raised
+ *   9. Ask ABDM about consent requests still waiting for the patient an hour after they were raised
  *      (ABDM ends an unanswered request on its own clock and sends no notice of it).
+ *
+ * Steps 1, 2, 7, 8 and 9 are the consent service's, skipped when it is not given.
  *
  * Safe with several instances: every step is one atomic statement, and a timed-out transfer is
  * notified only by the instance whose claim on NotifiedAt succeeds (HiuDataFlowService).
@@ -40,10 +49,13 @@ export interface HiuMaintenanceDeps {
     store: HiuMaintenanceStore;
     dataFlow: Pick<HiuDataFlowService, "failTransfer">;
     /** The consent side's sweep steps; left out, those steps are skipped. */
-    consent?: Pick<HiuConsentService, "failStaleSending" | "retryFetches" | "checkWaitingRequests">;
+    consent?: HiuConsentSweep;
     audit: HiuAudit;
     clock?: () => number;
 }
+
+/** The consent service's sweep steps. */
+export type HiuConsentSweep = Pick<HiuConsentService, "expireLapsed" | "settleRequests" | "failStaleSending" | "retryFetches" | "checkWaitingRequests">;
 
 /** Timed-out transfers handled per sweep; the rest wait for the next one. */
 const TIMEOUT_BATCH = 50;
@@ -51,7 +63,7 @@ const TIMEOUT_BATCH = 50;
 export class HiuMaintenanceService {
     private readonly store: HiuMaintenanceStore;
     private readonly dataFlow: Pick<HiuDataFlowService, "failTransfer">;
-    private readonly consent: Pick<HiuConsentService, "failStaleSending" | "retryFetches" | "checkWaitingRequests"> | null;
+    private readonly consent: HiuConsentSweep | null;
     private readonly audit: HiuAudit;
     private readonly clock: () => number;
     private running: Promise<void> | null = null;
@@ -66,6 +78,20 @@ export class HiuMaintenanceService {
 
     /** One sweep. A failing step is logged and the others still run; it never throws. */
     async runOnce(now: Date = new Date(this.clock())): Promise<void> {
+        const consent = this.consent;
+        if (consent) {
+            // Before the purge: the records of what these end are then deleted in this same sweep.
+            await this.step("lapsed consents", async () => {
+                const ended = await consent.expireLapsed(now.getTime());
+                if (ended) console.log(`[ABDM HIU] maintenance: ${ended} consents past their delete-by time ended`);
+            });
+
+            await this.step("settle requests", async () => {
+                const settled = await consent.settleRequests(now.getTime());
+                if (settled) console.log(`[ABDM HIU] maintenance: ${settled} record requests settled`);
+            });
+        }
+
         await this.step("purge records", async () => {
             const purged = await this.store.purgeRecords(now);
             for (const item of purged) {
@@ -99,7 +125,6 @@ export class HiuMaintenanceService {
             if (cleared) console.log(`[ABDM HIU] maintenance: ${cleared} private keys deleted`);
         });
 
-        const consent = this.consent;
         if (!consent) return;
         await this.step("stale consent requests", async () => {
             const failed = await consent.failStaleSending(now.getTime());

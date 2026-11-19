@@ -84,7 +84,8 @@ export type ArtefactRecordsView =
           /** How many records came without their content (contentOmitted). */
           omitted: number;
       }
-    | { available: false; artefactId: number; reason: "NOT_GRANTED" | "REVOKED" | "EXPIRED" | "ERASED" | "NOT_RECEIVED" };
+    /** CLOSED: ended by ClinicX with the rest of its request, after another facility was revoked or lapsed. */
+    | { available: false; artefactId: number; reason: "NOT_GRANTED" | "REVOKED" | "EXPIRED" | "CLOSED" | "ERASED" | "NOT_RECEIVED" };
 
 /** What acceptPush answers the HIP with: 202 when the page was taken for processing. */
 export interface PushAnswer {
@@ -841,7 +842,9 @@ export class HiuDataFlowService implements HealthInformationRequester {
     /**
      * Claims the transfer's one notify, settles its status, drops our private key, then sends
      * health-information/notify: RECEIVED when every stored entry decrypted and verified, else
-     * FAILED; hiStatus per care context, with granted care contexts that sent nothing ERRORED.
+     * FAILED; hiStatus per care context, with granted care contexts that sent nothing ERRORED. A
+     * transfer whose consent ended before anything arrived is closed FAILED with no notify: there is
+     * no care context left to report on.
      */
     private async completeTransfer(dataRequestId: number, asked: "complete" | "timeout"): Promise<void> {
         const notifyRequestId = randomUUID();
@@ -890,15 +893,22 @@ export class HiuDataFlowService implements HealthInformationRequester {
             }
         }
 
-        const sessionStatus: HiuNotifySessionStatus = reason === "complete" && entryOk && !entryFailed ? "RECEIVED" : "FAILED";
+        // The consent ended (revoked, closed or lapsed) while the transfer was open, and nothing it
+        // sent is left to report on: its care contexts were dropped with it, so the notify would carry
+        // no statusResponses, which ABDM refuses ("ABDM-9999: statusResponses is mandatory"). The
+        // transfer is closed FAILED here, and ABDM is not told.
+        const consentEnded = artefact !== null && artefact.status !== "GRANTED" && statusResponses.length === 0;
+        const sessionStatus: HiuNotifySessionStatus = !consentEnded && reason === "complete" && entryOk && !entryFailed ? "RECEIVED" : "FAILED";
         const error = sessionStatus === "RECEIVED"
             ? null
-            : reason === "timeout"
-              // Not "the provider did not send": a page that arrived and could not be stored counts here too.
-              ? `Only ${row.pagesReceived} of ${row.pageCount ?? "?"} pages were received and stored within ${settings.transferWindowMinutes} minutes.`
-              : entryOk
-                ? "Some entries could not be decrypted or failed their checksum."
-                : "No entry could be decrypted and verified.";
+            : consentEnded
+              ? "The consent ended before the records arrived."
+              : reason === "timeout"
+                // Not "the provider did not send": a page that arrived and could not be stored counts here too.
+                ? `Only ${row.pagesReceived} of ${row.pageCount ?? "?"} pages were received and stored within ${settings.transferWindowMinutes} minutes.`
+                : entryOk
+                  ? "Some entries could not be decrypted or failed their checksum."
+                  : "No entry could be decrypted and verified.";
 
         await this.store.updateDataRequest(row.id, {
             sessionStatus,
@@ -907,6 +917,12 @@ export class HiuDataFlowService implements HealthInformationRequester {
             error,
             careContextStatus: keys ? seal(JSON.stringify(statusResponses.map(({ careContextReference, hiStatus }) => ({ careContextReference, hiStatus }))), keys) : null,
         });
+
+        if (consentEnded) {
+            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DATA_NOTIFY_SENT, requestId: notifyRequestId, outcome: HIU_AUDIT_OUTCOMES.IGNORED, detail: "consent ended" });
+            console.warn(`[ABDM HIU] transfer for REQUEST-ID=${row.hiRequestId} closed FAILED: its consent ended (${artefact?.status === "EXPIRED" ? "LAPSED" : artefact?.status}) with nothing to report; no notify sent`);
+            return;
+        }
 
         if (!row.transactionId) {
             // ABDM never acknowledged the request, so there is no transaction to report on.
@@ -1064,9 +1080,10 @@ export class HiuDataFlowService implements HealthInformationRequester {
         if (!keys) throw hiuNotConfiguredError();
 
         const now = new Date(this.clock());
-        const unavailable = (reason: "NOT_GRANTED" | "REVOKED" | "EXPIRED" | "ERASED"): { view: ArtefactRecordsView } => ({ view: { available: false, artefactId: artefact.id, reason } });
+        const unavailable = (reason: "NOT_GRANTED" | "REVOKED" | "EXPIRED" | "CLOSED" | "ERASED"): { view: ArtefactRecordsView } => ({ view: { available: false, artefactId: artefact.id, reason } });
         if (artefact.status === "REVOKED") return unavailable("REVOKED");
         if (artefact.status === "EXPIRED") return unavailable("EXPIRED");
+        if (artefact.status === "CLOSED") return unavailable("CLOSED");
         if (artefact.status !== "GRANTED") return unavailable("NOT_GRANTED");
         if (artefact.recordsPurgedAt || (artefact.dataEraseAt && now.getTime() >= new Date(artefact.dataEraseAt).getTime())) return unavailable("ERASED");
         return { artefact, keys, now };

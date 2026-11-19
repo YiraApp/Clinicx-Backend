@@ -1,4 +1,4 @@
-import type { ConsentStatus } from "../../services/Abdm/hiu/hiu-enums.js";
+import type { StoredConsentStatus } from "../../services/Abdm/hiu/hiu-enums.js";
 import type { ConsentRequestRow } from "../../services/Abdm/hiu/hiu-consent.service.js";
 
 /**
@@ -15,10 +15,13 @@ export type HiuConsentQuery = (sql: string, parameters?: unknown[]) => Promise<a
  * already ended (another handler, or this call's own earlier try whose answer was lost). Small writes
  * only, so it commits at once even on a small database: the artefact's records are deleted afterwards,
  * a row at a time (purgeArtefactRecords), never in here.
+ *
+ * One ended artefact may change again: a CLOSED one (ClinicX's own ending) takes a REVOKED or EXPIRED
+ * ABDM reports for it later, so its card shows what ABDM said. Nothing else is ever overwritten.
  */
 export const END_ARTEFACT = `SET XACT_ABORT ON;
 BEGIN TRANSACTION;
-UPDATE AbdmHiuConsentArtefacts SET Status = @1, StatusAt = @2, CareContexts = NULL, UpdatedAt = @2 WHERE Id = @0 AND Status = 'GRANTED';
+UPDATE AbdmHiuConsentArtefacts SET Status = @1, StatusAt = @2, CareContexts = NULL, UpdatedAt = @2 WHERE Id = @0 AND (Status = 'GRANTED' OR (Status = 'CLOSED' AND @1 IN ('REVOKED', 'EXPIRED')));
 DECLARE @changed INT = @@ROWCOUNT;
 UPDATE AbdmHiuDataRequests SET PrivateKey = NULL WHERE ArtefactFk = @0;
 COMMIT TRANSACTION;
@@ -72,6 +75,70 @@ export const statusCheckParams = <T>(input: { id: number; requestId: string; at:
     [input.id, input.requestId, time(input.at), time(input.checkedBefore)];
 
 /**
+ * GRANTED artefacts past their delete-by time at @0: their granted DataEraseAt, else (details never
+ * fetched) their request's, returned as LapsedAt. The earliest first, at most @1. An artefact whose
+ * request row is gone counts by its own DataEraseAt only. Parameters in that order:
+ * lapsedArtefactsParams. Every time is bound from JS: the driver runs with useUTC=false, so the
+ * database's own clock reads hours off the stored values.
+ */
+export const LIST_LAPSED_ARTEFACTS = `SELECT TOP (@1) a.*, COALESCE(a.DataEraseAt, r.DataEraseAt) AS LapsedAt
+    FROM AbdmHiuConsentArtefacts a
+    LEFT JOIN AbdmHiuConsentRequests r ON r.Id = a.ConsentRequestFk
+    WHERE a.Status = 'GRANTED' AND COALESCE(a.DataEraseAt, r.DataEraseAt) <= @0
+      AND (a.DataEraseAt IS NOT NULL OR a.CreatedAt IS NULL OR a.CreatedAt < r.DataEraseAt OR a.FetchAttempts >= @2)
+    ORDER BY COALESCE(a.DataEraseAt, r.DataEraseAt), a.Id`;
+
+/**
+ * now, the limit, and how many fetches a grant without terms waits for (MAX_FETCH_ATTEMPTS): one
+ * stored after its request's delete-by time lapses by the request's time only once those are spent
+ * (the service's deleteByOf, the same rule).
+ */
+export const lapsedArtefactsParams = <T>(input: { now: Date; limit: number; maxFetchAttempts: number }, time: (date: Date) => T): unknown[] =>
+    [time(input.now), input.limit, input.maxFetchAttempts];
+
+/**
+ * Ends, as EXPIRED at its own DataEraseAt, every request still GRANTED with no artefacts whose
+ * DataEraseAt is at or before @0 (also its UpdatedAt). One statement, so two instances never both
+ * end one. Parameters: expireEmptyRequestsParams.
+ */
+export const EXPIRE_EMPTY_REQUESTS = `UPDATE r SET Status = 'EXPIRED', StatusAt = r.DataEraseAt, UpdatedAt = @0
+    OUTPUT inserted.Id, inserted.HospitalId, inserted.ConsentRequestId, inserted.StatusAt
+    FROM AbdmHiuConsentRequests r
+    WHERE r.Status = 'GRANTED' AND r.DataEraseAt <= @0
+      AND NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts a WHERE a.ConsentRequestFk = r.Id)`;
+
+export const expireEmptyRequestsParams = <T>(now: Date, time: (date: Date) => T): unknown[] => [time(now)];
+
+/**
+ * Requests whose stored status no longer follows their artefacts, at most @0: PARTLY_REVOKED (no
+ * longer written), GRANTED with an artefact revoked or lapsed, and REVOKED or EXPIRED through an
+ * artefact while another facility is still GRANTED. Settling each closes what is still open.
+ *
+ * Two more, so a handler that lost a race (with the sweep, or another instance) is put right by the
+ * next sweep:
+ *   - REVOKED or EXPIRED, but an artefact ended before that (or revoked at that same moment while
+ *     the request reads lapsed): the request did not take how it ended first.
+ *   - A CLOSED artefact that was open at its delete-by time (stored before it) and closed at or after
+ *     it: it had lapsed first, so settling moves it to EXPIRED and the request with it. One stored
+ *     already CLOSED (granted after its request ended) was never open, and is not picked.
+ * No time is bound: each clause compares stored values only.
+ */
+export const LIST_UNSETTLED_REQUESTS = `${SELECT_REQUEST}
+    WHERE r.Status = 'PARTLY_REVOKED'
+       OR (r.Status = 'GRANTED'
+           AND EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts e WHERE e.ConsentRequestFk = r.Id AND e.Status IN ('REVOKED', 'EXPIRED')))
+       OR (r.Status IN ('REVOKED', 'EXPIRED')
+           AND EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts e WHERE e.ConsentRequestFk = r.Id AND e.Status IN ('REVOKED', 'EXPIRED'))
+           AND EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts g WHERE g.ConsentRequestFk = r.Id AND g.Status = 'GRANTED'))
+       OR (r.Status IN ('REVOKED', 'EXPIRED')
+           AND EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts f WHERE f.ConsentRequestFk = r.Id AND f.Status IN ('REVOKED', 'EXPIRED')
+                       AND (f.StatusAt < r.StatusAt OR (f.StatusAt = r.StatusAt AND f.Status = 'REVOKED' AND r.Status = 'EXPIRED'))))
+       OR EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts c WHERE c.ConsentRequestFk = r.Id AND c.Status = 'CLOSED'
+                  AND COALESCE(c.DataEraseAt, r.DataEraseAt) <= c.StatusAt AND c.CreatedAt < COALESCE(c.DataEraseAt, r.DataEraseAt))
+    ORDER BY r.Id
+    OFFSET 0 ROWS FETCH NEXT @0 ROWS ONLY`;
+
+/**
  * An artefact's (alias a) record count as the records view shows it: the entries of one transfer,
  * its latest RECEIVED transfer holding entries, else its latest transfer holding entries (as
  * hiu-data.repository's SHOWN_TRANSFER), never the marker row of a page with no entries.
@@ -103,7 +170,8 @@ export const toRequestRow = (raw: any): ConsentRequestRow => ({
     dateTo: raw.DateTo,
     dataEraseAt: raw.DataEraseAt,
     accessMode: raw.AccessMode,
-    status: raw.Status as ConsentStatus,
+    // A legacy PARTLY_REVOKED still loads: the sweep settles it (settleRequests).
+    status: raw.Status as StoredConsentStatus,
     statusAt: raw.StatusAt,
     abdmErrorCode: raw.AbdmErrorCode ?? null,
     abdmError: raw.AbdmError ?? null,

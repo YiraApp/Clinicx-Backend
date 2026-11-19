@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     ABHA_ADDRESS_PATTERN,
+    ARTEFACT_STATUSES,
     CONSENT_STATUSES,
+    LEGACY_CONSENT_STATUSES,
+    STORED_ARTEFACT_STATUSES,
     HIU_ACCESS_MODES,
     HIU_FREQUENCY_UNITS,
     HIU_HI_TYPES,
@@ -13,6 +16,8 @@ import {
     hiuNotConfiguredError,
     isAbhaAddress,
     isAccessMode,
+    isArtefactStatus,
+    isConsentStatus,
     isDataPushUrl,
     isDateOnly,
     isFrequencyUnit,
@@ -55,7 +60,18 @@ test("the eight HI types, access modes and frequency units are the spec's enums"
     assert.ok(isAccessMode("VIEW") && !isAccessMode("view") && !isAccessMode("READ"));
     assert.deepEqual([...HIU_FREQUENCY_UNITS], ["HOUR", "DAY", "WEEK", "MONTH", "YEAR"]);
     assert.ok(isFrequencyUnit("HOUR") && !isFrequencyUnit("MINUTE"));
-    assert.deepEqual([...CONSENT_STATUSES], ["SENDING", "REQUESTED", "GRANTED", "PARTLY_REVOKED", "DENIED", "EXPIRED", "REVOKED", "FAILED"]);
+    assert.deepEqual([...CONSENT_STATUSES], ["SENDING", "REQUESTED", "GRANTED", "DENIED", "EXPIRED", "REVOKED", "FAILED"]);
+});
+
+test("PARTLY_REVOKED is only a legacy stored value, and CLOSED is ClinicX's own artefact status that ABDM never sends", () => {
+    // One facility revoked or lapsed ends the whole request: there is no partial status any more.
+    assert.ok(!isConsentStatus("PARTLY_REVOKED"));
+    assert.deepEqual([...LEGACY_CONSENT_STATUSES], ["PARTLY_REVOKED"]);
+    // ABDM's artefact statuses, as on-fetch checks them; CLOSED is stored, never accepted from ABDM.
+    assert.deepEqual([...ARTEFACT_STATUSES], ["GRANTED", "REVOKED", "EXPIRED", "DENIED"]);
+    assert.deepEqual([...STORED_ARTEFACT_STATUSES], ["GRANTED", "REVOKED", "EXPIRED", "DENIED", "CLOSED"]);
+    assert.ok(!isArtefactStatus("CLOSED"));
+    assert.ok(isArtefactStatus("REVOKED"));
 });
 
 test("HI type lists need at least one known type and no repeats", () => {

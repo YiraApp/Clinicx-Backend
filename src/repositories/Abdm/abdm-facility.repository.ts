@@ -36,7 +36,7 @@ export const abdmFacilityRepository: FacilityStore = {
             `SELECT COUNT(*) AS OpenRequests FROM AbdmHiuConsentRequests r
              WHERE r.HospitalId = @0 AND r.HiuId = @1 AND (
                 (r.Status IN ('SENDING', 'REQUESTED') AND r.DataEraseAt > @2)
-                OR (r.Status IN ('GRANTED', 'PARTLY_REVOKED') AND NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts a WHERE a.ConsentRequestFk = r.Id))
+                OR (r.Status = 'GRANTED' AND NOT EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts a WHERE a.ConsentRequestFk = r.Id))
                 OR EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts a WHERE a.ConsentRequestFk = r.Id AND a.Status = 'GRANTED' AND (a.DataEraseAt IS NULL OR a.DataEraseAt > @2))
                 OR EXISTS (SELECT 1 FROM AbdmHiuConsentArtefacts a INNER JOIN AbdmHiuDataRequests d ON d.ArtefactFk = a.Id
                            WHERE a.ConsentRequestFk = r.Id AND d.SessionStatus IN ('REQUESTED', 'RECEIVING')))`,

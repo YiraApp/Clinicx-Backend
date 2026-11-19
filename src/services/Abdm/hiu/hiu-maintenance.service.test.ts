@@ -72,6 +72,14 @@ test("one sweep purges due records with an audit per artefact, fails timed-out t
 
 test("with the consent service, the sweep also fails requests with no on-init, fetches stuck artefacts again and asks about waiting requests", async () => {
     const consent = {
+        async expireLapsed(now: number) {
+            steps.push(`lapsed ${new Date(now).toISOString()}`);
+            return 0;
+        },
+        async settleRequests(now: number) {
+            steps.push(`settle ${new Date(now).toISOString()}`);
+            return 0;
+        },
         async failStaleSending(now: number) {
             steps.push(`stale-sending ${new Date(now).toISOString()}`);
             if (faults.has("stale-sending")) throw Object.assign(new Error("db down"), { code: "ETIMEOUT" });
@@ -99,6 +107,58 @@ test("with the consent service, the sweep also fails requests with no on-init, f
     faults.add("refetch");
     await service.runOnce(NOW);
     assert.equal(steps.at(-1), `waiting ${NOW.toISOString()}`, "failing steps do not stop the check of waiting requests");
+});
+
+test("lapsed consents end, then requests settle, before the purge, so what they end is deleted in the same sweep", async () => {
+    const consent = {
+        async expireLapsed(now: number) {
+            steps.push(`lapsed ${new Date(now).toISOString()}`);
+            if (faults.has("lapsed")) throw Object.assign(new Error("db down"), { code: "ETIMEOUT" });
+            return 2;
+        },
+        async settleRequests(now: number) {
+            steps.push(`settle ${new Date(now).toISOString()}`);
+            if (faults.has("settle")) throw Object.assign(new Error("db down"), { code: "EREQUEST" });
+            return 1;
+        },
+        async failStaleSending() { steps.push("stale-sending"); return 0; },
+        async retryFetches() { steps.push("refetch"); return 0; },
+        async checkWaitingRequests() { steps.push("waiting"); return 0; },
+    };
+    const service = new HiuMaintenanceService({ store, dataFlow, consent, audit });
+    await service.runOnce(NOW);
+    assert.deepEqual(steps, [
+        `lapsed ${NOW.toISOString()}`,
+        `settle ${NOW.toISOString()}`,
+        `purge ${NOW.toISOString()}`,
+        "timeouts 50",
+        "stale",
+        `keys ${NOW.toISOString()}`,
+        "stale-sending",
+        "refetch",
+        "waiting",
+    ]);
+    assert.ok(logged.some((line) => line.includes("2 consents past their delete-by time ended")));
+    assert.ok(logged.some((line) => line.includes("1 record requests settled")));
+    assert.ok(!logged.some((line) => /expired/i.test(line)));
+
+    // A failing step is logged by code; the others, the purge included, still run.
+    steps = [];
+    faults.add("lapsed");
+    faults.add("settle");
+    await service.runOnce(NOW);
+    assert.deepEqual(steps.slice(0, 3), [`lapsed ${NOW.toISOString()}`, `settle ${NOW.toISOString()}`, `purge ${NOW.toISOString()}`]);
+    assert.equal(steps.at(-1), "waiting");
+    assert.ok(logged.some((line) => line.includes('"lapsed consents" failed: ETIMEOUT')));
+    assert.ok(logged.some((line) => line.includes('"settle requests" failed: EREQUEST')));
+    assert.ok(!logged.some((line) => line.includes("db down")));
+});
+
+test("without the consent service, no consent step runs and the purge comes first", async () => {
+    const service = new HiuMaintenanceService({ store, dataFlow, audit });
+    await service.runOnce(NOW);
+    assert.equal(steps[0], `purge ${NOW.toISOString()}`);
+    assert.ok(!steps.some((step) => /^(lapsed|settle|stale-sending|refetch|waiting)/.test(step)));
 });
 
 test("a failing step is logged by code and the other steps still run", async () => {

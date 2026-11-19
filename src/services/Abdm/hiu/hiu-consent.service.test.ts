@@ -11,6 +11,8 @@ import {
     ConsentInitUnansweredError,
     HiuConsentService,
     artefactStage,
+    deleteByOf,
+    requestEnding,
     requestStatusFrom,
     type ArtefactWithTransfer,
     type ConsentRequestRow,
@@ -65,6 +67,8 @@ let purgeLog: string[];
 let purgeFault: Error | null;
 /** Artefacts another handler ends (as the given status) just before this one's END_ARTEFACT runs. */
 let endedElsewhere: Map<number, "REVOKED" | "EXPIRED">;
+/** Runs just before each END_ARTEFACT, as another handler (or the sweep) committing in between would. */
+let beforeEnd: ((id: number, status: string, at: Date) => void | Promise<void>) | null;
 let service: HiuConsentService;
 
 const patients = new Map([
@@ -166,7 +170,7 @@ const store: HiuConsentStore = {
             artefacts.push({
                 id: ++ids, consentArtefactId, consentRequestFk, hospitalId, hipId: null, hipName: null, status, statusAt: at,
                 hiTypes: null, dateFrom: null, dateTo: null, dataEraseAt: null, accessMode: null, fetchRequestId: null, fetchedAt: null,
-                recordsPurgedAt: status === "GRANTED" ? null : at, transfer: null, recordCount: 0,
+                recordsPurgedAt: status === "GRANTED" ? null : at, createdAt: at, transfer: null, recordCount: 0,
             });
             touchedAt.set(ids, at.getTime());
         }
@@ -176,6 +180,7 @@ const store: HiuConsentStore = {
         if (artefact.fetchRequestId || artefact.fetchedAt || artefact.status !== "GRANTED") return false;
         artefact.fetchRequestId = requestId;
         fetchAttempts.set(id, (fetchAttempts.get(id) ?? 0) + 1);
+        artefact.fetchAttempts = fetchAttempts.get(id);
         touchedAt.set(id, at.getTime());
         return true;
     },
@@ -198,6 +203,7 @@ const store: HiuConsentStore = {
         if (artefact.fetchRequestId !== previousRequestId) return false;
         artefact.fetchRequestId = requestId;
         fetchAttempts.set(artefactId, (fetchAttempts.get(artefactId) ?? 0) + 1);
+        artefact.fetchAttempts = fetchAttempts.get(artefactId);
         touchedAt.set(artefactId, at.getTime());
         return true;
     },
@@ -209,14 +215,54 @@ const store: HiuConsentStore = {
         return true;
     },
     async endArtefact(id, status, at) {
-        // Status, key and care contexts only, and only while GRANTED: the records stay until purgeRecords.
+        // Status, key and care contexts only, and only while GRANTED (or CLOSED, taking ABDM's REVOKED
+        // or EXPIRED), like END_ARTEFACT: the records stay until purgeRecords.
+        await beforeEnd?.(id, status, at);
         privateKeys.set(id, null);
         const artefact = artefacts.find((a) => a.id === id)!;
         if (endedElsewhere.has(id)) Object.assign(artefact, { status: endedElsewhere.get(id), statusAt: at });
-        if (artefact.status !== "GRANTED") return false;
+        const fromClosed = artefact.status === "CLOSED" && (status === "REVOKED" || status === "EXPIRED");
+        if (artefact.status !== "GRANTED" && !fromClosed) return false;
         Object.assign(artefact, { status, statusAt: at });
-        purgeLog.push(`end ${id}`);
+        purgeLog.push(status === "CLOSED" ? `close ${id}` : `end ${id}`);
         return true;
+    },
+    async listLapsedArtefacts({ now: at, limit, maxFetchAttempts }) {
+        // As LIST_LAPSED_ARTEFACTS: its granted delete-by time, else its request's when it was stored
+        // before it or its fetches are spent; an artefact with no request row counts by its own only.
+        const lapsedAt = (artefact: ArtefactWithTransfer) => {
+            const row = requests.find((r) => r.id === artefact.consentRequestFk) ?? null;
+            const storedAfter = row && artefact.createdAt && new Date(artefact.createdAt).getTime() >= new Date(row.dataEraseAt).getTime();
+            if (!artefact.dataEraseAt && storedAfter && (artefact.fetchAttempts ?? 0) < maxFetchAttempts) return null;
+            return artefact.dataEraseAt ?? row?.dataEraseAt ?? null;
+        };
+        return artefacts.filter((artefact) => artefact.status === "GRANTED" && lapsedAt(artefact) && new Date(lapsedAt(artefact)!).getTime() <= at.getTime())
+            .sort((x, y) => new Date(lapsedAt(x)!).getTime() - new Date(lapsedAt(y)!).getTime() || x.id - y.id)
+            .slice(0, limit).map((artefact) => ({ ...artefact, lapsedAt: new Date(lapsedAt(artefact)!) }));
+    },
+    async expireEmptyRequests(at) {
+        const due = requests.filter((row) => row.status === "GRANTED" && new Date(row.dataEraseAt).getTime() <= at.getTime()
+            && !artefacts.some((artefact) => artefact.consentRequestFk === row.id));
+        for (const row of due) Object.assign(row, { status: "EXPIRED", statusAt: new Date(row.dataEraseAt) });
+        return due.map((row) => ({ id: row.id, hospitalId: row.hospitalId, consentRequestId: row.consentRequestId, statusAt: row.statusAt }));
+    },
+    async listUnsettledRequests(limit) {
+        // As LIST_UNSETTLED_REQUESTS, clause by clause.
+        const of = (row: ConsentRequestRow) => artefacts.filter((artefact) => artefact.consentRequestFk === row.id);
+        const ended = (artefact: ArtefactWithTransfer) => artefact.status === "REVOKED" || artefact.status === "EXPIRED";
+        const time = (date: Date | null | undefined) => new Date(date!).getTime();
+        const endedBefore = (row: ConsentRequestRow) => of(row).some((artefact) => ended(artefact)
+            && (time(artefact.statusAt) < time(row.statusAt) || (time(artefact.statusAt) === time(row.statusAt) && artefact.status === "REVOKED" && row.status === "EXPIRED")));
+        const closedAfterLapse = (row: ConsentRequestRow) => of(row).some((artefact) => {
+            const deleteBy = time(artefact.dataEraseAt ?? row.dataEraseAt);
+            return artefact.status === "CLOSED" && deleteBy <= time(artefact.statusAt) && time(artefact.createdAt) < deleteBy;
+        });
+        return requests.filter((row) => row.status === "PARTLY_REVOKED"
+            || (row.status === "GRANTED" && of(row).some(ended))
+            || ((row.status === "REVOKED" || row.status === "EXPIRED") && of(row).some(ended) && of(row).some((artefact) => artefact.status === "GRANTED"))
+            || ((row.status === "REVOKED" || row.status === "EXPIRED") && endedBefore(row))
+            || closedAfterLapse(row))
+            .slice(0, limit).map(withName);
     },
     async purgeRecords(id, at) {
         // What the caller had already sent (the acknowledgement) and saw ended when the purge began.
@@ -332,6 +378,7 @@ beforeEach(() => {
     purgeLog = [];
     purgeFault = null;
     endedElsewhere = new Map();
+    beforeEnd = null;
     fetchAttempts = new Map();
     touchedAt = new Map();
     requestTouchedAt = new Map();
@@ -1059,39 +1106,107 @@ test("a notification for a consent request we do not hold is dropped, unacknowle
     assert.ok(audits.some((event) => event.event === "NOTIFY_GRANTED" && event.outcome === "IGNORED" && event.hospitalId === null));
 });
 
-test("REVOKED blocks the named artefact and deletes its records; the request becomes PARTLY_REVOKED, then REVOKED", async () => {
+test("REVOKED of one facility ends the whole request: the other is CLOSED, and ABDM's acknowledgement names only the revoked one", async () => {
     const row = await raised();
     await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
     const [a, b] = artefacts;
     records.push({ artefactFk: a!.id }, { artefactFk: a!.id }, { artefactFk: b!.id });
     privateKeys.set(a!.id, "sealed-key");
+    privateKeys.set(b!.id, "sealed-key");
     const fetchesBefore = pathsCalled().filter((path) => path === "fetch").length;
 
     // A revocation names only the artefacts (the spec's REVOKED carries consentArtefacts).
+    now += 60_000;
+    const revokedAt = now;
     await notify("REVOKED", [ARTEFACT_A], "revoke-1", null);
     assert.equal(a!.status, "REVOKED");
-    assert.ok(a!.recordsPurgedAt);
+    assert.equal(b!.status, "CLOSED", "ClinicX's own status: ABDM still holds it as granted");
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt, "since the revocation");
+    assert.deepEqual(records, [], "no record of the request is left, the other facility's included");
+    assert.ok(a!.recordsPurgedAt && b!.recordsPurgedAt);
     assert.equal(privateKeys.get(a!.id), null);
-    assert.deepEqual(records, [{ artefactFk: b!.id }]);
-    assert.equal(row.status, "PARTLY_REVOKED");
+    assert.equal(privateKeys.get(b!.id), null);
     assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }], response: { requestId: "revoke-1" } });
+    // Both end (access stops) before ABDM is answered; both are deleted only after.
+    assert.deepEqual(purgeLog, [
+        `end ${a!.id}`,
+        `close ${b!.id}`,
+        `purge ${a!.id} after request/hiu/on-notify (REVOKED)`,
+        `purge ${b!.id} after request/hiu/on-notify (CLOSED)`,
+    ]);
+    assert.deepEqual(audits.filter((event) => event.event === "ARTEFACT_CLOSED").map((event) => [event.artefactId, event.consentRequestId, event.outcome, event.detail]), [
+        [ARTEFACT_B, CONSENT_REQUEST, "OK", "request ended: another provider was revoked"],
+    ]);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => [event.artefactId, event.detail]), [
+        [ARTEFACT_A, "REVOKED: 2 records"],
+        [ARTEFACT_B, "CLOSED: 1 records"],
+    ]);
 
     // Repeated: nothing more happens.
     await notify("REVOKED", [ARTEFACT_A], "revoke-1", null);
-    assert.equal(audits.filter((event) => event.event === "RECORD_PURGED").length, 1);
+    assert.equal(audits.filter((event) => event.event === "RECORD_PURGED").length, 2);
+    assert.equal(audits.filter((event) => event.event === "ARTEFACT_CLOSED").length, 1);
 
+    // ABDM's own REVOKED for the closed one later: its card takes ABDM's word, and ABDM is answered.
+    now += 60_000;
     await notify("REVOKED", [ARTEFACT_B], "revoke-2");
     assert.equal(b!.status, "REVOKED");
-    assert.equal(records.length, 0);
+    assert.equal(new Date(b!.statusAt).getTime(), now);
+    assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_B }], response: { requestId: "revoke-2" } });
     assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt, "the request still ended at the first revocation");
+    assert.equal(audits.filter((event) => event.event === "RECORD_PURGED").length, 2, "its records went when it was closed");
     assert.equal(pathsCalled().filter((path) => path === "fetch").length, fetchesBefore, "a revocation never fetches");
 
     const detail = await service.detail(ctx, row.id);
-    assert.deepEqual(detail.artefacts.map((artefact) => artefact.stage), ["BLOCKED", "BLOCKED"]);
-    // A GRANTED arriving late (out of order) does not bring a revoked artefact back.
+    assert.deepEqual(detail.artefacts.map((artefact) => [artefact.status, artefact.stage]), [["REVOKED", "BLOCKED"], ["REVOKED", "BLOCKED"]]);
+    assert.ok(detail.events.some((event) => event.event === "ARTEFACT_CLOSED"), "History shows ClinicX closing it");
+    // A GRANTED arriving late (out of order) does not reopen the request, and fetches nothing.
     await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B], "late-grant");
     assert.equal(row.status, "REVOKED");
+    assert.deepEqual(artefacts.map((artefact) => artefact.status), ["REVOKED", "REVOKED"]);
     assert.equal(pathsCalled().filter((path) => path === "fetch").length, fetchesBefore);
+});
+
+test("a closed facility's own EXPIRED from ABDM shows on its card; the request keeps how it ended first", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    const [a, b] = artefacts;
+    const revokedAt = now;
+    await notify("REVOKED", [ARTEFACT_A], "revoke-a", null);
+    assert.equal(b!.status, "CLOSED");
+    now += 60_000;
+    await notify("EXPIRED", [ARTEFACT_B], "expire-b");
+    assert.equal(b!.status, "EXPIRED");
+    assert.equal(a!.status, "REVOKED");
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt);
+    assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_B }], response: { requestId: "expire-b" } });
+});
+
+test("a GRANTED notify adding artefacts to a request already ended stores them CLOSED and fetches nothing", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    await notify("REVOKED", [ARTEFACT_A], "revoke", null);
+    const fetches = pathsCalled().filter((path) => path === "fetch").length;
+
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B], "late-grant");
+    const b = artefacts.find((artefact) => artefact.consentArtefactId === ARTEFACT_B)!;
+    assert.equal(b.status, "CLOSED");
+    assert.ok(b.recordsPurgedAt, "nothing can be received under it");
+    assert.equal(row.status, "REVOKED");
+    // ABDM is answered for every artefact it named, as for any GRANTED.
+    assert.deepEqual(calls.at(-1)!.call.body, {
+        acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }, { status: "OK", consentId: ARTEFACT_B }],
+        response: { requestId: "late-grant" },
+    });
+    assert.deepEqual(audits.filter((event) => event.event === "ARTEFACT_CLOSED").map((event) => [event.artefactId, event.detail]), [
+        [ARTEFACT_B, "granted after the request ended"],
+    ]);
+    assert.equal(pathsCalled().filter((path) => path === "fetch").length, fetches);
+    now += 60 * 60_000;
+    assert.equal(await service.retryFetches(), 0);
 });
 
 test("REVOKED commits the artefact's end and acknowledges ABDM before its records are deleted", async () => {
@@ -1221,15 +1336,45 @@ test("on-fetch reads dataEraseAt inside permission too, and asks for nothing onc
     assert.deepEqual(requested, [artefacts[0]!.id], "past dataEraseAt: no request");
 });
 
-test("on-fetch that is not GRANTED blocks the artefact and asks for nothing", async () => {
+test("on-fetch REVOKED for one facility ends the whole request: the other is CLOSED, nothing is asked for and no records are left", async () => {
     const row = await raised();
     await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
-    records.push({ artefactFk: artefacts[0]!.id }, { artefactFk: artefacts[1]!.id });
+    const [a, b] = artefacts;
+    records.push({ artefactFk: a!.id }, { artefactFk: b!.id });
     await service.onFetch({ ...onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), consent: { status: "REVOKED", consentDetail: null, signature: "" } }, headers("f"));
-    assert.equal(artefacts[0]!.status, "REVOKED");
-    assert.equal(row.status, "PARTLY_REVOKED");
+    assert.equal(a!.status, "REVOKED");
+    assert.equal(b!.status, "CLOSED");
+    assert.equal(row.status, "REVOKED");
     assert.deepEqual(requested, []);
-    assert.deepEqual(records, [{ artefactFk: artefacts[1]!.id }], "the revoked artefact's records are deleted, the other's kept");
+    assert.deepEqual(records, [], "the revoked facility's records and the closed one's are deleted");
+    assert.ok(audits.some((event) => event.event === "ARTEFACT_CLOSED" && event.artefactId === ARTEFACT_B));
+
+    // The closed facility's own answer, GRANTED, arriving after: nothing is stored or asked for.
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_B), ARTEFACT_B), headers("f2"));
+    assert.equal(b!.status, "CLOSED");
+    assert.equal(b!.fetchedAt, null);
+    assert.deepEqual(requested, []);
+});
+
+test("on-fetch DENIED for one facility while another is still granted leaves the request GRANTED; nothing is closed", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    const [a, b] = artefacts;
+    records.push({ artefactFk: b!.id });
+    const denied = (requestId: string, consentId: string) => ({ ...onFetchBody(requestId, consentId), consent: { status: "DENIED", consentDetail: null, signature: "" } });
+
+    await service.onFetch(denied(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), headers("f"));
+    assert.equal(a!.status, "DENIED", "the denied facility shows Denied on its own card");
+    assert.equal(b!.status, "GRANTED");
+    assert.equal(row.status, "GRANTED", "a denial is not an ending: the other facility stays usable");
+    assert.equal(records.length, 1, "the granted facility's records stay");
+    assert.ok(!audits.some((event) => event.event === "ARTEFACT_CLOSED"));
+    assert.equal(await service.settleRequests(), 0);
+
+    // Once no facility is granted any more, the request is DENIED.
+    await service.onFetch(denied(fetchRequestIdOf(ARTEFACT_B), ARTEFACT_B), headers("f2"));
+    assert.equal(b!.status, "DENIED");
+    assert.equal(row.status, "DENIED");
 });
 
 test("an on-fetch arriving after a revocation stores nothing on the revoked artefact and asks for nothing", async () => {
@@ -1286,6 +1431,11 @@ test("list and detail are scoped to the staff member's hospital", async () => {
     assert.equal((await service.list(otherHospital, { page: 1, pageSize: 20 })).total, 0);
     assert.equal((await service.list(ctx, { page: 1, pageSize: 20, status: "DENIED" })).total, 0);
     await assertRefused(service.list(ctx, { page: 1, pageSize: 20, status: "LOST" }), "validation", 400);
+    // No longer a status: a legacy row is settled by the sweep, never filtered for.
+    await assertRefused(service.list(ctx, { page: 1, pageSize: 20, status: "PARTLY_REVOKED" }), "validation", 400);
+    for (const status of ["SENDING", "REQUESTED", "GRANTED", "DENIED", "EXPIRED", "REVOKED", "FAILED"]) {
+        assert.equal((await service.list(ctx, { page: 1, pageSize: 20, status })).total, status === "REQUESTED" ? 1 : 0);
+    }
     await assertRefused(service.detail(otherHospital, row.id), "not-found", 404);
     await assertRefused(service.detail(ctx, 999), "not-found", 404);
 });
@@ -1303,18 +1453,524 @@ test("artefact stage follows the artefact and its latest transfer", () => {
     assert.equal(artefactStage({ ...base, transfer: transfer("FAILED") }, now), "TRANSFER_FAILED");
     assert.equal(artefactStage({ ...base, recordsPurgedAt: new Date(now), transfer: transfer("RECEIVED") }, now), "RECORDS_DELETED");
     assert.equal(artefactStage({ ...base, dataEraseAt: new Date(now - 1) }, now), "RECORDS_DELETED");
-    for (const status of ["REVOKED", "EXPIRED", "DENIED"] as const) {
+    for (const status of ["REVOKED", "EXPIRED", "DENIED", "CLOSED"] as const) {
         assert.equal(artefactStage({ ...base, status, recordsPurgedAt: new Date(now) }, now), "BLOCKED");
     }
 });
 
-test("a request's status follows its artefacts", () => {
+test("a request's status is how it ended first: any facility revoked or lapsed ends it, CLOSED never decides", () => {
+    const at = (minutes: number) => new Date(now + minutes * 60_000);
+    const G = (minutes = 0) => ({ status: "GRANTED" as const, statusAt: at(minutes) });
+    const R = (minutes = 0) => ({ status: "REVOKED" as const, statusAt: at(minutes) });
+    const E = (minutes = 0) => ({ status: "EXPIRED" as const, statusAt: at(minutes) });
+    const C = (minutes = 0) => ({ status: "CLOSED" as const, statusAt: at(minutes) });
+    const D = (minutes = 0) => ({ status: "DENIED" as const, statusAt: at(minutes) });
+
     assert.equal(requestStatusFrom([]), null);
-    assert.equal(requestStatusFrom([{ status: "GRANTED" }, { status: "GRANTED" }]), "GRANTED");
-    assert.equal(requestStatusFrom([{ status: "GRANTED" }, { status: "REVOKED" }]), "PARTLY_REVOKED");
-    assert.equal(requestStatusFrom([{ status: "REVOKED" }, { status: "EXPIRED" }]), "REVOKED");
-    assert.equal(requestStatusFrom([{ status: "EXPIRED" }]), "EXPIRED");
-    assert.equal(requestStatusFrom([{ status: "DENIED" }]), "DENIED");
+    assert.equal(requestStatusFrom([G(), G()]), "GRANTED");
+    assert.equal(requestStatusFrom([G(), R(1)]), "REVOKED");
+    assert.equal(requestStatusFrom([G(), E(1)]), "EXPIRED");
+    assert.equal(requestStatusFrom([R(5), E(1)]), "EXPIRED", "a revocation after the consent lapsed leaves it lapsed");
+    assert.equal(requestStatusFrom([R(1), E(5)]), "REVOKED");
+    assert.equal(requestStatusFrom([E(1), R(1)]), "REVOKED", "at the same moment the revocation counts");
+    assert.equal(requestStatusFrom([G(), C(2), R(1)]), "REVOKED");
+    assert.equal(requestStatusFrom([C(0), E(1)]), "EXPIRED");
+    assert.equal(requestStatusFrom([E(1)]), "EXPIRED");
+    // A denial is not an ending: while any facility is still granted the request is GRANTED, and
+    // only DENIED when none is.
+    assert.equal(requestStatusFrom([D()]), "DENIED");
+    assert.equal(requestStatusFrom([D(), D(1)]), "DENIED");
+    assert.equal(requestStatusFrom([G(), D()]), "GRANTED", "the denied facility shows Denied on its own card; the others stay usable");
+    assert.equal(requestStatusFrom([D(), G()]), "GRANTED");
+    assert.equal(requestStatusFrom([G(), D(), R(1)]), "REVOKED", "an ending still decides");
+    assert.equal(requestStatusFrom([D(), E(2), R(3)]), "EXPIRED", "by the first ending");
+
+    assert.deepEqual(requestEnding([R(5), E(1), C(0)]), { status: "EXPIRED", at: at(1) });
+    assert.equal(requestEnding([G(), C(), D()]), null);
+
+    // Never a partial status, whatever the mix.
+    const kinds = [G, R, E, C, D];
+    for (const x of kinds) for (const y of kinds) for (const z of kinds) {
+        assert.notEqual(requestStatusFrom([x(1), y(2), z(3)]) as string, "PARTLY_REVOKED");
+    }
+});
+
+// ---- the sweep: consents past their delete-by time, and requests to settle ----
+
+const GRANTED_ERASE_AT = "2026-11-30T00:00:00.000Z";
+/** The request's own delete-by time (the form's 2026-12-31 23:59 IST). */
+const REQUEST_ERASE_AT = "2026-12-31T18:29:00.000Z";
+const lapsedAudits = () => audits.filter((event) => event.event === "CONSENT_LAPSED");
+
+test("a granted consent past its delete-by time is ended by ClinicX at that time, its records deleted, with no ABDM call", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), headers("f"));
+    const a = artefacts[0]!;
+    records.push({ artefactFk: a.id }, { artefactFk: a.id });
+    const callsBefore = calls.length;
+
+    now = Date.parse(GRANTED_ERASE_AT) - 1;
+    assert.equal(await service.expireLapsed(), 0, "not before its delete-by time");
+    assert.equal(a.status, "GRANTED");
+
+    // The sweep runs up to a minute after: the status still says when the consent lapsed.
+    now = Date.parse(GRANTED_ERASE_AT) + 40_000;
+    assert.equal(await service.expireLapsed(), 1);
+    assert.equal(a.status, "EXPIRED");
+    assert.equal(new Date(a.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT, "since the delete-by time, not the sweep's");
+    assert.deepEqual(records, []);
+    assert.ok(a.recordsPurgedAt);
+    assert.equal(privateKeys.get(a.id), null);
+    assert.equal(calls.length, callsBefore, "ABDM is not called: it ends a granted consent on its own clock");
+    assert.deepEqual(lapsedAudits().map((event) => [event.hospitalId, event.consentRequestId, event.artefactId, event.outcome, event.detail]), [
+        [19, CONSENT_REQUEST, ARTEFACT_A, "OK", "at its delete-by time, by ClinicX"],
+    ]);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => event.detail), ["LAPSED: 2 records"]);
+    const detail = await service.detail(ctx, row.id);
+    assert.deepEqual(detail.artefacts.map((artefact) => [artefact.status, artefact.stage]), [["EXPIRED", "BLOCKED"]]);
+    assert.ok(detail.events.some((event) => event.event === "CONSENT_LAPSED"), "History shows ClinicX ending it");
+
+    // A second run changes nothing.
+    now += 60_000;
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(lapsedAudits().length, 1);
+
+    // A later word from ABDM is acknowledged and leaves it as it ended.
+    for (const status of ["REVOKED", "EXPIRED"]) {
+        await notify(status, [ARTEFACT_A], `late-${status}`);
+        assert.equal(a.status, "EXPIRED");
+        assert.equal(row.status, "EXPIRED");
+        assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+        assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }], response: { requestId: `late-${status}` } });
+    }
+    assert.ok(!audits.some((event) => /expired/i.test(String(event.detail ?? ""))), "no audit note uses the word the frontend reads as a login lapse");
+});
+
+test("the first facility to lapse ends the whole request: a later delete-by time is CLOSED with it", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), headers("fa"));
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_B), ARTEFACT_B, { dataEraseAt: "2026-12-15T00:00:00.000Z" }), headers("fb"));
+    const [a, b] = artefacts;
+    records.push({ artefactFk: a!.id }, { artefactFk: b!.id }, { artefactFk: b!.id });
+
+    now = Date.parse(GRANTED_ERASE_AT) + 30_000;
+    assert.equal(await service.expireLapsed(), 1);
+    assert.equal(a!.status, "EXPIRED");
+    assert.equal(b!.status, "CLOSED");
+    assert.equal(new Date(b!.statusAt).getTime(), now, "closed when ClinicX closed it");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.deepEqual(records, []);
+    assert.deepEqual(audits.filter((event) => event.event === "ARTEFACT_CLOSED").map((event) => [event.artefactId, event.detail]), [
+        [ARTEFACT_B, "request ended: another provider lapsed"],
+    ]);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => [event.artefactId, event.detail]), [
+        [ARTEFACT_A, "LAPSED: 1 records"],
+        [ARTEFACT_B, "CLOSED: 2 records"],
+    ]);
+
+    // Its own delete-by time passing later changes nothing: it is no longer granted.
+    now = Date.parse("2026-12-15T00:01:00.000Z");
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(b!.status, "CLOSED");
+});
+
+test("facilities that lapse at the same time all end EXPIRED; one whose details never came lapses at the request's delete-by time", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    // A's details came (granted with the request's own delete-by time); B's never did.
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A, { dataEraseAt: REQUEST_ERASE_AT }), headers("fa"));
+    const [a, b] = artefacts;
+    assert.equal(b!.dataEraseAt, null);
+
+    now = Date.parse(REQUEST_ERASE_AT) + 10_000;
+    assert.equal(await service.expireLapsed(), 2);
+    assert.deepEqual([a!.status, b!.status], ["EXPIRED", "EXPIRED"]);
+    assert.equal(new Date(b!.statusAt).toISOString(), REQUEST_ERASE_AT);
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(lapsedAudits().length, 2);
+    assert.ok(!audits.some((event) => event.event === "ARTEFACT_CLOSED"));
+    // A fetch the sweep would have retried is never sent for it now.
+    assert.equal(await service.retryFetches(), 0);
+});
+
+test("a revocation after the consent lapsed leaves the request EXPIRED; the revocation still shows on its card and in History", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), headers("fa"));
+    const [a, b] = artefacts;
+    now = Date.parse(GRANTED_ERASE_AT) + 20_000;
+    await service.expireLapsed();
+    assert.equal(b!.status, "CLOSED");
+
+    now = Date.parse(GRANTED_ERASE_AT) + 5 * 60_000;
+    await notify("REVOKED", [ARTEFACT_B], "revoke-after", null);
+    assert.equal(a!.status, "EXPIRED");
+    assert.equal(b!.status, "REVOKED", "ABDM's word on the facility it named");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.ok(audits.some((event) => event.event === "NOTIFY_REVOKED" && event.outcome === "OK"));
+});
+
+test("the sweep settles a backlog the same way: a lapse before a revocation stays EXPIRED", async () => {
+    // As request 64 was left: A granted and past its delete-by time at 12:10, B revoked at 12:14:54.
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), headers("fa"));
+    const [a, b] = artefacts;
+    const revokedAt = new Date(Date.parse(GRANTED_ERASE_AT) + 294_000);
+    Object.assign(b!, { status: "REVOKED", statusAt: revokedAt, recordsPurgedAt: revokedAt });
+    Object.assign(row, { status: "PARTLY_REVOKED", statusAt: revokedAt });
+
+    now = Date.parse(GRANTED_ERASE_AT) + 24 * 60 * 60_000;
+    // The sweep's order: lapsed consents, then requests to settle.
+    assert.equal(await service.expireLapsed(), 1);
+    assert.equal(await service.settleRequests(), 0, "already settled by the lapse");
+    assert.equal(a!.status, "EXPIRED");
+    assert.equal(new Date(a!.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+});
+
+// ---- endings that arrive before the sweep has recorded a lapse, and races with it ----
+
+const ARTEFACT_C = "dddddddd-0000-4000-8000-00000000000d";
+const LATER_ERASE_AT = "2026-12-15T00:00:00.000Z";
+
+/** A request whose facility A lapses at GRANTED_ERASE_AT and B at LATER_ERASE_AT, each with records. */
+const grantedTwo = async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A), headers("fa"));
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_B), ARTEFACT_B, { dataEraseAt: LATER_ERASE_AT }), headers("fb"));
+    const [a, b] = artefacts;
+    records.push({ artefactFk: a!.id }, { artefactFk: b!.id }, { artefactFk: b!.id });
+    return { row, a: a!, b: b! };
+};
+
+test("a revocation that arrives after another facility's delete-by time, before the sweep, leaves the request EXPIRED then; the lapsed one is not CLOSED", async () => {
+    const { row, a, b } = await grantedTwo();
+    // A's delete-by time passed 15 s ago (as 12:10:00 and a revoke at 12:10:15); the sweep has not run yet.
+    now = Date.parse(GRANTED_ERASE_AT) + 15_000;
+    await notify("REVOKED", [ARTEFACT_B], "revoke-b", null);
+
+    assert.equal(a.status, "EXPIRED");
+    assert.equal(new Date(a.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(b.status, "REVOKED", "the facility ABDM named keeps ABDM's word on its card");
+    assert.equal(new Date(b.statusAt).getTime(), now);
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT, "how it ended first: the lapse");
+    assert.ok(!audits.some((event) => event.event === "ARTEFACT_CLOSED"), "nothing is CLOSED: A lapsed and B was revoked");
+    assert.deepEqual(lapsedAudits().map((event) => [event.artefactId, event.detail]), [[ARTEFACT_A, "at its delete-by time, by ClinicX"]]);
+    // ABDM is answered only for what it named; both facilities' records go after that.
+    assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_B }], response: { requestId: "revoke-b" } });
+    assert.deepEqual(purgeLog, [`end ${a.id}`, `end ${b.id}`, `purge ${a.id} after request/hiu/on-notify (EXPIRED)`, `purge ${b.id} after request/hiu/on-notify (REVOKED)`]);
+    assert.deepEqual(records, []);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => [event.artefactId, event.detail]), [
+        [ARTEFACT_A, "LAPSED: 1 records"],
+        [ARTEFACT_B, "REVOKED: 2 records"],
+    ]);
+
+    // The sweep then finds nothing left to do.
+    now += 60_000;
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(await service.settleRequests(), 0);
+    assert.equal(row.status, "EXPIRED");
+});
+
+test("a revocation or an on-fetch REVOKED naming the facility that already lapsed, before the sweep, leaves it and the request EXPIRED", async () => {
+    const { row, a, b } = await grantedTwo();
+    now = Date.parse(GRANTED_ERASE_AT) + 15_000;
+    await notify("REVOKED", [ARTEFACT_A], "revoke-a", null);
+    assert.equal(a.status, "EXPIRED", "it had lapsed before ABDM's word");
+    assert.equal(b.status, "CLOSED");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.deepEqual(calls.at(-1)!.call.body, { acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }], response: { requestId: "revoke-a" } });
+
+    // The same through on-fetch, on a second request: C lapsed at the request's own delete-by time
+    // (its details never came), D's on-fetch answers REVOKED after it.
+    const second = await service.create(ctx, input({ purposeCode: "PUBHLTH" }));
+    const secondRow = requests.find((r) => r.id === second.id)!;
+    await service.onInit({ consentRequest: { id: "eeeeeeee-1111-4000-8000-00000000000e" }, error: null, response: { requestId: secondRow.initRequestId } }, headers("cb-init-2"));
+    await notify("GRANTED", [ARTEFACT_C, "ffffffff-1111-4000-8000-00000000000f"], "grant-2", "eeeeeeee-1111-4000-8000-00000000000e");
+    const [c, d] = artefacts.filter((artefact) => artefact.consentRequestFk === secondRow.id);
+    now = Date.parse(REQUEST_ERASE_AT) + 15_000;
+    await service.onFetch({ ...onFetchBody(d!.fetchRequestId!, d!.consentArtefactId), consent: { status: "REVOKED", consentDetail: null, signature: "" } }, headers("fd"));
+    assert.equal(c!.status, "EXPIRED");
+    assert.equal(new Date(c!.statusAt).toISOString(), REQUEST_ERASE_AT);
+    assert.equal(d!.status, "EXPIRED", "it had lapsed too, at the same delete-by time");
+    assert.equal(secondRow.status, "EXPIRED");
+    assert.equal(new Date(secondRow.statusAt).toISOString(), REQUEST_ERASE_AT);
+});
+
+test("a GRANTED adding facilities after another one's delete-by time, before the sweep, stores them CLOSED and fetches nothing", async () => {
+    const { row, a, b } = await grantedTwo();
+    const fetches = pathsCalled().filter((path) => path === "fetch").length;
+    now = Date.parse(GRANTED_ERASE_AT) + 15_000;
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B, ARTEFACT_C], "late-grant");
+
+    const c = artefacts.find((artefact) => artefact.consentArtefactId === ARTEFACT_C)!;
+    assert.equal(a.status, "EXPIRED");
+    assert.equal(new Date(a.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(b.status, "CLOSED");
+    assert.equal(c.status, "CLOSED");
+    assert.ok(c.recordsPurgedAt, "nothing can be received under it");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(pathsCalled().filter((path) => path === "fetch").length, fetches, "no consent/fetch for a request that has ended");
+    assert.deepEqual(calls.at(-1)!.call.body, {
+        acknowledgement: [{ status: "OK", consentId: ARTEFACT_A }, { status: "OK", consentId: ARTEFACT_B }, { status: "OK", consentId: ARTEFACT_C }],
+        response: { requestId: "late-grant" },
+    });
+    assert.deepEqual(audits.filter((event) => event.event === "ARTEFACT_CLOSED").map((event) => [event.artefactId, event.detail]), [
+        [ARTEFACT_C, "granted after the request ended"],
+        [ARTEFACT_B, "request ended: another provider lapsed"],
+    ]);
+    assert.deepEqual(lapsedAudits().map((event) => event.artefactId), [ARTEFACT_A]);
+    assert.deepEqual(records, [], "the lapsed facility's records and the closed one's are deleted");
+
+    now += 60 * 60_000;
+    assert.equal(await service.retryFetches(), 0);
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(await service.settleRequests(), 0);
+});
+
+test("a facility CLOSED after it had already lapsed is moved to lapsed by the sweep, and the request to EXPIRED at that time", async () => {
+    const { row, a, b } = await grantedTwo();
+    // As a revocation handled before this check left it: B revoked 15 s after A's delete-by time, A CLOSED with it.
+    const revokedAt = new Date(Date.parse(GRANTED_ERASE_AT) + 15_000);
+    Object.assign(a, { status: "CLOSED", statusAt: revokedAt, recordsPurgedAt: revokedAt });
+    Object.assign(b, { status: "REVOKED", statusAt: revokedAt, recordsPurgedAt: revokedAt });
+    Object.assign(row, { status: "REVOKED", statusAt: revokedAt });
+    records = [];
+
+    now = revokedAt.getTime() + 60_000;
+    assert.equal(await service.expireLapsed(), 0, "nothing is still granted");
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(a.status, "EXPIRED");
+    assert.equal(new Date(a.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(b.status, "REVOKED");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT, "re-settled to when it lapsed");
+    assert.deepEqual(lapsedAudits().map((event) => [event.artefactId, event.detail]), [[ARTEFACT_A, "at its delete-by time, by ClinicX; it had been closed after that"]]);
+    assert.ok(!audits.some((event) => event.event === "RECORD_PURGED"), "its records went when it was closed");
+    assert.ok(!audits.some((event) => /expired/i.test(String(event.detail ?? ""))));
+    assert.equal(await service.settleRequests(), 0, "settled once");
+});
+
+test("a facility stored CLOSED because it was granted after its request ended is never taken as lapsed", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A, { dataEraseAt: "2027-01-31T00:00:00.000Z" }), headers("fa"));
+    const revokedAt = now;
+    await notify("REVOKED", [ARTEFACT_A], "revoke-a", null);
+    // Another facility's grant long after the request's own delete-by time: stored CLOSED then.
+    now = Date.parse(REQUEST_ERASE_AT) + 60 * 60_000;
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B], "late-grant");
+    const b = artefacts.find((artefact) => artefact.consentArtefactId === ARTEFACT_B)!;
+    assert.equal(b.status, "CLOSED");
+
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(await service.settleRequests(), 0);
+    assert.equal(b.status, "CLOSED", "it was never open, so it never lapsed");
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt);
+    assert.equal(lapsedAudits().length, 0);
+});
+
+test("the sweep puts back a request that does not read how it ended first", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    const [a, b] = artefacts;
+    // As a revocation that lost a race with the sweep left it: A lapsed, B revoked 20 s later, and
+    // the revocation's stale write left the request REVOKED since then.
+    const lapsedAt = new Date(GRANTED_ERASE_AT);
+    const revokedAt = new Date(lapsedAt.getTime() + 20_000);
+    Object.assign(a!, { status: "EXPIRED", statusAt: lapsedAt, recordsPurgedAt: lapsedAt });
+    Object.assign(b!, { status: "REVOKED", statusAt: revokedAt, recordsPurgedAt: revokedAt });
+    Object.assign(row, { status: "REVOKED", statusAt: revokedAt });
+    now = revokedAt.getTime() + 60_000;
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(await service.settleRequests(), 0);
+
+    // The right status since a later time is put back too: REVOKED since the first revocation.
+    const firstAt = new Date(now);
+    Object.assign(a!, { status: "REVOKED", statusAt: firstAt });
+    Object.assign(b!, { status: "REVOKED", statusAt: new Date(now + 30_000) });
+    Object.assign(row, { status: "REVOKED", statusAt: new Date(now + 30_000) });
+    now += 60_000;
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), firstAt.getTime());
+    assert.equal(await service.settleRequests(), 0);
+
+    // A revocation at the same moment as a lapse counts as the revocation.
+    Object.assign(a!, { status: "EXPIRED", statusAt: firstAt });
+    Object.assign(b!, { status: "REVOKED", statusAt: firstAt });
+    Object.assign(row, { status: "EXPIRED", statusAt: firstAt });
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), firstAt.getTime());
+    assert.equal(await service.settleRequests(), 0);
+    assert.ok(!audits.some((event) => event.event === "ARTEFACT_CLOSED"), "nothing was open to close");
+});
+
+test("a request ABDM ended before any facility was stored keeps that ending, and is not picked by every sweep", async () => {
+    const row = await raised();
+    await notify("EXPIRED", [], "expire-all");
+    const endedAt = now;
+    assert.equal(row.status, "EXPIRED");
+    now += 60_000;
+    await notify("GRANTED", [ARTEFACT_A], "late-grant");
+    now += 60_000;
+    await notify("REVOKED", [ARTEFACT_A], "revoke-a", null);
+    assert.equal(artefacts[0]!.status, "REVOKED", "the closed facility takes ABDM's word");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).getTime(), endedAt);
+    assert.equal(await service.settleRequests(), 0);
+});
+
+test("settle reads the artefacts again when one it would close was ended meanwhile, and writes how the request ended first", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B, ARTEFACT_C]);
+    const [a, b, c] = artefacts;
+    // Another handler revoked A a moment earlier: its end of A and its status write commit after this
+    // revocation of B has read the artefacts, just before it would close A.
+    const earlier = new Date(now - 5_000);
+    let fired = false;
+    beforeEnd = (id, status) => {
+        if (fired || id !== a!.id || status !== "CLOSED") return;
+        fired = true;
+        Object.assign(a!, { status: "REVOKED", statusAt: earlier });
+        Object.assign(row, { status: "REVOKED", statusAt: earlier });
+    };
+    await notify("REVOKED", [ARTEFACT_B], "revoke-b", null);
+    assert.ok(fired);
+    assert.equal(a!.status, "REVOKED", "the other handler's ending stands");
+    assert.equal(b!.status, "REVOKED");
+    assert.equal(c!.status, "CLOSED");
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), earlier.getTime(), "since the first revocation, not this later one");
+    assert.deepEqual(audits.filter((event) => event.event === "ARTEFACT_CLOSED").map((event) => event.artefactId), [ARTEFACT_C]);
+    assert.equal(await service.settleRequests(), 0);
+});
+
+test("the sweep running in the middle of a revocation's handling still leaves the request how it ended first", async () => {
+    const { row, a, b } = await grantedTwo();
+    now = Date.parse(GRANTED_ERASE_AT) + 20_000;
+    // The whole sweep commits between this revocation's read of A and its own end of A.
+    let fired = false;
+    beforeEnd = async (id) => {
+        if (fired || id !== a.id) return;
+        fired = true;
+        await service.expireLapsed();
+    };
+    await notify("REVOKED", [ARTEFACT_B], "revoke-b", null);
+    assert.ok(fired);
+    assert.equal(a.status, "EXPIRED");
+    assert.equal(new Date(a.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(b.status, "REVOKED", "ABDM's word on the facility it named");
+    assert.equal(row.status, "EXPIRED");
+    assert.equal(new Date(row.statusAt).toISOString(), GRANTED_ERASE_AT);
+    assert.equal(lapsedAudits().length, 1, "lapsed once, by the sweep");
+    assert.deepEqual(records, []);
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(await service.settleRequests(), 0);
+});
+
+test("an artefact whose request row is gone is just ended; one with no delete-by time at all is left alone", async () => {
+    const orphan = (id: number, consentArtefactId: string, dataEraseAt: Date | null): ArtefactWithTransfer => ({
+        id, consentArtefactId, consentRequestFk: 999, hospitalId: 19, hipId: null, hipName: null, status: "GRANTED", statusAt: new Date(now - 86_400_000),
+        hiTypes: null, dateFrom: null, dateTo: null, dataEraseAt, accessMode: null, fetchRequestId: null, fetchedAt: dataEraseAt, recordsPurgedAt: null,
+        transfer: null, recordCount: 0,
+    });
+    artefacts.push(orphan(900, "orphan-1", new Date(now - 60_000)), orphan(901, "orphan-2", null));
+    records.push({ artefactFk: 900 });
+
+    assert.equal(await service.expireLapsed(), 1);
+    assert.equal(artefacts[0]!.status, "EXPIRED");
+    assert.equal(new Date(artefacts[0]!.statusAt).getTime(), now - 60_000);
+    assert.equal(artefacts[1]!.status, "GRANTED");
+    assert.deepEqual(records, []);
+    assert.deepEqual(lapsedAudits().map((event) => [event.hospitalId, event.consentRequestId, event.artefactId]), [[19, null, "orphan-1"]]);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => [event.artefactId, event.detail]), [["orphan-1", "LAPSED: 1 records"]]);
+});
+
+test("a request granted with no artefacts lapses at its delete-by time; a REQUESTED one past it is left to ABDM", async () => {
+    const granted = await raised();
+    granted.status = "GRANTED";
+    const waiting = await service.create(ctx, input({ purposeCode: "PUBHLTH" }));
+    const waitingRow = requests.find((row) => row.id === waiting.id)!;
+    await service.onInit({ consentRequest: { id: "dddddddd-0000-4000-8000-00000000000d" }, error: null, response: { requestId: waitingRow.initRequestId } }, headers("cb-init-2"));
+    assert.equal(waitingRow.status, "REQUESTED");
+    const callsBefore = calls.length;
+
+    now = Date.parse(REQUEST_ERASE_AT) + 60_000;
+    assert.equal(await service.expireLapsed(), 1);
+    assert.equal(granted.status, "EXPIRED");
+    assert.equal(new Date(granted.statusAt).toISOString(), REQUEST_ERASE_AT);
+    assert.equal(waitingRow.status, "REQUESTED", "ABDM ends a request the patient never answered");
+    assert.equal(calls.length, callsBefore);
+    assert.deepEqual(lapsedAudits().map((event) => [event.hospitalId, event.consentRequestId, event.artefactId ?? null, event.detail]), [
+        [19, CONSENT_REQUEST, null, "at its delete-by time, by ClinicX; no artefacts"],
+    ]);
+    assert.equal(await service.expireLapsed(), 0);
+});
+
+test("a legacy PARTLY_REVOKED request is settled by the sweep: REVOKED since the revocation, its other facilities CLOSED and their records deleted", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B, "dddddddd-0000-4000-8000-00000000000d"]);
+    const [a, b, c] = artefacts;
+    // As an earlier version left it: A revoked, B and C still granted and readable.
+    const revokedAt = new Date(now + 60_000);
+    Object.assign(a!, { status: "REVOKED", statusAt: revokedAt, recordsPurgedAt: revokedAt });
+    Object.assign(row, { status: "PARTLY_REVOKED", statusAt: revokedAt });
+    records.push({ artefactFk: b!.id }, { artefactFk: b!.id }, { artefactFk: c!.id });
+    // It still loads as it is until then.
+    assert.equal((await service.list(ctx, { page: 1, pageSize: 20 })).items[0]!.status, "PARTLY_REVOKED");
+
+    now += 60 * 60_000;
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt.getTime());
+    assert.deepEqual([a!.status, b!.status, c!.status], ["REVOKED", "CLOSED", "CLOSED"]);
+    assert.deepEqual(records, []);
+    assert.ok(b!.recordsPurgedAt && c!.recordsPurgedAt);
+    assert.equal(audits.filter((event) => event.event === "ARTEFACT_CLOSED").length, 2);
+    assert.deepEqual(audits.filter((event) => event.event === "RECORD_PURGED").map((event) => event.detail), ["CLOSED: 2 records", "CLOSED: 1 records"]);
+    assert.equal(pathsCalled().filter((path) => path === "request/hiu/on-notify").length, 1, "ABDM is told nothing of it");
+
+    assert.equal(await service.settleRequests(), 0, "nothing left to settle");
+});
+
+test("the sweep corrects a GRANTED request with a facility revoked, and an ended one with a facility still open", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    const [a, b] = artefacts;
+    // A handler that stopped part way: A revoked, the request still GRANTED.
+    Object.assign(a!, { status: "REVOKED", statusAt: new Date(now) });
+    const revokedAt = now;
+    now += 60_000;
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt);
+    assert.equal(b!.status, "CLOSED");
+
+    // REVOKED already, with a facility left GRANTED: it is closed, the request's time kept.
+    Object.assign(b!, { status: "GRANTED" });
+    now += 60_000;
+    assert.equal(await service.settleRequests(), 1);
+    assert.equal(b!.status, "CLOSED");
+    assert.equal(row.status, "REVOKED");
+    assert.equal(new Date(row.statusAt).getTime(), revokedAt);
+    assert.equal(await service.settleRequests(), 0);
 });
 
 test("no log line carries the ABHA address or a care-context reference", async () => {
@@ -1499,4 +2155,57 @@ test("a request with no HIU id on record is never asked about or fetched as anot
     await service.onStatus({ consentRequest: { id: CONSENT_REQUEST, status: "REVOKED" }, response: { requestId: "none" } }, headers("cb"));
     await notify("REVOKED", [ARTEFACT_A], "revoke-1");
     assert.equal(artefact.status, "GRANTED");
+});
+
+test("a grant without its terms yet waits for them when it came after its request's delete-by time; only spent fetches fall back", () => {
+    const row = { dataEraseAt: new Date(REQUEST_ERASE_AT) };
+    const before = new Date(Date.parse(REQUEST_ERASE_AT) - 60_000);
+    const after = new Date(Date.parse(REQUEST_ERASE_AT) + 60_000);
+    assert.equal(deleteByOf({ dataEraseAt: new Date(LATER_ERASE_AT), createdAt: after }, row)?.toISOString(), new Date(LATER_ERASE_AT).toISOString(), "its granted time always wins");
+    assert.equal(deleteByOf({ dataEraseAt: null, createdAt: before }, row)?.toISOString(), REQUEST_ERASE_AT, "open at the request's time: that time");
+    assert.equal(deleteByOf({ dataEraseAt: null, createdAt: after, fetchAttempts: 1 }, row), null, "the patient may have granted longer: wait for on-fetch");
+    assert.equal(deleteByOf({ dataEraseAt: null, createdAt: after, fetchAttempts: 4 }, row)?.toISOString(), REQUEST_ERASE_AT, "fetches spent: it cannot stay open for ever");
+    assert.equal(deleteByOf({ dataEraseAt: null }, row)?.toISOString(), REQUEST_ERASE_AT, "when it was stored is unknown: as before");
+    assert.equal(deleteByOf({ dataEraseAt: null, createdAt: after }, null), null);
+});
+
+test("a grant that arrives after the requested delete-by time is fetched, not lapsed on arrival, and lasts to its own granted time", async () => {
+    const row = await raised();
+    now = Date.parse(REQUEST_ERASE_AT) + 60_000;
+    await notify("GRANTED", [ARTEFACT_A]);
+    const [a] = artefacts;
+    assert.equal(a!.status, "GRANTED");
+    assert.equal(row.status, "GRANTED");
+    assert.ok(fetchRequestIdOf(ARTEFACT_A), "its consent/fetch went out");
+    assert.equal(lapsedAudits().length, 0);
+    assert.equal(await service.expireLapsed(), 0, "nothing to go by until its terms arrive");
+
+    const grantedUntil = "2027-01-31T00:00:00.000Z";
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A, { dataEraseAt: grantedUntil }), headers("fa"));
+    assert.equal(await service.expireLapsed(), 0);
+    assert.equal(row.status, "GRANTED");
+    now = Date.parse(grantedUntil) + 1_000;
+    assert.equal(await service.expireLapsed(), 1);
+    assert.equal(a!.status, "EXPIRED");
+    assert.equal(new Date(a!.statusAt).toISOString(), grantedUntil);
+    assert.equal(row.status, "EXPIRED");
+});
+
+test("a second grant after the requested delete-by time never closes a facility still inside its own granted time", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A]);
+    const grantedUntil = "2027-03-31T00:00:00.000Z";
+    await service.onFetch(onFetchBody(fetchRequestIdOf(ARTEFACT_A), ARTEFACT_A, { dataEraseAt: grantedUntil }), headers("fa"));
+    const a = artefacts.find((x) => x.consentArtefactId === ARTEFACT_A)!;
+    records.push({ artefactFk: a.id });
+
+    now = Date.parse(REQUEST_ERASE_AT) + 60_000;
+    await notify("GRANTED", [ARTEFACT_B], "notify-granted-b");
+    const b = artefacts.find((x) => x.consentArtefactId === ARTEFACT_B)!;
+    assert.equal(a.status, "GRANTED");
+    assert.equal(b.status, "GRANTED", "waits for its own terms");
+    assert.equal(row.status, "GRANTED");
+    assert.equal(records.length, 1, "A's record stays");
+    assert.ok(!audits.some((event) => event.event === "ARTEFACT_CLOSED" || event.event === "CONSENT_LAPSED"));
+    assert.equal(await service.expireLapsed(), 0);
 });

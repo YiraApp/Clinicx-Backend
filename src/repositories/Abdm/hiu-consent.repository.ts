@@ -5,14 +5,19 @@ import { HiuConsentRequest } from "../../models/Abdm/hiu-consent-request.model.j
 import { HiuConsentArtefact } from "../../models/Abdm/hiu-consent-artefact.model.js";
 import { hiuDataRepository } from "./hiu-data.repository.js";
 import { User } from "../../models/Account/user.model.js";
-import type { ArtefactStatus } from "../../services/Abdm/hiu/hiu-enums.js";
+import type { StoredArtefactStatus } from "../../services/Abdm/hiu/hiu-enums.js";
 import {
     ARTEFACT_RECORD_COUNT,
     CLAIM_STATUS_CHECK,
     END_ARTEFACT,
+    EXPIRE_EMPTY_REQUESTS,
+    expireEmptyRequestsParams,
     findPatientIn,
     jsonList,
+    LIST_LAPSED_ARTEFACTS,
+    LIST_UNSETTLED_REQUESTS,
     LIST_WAITING_REQUESTS,
+    lapsedArtefactsParams,
     SELECT_REQUEST,
     statusCheckParams,
     toRequestRow,
@@ -49,7 +54,7 @@ const toArtefactRow = (raw: any): ArtefactRow => ({
     hospitalId: Number(raw.HospitalId),
     hipId: raw.HipId ?? null,
     hipName: raw.HipName ?? null,
-    status: raw.Status as ArtefactStatus,
+    status: raw.Status as StoredArtefactStatus,
     statusAt: raw.StatusAt,
     hiTypes: raw.HiTypes ? jsonList(raw.HiTypes) : null,
     dateFrom: raw.DateFrom ?? null,
@@ -59,6 +64,8 @@ const toArtefactRow = (raw: any): ArtefactRow => ({
     fetchRequestId: raw.FetchRequestId ?? null,
     fetchedAt: raw.FetchedAt ?? null,
     recordsPurgedAt: raw.RecordsPurgedAt ?? null,
+    createdAt: raw.CreatedAt ?? null,
+    fetchAttempts: Number(raw.FetchAttempts ?? 0),
 });
 
 const toRequestColumns = (changes: ConsentRequestChanges): Partial<HiuConsentRequest> => {
@@ -276,7 +283,7 @@ export class HiuConsentRepository implements HiuConsentStore {
         return row ? toArtefactRow(row) : null;
     }
 
-    async addArtefacts(input: { consentRequestFk: number; hospitalId: number; consentArtefactIds: string[]; at: Date; status?: "GRANTED" | "REVOKED" | "EXPIRED" }): Promise<void> {
+    async addArtefacts(input: { consentRequestFk: number; hospitalId: number; consentArtefactIds: string[]; at: Date; status?: "GRANTED" | "REVOKED" | "EXPIRED" | "CLOSED" }): Promise<void> {
         if (input.consentArtefactIds.length === 0) return;
         const status = input.status ?? "GRANTED";
         const existing = new Set((await this.artefacts.find({
@@ -363,13 +370,34 @@ export class HiuConsentRepository implements HiuConsentStore {
         return (result.affected ?? 0) > 0;
     }
 
-    async endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED", when: Date): Promise<boolean> {
-        // One short batch, tried again on a timeout or deadlock (it ends a GRANTED artefact only).
+    async endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED" | "CLOSED", when: Date): Promise<boolean> {
+        // One short batch, tried again on a timeout or deadlock (it ends a GRANTED artefact, or moves a CLOSED one to ABDM's word).
         const rows = await retryTransient(
             () => AppDataSource.query(END_ARTEFACT, [artefactId, status, at(when)]),
             { label: "artefact end" },
         );
         return Number(rows?.[0]?.Changed) === 1;
+    }
+
+    async listLapsedArtefacts(input: { now: Date; limit: number; maxFetchAttempts: number }): Promise<(ArtefactRow & { lapsedAt: Date })[]> {
+        const rows = await AppDataSource.query(LIST_LAPSED_ARTEFACTS, lapsedArtefactsParams(input, at));
+        return (Array.isArray(rows) ? rows : []).map((raw: any) => ({ ...toArtefactRow(raw), lapsedAt: raw.LapsedAt }));
+    }
+
+    async expireEmptyRequests(now: Date): Promise<{ id: number; hospitalId: number; consentRequestId: string | null; statusAt: Date }[]> {
+        const rows = await AppDataSource.query(EXPIRE_EMPTY_REQUESTS, expireEmptyRequestsParams(now, at));
+        return (Array.isArray(rows) ? rows : []).map((row: any) => ({
+            id: Number(row.Id),
+            hospitalId: Number(row.HospitalId),
+            consentRequestId: row.ConsentRequestId ?? null,
+            statusAt: row.StatusAt,
+        }));
+    }
+
+    async listUnsettledRequests(limit: number): Promise<ConsentRequestRow[]> {
+        // Compares stored times only, so nothing but the limit is bound.
+        const rows = await AppDataSource.query(LIST_UNSETTLED_REQUESTS, [limit]);
+        return (Array.isArray(rows) ? rows : []).map(toRequestRow);
     }
 
     async purgeRecords(artefactId: number, when: Date): Promise<number> {

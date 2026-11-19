@@ -21,6 +21,7 @@ import {
     isAbhaAddress,
     isAccessMode,
     isArtefactStatus,
+    isConsentStatus,
     isDateOnly,
     isFrequencyUnit,
     isHiType,
@@ -30,9 +31,10 @@ import {
     parseHiTypes,
     purposeText,
     type ArtefactStage,
-    type ArtefactStatus,
     type ConsentStatus,
     type NotifyConsentStatus,
+    type StoredArtefactStatus,
+    type StoredConsentStatus,
 } from "./hiu-enums.js";
 
 /**
@@ -44,6 +46,11 @@ import {
  *   we acknowledge on hiu/on-notify (one entry per artefact), then for EACH granted artefact
  *   consent/fetch (REQUEST-ID stored first)                             ──► on-fetch: what was granted
  *   and hand the artefact to the data-flow service (HealthInformationRequester).
+ *
+ * A request ends as a whole, with its first ending: the patient revoking any one facility, or any
+ * one facility's consent lapsing at its delete-by time (ClinicX ends that itself: ABDM sends no
+ * notice). Its other facilities are then CLOSED, ClinicX's own status that ABDM is never told of,
+ * and every record received under the request is deleted (settle).
  *
  * Per tenant: a request is raised as its hospital's HIU id (AbdmFacilities: HiuId, else HipId),
  * stored on the row; status, fetch and the data flow then use the row's id, and a callback is
@@ -99,7 +106,8 @@ export interface NewConsentRequestInput {
 
 export interface ConsentRequestSummary {
     id: number;
-    status: ConsentStatus;
+    /** A legacy PARTLY_REVOKED shows until the sweep settles the row (within a minute). */
+    status: StoredConsentStatus;
     statusAt: string;
     createdAt: string;
     /** ABDM's id, once on-init arrives. */
@@ -125,7 +133,8 @@ export interface ConsentRequestSummary {
 export interface ArtefactView {
     id: number;
     consentArtefactId: string;
-    status: "GRANTED" | "REVOKED" | "EXPIRED" | "DENIED";
+    /** ABDM's status, or CLOSED: ended by ClinicX with the rest of the request. */
+    status: StoredArtefactStatus;
     statusAt: string;
     hip: { id: string; name: string | null } | null;
     /** What the patient granted (ISO date-times), which may differ from what was asked. Null until on-fetch. */
@@ -173,7 +182,7 @@ export interface ConsentRequestRow {
     dateTo: Date;
     dataEraseAt: Date;
     accessMode: string;
-    status: ConsentStatus;
+    status: StoredConsentStatus;
     statusAt: Date;
     abdmErrorCode: string | null;
     abdmError: string | null;
@@ -183,10 +192,11 @@ export interface ConsentRequestRow {
 
 export type NewConsentRequestRow = Omit<
     ConsentRequestRow,
-    "id" | "createdAt" | "patientName" | "patientAbhaNumber" | "artefactCount" | "consentRequestId" | "statusRequestId" | "abdmErrorCode" | "abdmError"
->;
+    "id" | "createdAt" | "patientName" | "patientAbhaNumber" | "artefactCount" | "consentRequestId" | "statusRequestId" | "abdmErrorCode" | "abdmError" | "status"
+> & { status: ConsentStatus };
 
-export type ConsentRequestChanges = Partial<Pick<ConsentRequestRow, "consentRequestId" | "statusRequestId" | "status" | "statusAt" | "abdmErrorCode" | "abdmError">>;
+/** A legacy status is only ever read, never written. */
+export type ConsentRequestChanges = Partial<Pick<ConsentRequestRow, "consentRequestId" | "statusRequestId" | "statusAt" | "abdmErrorCode" | "abdmError"> & { status: ConsentStatus }>;
 
 export interface ArtefactRow {
     id: number;
@@ -195,7 +205,7 @@ export interface ArtefactRow {
     hospitalId: number;
     hipId: string | null;
     hipName: string | null;
-    status: ArtefactStatus;
+    status: StoredArtefactStatus;
     statusAt: Date;
     /** Granted terms, null until on-fetch. */
     hiTypes: string[] | null;
@@ -206,6 +216,13 @@ export interface ArtefactRow {
     fetchRequestId: string | null;
     fetchedAt: Date | null;
     recordsPurgedAt: Date | null;
+    /**
+     * When it was stored (the GRANTED notify, or an ending that named it first). Tells a CLOSED
+     * artefact that was open at its delete-by time from one stored already closed. Absent: unknown.
+     */
+    createdAt?: Date | null;
+    /** How many consent/fetch calls were sent for it: a grant still without terms after the last one stops waiting (deleteByOf). */
+    fetchAttempts?: number;
 }
 
 /** The artefact's latest health-information request (AbdmHiuDataRequests), as the stage needs it. */
@@ -285,7 +302,7 @@ export interface HiuConsentStore {
      * Stores each id not yet stored, as [status] (GRANTED when omitted; an ended one also gets
      * RecordsPurgedAt). A repeat (or a concurrent duplicate) adds nothing.
      */
-    addArtefacts(input: { consentRequestFk: number; hospitalId: number; consentArtefactIds: string[]; at: Date; status?: "GRANTED" | "REVOKED" | "EXPIRED" }): Promise<void>;
+    addArtefacts(input: { consentRequestFk: number; hospitalId: number; consentArtefactIds: string[]; at: Date; status?: "GRANTED" | "REVOKED" | "EXPIRED" | "CLOSED" }): Promise<void>;
     /**
      * Sets FetchRequestId (and counts the attempt) only while it is null and the artefact is GRANTED
      * and not fetched; false when another fetch holds it.
@@ -307,11 +324,32 @@ export interface HiuConsentStore {
     saveFetchedDetail(artefactId: number, detail: FetchedDetail): Promise<boolean>;
     /**
      * Ends an artefact that is still GRANTED, in one short transaction (tried again on a timeout or
-     * deadlock): sets [status], nulls PrivateKey on its data requests and drops its sealed care
-     * contexts, so its records can no longer be read or added to. True when this call ended it; false
-     * when it had already ended. What was stored is deleted afterwards (purgeRecords).
+     * deadlock): sets [status] at [at], nulls PrivateKey on its data requests and drops its sealed
+     * care contexts, so its records can no longer be read or added to. True when this call ended it;
+     * false when it had already ended. What was stored is deleted afterwards (purgeRecords). A CLOSED
+     * artefact still takes a REVOKED or EXPIRED (ABDM's word wins over ClinicX's); nothing else that
+     * has ended changes again.
      */
-    endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED", at: Date): Promise<boolean>;
+    endArtefact(artefactId: number, status: "REVOKED" | "EXPIRED" | "DENIED" | "CLOSED", at: Date): Promise<boolean>;
+    /**
+     * GRANTED artefacts past their delete-by time at [now] (their granted DataEraseAt, else their
+     * request's), with that time as lapsedAt, the earliest first, at most [limit]. One whose request
+     * row is gone counts by its own DataEraseAt only.
+     */
+    listLapsedArtefacts(input: { now: Date; limit: number; maxFetchAttempts: number }): Promise<(ArtefactRow & { lapsedAt: Date })[]>;
+    /**
+     * Ends as EXPIRED, at its own DataEraseAt, every request still GRANTED with no artefacts whose
+     * DataEraseAt is at or before [now], in one statement. Returns the ones it ended.
+     */
+    expireEmptyRequests(now: Date): Promise<{ id: number; hospitalId: number; consentRequestId: string | null; statusAt: Date }[]>;
+    /**
+     * Requests whose stored status no longer follows their artefacts, at most [limit]: a legacy
+     * PARTLY_REVOKED, a GRANTED one with an artefact revoked or lapsed, an ended one with a facility
+     * still GRANTED, an ended one whose status or time is not how it ended first (an artefact ended
+     * earlier, or was revoked at the same moment while it reads lapsed), and one with a CLOSED
+     * artefact that was open at its delete-by time and closed at or after it.
+     */
+    listUnsettledRequests(limit: number): Promise<ConsentRequestRow[]>;
     /**
      * Deletes an ended artefact's AbdmHiuRecords rows, a row at a time, and sets RecordsPurgedAt once
      * none is left (also when there were none). Returns how many it deleted; throws (a RecordPurgeError
@@ -395,6 +433,14 @@ const FETCH_RETRY_AFTER_MS = 5 * 60_000;
 const MAX_FETCH_ATTEMPTS = 4;
 /** Artefacts the sweep fetches again per run; the rest wait for the next run. */
 const FETCH_RETRY_BATCH = 20;
+/** Lapsed artefacts the sweep ends per run, and requests it settles per run; the rest wait for the next run. */
+const LAPSE_BATCH = 100;
+const SETTLE_BATCH = 50;
+/**
+ * How many times settle reads a request's artefacts when another handler (or instance, or the
+ * sweep) changed one under it; anything still off after that is put right by the next sweep.
+ */
+const SETTLE_READS = 3;
 /**
  * dateRange.to is kept this far behind our clock: ABDM refuses a date "in the future" by its own
  * clock ("Date must be a present/before date"), and the two clocks can differ by a few seconds.
@@ -423,7 +469,21 @@ const abdmId = (value: unknown): string | null => {
     return ABDM_ID_PATTERN.test(id) ? id : null;
 };
 
-const isFinalForInit = (status: ConsentStatus): boolean => status !== "SENDING" && status !== "FAILED";
+const isFinalForInit = (status: StoredConsentStatus): boolean => status !== "SENDING" && status !== "FAILED";
+
+/** How a request (or an artefact) ended: ABDM's revocation, or its consent lapsing. */
+type Ending = { status: "REVOKED" | "EXPIRED"; at: Date };
+
+/** The earliest of [endings]; at the same moment a revocation counts before a lapse. */
+const earliestEnding = (endings: Ending[]): Ending | null => {
+    let first: Ending | null = null;
+    for (const ending of endings) {
+        const time = new Date(ending.at).getTime();
+        const firstTime = first ? new Date(first.at).getTime() : Infinity;
+        if (time < firstTime || (time === firstTime && ending.status === "REVOKED")) first = ending;
+    }
+    return first;
+};
 
 /**
  * The requested permission.dateRange for whole clinic days: from the start of [dateFrom] to the end
@@ -490,19 +550,64 @@ export const artefactStage = (artefact: Pick<ArtefactWithTransfer, "status" | "r
 };
 
 /**
- * A request's status from its artefacts: all live is GRANTED; some live is PARTLY_REVOKED (some
- * revoked or lapsed); none live is REVOKED when any was revoked, else EXPIRED, else DENIED. Null with
- * no artefacts (the status stays as ABDM last said).
+ * How and when a request ended first: of its artefacts that ABDM revoked or that lapsed, the one
+ * with the earliest StatusAt (a revocation at the same moment as a lapse counts as the revocation).
+ * Null while none has ended. CLOSED never counts: it is ClinicX following an ending, not one.
  */
-export const requestStatusFrom = (artefacts: Pick<ArtefactRow, "status">[]): ConsentStatus | null => {
+export const requestEnding = (artefacts: Pick<ArtefactRow, "status" | "statusAt">[]): Ending | null =>
+    earliestEnding(artefacts.flatMap((artefact) =>
+        artefact.status === "REVOKED" || artefact.status === "EXPIRED" ? [{ status: artefact.status, at: artefact.statusAt }] : []));
+
+/**
+ * A request's status from its artefacts. One facility revoked or lapsed ends the whole request, so
+ * it is how it ended first (requestEnding): REVOKED or EXPIRED. A revocation after a lapse leaves it
+ * EXPIRED; History and that facility's card still show the revocation. Until something ends: any
+ * artefact still GRANTED makes it GRANTED (a facility ABDM answered DENIED shows Denied on its own
+ * card, and nothing is closed: a denial is not an ending), and DENIED only when none is GRANTED.
+ * Null with no artefacts (the status stays as ABDM last said).
+ */
+export const requestStatusFrom = (artefacts: Pick<ArtefactRow, "status" | "statusAt">[]): ConsentStatus | null => {
     if (artefacts.length === 0) return null;
-    const live = artefacts.filter((artefact) => artefact.status === "GRANTED").length;
-    if (live === artefacts.length) return "GRANTED";
-    if (live > 0) return "PARTLY_REVOKED";
-    if (artefacts.some((artefact) => artefact.status === "REVOKED")) return "REVOKED";
-    if (artefacts.some((artefact) => artefact.status === "EXPIRED")) return "EXPIRED";
-    return "DENIED";
+    const ending = requestEnding(artefacts);
+    if (ending) return ending.status;
+    return artefacts.some((artefact) => artefact.status === "GRANTED") ? "GRANTED" : "DENIED";
 };
+
+/**
+ * When an artefact's records must be gone: its granted dataEraseAt. Before its details are fetched,
+ * its request's delete-by time stands in, but only for an artefact that was already stored at that
+ * time. The patient picks the expiry when granting, so a grant that arrives after the requested
+ * time may well run longer: it waits for its granted terms (on-fetch, seconds later), and only once
+ * fetching them has given up (MAX_FETCH_ATTEMPTS) does the request's time count, so it cannot stay
+ * open for ever. Null: nothing to go by yet.
+ */
+export const deleteByOf = (
+    artefact: Pick<ArtefactRow, "dataEraseAt" | "createdAt" | "fetchAttempts">,
+    row: Pick<ConsentRequestRow, "dataEraseAt"> | null,
+): Date | null => {
+    if (artefact.dataEraseAt) return new Date(artefact.dataEraseAt);
+    const requested = row?.dataEraseAt ? new Date(row.dataEraseAt) : null;
+    if (!requested) return null;
+    const storedAfter = artefact.createdAt ? new Date(artefact.createdAt).getTime() >= requested.getTime() : false;
+    if (storedAfter && (artefact.fetchAttempts ?? 0) < MAX_FETCH_ATTEMPTS) return null;
+    return requested;
+};
+
+/**
+ * A CLOSED artefact that was still open at its delete-by time [lapsedAt] and closed only at or after
+ * it: it had lapsed by then, so it counts as lapsed, at that time. One stored already CLOSED (granted
+ * after its request ended, so stored at its StatusAt) was never open, and stays CLOSED.
+ */
+const closedAfterLapse = (artefact: Pick<ArtefactRow, "status" | "statusAt" | "createdAt">, lapsedAt: Date): boolean =>
+    artefact.status === "CLOSED"
+    && lapsedAt.getTime() <= new Date(artefact.statusAt).getTime()
+    && (!artefact.createdAt || new Date(artefact.createdAt).getTime() < lapsedAt.getTime());
+
+/** A request that ABDM or ClinicX ended (revoked or lapsed): it never reopens. */
+const hasEnded = (status: StoredConsentStatus): boolean => status === "REVOKED" || status === "EXPIRED";
+
+/** The word an artefact's ending goes by in audit details and logs; never the one the frontend reads as a login lapse. */
+const endedLabel = (status: StoredArtefactStatus): string => (status === "EXPIRED" ? "LAPSED" : status);
 
 const maskAbhaNumber = (abhaNumber: string | null): string | null => {
     const digits = (abhaNumber ?? "").replace(/\D/g, "");
@@ -813,7 +918,8 @@ export class HiuConsentService {
         const page = Number.isInteger(query?.page) && query.page > 0 ? query.page : 1;
         const pageSize = Number.isInteger(query?.pageSize) && query.pageSize > 0 ? Math.min(query.pageSize, 100) : 20;
         const status = text(query?.status) || undefined;
-        if (status && !["SENDING", "REQUESTED", "GRANTED", "PARTLY_REVOKED", "DENIED", "EXPIRED", "REVOKED", "FAILED"].includes(status)) {
+        // Today's statuses only: a legacy PARTLY_REVOKED row is settled by the sweep, never filtered for.
+        if (status && !isConsentStatus(status)) {
             throw invalid("status", "Unknown status filter.");
         }
         const { rows, total } = await this.store.listRequests({ hospitalId: ctx.hospitalId, page, pageSize, status });
@@ -996,6 +1102,75 @@ export class HiuConsentService {
         return sent;
     }
 
+    /**
+     * Ends, as EXPIRED, each granted artefact past its delete-by time (its granted dataEraseAt, else
+     * its request's while its details never came), with that time as its StatusAt. ABDM ends a
+     * granted consent at dataEraseAt on its own clock and notifies nobody, and the HIU must erase by
+     * then ("Erase stored data by dataEraseAt"), so ClinicX ends it itself, with no ABDM call. Each
+     * request is then settled: the first lapse ends it as a whole, its other facilities are CLOSED,
+     * and the records of all of them are deleted. An artefact whose request row is gone is just
+     * ended. A request still GRANTED with no artefacts, past its delete-by time, is EXPIRED too. A
+     * REQUESTED request is never touched: ABDM ends those (checkWaitingRequests). Audited as
+     * CONSENT_LAPSED. Returns how many artefacts and requests it ended.
+     */
+    async expireLapsed(now: number = this.clock()): Promise<number> {
+        const lapsed = await this.store.listLapsedArtefacts({ now: new Date(now), limit: LAPSE_BATCH, maxFetchAttempts: MAX_FETCH_ATTEMPTS });
+        const rows = new Map<number, ConsentRequestRow | null>();
+        // Every lapsed artefact first, then each request once: artefacts of one request that lapsed
+        // together all end EXPIRED, rather than the later ones CLOSED by the first.
+        const byRequest = new Map<number, ArtefactRow[]>();
+        let ended = 0;
+        for (const artefact of lapsed) {
+            if (!rows.has(artefact.consentRequestFk)) rows.set(artefact.consentRequestFk, await this.store.findRequestById(artefact.consentRequestFk));
+            const row = rows.get(artefact.consentRequestFk) ?? null;
+            if (!(await this.lapse(row, artefact, new Date(artefact.lapsedAt)))) continue;
+            ended += 1;
+            byRequest.set(artefact.consentRequestFk, [...(byRequest.get(artefact.consentRequestFk) ?? []), artefact]);
+        }
+        for (const [fk, artefacts] of byRequest) {
+            const row = rows.get(fk) ?? null;
+            if (!row) {
+                for (const artefact of artefacts) await this.purgeEnded({ hospitalId: artefact.hospitalId, consentRequestId: null }, [artefact]);
+                continue;
+            }
+            // settle also ends, as lapsed, any of the request's artefacts past their delete-by time
+            // that did not fit in this batch, so none of them is CLOSED by the first.
+            const settled = await this.settle(row, new Date(now));
+            await this.purgeEnded(row, [...artefacts, ...settled]);
+        }
+
+        const emptied = await this.store.expireEmptyRequests(new Date(now));
+        for (const row of emptied) {
+            await this.audit.record({
+                hospitalId: row.hospitalId,
+                event: HIU_AUDIT_EVENTS.CONSENT_LAPSED,
+                consentRequestId: row.consentRequestId,
+                outcome: HIU_AUDIT_OUTCOMES.OK,
+                detail: "at its delete-by time, by ClinicX; no artefacts",
+            });
+            console.log(`[ABDM HIU] request=${row.id} granted with no artefacts, past its delete-by time; ended as lapsed`);
+        }
+        return ended + emptied.length;
+    }
+
+    /**
+     * Settles each request whose stored status no longer follows its artefacts: a PARTLY_REVOKED row
+     * from before a revocation ended the whole request, a GRANTED one with a facility revoked or
+     * lapsed, an ended one with a facility still open (a handler stopped part way), an ended one that
+     * does not read how it ended first (a handler that lost a race wrote a later ending over it), and
+     * one with a facility CLOSED after it had already lapsed (it is moved to lapsed, at its delete-by
+     * time). Its open facilities are CLOSED and their records deleted. Returns how many it looked at.
+     */
+    async settleRequests(now: number = this.clock()): Promise<number> {
+        const rows = await this.store.listUnsettledRequests(SETTLE_BATCH);
+        for (const row of rows) {
+            const settled = await this.settle(row, new Date(now));
+            console.log(`[ABDM HIU] request=${row.id} settled as ${row.status}; ${settled.length} artefacts ended or closed`);
+            await this.purgeEnded(row, settled);
+        }
+        return rows.length;
+    }
+
     // ---- Callbacks: answered 200 by the controller before these run; they never throw ----
 
     /** on-init: ABDM's consent request id for our init, or why it refused it. */
@@ -1059,15 +1234,20 @@ export class HiuConsentService {
             await this.record(row, HIU_AUDIT_EVENTS.ON_STATUS, status, { requestId });
             const ended = await this.applyStatus(row, status, null);
             console.log(`[ABDM HIU] on-status REQUEST-ID=${requestId} request=${row.id} ${status}`);
-            await this.purgeEnded(row, ended, status);
+            await this.purgeEnded(row, ended);
         });
     }
 
     /**
      * notify: the patient's decision. Every artefact id is stored, the notification is acknowledged on
      * hiu/on-notify with one entry per artefact, and each granted artefact not yet fetched is fetched.
-     * DENIED and EXPIRED end the request (no fetch, no retry); REVOKED ends the named artefacts and
-     * deletes what was received under them. A repeat changes nothing and fetches nothing again.
+     * DENIED and EXPIRED end the request (no fetch, no retry); REVOKED ends the named artefacts, and
+     * with them the whole request: its other facilities are CLOSED (ABDM is told only of the ones it
+     * named), and what was received under all of them is deleted. A facility already past its
+     * delete-by time is first ended as lapsed then, whether or not the sweep has got to it: a
+     * revocation after it leaves the request EXPIRED. A GRANTED that adds artefacts to a request
+     * already ended (that way too) stores them CLOSED and fetches nothing. A repeat changes nothing
+     * and fetches nothing again.
      *
      * A notification for a consent request (and artefacts) we do not hold is logged and dropped, not
      * acknowledged: shared sandbox bridges deliver other HIUs' notifications, and acknowledging those
@@ -1129,21 +1309,23 @@ export class HiuConsentService {
                     requestId: notifyRequestId,
                     detail: `${artefactIds.length} artefacts`,
                 });
+                // Facilities a GRANTED found past their delete-by time, ended as lapsed: deleted with the rest.
+                let lapsed: ArtefactRow[] = [];
                 if (status === "GRANTED") {
-                    await this.store.addArtefacts({ consentRequestFk: row.id, hospitalId: row.hospitalId, consentArtefactIds: artefactIds, at: new Date(this.clock()) });
+                    lapsed = await this.addGranted(row, artefactIds);
                 } else if ((status === "REVOKED" || status === "EXPIRED") && row === byId && artefactIds.length > 0) {
                     // Every artefact id is kept, even one whose GRANTED notify never got stored: it is
                     // stored already ended, so it is never fetched and nothing is received under it.
                     await this.store.addArtefacts({ consentRequestFk: row.id, hospitalId: row.hospitalId, consentArtefactIds: artefactIds, at: new Date(this.clock()), status });
                 }
-                ended.push({ row, artefacts: await this.applyStatus(row, status, artefactIds) });
+                ended.push({ row, artefacts: [...lapsed, ...(await this.applyStatus(row, status, artefactIds))] });
             }
             console.log(`[ABDM HIU] notify REQUEST-ID=${notifyRequestId ?? "-"} ${status} request=${rows.map((row) => row.id).join(",")} artefacts=${artefactIds.length}`);
 
             await this.acknowledge(rows[0]!, notifyRequestId, artefactIds);
 
-            // The records of what was revoked or lapsed: access already stopped and ABDM has its answer.
-            for (const item of ended) await this.purgeEnded(item.row, item.artefacts, status);
+            // The records of what was revoked, lapsed or closed: access already stopped and ABDM has its answer.
+            for (const item of ended) await this.purgeEnded(item.row, item.artefacts);
 
             if (status === "GRANTED") {
                 for (const row of rows) await this.fetchArtefacts(row);
@@ -1154,6 +1336,7 @@ export class HiuConsentService {
     /**
      * on-fetch: what the patient granted under one artefact. Stored once (a repeat changes nothing);
      * then, when GRANTED and before its dataEraseAt, the data-flow service is asked for the records.
+     * REVOKED or EXPIRED ends the artefact, and with it the whole request (settle).
      */
     async onFetch(body: any, headers: CallbackHeaders): Promise<void> {
         await this.guard("on-fetch", headers, async () => {
@@ -1190,10 +1373,14 @@ export class HiuConsentService {
             await this.record(row, HIU_AUDIT_EVENTS.ON_FETCH, status, { artefactId: artefact.consentArtefactId, requestId });
 
             if (status !== "GRANTED") {
-                const ended = await this.endArtefacts([artefact], status);
-                await this.recompute(row);
+                // A facility past its delete-by time lapsed then, before this answer: recorded first, so
+                // neither this artefact nor the request is taken as revoked (or denied) now.
+                const artefacts = await this.store.listArtefacts(row.id);
+                const lapsed = await this.endLapsed(row, artefacts, at);
+                const ended = await this.endArtefacts([artefacts.find((item) => item.id === artefact.id) ?? artefact], status);
+                const settled = await this.settle(row);
                 console.log(`[ABDM HIU] on-fetch REQUEST-ID=${requestId} artefact=${artefact.consentArtefactId} ${status}`);
-                await this.purgeEnded(row, ended, status);
+                await this.purgeEnded(row, [...lapsed.ended, ...ended, ...settled]);
                 return;
             }
             if (!detail) {
@@ -1271,8 +1458,9 @@ export class HiuConsentService {
         console.warn(`[ABDM HIU] ${event} for unknown requestId=${requestId || "-"}; dropped`);
     }
 
+    /** One audit row about a request; [row] may be only what the row names (an artefact whose request row is gone). */
     private async record(
-        row: ConsentRequestRow,
+        row: Pick<ConsentRequestRow, "hospitalId" | "consentRequestId">,
         event: string,
         outcome: string,
         extra: { consentRequestId?: string | null; artefactId?: string | null; requestId?: string | null; detail?: string | null } = {},
@@ -1288,24 +1476,156 @@ export class HiuConsentService {
         });
     }
 
-    private async setStatus(row: ConsentRequestRow, status: ConsentStatus): Promise<void> {
+    /** Sets the request's status, since [at] (now when left out); a status it already has keeps its time. */
+    private async setStatus(row: ConsentRequestRow, status: ConsentStatus, at: Date = new Date(this.clock())): Promise<void> {
         if (row.status === status) return;
-        const at = new Date(this.clock());
         await this.store.updateRequest(row.id, { status, statusAt: at });
         row.status = status;
         row.statusAt = at;
     }
 
-    /** The request's status from its artefacts, when it has any. */
-    private async recompute(row: ConsentRequestRow): Promise<void> {
-        const status = requestStatusFrom(await this.store.listArtefacts(row.id));
-        if (status) await this.setStatus(row, status);
+    /**
+     * Ends [artefact] as EXPIRED at its delete-by time [lapsedAt], from GRANTED (or from a CLOSED that
+     * had lapsed before it was closed), audited as CONSENT_LAPSED. [row] is its request, or null when
+     * that row is gone. False when it had changed meanwhile (another handler, instance or the sweep).
+     */
+    private async lapse(row: Pick<ConsentRequestRow, "hospitalId" | "consentRequestId"> | null, artefact: ArtefactRow, lapsedAt: Date): Promise<boolean> {
+        const wasClosed = artefact.status === "CLOSED";
+        if (!(await this.store.endArtefact(artefact.id, "EXPIRED", lapsedAt))) return false;
+        artefact.status = "EXPIRED";
+        artefact.statusAt = lapsedAt;
+        await this.record(row ?? { hospitalId: artefact.hospitalId, consentRequestId: null }, HIU_AUDIT_EVENTS.CONSENT_LAPSED, HIU_AUDIT_OUTCOMES.OK, {
+            artefactId: artefact.consentArtefactId,
+            detail: wasClosed ? "at its delete-by time, by ClinicX; it had been closed after that" : "at its delete-by time, by ClinicX",
+        });
+        console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} past its delete-by time; ${wasClosed ? "CLOSED, now" : "ended as"} lapsed${row ? "" : " (no request row)"}`);
+        return true;
+    }
+
+    /**
+     * Ends as lapsed, at its delete-by time, each of the request's [artefacts] still GRANTED whose
+     * delete-by time (its granted dataEraseAt, else the request's) is at or before [now]. The sweep
+     * records a lapse up to a minute late (and not at all for a minute after a restart): a revocation
+     * or a grant arriving in that window must find the facility lapsed, not close it as though the
+     * revocation had come first. Also moves to lapsed, at that time, a CLOSED one that was still open
+     * at its delete-by time and closed only after it (by a handler from before this check, or one
+     * that lost a race with the sweep): its records went when it was closed. [artefacts] are updated
+     * in place. Returns the ones it ended from GRANTED, whose records the caller deletes, and whether
+     * any of them had changed meanwhile.
+     */
+    private async endLapsed(row: ConsentRequestRow, artefacts: ArtefactRow[], now: Date): Promise<{ ended: ArtefactRow[]; raced: boolean }> {
+        const ended: ArtefactRow[] = [];
+        let raced = false;
+        for (const artefact of artefacts) {
+            const lapsedAt = deleteByOf(artefact, row);
+            if (!lapsedAt) continue;
+            const due = artefact.status === "GRANTED" && lapsedAt.getTime() <= now.getTime();
+            if (!due && !closedAfterLapse(artefact, lapsedAt)) continue;
+            if (!(await this.lapse(row, artefact, lapsedAt))) raced = true;
+            else if (due) ended.push(artefact);
+        }
+        return { ended, raced };
+    }
+
+    /**
+     * Brings the request in line with its artefacts. First, any facility past its delete-by time is
+     * ended as lapsed then (endLapsed). Once any of them has ended (revoked, or lapsed), the whole
+     * request has ended: every facility still GRANTED is CLOSED at [at] (ClinicX's own status; ABDM
+     * is never told) and audited as ARTEFACT_CLOSED. The request then takes how it ended first, since
+     * when it ended: an artefact's ending, or its own when that came earlier still (a revoke or lapse
+     * ABDM reported before any artefact was stored); a request already REVOKED or EXPIRED but since a
+     * later time is corrected too. Without an ending it follows requestStatusFrom.
+     *
+     * When one of those writes finds its artefact already changed (another handler, instance or the
+     * sweep got there between this read and the write), the artefacts are read again and the ending
+     * worked out again, so the status written follows what is stored rather than a stale read; what
+     * still slips through is put right by the sweep (settleRequests). Returns the artefacts it ended
+     * as lapsed or closed, whose records the caller deletes next (for a notify, after the
+     * acknowledgement).
+     */
+    private async settle(row: ConsentRequestRow, at: Date = new Date(this.clock())): Promise<ArtefactRow[]> {
+        const ended: ArtefactRow[] = [];
+        let artefacts: ArtefactRow[] = [];
+        let ending: Ending | null = null;
+        for (let read = 1; ; read += 1) {
+            artefacts = await this.store.listArtefacts(row.id);
+            const lapsed = await this.endLapsed(row, artefacts, at);
+            ended.push(...lapsed.ended);
+            let raced = lapsed.raced;
+            const own: Ending[] = row.status === "REVOKED" || row.status === "EXPIRED" ? [{ status: row.status, at: row.statusAt }] : [];
+            const fromArtefacts = requestEnding(artefacts);
+            ending = earliestEnding([...(fromArtefacts ? [fromArtefacts] : []), ...own]);
+            if (ending) {
+                for (const artefact of artefacts) {
+                    if (artefact.status !== "GRANTED") continue;
+                    // False when it ended meanwhile (another handler or instance): that one owns it,
+                    // and its ending may come before the one worked out from this read.
+                    if (!(await this.store.endArtefact(artefact.id, "CLOSED", at))) {
+                        raced = true;
+                        continue;
+                    }
+                    artefact.status = "CLOSED";
+                    artefact.statusAt = at;
+                    ended.push(artefact);
+                    await this.record(row, HIU_AUDIT_EVENTS.ARTEFACT_CLOSED, HIU_AUDIT_OUTCOMES.OK, {
+                        artefactId: artefact.consentArtefactId,
+                        detail: ending.status === "REVOKED" ? "request ended: another provider was revoked" : "request ended: another provider lapsed",
+                    });
+                    console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} CLOSED: request=${row.id} ended (${endedLabel(ending.status)})`);
+                }
+            }
+            if (!raced || read >= SETTLE_READS) break;
+            console.log(`[ABDM HIU] request=${row.id}: an artefact changed while settling; reading its artefacts again`);
+        }
+        if (ending) {
+            // The time too, not only the status: a request that reads REVOKED since a later moment
+            // than it first ended (written from a stale read) is put back to when it ended.
+            const endedAt = new Date(ending.at);
+            if (row.status !== ending.status || new Date(row.statusAt).getTime() !== endedAt.getTime()) {
+                await this.store.updateRequest(row.id, { status: ending.status, statusAt: endedAt });
+                row.status = ending.status;
+                row.statusAt = endedAt;
+            }
+            return ended;
+        }
+        // A legacy PARTLY_REVOKED with no artefacts (none ever was) can only have come from a revocation.
+        const status = requestStatusFrom(artefacts) ?? (row.status === "PARTLY_REVOKED" ? "REVOKED" : null);
+        if (status) await this.setStatus(row, status, at);
+        return ended;
+    }
+
+    /**
+     * Stores the artefact ids of a GRANTED notify. A facility already past its delete-by time is
+     * ended as lapsed first (the sweep may not have got to it yet): the request ended with it. A
+     * request that has already ended (revoked or lapsed, as a whole or through one facility) never
+     * reopens: ids new to it are stored CLOSED, audited as ARTEFACT_CLOSED, and never fetched.
+     * Returns the facilities it ended as lapsed, whose records the caller deletes.
+     */
+    private async addGranted(row: ConsentRequestRow, artefactIds: string[]): Promise<ArtefactRow[]> {
+        const existing = await this.store.listArtefacts(row.id);
+        const at = new Date(this.clock());
+        const lapsed = await this.endLapsed(row, existing, at);
+        const ended = hasEnded(row.status) || requestEnding(existing) !== null;
+        await this.store.addArtefacts({ consentRequestFk: row.id, hospitalId: row.hospitalId, consentArtefactIds: artefactIds, at, ...(ended ? { status: "CLOSED" as const } : {}) });
+        if (!ended) return lapsed.ended;
+        const fresh = artefactIds.filter((id) => !existing.some((artefact) => artefact.consentArtefactId === id));
+        for (const artefact of await this.store.findArtefactsByConsentArtefactIds(fresh)) {
+            if (artefact.consentRequestFk !== row.id || artefact.status !== "CLOSED") continue;
+            await this.record(row, HIU_AUDIT_EVENTS.ARTEFACT_CLOSED, HIU_AUDIT_OUTCOMES.OK, {
+                artefactId: artefact.consentArtefactId,
+                detail: "granted after the request ended",
+            });
+            console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} granted after request=${row.id} ended; stored CLOSED, not fetched`);
+        }
+        return lapsed.ended;
     }
 
     /**
      * Applies a status ABDM reported (notify or on-status). [named] is the artefact list a notify
      * carried; null from on-status. Never moves a request backwards: REQUESTED only from SENDING (or
-     * a FAILED init that ABDM accepted after all), DENIED only before any grant.
+     * a FAILED init that ABDM accepted after all), DENIED only before any grant, and nothing reopens
+     * a request that was revoked or lapsed. Returns the artefacts it ended or closed, whose records
+     * the caller deletes.
      */
     private async applyStatus(row: ConsentRequestRow, status: NotifyConsentStatus, named: string[] | null): Promise<ArtefactRow[]> {
         const artefacts = await this.store.listArtefacts(row.id);
@@ -1314,8 +1634,9 @@ export class HiuConsentService {
                 if (row.status === "SENDING" || (row.status === "FAILED" && row.consentRequestId)) await this.setStatus(row, "REQUESTED");
                 return [];
             case "GRANTED":
-                if (artefacts.length > 0) await this.recompute(row);
-                else if (row.status === "SENDING" || row.status === "REQUESTED" || row.status === "FAILED") await this.setStatus(row, "GRANTED");
+                if (hasEnded(row.status)) return [];
+                if (artefacts.length > 0) return this.settle(row);
+                if (row.status === "SENDING" || row.status === "REQUESTED" || row.status === "FAILED") await this.setStatus(row, "GRANTED");
                 return [];
             case "DENIED":
                 if (artefacts.length === 0) await this.setStatus(row, "DENIED");
@@ -1327,56 +1648,65 @@ export class HiuConsentService {
                     await this.setStatus(row, status);
                     return [];
                 }
+                // A facility past its delete-by time lapsed then, before this word from ABDM: it is
+                // recorded first, so neither it nor the request is taken as revoked now.
+                const lapsed = await this.endLapsed(row, artefacts, new Date(this.clock()));
                 const targets = named && named.length > 0 ? artefacts.filter((artefact) => named.includes(artefact.consentArtefactId)) : artefacts;
                 const ended = await this.endArtefacts(targets, status);
-                await this.recompute(row);
-                return ended;
+                return [...lapsed.ended, ...ended, ...(await this.settle(row))];
             }
         }
     }
 
     /**
      * Ends each still-granted artefact, each in a short transaction: from then on nothing under it
-     * can be read or stored. Returns the ones it ended, whose records purgeEnded then deletes.
+     * can be read or stored. Returns the ones it ended, whose records purgeEnded then deletes. A
+     * CLOSED artefact takes a REVOKED or EXPIRED ABDM reports for it, so its card shows ABDM's word;
+     * its records went when it was closed, so it is not returned.
      */
     private async endArtefacts(artefacts: ArtefactRow[], status: "REVOKED" | "EXPIRED" | "DENIED"): Promise<ArtefactRow[]> {
         const ended: ArtefactRow[] = [];
         for (const artefact of artefacts) {
-            if (artefact.status !== "GRANTED") continue;
-            if (!(await this.store.endArtefact(artefact.id, status, new Date(this.clock())))) {
+            const fromClosed = artefact.status === "CLOSED" && status !== "DENIED";
+            if (artefact.status !== "GRANTED" && !fromClosed) continue;
+            const at = new Date(this.clock());
+            if (!(await this.store.endArtefact(artefact.id, status, at))) {
                 // Already ended meanwhile (another handler); its records are that handler's, or the sweep's.
-                console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} already ended; ${status} not applied`);
+                console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} already ended; ${endedLabel(status)} not applied`);
                 continue;
             }
             artefact.status = status;
-            ended.push(artefact);
-            console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}`);
+            artefact.statusAt = at;
+            console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${fromClosed ? "CLOSED, now " : ""}${endedLabel(status)}`);
+            if (!fromClosed) ended.push(artefact);
         }
         return ended;
     }
 
     /**
-     * Deletes what was received under artefacts just ended. Run after their status is committed, and
-     * for a notify after its acknowledgement: on a small database deleting megabytes takes a while
-     * and must hold up neither. A failure is audited and left to the maintenance sweep.
+     * Deletes what was received under artefacts just ended or closed, each audited with how it ended.
+     * Run after their status is committed, and for a notify after its acknowledgement: on a small
+     * database deleting megabytes takes a while and must hold up neither. A failure is audited and
+     * left to the maintenance sweep.
      */
-    private async purgeEnded(row: ConsentRequestRow, ended: ArtefactRow[], status: string): Promise<void> {
+    private async purgeEnded(row: Pick<ConsentRequestRow, "hospitalId" | "consentRequestId">, ended: ArtefactRow[]): Promise<void> {
         for (const artefact of ended) {
+            const how = endedLabel(artefact.status);
             try {
                 const deleted = await this.store.purgeRecords(artefact.id, new Date(this.clock()));
                 await this.record(row, HIU_AUDIT_EVENTS.RECORD_PURGED, HIU_AUDIT_OUTCOMES.OK, {
                     artefactId: artefact.consentArtefactId,
-                    detail: `${status}: ${deleted} records`,
+                    detail: `${how}: ${deleted} records`,
                 });
-                console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}; ${deleted} records deleted`);
+                console.log(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${how}; ${deleted} records deleted`);
             } catch (error: any) {
                 const deleted = error instanceof RecordPurgeError ? error.deleted : 0;
                 const code = errorCodeOf(error instanceof RecordPurgeError ? error.failure : error);
                 await this.record(row, HIU_AUDIT_EVENTS.RECORD_PURGED, HIU_AUDIT_OUTCOMES.FAILED, {
                     artefactId: artefact.consentArtefactId,
-                    detail: `${status}: ${deleted} records, then ${code}; the sweep deletes the rest`,
+                    detail: `${how}: ${deleted} records, then ${code}; the sweep deletes the rest`,
                 });
-                console.error(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${status}; ${deleted} records deleted, then ${code}; the sweep deletes the rest`);
+                console.error(`[ABDM HIU] artefact=${artefact.consentArtefactId} ${how}; ${deleted} records deleted, then ${code}; the sweep deletes the rest`);
             }
         }
     }

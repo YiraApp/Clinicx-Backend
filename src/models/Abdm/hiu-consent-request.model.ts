@@ -73,7 +73,11 @@ export class HiuConsentRequest {
     @Column({ type: "varchar", length: 10 })
     AccessMode: string;
 
-    /** SENDING, REQUESTED, GRANTED, PARTLY_REVOKED, DENIED, EXPIRED, REVOKED or FAILED. */
+    /**
+     * SENDING, REQUESTED, GRANTED, DENIED, EXPIRED, REVOKED or FAILED. One facility revoked or lapsed
+     * ends the whole request. Rows from earlier versions may hold PARTLY_REVOKED until the
+     * maintenance sweep settles them.
+     */
     @Column({ type: "varchar", length: 20 })
     Status: string;
 
