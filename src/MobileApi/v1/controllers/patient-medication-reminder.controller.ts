@@ -2,6 +2,29 @@ import { Request, Response } from "express";
 import { patientMedicationReminderRepository } from "../../../repositories/Appointments/patient-medication-reminder.repository.js";
 import { ApiResponse } from "../../../utils/response.utils.js";
 
+/**
+ * The calendar day the app meant. The app sends local times without a zone
+ * ("2026-11-25T00:00:00.000"); turning those into UTC moved every start and end
+ * date one day earlier in India, so the date part is taken as it is.
+ */
+export function reminderDate(value: unknown, fallback: Date): string {
+    if (typeof value === "string") {
+        const match = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+        if (match) return match[1];
+    }
+    const date = value ? new Date(value as any) : fallback;
+    const valid = isNaN(date.getTime()) ? fallback : date;
+    const local = new Date(valid.getTime() - valid.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+}
+
+/** False when [id] is a reminder of another person: it must not be overwritten or moved. */
+async function canWriteReminder(id: string | undefined, userId: string): Promise<boolean> {
+    if (!id) return true;
+    const existing = await patientMedicationReminderRepository.findById(String(id));
+    return !existing || String(existing.UserId).toUpperCase() === String(userId).toUpperCase();
+}
+
 export class PatientMedicationReminderController {
     /**
      * Save or update a medication reminder
@@ -47,11 +70,14 @@ export class PatientMedicationReminderController {
                 finalTimesJson = times;
             }
 
+            if (!(await canWriteReminder(id, userId))) {
+                return res.status(403).json(ApiResponse.error("This reminder belongs to someone else"));
+            }
             const reminderId = id || `med_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-            // Normalize dates to YYYY-MM-DD
-            const start = startDate ? new Date(startDate).toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
-            const end = endDate ? new Date(endDate).toISOString().split("T")[0] : new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+            // Normalize dates to YYYY-MM-DD (the day the patient picked)
+            const start = reminderDate(startDate, new Date());
+            const end = reminderDate(endDate, new Date(Date.now() + 7 * 86400000));
 
             const saved = await patientMedicationReminderRepository.saveReminder({
                 Id: reminderId,
@@ -179,9 +205,10 @@ export class PatientMedicationReminderController {
                     finalTimesJson = item.timesJson;
                 }
 
+                if (!(await canWriteReminder(item.id, userId))) continue;
                 const reminderId = item.id || `med_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                const start = item.startDate ? new Date(item.startDate).toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
-                const end = item.endDate ? new Date(item.endDate).toISOString().split("T")[0] : new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+                const start = reminderDate(item.startDate, new Date());
+                const end = reminderDate(item.endDate, new Date(Date.now() + 7 * 86400000));
 
                 const saved = await patientMedicationReminderRepository.saveReminder({
                     Id: reminderId,

@@ -30,8 +30,24 @@ export const registerDeviceToken = async (req: Request, res: Response) => {
             });
         }
 
-        // Retrieve authenticated user's ID if not passed explicitly in request body
-        const resolvedUserId = userId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id;
+        // The phone belongs to the signed-in account (the token's user), not to the family
+        // profile the app has open: a dependent's notifications reach this phone through
+        // their account holder. Only builds that send no token name the user in the body.
+        const identity = (req as any).user || {};
+        const sentToken = String(req.headers.authorization || "").startsWith("Bearer ");
+        if (sentToken && !identity.tokenUserId) {
+            // The token was logged out or ran out (the request got through on the old
+            // userId fallback). A signed-out phone must not sign up for pushes again.
+            return res.status(200).json({
+                status: false,
+                message: "Session ended; sign in again to get notifications"
+            });
+        }
+        // Opening a family profile gives the app a session of that profile, so the token's
+        // user can be a dependent: the phone still belongs to their account holder.
+        const resolvedUserId = identity.tokenUserId
+            ? await userDeviceService.accountHolderOf(String(identity.tokenUserId))
+            : (userId || identity.userId || identity.Id || identity.id);
 
         if (!resolvedUserId) {
             return res.status(200).json({

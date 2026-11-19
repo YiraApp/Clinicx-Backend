@@ -262,18 +262,24 @@ export class PrescriptionPdfService {
                     cursorY += 12;
                 };
 
-                // Hospital Logo (Real Logo)
+                // Hospital Logo (Real Logo). A square logo fits a 56 pt box; a wide wordmark gets up to
+                // 150 x 40 pt so its lettering stays readable, and the hospital's details move right of it.
+                let logoSlot = 56;
                 if (logoBuffer) {
                     try {
-                        doc.image(logoBuffer, margin, cursorY, { fit: [56, 56] });
+                        const image = (doc as any).openImage(logoBuffer);
+                        const ratio = image.width / image.height;
+                        const box: [number, number] = ratio > 1.6 ? [150, 40] : [56, 56];
+                        logoSlot = Math.max(56, Math.min(box[0], box[1] * ratio));
+                        doc.image(image, margin, cursorY + 2, { fit: box });
                     } catch (imgErr) {
                         console.warn("[PrescriptionPdfService] Failed to draw logo image:", imgErr);
                     }
                 }
 
-                const headerTextX = margin + 66;
+                const headerTextX = margin + logoSlot + 10;
                 const badgeWidth = 120;
-                const headerTextWidth = contentWidth - 66 - badgeWidth - 8;
+                const headerTextWidth = contentWidth - logoSlot - 10 - badgeWidth - 8;
 
                 // Hospital Name (Real Only, NA if not available)
                 const hospName = (data.hospital.name && data.hospital.name.trim()) ? data.hospital.name.trim() : "NA";

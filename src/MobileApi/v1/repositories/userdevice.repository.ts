@@ -1,6 +1,13 @@
 import { AppDataSource } from "../../../config/database.js";
 import { UserDevice } from "../../../models/Account/userdevice.model.js";
 
+/**
+ * A phone gets pushes only while its account has a live session: a sign-in that
+ * hasn't been logged out (revoked) or run out. A phone whose session ended, for
+ * example when logout couldn't reach the server, stays quiet.
+ */
+const LIVE_SESSION = "EXISTS (SELECT 1 FROM UserTokens t WHERE t.UserId = d.UserId AND t.IsRevoked = 0 AND t.RefreshTokenExpiry > :sessionNow)";
+
 export class UserDeviceRepository {
     private deviceRepo = AppDataSource.getRepository(UserDevice);
 
@@ -16,17 +23,33 @@ export class UserDeviceRepository {
         });
     }
 
+    /** The user's phones that may get pushes (active, with a live session). */
     async findActiveDevicesByUserId(userId: string): Promise<UserDevice[]> {
-        return await this.deviceRepo.find({
-            where: { UserId: userId, IsActive: true }
-        });
+        return this.findPushableDevicesByUserIds([userId]);
     }
 
+    /** The phones of these users that may get pushes (active, with a live session). */
+    async findPushableDevicesByUserIds(userIds: string[]): Promise<UserDevice[]> {
+        const ids = Array.from(new Set(userIds.filter(Boolean)));
+        const devices: UserDevice[] = [];
+        // SQL Server takes at most 2100 parameters per query.
+        for (let i = 0; i < ids.length; i += 1000) {
+            devices.push(...await this.deviceRepo.createQueryBuilder("d")
+                .where("d.UserId IN (:...ids)", { ids: ids.slice(i, i + 1000) })
+                .andWhere("d.IsActive = 1")
+                .andWhere(LIVE_SESSION, { sessionNow: new Date() })
+                .getMany());
+        }
+        return devices;
+    }
+
+    /** Every phone that may get pushes (active, with a token and a live session). */
     async findAllActiveDevices(): Promise<UserDevice[]> {
         return await this.deviceRepo.createQueryBuilder("d")
             .where("d.IsActive = 1")
             .andWhere("d.FCMToken IS NOT NULL")
             .andWhere("d.FCMToken != ''")
+            .andWhere(LIVE_SESSION, { sessionNow: new Date() })
             .getMany();
     }
 
@@ -34,13 +57,9 @@ export class UserDeviceRepository {
         return await this.deviceRepo.save(device);
     }
 
+    /** Stops pushes to a token Firebase no longer accepts, on every row that holds it. */
     async deactivateToken(token: string): Promise<void> {
-        const device = await this.findByToken(token);
-        if (device) {
-            device.IsActive = false;
-            device.UpdatedAt = new Date();
-            await this.deviceRepo.save(device);
-        }
+        await this.deviceRepo.update({ FCMToken: token }, { IsActive: false, UpdatedAt: new Date() });
     }
 
     async deactivateAllDevices(userId: string): Promise<void> {

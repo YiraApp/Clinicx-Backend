@@ -5,6 +5,7 @@ import { appointmentRepository } from "../../repositories/Appointments/appointme
 import { mailService } from "../Mail/mail.service.js";
 import { v4 as uuidv4 } from "uuid";
 import { PostVisitDocument } from "../../models/Appointments/post-visit-document.model.js";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 
 export class PostVisitService {
     /**
@@ -128,8 +129,7 @@ export class PostVisitService {
         } else if (channel === "whatsapp" && appointment.User?.PhoneNumber) {
             try {
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
-                const countryCode = appointment.User.CountryCode || "91";
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appointment.User.PhoneNumber.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(appointment.User.PhoneNumber, appointment.User.CountryCode);
                 const components = [
                     { type: "header", parameters: [{ type: "text", text: hospitalName }] },
                     { type: "body", parameters: [{ type: "text", text: patientName }, { type: "text", text: hospitalName }] },
@@ -143,8 +143,7 @@ export class PostVisitService {
         } else if (channel === "sms" && appointment.User?.PhoneNumber) {
             try {
                 const { smsService } = await import("../Common/sms.service.js");
-                const countryCode = appointment.User.CountryCode || "91";
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appointment.User.PhoneNumber.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(appointment.User.PhoneNumber, appointment.User.CountryCode);
                 const message = `Hello ${patientName}, your medical documents from ${hospitalName} are ready. View them here: ${shareLinkUrl}`;
                 await smsService.sendSMS(normalizedPhone, message);
             } catch (err) {
@@ -355,9 +354,7 @@ export class PostVisitService {
         } else if (channel === "whatsapp" && appointment.User?.PhoneNumber) {
             try {
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
-                const countryCode = appointment.User.CountryCode || "91";
-                const phone = appointment.User.PhoneNumber;
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${phone.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(appointment.User.PhoneNumber, appointment.User.CountryCode);
                 const patientName = `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim();
                 const hospitalName = appointment.Hospital?.Name || "our hospital";
 
@@ -400,9 +397,7 @@ export class PostVisitService {
         } else if (channel === "sms" && appointment.User?.PhoneNumber) {
             try {
                 const { smsService } = await import("../Common/sms.service.js");
-                const countryCode = appointment.User.CountryCode || "91";
-                const phone = appointment.User.PhoneNumber;
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${phone.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(appointment.User.PhoneNumber, appointment.User.CountryCode);
                 const patientName = `${appointment.User.FirstName} ${appointment.User.LastName || ""}`.trim();
                 const hospitalName = appointment.Hospital?.Name || "our hospital";
 

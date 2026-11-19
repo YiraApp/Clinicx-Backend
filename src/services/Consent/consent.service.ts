@@ -8,6 +8,7 @@ import { mailService } from "../Mail/mail.service.js";
 import { consentRequestRepository } from "../../repositories/Consent/consent-request.repository.js";
 import { PDFDocument, rgb } from "pdf-lib";
 import crypto from "crypto";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 
 export class ConsentService {
     /**
@@ -301,7 +302,7 @@ export class ConsentService {
             // Send via WhatsApp Graph API using the "consent" template
             try {
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
-                const normalizedPhone = `${patient.CountryCode || "91"}${patient.PhoneNumber.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(patient.PhoneNumber, patient.CountryCode);
 
                 // Template: consent
                 // Body: Hello {{1}}, As part of your visit to {{2}}, please review and sign...

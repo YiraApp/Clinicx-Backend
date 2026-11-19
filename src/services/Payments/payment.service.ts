@@ -15,6 +15,7 @@ import { HospitalPaymentConfiguration } from "../../models/Organizations/hospita
 import { AppointmentBill } from "../../models/Payments/appointment-bill.model.js";
 import { IsNull } from "typeorm/index.js";
 import { razorpayKeyProblem, razorpayOrderError } from "../../utils/razorpay.utils.js";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 
 // A payment confirms the appointment (and sends the confirmation messages) only while it is still
 // waiting for payment; collecting a balance after the visit must not move it back to Confirmed.
@@ -520,11 +521,7 @@ export class PaymentService {
         }
 
         // Generate WhatsApp Link
-        const rawPhone = user.PhoneNumber || "";
-        const cleanPhone = rawPhone.replace(/\D/g, "");
-        const formattedPhone = cleanPhone.startsWith(user.CountryCode || "91")
-            ? cleanPhone
-            : `${user.CountryCode || "91"}${cleanPhone}`;
+        const formattedPhone = toInternationalPhone(user.PhoneNumber, user.CountryCode);
         const whatsappText = `Dear ${user.FirstName || "Patient"}, complete your ClinicX payment of Rs.${data.amount} here: ${paymentLink}`;
         const whatsappLink = `https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(whatsappText)}`;
 

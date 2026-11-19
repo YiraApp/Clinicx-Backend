@@ -192,7 +192,9 @@ export class PatientAccessConsentController {
                             type: "CONSENT_APPROVED",
                             referenceId: String(consentId),
                             route: "/patientConsentsScreen",
-                            additionalData: { consentId, doctorId: dId, action: "APPROVE", duration: durationText }
+                            additionalData: { consentId, doctorId: dId, action: "APPROVE", duration: durationText },
+                            // The patient did this themself: list it, no push.
+                            push: false
                         });
                     }
                 } else if (actionUpper === "REVOKE") {
@@ -220,7 +222,9 @@ export class PatientAccessConsentController {
                             type: "CONSENT_REVOKED",
                             referenceId: String(consentId),
                             route: "/patientConsentsScreen",
-                            additionalData: { consentId, doctorId: dId, action: "REVOKE" }
+                            additionalData: { consentId, doctorId: dId, action: "REVOKE" },
+                            // The patient did this themself: list it, no push.
+                            push: false
                         });
                     }
                 } else if (actionUpper === "REJECT") {
@@ -248,7 +252,9 @@ export class PatientAccessConsentController {
                             type: "CONSENT_REJECTED",
                             referenceId: String(consentId),
                             route: "/patientConsentsScreen",
-                            additionalData: { consentId, doctorId: dId, action: "REJECT" }
+                            additionalData: { consentId, doctorId: dId, action: "REJECT" },
+                            // The patient did this themself: list it, no push.
+                            push: false
                         });
                     }
                 }

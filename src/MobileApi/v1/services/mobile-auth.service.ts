@@ -158,7 +158,8 @@ export class MobileAuthService {
     async sendOTP(
         identity: string,
         countryCode?: string,
-        isResend?: boolean
+        isResend?: boolean,
+        channel?: "sms" | "whatsapp"
     ): Promise<{
         otpSent: boolean;
         sessionId: string;
@@ -221,7 +222,7 @@ export class MobileAuthService {
                 otpTarget,
                 OTPPurpose.LOGIN,
                 countryCode || user.CountryCode || undefined,
-                undefined,
+                channel,
                 true
             );
 
@@ -240,7 +241,7 @@ export class MobileAuthService {
                 countryCode || user.CountryCode || undefined,
                 undefined,
                 undefined,
-                undefined,
+                channel,
                 true
             );
 
@@ -260,7 +261,8 @@ export class MobileAuthService {
     async sendSignupOTP(
         phoneNumber: string,
         countryCode?: string,
-        email?: string
+        email?: string,
+        channel?: "sms" | "whatsapp"
     ): Promise<{
         otpSent: boolean;
         sessionId: string;
@@ -316,7 +318,7 @@ export class MobileAuthService {
             countryCode || "91",
             undefined,
             undefined,
-            undefined,
+            channel,
             true
         );
 

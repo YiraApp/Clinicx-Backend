@@ -84,7 +84,8 @@ export const bookAppointment = async (req: Request, res: Response) => {
             includeConsultationFee,
             consultationFee,
             shareRecords,
-            grantRecordAccess
+            grantRecordAccess,
+            shareRecordsDuration
         } = req.body;
 
         if (!doctorId || hospitalId === undefined || orgId === undefined || !patientPhone) {
@@ -130,7 +131,10 @@ export const bookAppointment = async (req: Request, res: Response) => {
             discountAmount: discountAmount ? Number(discountAmount) : 0,
             includeConsultationFee: includeConsultationFee !== undefined ? Boolean(includeConsultationFee) : true,
             consultationFee: consultationFee !== undefined ? Number(consultationFee) : undefined,
-            shareRecords: shareRecords !== undefined ? Boolean(shareRecords) : (grantRecordAccess !== undefined ? Boolean(grantRecordAccess) : true)
+            shareRecords: shareRecords !== undefined ? Boolean(shareRecords) : (grantRecordAccess !== undefined ? Boolean(grantRecordAccess) : true),
+            shareRecordsDuration: shareRecordsDuration ? String(shareRecordsDuration) : undefined,
+            // Who is booking: only the patient (or their family) can give the doctor access to their records
+            requesterId: String((req as any).user?.tokenUserId || (req as any).user?.userId || "").trim() || undefined
         });
 
         return res.json(ApiResponse.success(result, "Appointment booked successfully."));

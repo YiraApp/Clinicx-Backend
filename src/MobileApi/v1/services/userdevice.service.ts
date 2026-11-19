@@ -5,6 +5,27 @@ import { AppDataSource } from "../../../config/database.js";
 import { User } from "../../../models/Account/user.model.js";
 
 export class UserDeviceService {
+    /**
+     * The account a phone belongs to when [userId] is signed in on it: a dependent's
+     * parent account, a secondary profile's primary account on the same phone number,
+     * or the account itself. Pushes for a dependent reach this account's phones.
+     */
+    async accountHolderOf(userId: string): Promise<string> {
+        try {
+            const repo = AppDataSource.getRepository(User);
+            const user = await repo.findOne({ where: { Id: userId }, select: { Id: true, ParentUserId: true, IsPrimary: true, PhoneNumber: true } });
+            if (!user) return userId;
+            if (user.ParentUserId) return user.ParentUserId;
+            if (user.IsPrimary === false && user.PhoneNumber) {
+                const primary = await repo.findOne({ where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false }, select: { Id: true } });
+                if (primary?.Id) return primary.Id;
+            }
+            return user.Id;
+        } catch {
+            return userId;
+        }
+    }
+
     async registerDeviceToken(
         userId: string,
         platform: PlatformType | undefined,

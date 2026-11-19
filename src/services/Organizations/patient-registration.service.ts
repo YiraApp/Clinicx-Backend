@@ -7,6 +7,7 @@ import { addressRepository } from "../../repositories/Account/address.repository
 import { Address } from "../../models/Account/address.model.js";
 import { userRepository } from "../../repositories/Account/user.repository.js";
 import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 
 export class PatientRegistrationService {
 
@@ -22,11 +23,9 @@ export class PatientRegistrationService {
                 return;
             }
 
-            let rawDigits = patientMobile.replace(/\D/g, "");
-            if (rawDigits.length >= 10) {
-                rawDigits = rawDigits.slice(-10);
-            }
-            const normalizedPhone = `91${rawDigits}`;
+            // The message shows the number as registered (national form); it is sent with the country code.
+            const rawDigits = patientMobile.replace(/\D/g, "").slice(-10);
+            const normalizedPhone = toInternationalPhone(patientMobile, user.CountryCode);
 
             const components = [
                 {
@@ -585,7 +584,7 @@ table { border-collapse:collapse; width:100%; }
             // Send via WhatsApp Graph API using the "self_registration" template
             try {
                 const { whatsappService } = await import("../Common/whatsapp.service.js");
-                const normalizedPhone = `${countryCode || "91"}${phone.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(phone, countryCode);
 
                 // Template: self_registration
                 // Header: Expected 1 localizable_param (e.g. Org Name / Clinic Name)
@@ -625,7 +624,7 @@ table { border-collapse:collapse; width:100%; }
             // Send via SMS
             try {
                 const { smsService } = await import("../Common/sms.service.js");
-                const normalizedPhone = `${countryCode || "91"}${phone.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(phone, countryCode);
                 const message = `Hello ${name || "Patient"}, your patient registration for ${orgDisplayName} is awaiting completion. Please use this secure link to complete your registration: ${link} - Thank you`;
                 await smsService.sendSMS(normalizedPhone, message);
                 console.log(`[SendRegistrationLink] SMS sent to ${normalizedPhone}`);

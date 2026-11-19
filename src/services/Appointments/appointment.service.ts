@@ -13,6 +13,7 @@ import { appointmentBillRepository } from "../../repositories/Payments/appointme
 import { defaultOrganizationRepository } from "../../repositories/Organizations/default-organization.repository.js";
 import { zoomService } from "../Common/zoom.service.js";
 import { mailService } from "../Mail/mail.service.js";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 
 export class AppointmentService {
     async bookAppointmentFromPulse(data: {
@@ -842,11 +843,7 @@ export class AppointmentService {
                             StartTime: appt.StartTime
                         });
 
-                        const countryCode = appt.User?.CountryCode || "91";
-                        const cleanPatientDigits = (appt.User?.PhoneNumber || "").replace(/\D/g, "");
-                        const normalizedPhone = cleanPatientDigits.length === 10
-                            ? `${countryCode.replace(/\D/g, "")}${cleanPatientDigits}`
-                            : cleanPatientDigits;
+                        const normalizedPhone = toInternationalPhone(appt.User?.PhoneNumber, appt.User?.CountryCode);
 
                         // Select template based on consultation type
                         const templateName = appt.IsTeleConsultation ? "video_call_template" : "appointment_conformation";
@@ -901,11 +898,7 @@ export class AppointmentService {
                     }
 
                     if (doctorUser?.PhoneNumber) {
-                        const docCountryCode = doctorUser.CountryCode || "91";
-                        const cleanDocDigits = doctorUser.PhoneNumber.replace(/\D/g, "");
-                        const normalizedDocPhone = cleanDocDigits.length === 10
-                            ? `${docCountryCode.replace(/\D/g, "")}${cleanDocDigits}`
-                            : cleanDocDigits;
+                        const normalizedDocPhone = toInternationalPhone(doctorUser.PhoneNumber, doctorUser.CountryCode);
 
                         let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim();
                         while (/^(?:dr\.?|doctor)\s+/i.test(docDisplayName)) {
@@ -1187,11 +1180,13 @@ export class AppointmentService {
 
             // Find patient phone number (or parent phone if dependent)
             let phone: string | null | undefined = appt.User?.PhoneNumber;
+            let phoneCountryCode: string | null | undefined = appt.User?.CountryCode;
             if (!phone && appt.User?.ParentUserId) {
                 const { User } = await import("../../models/Account/user.model.js");
                 const userRepo = AppDataSource.getRepository(User);
                 const parent = await userRepo.findOne({ where: { Id: appt.User.ParentUserId } });
                 phone = parent?.PhoneNumber;
+                phoneCountryCode = parent?.CountryCode;
             }
 
             if (!phone) {
@@ -1199,10 +1194,7 @@ export class AppointmentService {
                 return { success: false, error: "Patient phone number not found" };
             }
 
-            let normalizedPhone = phone.replace(/\D/g, "");
-            if (normalizedPhone.length === 10) {
-                normalizedPhone = "91" + normalizedPhone;
-            }
+            const normalizedPhone = toInternationalPhone(phone, phoneCountryCode);
 
             // Parameter 1: Patient Name
             const patientName = `${appt.User?.FirstName || ""} ${appt.User?.LastName || ""}`.trim() || "Valued Patient";
@@ -1465,8 +1457,7 @@ export class AppointmentService {
                     locationStr = "Online Video Consultation";
                 }
 
-                const countryCode = enriched.User.CountryCode || "91";
-                const normalizedPhone = `${countryCode.replace(/\D/g, "")}${enriched.User.PhoneNumber.replace(/\D/g, "")}`;
+                const normalizedPhone = toInternationalPhone(enriched.User.PhoneNumber, enriched.User.CountryCode);
 
                 const components: any[] = [
                     {

@@ -1,5 +1,6 @@
 import { medicalDocumentRepository } from "../../repositories/Appointments/medical-document.repository.js";
 import { readableRecordName } from "../../utils/record-name.js";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 import { appointmentShareLinkRepository } from "../../repositories/Appointments/appointment-share-link.repository.js";
 import { appointmentRepository } from "../../repositories/Appointments/appointment.repository.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
@@ -46,10 +47,7 @@ export class MedicalDocumentService {
         const phone = patient.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = "91" + normalizedPhone;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
 
@@ -331,10 +329,7 @@ export class MedicalDocumentService {
         const phone = patient.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = "91" + normalizedPhone;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
 
@@ -390,10 +385,7 @@ export class MedicalDocumentService {
         const phone = patient.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = "91" + normalizedPhone;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
 
@@ -451,10 +443,7 @@ export class MedicalDocumentService {
         const phone = patient.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = "91" + normalizedPhone;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
 
@@ -525,10 +514,7 @@ export class MedicalDocumentService {
         const phone = patient.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = "91" + normalizedPhone;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
 
@@ -594,10 +580,7 @@ export class MedicalDocumentService {
         const phone = patient.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = "91" + normalizedPhone;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = (patient.FirstName || "") + " " + (patient.LastName || "").trim() || "Valued Patient";
 
@@ -740,10 +723,7 @@ export class MedicalDocumentService {
             throw new Error("Patient does not have a phone number registered.");
         }
 
-        let normalizedPhone = phone.replace(/\D/g, "");
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = `91${normalizedPhone}`;
-        }
+        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
 
         const patientName = `${patient.FirstName || ""} ${patient.LastName || ""}`.trim() || "Valued Patient";
 

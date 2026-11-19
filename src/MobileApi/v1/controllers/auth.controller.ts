@@ -113,8 +113,12 @@ export const login = async (req: Request, res: Response) => {
  * Sends OTP to a mobile phone user if they exist and are active with Patient/Provider roles.
  * Supports resending via optional `isResend` / `resend` body flag.
  */
+/** "whatsapp" when the app asks for it (numbers outside India); anything else means SMS. */
+const otpChannel = (value: unknown): "sms" | "whatsapp" | undefined =>
+    value === "whatsapp" ? "whatsapp" : value === "sms" ? "sms" : undefined;
+
 export const sendOTP = async (req: Request, res: Response) => {
-    const { identity, countryCode, isResend, resend } = req.body;
+    const { identity, countryCode, isResend, resend, channel } = req.body;
     const isResendFlag = isResend === true || resend === true;
     try {
         if (!identity) {
@@ -126,7 +130,7 @@ export const sendOTP = async (req: Request, res: Response) => {
             });
         }
 
-        const result = await mobileAuthService.sendOTP(identity, countryCode, isResendFlag);
+        const result = await mobileAuthService.sendOTP(identity, countryCode, isResendFlag, otpChannel(channel));
         const successMessage = isResendFlag ? "OTP resent successfully!" : "OTP sent successfully!";
         return res.json(ApiResponse.success(result, successMessage));
     } catch (error: any) {
@@ -188,7 +192,7 @@ export const sendOTP = async (req: Request, res: Response) => {
  * Sends OTP for Mobile Signup verification.
  */
 export const sendSignupOtp = async (req: Request, res: Response) => {
-    const { identity, phoneNumber, countryCode, email } = req.body;
+    const { identity, phoneNumber, countryCode, email, channel } = req.body;
     const targetPhone = phoneNumber || identity;
     try {
         if (!targetPhone) {
@@ -199,7 +203,7 @@ export const sendSignupOtp = async (req: Request, res: Response) => {
             });
         }
 
-        const result = await mobileAuthService.sendSignupOTP(targetPhone, countryCode, email);
+        const result = await mobileAuthService.sendSignupOTP(targetPhone, countryCode, email, otpChannel(channel));
         return res.json(ApiResponse.success(result, "Verification code sent successfully."));
     } catch (error: any) {
         console.error("[DEBUG] sendSignupOtp Error:", error);
@@ -306,7 +310,7 @@ export const register = async (req: Request, res: Response) => {
  */
 export const resendOTP = async (req: Request, res: Response) => {
     try {
-        const { contact, countryCode } = req.body;
+        const { contact, countryCode, channel } = req.body;
         if (!contact) {
             return res.status(400).json({
                 status: false,
@@ -316,7 +320,7 @@ export const resendOTP = async (req: Request, res: Response) => {
             });
         }
 
-        const result = await mobileAuthService.sendOTP(contact, countryCode, true);
+        const result = await mobileAuthService.sendOTP(contact, countryCode, true, otpChannel(channel));
         return res.json(ApiResponse.success(result, "OTP resent successfully!"));
     } catch (error: any) {
         return res.status(400).json({
@@ -417,17 +421,21 @@ export const logout = async (req: Request, res: Response) => {
         // Logout is reachable without a session, so an unproven userId is only trusted from released builds.
         const claimedUserId = legacyUserHeadersAllowed() ? ((req.body && req.body.userId) || (req.headers && (req.headers['x-user-id'] as string)) || null) : null;
         let userId: string | null = (req as any).userId || claimedUserId;
+        // Set only when the refresh token proves who is logging out.
+        let verifiedUserId: string | null = null;
         if (refreshToken) {
             try {
                 // First decode using JWT utility to see if payload is valid
                 const payload = verifyRefreshToken(refreshToken);
                 if (payload && payload.userId) {
                     userId = payload.userId;
+                    verifiedUserId = payload.userId;
                 } else {
                     // If JWT verify fails (e.g. expired token), look up in DB to find associated UserId
                     const tokenRecord = await tokenRepository.findByRefreshToken(refreshToken);
                     if (tokenRecord) {
                         userId = tokenRecord.UserId;
+                        verifiedUserId = tokenRecord.UserId;
                     }
                 }
             } catch (_) {}
@@ -445,6 +453,26 @@ export const logout = async (req: Request, res: Response) => {
         const isAll = (logoutAll === true || allDevices === true || !isSingleDeviceLogout);
         const headerDeviceId = (req.headers && (req.headers['x-device-id'] as string)) || null;
         const targetDeviceId = deviceId || headerDeviceId || null;
+
+        // The phone also holds sessions for family profiles it opened (each opening issues
+        // one). They end too, or the phone would still count as signed in for pushes.
+        if (verifiedUserId && targetDeviceId && String(targetDeviceId).trim().length >= 8 && targetDeviceId !== "unknown_id") {
+            try {
+                const { AppDataSource } = await import("../../../config/database.js");
+                const { isFamilyLinked } = await import("../../../middlewares/request-identity.js");
+                const sessions: { TokenId: number; UserId: string }[] = await AppDataSource.query(
+                    "SELECT TokenId, UserId FROM UserTokens WHERE DeviceInfo = @0 AND IsRevoked = 0",
+                    [String(targetDeviceId).trim()]
+                );
+                for (const session of sessions) {
+                    if (await isFamilyLinked(verifiedUserId, String(session.UserId)).catch(() => false)) {
+                        await tokenRepository.revokeToken(session.TokenId);
+                    }
+                }
+            } catch (sessionErr: any) {
+                console.error("[Logout] Could not end the phone's other sessions:", sessionErr?.message || sessionErr);
+            }
+        }
 
         await userDeviceService.deleteDevices(userId, fcmToken, targetDeviceId, isAll);
 

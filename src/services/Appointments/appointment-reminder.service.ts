@@ -3,6 +3,7 @@ import { meetingRedirectionService } from "./meeting-redirection.service.js";
 import { whatsappService } from "../Common/whatsapp.service.js";
 import { AppDataSource } from "../../config/database.js";
 import { Appointment } from "../../models/Appointments/appointment.model.js";
+import { toInternationalPhone } from "../../utils/phone-number.js";
 
 export interface ReminderResult {
     success: boolean;
@@ -114,8 +115,7 @@ export class AppointmentReminderService {
                 locationStr = "Online Video Consultation";
             }
 
-            const countryCode = appt.User.CountryCode || "91";
-            const normalizedPhone = `${countryCode.replace(/\D/g, "")}${appt.User.PhoneNumber.replace(/\D/g, "")}`;
+            const normalizedPhone = toInternationalPhone(appt.User.PhoneNumber, appt.User.CountryCode);
 
             // 3. Build WhatsApp Template Components
             const components: any[] = [

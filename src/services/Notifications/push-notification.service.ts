@@ -18,6 +18,34 @@ export interface SendPushPayload {
     referenceId?: string | null;
     route?: string | null;
     additionalData?: Record<string, any>;
+    /**
+     * false: only add it to the in-app notification list, without a push. For
+     * messages that confirm something the person has just done themself.
+     */
+    push?: boolean;
+    /**
+     * false: push only to the person's own phones, not to their account holder's.
+     * Use it when the account holder gets a message of their own about the same event.
+     */
+    includeAccountHolder?: boolean;
+}
+
+/** One push per phone per event: the same message to the same phone within this time is dropped. */
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+const recentPushes = new Map<string, number>();
+
+/** Returns the tokens that haven't already had this message in the last few minutes, and records them. */
+function dropRecentDuplicates(tokens: string[], eventKey: string): string[] {
+    const now = Date.now();
+    for (const [key, at] of recentPushes) {
+        if (now - at > DUPLICATE_WINDOW_MS) recentPushes.delete(key);
+    }
+    return tokens.filter((token) => {
+        const key = `${token}|${eventKey}`;
+        if (recentPushes.has(key)) return false;
+        recentPushes.set(key, now);
+        return true;
+    });
 }
 
 export class PushNotificationService {
@@ -31,17 +59,21 @@ export class PushNotificationService {
     }
 
     /**
-     * Resolves all candidate and linked family user identifiers (Primary account + all linked dependents, up to 6 accounts)
+     * Works out who a notification is for. [userId] may be a user id, a patient
+     * registration id, a phone number or an email.
+     * - directIds: the accounts whose in-app notification list gets the message.
+     * - deviceOwnerIds: the accounts whose phones get the push: the person and
+     *   their account holder (the parent account of a dependent, or the primary
+     *   account on the same phone number), since a dependent's notifications
+     *   arrive on the phone of whoever manages them. Other family members are
+     *   left out: a parent's own notifications must not reach a child's phone.
      */
-    private async resolveActualUserIds(userId: string): Promise<{ directIds: string[]; familyMemberIds: string[] }> {
+    private async resolveRecipients(userId: string, includeAccountHolder: boolean): Promise<{ directIds: string[]; deviceOwnerIds: string[] }> {
         const directIds = new Set<string>();
-        const familyMemberIds = new Set<string>();
-        if (!userId) return { directIds: [], familyMemberIds: [] };
+        const holderIds = new Set<string>();
+        if (!userId) return { directIds: [], deviceOwnerIds: [] };
 
-        if (this.isUuid(userId)) {
-            directIds.add(userId);
-            familyMemberIds.add(userId);
-        }
+        if (this.isUuid(userId)) directIds.add(userId);
 
         try {
             const { User } = await import("../../models/Account/user.model.js");
@@ -50,91 +82,58 @@ export class PushNotificationService {
             const userRepo = AppDataSource.getRepository(User);
             const regRepo = AppDataSource.getRepository(PatientRegistration);
 
-            // 1. If numeric or integer ID, check PatientRegistration by Id
-            const numId = parseInt(userId, 10);
-            if (!isNaN(numId)) {
-                const reg = await regRepo.findOne({ where: { Id: numId } }).catch(() => null);
-                if (reg?.UserId && this.isUuid(reg.UserId)) {
-                    directIds.add(reg.UserId);
-                    familyMemberIds.add(reg.UserId);
-                }
+            // A numeric id is a patient registration.
+            if (/^\d+$/.test(String(userId).trim())) {
+                const reg = await regRepo.findOne({ where: { Id: parseInt(userId, 10) } }).catch(() => null);
+                if (reg?.UserId && this.isUuid(reg.UserId)) directIds.add(reg.UserId);
             }
 
-            // 2. Check User by Id (UUID), PhoneNumber, or Email
-            let user = await userRepo.createQueryBuilder("u")
-                .where("u.Id = :id OR u.PhoneNumber = :phone OR u.Email = :email", {
-                    id: userId,
-                    phone: userId,
-                    email: userId
-                })
+            const user = await userRepo.createQueryBuilder("u")
+                .where("u.Id = :id OR u.PhoneNumber = :phone OR u.Email = :email", { id: userId, phone: userId, email: userId })
                 .getOne()
                 .catch(() => null);
 
             if (user?.Id && this.isUuid(user.Id)) {
                 directIds.add(user.Id);
-                familyMemberIds.add(user.Id);
-            }
-
-            // 3. Check PatientRegistrations pointing to this user
-            const patientRegs = await regRepo.find({ where: { UserId: userId } }).catch(() => []);
-            for (const r of patientRegs) {
-                if (r.UserId && this.isUuid(r.UserId)) {
-                    directIds.add(r.UserId);
-                    familyMemberIds.add(r.UserId);
-                }
-                // Do NOT add String(r.Id) because it is a numeric ID, not a valid GUID for AppNotifications.UserId
-            }
-
-            // 4. Resolve ALL linked family members / dependents (up to 6 accounts linked to same family/device)
-            if (user) {
-                const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
-                const parentId = user.ParentUserId || user.Id;
 
                 if (user.ParentUserId && this.isUuid(user.ParentUserId)) {
-                    familyMemberIds.add(user.ParentUserId);
-                }
-
-                const familyMembers = await userRepo.createQueryBuilder('u')
-                    .where('u.IsDeleted = 0')
-                    .andWhere(
-                        '(u.Id = :userId OR (u.Id = :parentId AND :parentId IS NOT NULL) OR u.ParentUserId = :parentId OR u.ParentUserId = :userId)',
-                        { userId: user.Id, parentId: user.ParentUserId || null }
-                    )
-                    .getMany()
-                    .catch(() => []);
-
-                for (const m of familyMembers) {
-                    if (this.isUuid(m.Id)) {
-                        familyMemberIds.add(m.Id);
-                    }
+                    holderIds.add(user.ParentUserId);
+                } else if (user.IsPrimary === false && user.PhoneNumber) {
+                    const primary = await userRepo.findOne({
+                        where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false },
+                        select: { Id: true },
+                    }).catch(() => null);
+                    if (primary?.Id && this.isUuid(primary.Id)) holderIds.add(primary.Id);
                 }
             }
         } catch (err) {
-            console.error("[PushNotificationService] Error resolving family user IDs:", err);
+            console.error("[PushNotificationService] Error resolving notification recipients:", err);
         }
 
-        return {
-            directIds: Array.from(directIds).filter((id): id is string => this.isUuid(id)),
-            familyMemberIds: Array.from(familyMemberIds).filter((id): id is string => this.isUuid(id))
-        };
+        const direct = Array.from(directIds).filter((id) => this.isUuid(id));
+        const owners = new Set(direct.map((id) => id.toUpperCase()));
+        if (includeAccountHolder) {
+            for (const id of holderIds) owners.add(id.toUpperCase());
+        }
+        return { directIds: direct, deviceOwnerIds: Array.from(owners) };
     }
 
     /**
-     * Dispatches a push notification to all active devices of a user and all linked family accounts, and logs it in the in-app notification center.
+     * Adds a notification to the person's in-app list and pushes it to the phones
+     * signed in to their account (and their account holder's, see resolveRecipients).
+     * Phones whose account has no live session (signed out, or the session ran out)
+     * get nothing, and a phone never gets the same message twice within a few minutes.
      */
     async sendNotification(payload: SendPushPayload): Promise<AppNotification> {
         const { userId, senderId, title, body, type, referenceId, route, additionalData } = payload;
+        const shouldPush = payload.push !== false;
 
-        const { directIds, familyMemberIds } = await this.resolveActualUserIds(userId);
-        console.log(`[PushNotificationService] Processing notification "${title}" for user "${userId}". Direct IDs: [${directIds.join(', ')}], Family IDs: [${familyMemberIds.join(', ')}]`);
+        const { directIds, deviceOwnerIds } = await this.resolveRecipients(userId, payload.includeAccountHolder !== false);
+        console.log(`[PushNotificationService] Processing notification "${title}" for user "${userId}". In-app: [${directIds.join(', ')}], push to: [${shouldPush ? deviceOwnerIds.join(', ') : 'none'}]`);
 
-        // 1. Persist notification in database for in-app Recent Notifications Center for all direct candidate IDs
+        // 1. The in-app notification list
         let primarySaved: AppNotification | null = null;
         for (const uid of directIds) {
-            if (!this.isUuid(uid)) {
-                console.warn(`[PushNotificationService] Skipping in-app notification for non-UUID uid: "${uid}"`);
-                continue;
-            }
             try {
                 const notification = new AppNotification();
                 notification.UserId = uid;
@@ -156,26 +155,28 @@ export class PushNotificationService {
             }
         }
 
-        // 2. Fetch active FCM tokens across all linked family member devices (primary account + dependents)
-        try {
-            const allDevices: any[] = [];
-            for (const uid of familyMemberIds) {
-                const devs = await userDeviceRepository.findActiveDevicesByUserId(uid);
-                if (devs && devs.length > 0) {
-                    allDevices.push(...devs);
-                }
-            }
+        if (!shouldPush) {
+            return primarySaved || new AppNotification();
+        }
 
-            const validTokens = Array.from(
+        // 2. The push, to phones with a live session only
+        try {
+            const devices = await userDeviceRepository.findPushableDevicesByUserIds(deviceOwnerIds);
+            const tokens = Array.from(
                 new Set(
-                    allDevices
+                    devices
                         .map(d => d.FCMToken?.trim())
                         .filter((t): t is string => !!t && t.length > 10 && t !== "no_token_available")
                 )
             );
+            const eventKey = `${type || "SYSTEM"}|${referenceId ?? ""}|${title}`;
+            const validTokens = dropRecentDuplicates(tokens, eventKey);
+            if (validTokens.length < tokens.length) {
+                console.log(`[PushNotificationService] Skipped ${tokens.length - validTokens.length} phone(s) that already had "${title}"`);
+            }
 
             if (validTokens.length > 0) {
-                console.log(`[PushNotificationService] Dispatched push to family [${familyMemberIds.join(', ')}] on ${validTokens.length} device(s): "${title}"`);
+                console.log(`[PushNotificationService] Dispatched push to [${deviceOwnerIds.join(', ')}] on ${validTokens.length} device(s): "${title}"`);
                 const { sendFcmPushToTokens } = await import("./firebase-admin.service.js");
                 await sendFcmPushToTokens(validTokens, {
                     title,
@@ -185,8 +186,8 @@ export class PushNotificationService {
                     referenceId: referenceId || undefined,
                     additionalData
                 });
-            } else {
-                console.log(`[PushNotificationService] Notification saved for family [${familyMemberIds.join(', ')}] (No active FCM device tokens registered)`);
+            } else if (tokens.length === 0) {
+                console.log(`[PushNotificationService] Notification saved for [${deviceOwnerIds.join(', ')}] (no signed-in phones)`);
             }
         } catch (error) {
             console.error(`[PushNotificationService] Error querying devices for user ${userId}:`, error);
@@ -233,7 +234,9 @@ export class PushNotificationService {
             additionalData: { appointmentId, date, time, patientName, consultationType }
         });
 
-        // 2. Notify Patient
+        const forDependent = !!parentUserId && parentUserId.toUpperCase() !== String(patientId).toUpperCase();
+
+        // 2. Notify Patient (a dependent's own phones only: the account holder gets message 3)
         await this.sendNotification({
             userId: patientId,
             senderId: doctorId,
@@ -242,11 +245,12 @@ export class PushNotificationService {
             type: "APPOINTMENT_BOOKED",
             referenceId: String(appointmentId),
             route: "/patientDashboard",
-            additionalData: { appointmentId, date, time, doctorName: formattedDoctor, consultationType }
+            additionalData: { appointmentId, date, time, doctorName: formattedDoctor, consultationType },
+            includeAccountHolder: !forDependent
         });
 
         // 3. If booking was made for a dependent, also notify Parent/Account holder
-        if (parentUserId && parentUserId !== patientId) {
+        if (forDependent && parentUserId) {
             await this.sendNotification({
                 userId: parentUserId,
                 senderId: doctorId,
@@ -287,7 +291,9 @@ export class PushNotificationService {
             type: "MEDICAL_RECORD_ADDED",
             referenceId: appointmentId ? String(appointmentId) : null,
             route: "/userTestResultScreen",
-            additionalData: { patientId, appointmentId, recordName }
+            additionalData: { patientId, appointmentId, recordName },
+            // The patient uploaded it themself: list it, but don't push it to them.
+            push: !isSelf
         });
     }
 
@@ -329,13 +335,18 @@ export class PushNotificationService {
         patientName: string;
         date: string;
         status: string;
+        /** The patient (or their family) made the change themself: list it, but don't push it to them. */
+        changedByPatient?: boolean;
     }) {
-        const { appointmentId, doctorId, patientId, parentUserId, doctorName, patientName, date, status } = params;
+        const { appointmentId, doctorId, patientId, parentUserId, doctorName, patientName, date, status, changedByPatient } = params;
+        const push = !changedByPatient;
 
         const formattedStatus = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
         const formattedDoctor = this.formatDoctorName(doctorName);
 
-        // Notify Patient
+        const forDependent = !!parentUserId && parentUserId.toUpperCase() !== String(patientId).toUpperCase();
+
+        // Notify Patient (a dependent's own phones only: the account holder gets the next message)
         await this.sendNotification({
             userId: patientId,
             senderId: doctorId,
@@ -344,11 +355,13 @@ export class PushNotificationService {
             type: "APPOINTMENT_STATUS",
             referenceId: String(appointmentId),
             route: PATIENT_APPOINTMENTS_ROUTE,
-            additionalData: { appointmentId, status, date }
+            additionalData: { appointmentId, status, date },
+            includeAccountHolder: !forDependent,
+            push
         });
 
         // Notify Parent account if this is a dependent patient
-        if (parentUserId && parentUserId !== patientId) {
+        if (forDependent && parentUserId) {
             await this.sendNotification({
                 userId: parentUserId,
                 senderId: doctorId,
@@ -357,7 +370,8 @@ export class PushNotificationService {
                 type: "APPOINTMENT_STATUS",
                 referenceId: String(appointmentId),
                 route: PATIENT_APPOINTMENTS_ROUTE,
-                additionalData: { appointmentId, status, date, dependentId: patientId }
+                additionalData: { appointmentId, status, date, dependentId: patientId },
+                push
             });
         }
     }

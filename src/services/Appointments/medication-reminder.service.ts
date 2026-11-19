@@ -94,7 +94,7 @@ export class MedicationReminderService {
 
                 if (dueTime) {
                     const dedupeKey = `${reminder.Id}_${todayIstStr}_${dueTime.hour}_${dueTime.minute}`;
-                    if (!this.sentPillReminders.has(dedupeKey)) {
+                    if (!this.sentPillReminders.has(dedupeKey) && !(await this.alreadySentSince(reminder.Id, nowMinutes - (dueTime.hour * 60 + dueTime.minute) + 1))) {
                         this.sentPillReminders.add(dedupeKey);
 
                         const dosageText = reminder.Dosage ? ` (${reminder.Dosage})` : "";
@@ -124,7 +124,7 @@ export class MedicationReminderService {
                 }
             }
 
-            // Periodically clear deduplication memory once it exceeds 2000 entries
+            // Keep the memory small; the database check below still stops repeats.
             if (this.sentPillReminders.size > 2000) {
                 this.sentPillReminders.clear();
             }
@@ -133,6 +133,25 @@ export class MedicationReminderService {
         } catch (err: any) {
             console.error("[MedicationReminder] Error in checkAndSendDueReminders:", err.message || err);
             return 0;
+        }
+    }
+
+    /**
+     * Whether this reminder's push already went out in the last [minutes] minutes.
+     * The in-memory list is lost on a restart, and another server running this job
+     * has its own, so the sent notifications in the database decide.
+     */
+    private async alreadySentSince(reminderId: string, minutes: number): Promise<boolean> {
+        try {
+            const rows = await AppDataSource.query(
+                `SELECT TOP 1 1 AS sent FROM AppNotifications
+                 WHERE Type = 'MEDICATION_REMINDER' AND ReferenceId = @0 AND CreatedAt >= @1`,
+                // A parameter, not GETDATE(): it is stored the same way CreatedAt was.
+                [reminderId, new Date(Date.now() - Math.max(1, Math.min(10, minutes)) * 60000)]
+            );
+            return rows.length > 0;
+        } catch {
+            return false;
         }
     }
 

@@ -293,15 +293,8 @@ export class PushCampaignService {
                 const userIds = patientRegs.map(p => p.UserId).filter(Boolean);
 
                 if (userIds.length > 0) {
-                    const { UserDevice } = await import("../../models/Account/userdevice.model.js");
-                    const deviceRepo = AppDataSource.getRepository(UserDevice);
-
-                    activeDevices = await deviceRepo.createQueryBuilder("d")
-                        .where("d.UserId IN (:...userIds)", { userIds })
-                        .andWhere("d.IsActive = 1")
-                        .andWhere("d.FCMToken IS NOT NULL")
-                        .andWhere("d.FCMToken != ''")
-                        .getMany();
+                    // Signed-in phones only (see findPushableDevicesByUserIds)
+                    activeDevices = await userDeviceRepository.findPushableDevicesByUserIds(userIds);
                 }
             }
         }

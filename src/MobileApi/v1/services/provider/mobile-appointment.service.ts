@@ -17,6 +17,7 @@ import { zoomService } from "../../../../services/Common/zoom.service.js";
 import { v4 as uuidv4 } from "uuid";
 import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
 import { canManageHospital } from "../../../../utils/staff-access.js";
+import { toInternationalPhone } from "../../../../utils/phone-number.js";
 
 export class MobileAppointmentService {
     async getAppointmentDashboard(
@@ -270,6 +271,10 @@ export class MobileAppointmentService {
         consultationFee?: number;
         shareRecords?: boolean;
         grantRecordAccess?: boolean;
+        /** How long the doctor may see the patient's records: 1_DAY, 7_DAYS (default) or 1_MONTH. */
+        shareRecordsDuration?: string;
+        /** The signed-in account that is booking. */
+        requesterId?: string;
     }): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const userRoleRepo = AppDataSource.getRepository(UserRole);
@@ -756,9 +761,25 @@ export class MobileAppointmentService {
             await slotRepo.save(slot);
         }
 
-                // Auto-grant 7 days of medical records access to doctor if patient consented (default true)
+        // The patient can let the doctor see all their records (every hospital, their own
+        // uploads) for a while: 7 days unless they chose 1 day or 1 month. Only the patient
+        // or their family can give this; a doctor or front desk booking for them can't.
+        const recordAccessDurations: Record<string, { minutes: number; label: string }> = {
+            "1_DAY": { minutes: 1440, label: "1 day" },
+            "7_DAYS": { minutes: 10080, label: "7 days" },
+            "1_MONTH": { minutes: 43200, label: "1 month" },
+        };
+        const accessDuration = recordAccessDurations[String(data.shareRecordsDuration || "").toUpperCase()]
+            ? String(data.shareRecordsDuration).toUpperCase()
+            : "7_DAYS";
         const shouldGrantAccess = data.shareRecords !== false && data.grantRecordAccess !== false;
-        if (shouldGrantAccess && patientUser?.Id && data.doctorId) {
+        let recordAccess: { duration: string; label: string; expiresAt: Date } | null = null;
+        let bookedByPatient = false;
+        if (shouldGrantAccess && data.requesterId && patientUser?.Id) {
+            const { isFamilyLinked } = await import("../../../../middlewares/request-identity.js");
+            bookedByPatient = await isFamilyLinked(data.requesterId, patientUser.Id).catch(() => false);
+        }
+        if (shouldGrantAccess && bookedByPatient && patientUser?.Id && data.doctorId) {
             try {
                 const consentRepo = AppDataSource.getRepository(PatientAccessConsent);
                 let consent = await consentRepo.findOne({
@@ -766,19 +787,21 @@ export class MobileAppointmentService {
                     order: { Id: "DESC" }
                 });
 
+                const { minutes, label } = recordAccessDurations[accessDuration];
                 const now = new Date();
-                const expires = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+                const expires = new Date(now.getTime() + minutes * 60 * 1000);
+                const notes = `Given by the patient while booking (${label})`;
 
                 if (consent) {
                     consent.Status = "APPROVED";
-                    consent.Duration = "7_DAYS";
-                    consent.DurationMinutes = 10080;
+                    consent.Duration = accessDuration;
+                    consent.DurationMinutes = minutes;
                     consent.RequestedAt = now;
                     consent.ApprovedAt = now;
                     consent.ExpiresAt = expires;
                     consent.HospitalId = data.hospitalId;
                     consent.OrganizationId = data.orgId;
-                    consent.Notes = "Auto-granted during appointment booking (7 days)";
+                    consent.Notes = notes;
                     consent.UpdatedAt = now;
                     await consentRepo.save(consent);
                 } else {
@@ -787,19 +810,20 @@ export class MobileAppointmentService {
                         DoctorId: data.doctorId,
                         HospitalId: data.hospitalId,
                         OrganizationId: data.orgId,
-                        Duration: "7_DAYS",
-                        DurationMinutes: 10080,
+                        Duration: accessDuration,
+                        DurationMinutes: minutes,
                         Status: "APPROVED",
                         RequestedAt: now,
                         ApprovedAt: now,
                         ExpiresAt: expires,
-                        Notes: "Auto-granted during appointment booking (7 days)"
+                        Notes: notes
                     });
                     await consentRepo.save(consent);
                 }
-                console.log(`[MobileAppointmentService] Auto-granted 7-day record access for patient ${patientUser.Id} to doctor ${data.doctorId}`);
+                recordAccess = { duration: accessDuration, label, expiresAt: expires };
+                console.log(`[MobileAppointmentService] Patient ${patientUser.Id} gave doctor ${data.doctorId} record access for ${label}`);
             } catch (consentErr) {
-                console.error("[MobileAppointmentService] Failed to auto-grant record access:", consentErr);
+                console.error("[MobileAppointmentService] Failed to grant record access:", consentErr);
             }
         }
 
@@ -817,7 +841,9 @@ export class MobileAppointmentService {
             appointmentDate: savedAppointment.AppointmentDate,
             startTime: savedAppointment.StartTime,
             status: savedAppointment.Status,
-            requiresOnlinePayment
+            requiresOnlinePayment,
+            // Set when the doctor was given access to the patient's records (the app checks it)
+            recordAccess
         };
     }
 
@@ -905,9 +931,7 @@ export class MobileAppointmentService {
             // 2. Trigger WhatsApp Message to Patient
             if (patientUser.PhoneNumber) {
                 try {
-                    const countryCode = patientUser.CountryCode || "91";
-                    const cleanDigits = patientUser.PhoneNumber.replace(/\D/g, "");
-                    const normalizedPhone = cleanDigits.length === 10 ? `${countryCode.replace(/\D/g, "")}${cleanDigits}` : cleanDigits;
+                    const normalizedPhone = toInternationalPhone(patientUser.PhoneNumber, patientUser.CountryCode);
 
                     // Clean doctor name so "Dr." is not duplicated.
                     // Meta WhatsApp templates (video_call_template, appointment_conformation) already include "Dr. {{2}}" in their template text.
@@ -992,11 +1016,7 @@ export class MobileAppointmentService {
                 }
 
                 if (doctorUser?.PhoneNumber) {
-                    const docCountryCode = doctorUser.CountryCode || "91";
-                    const cleanDocDigits = doctorUser.PhoneNumber.replace(/\D/g, "");
-                    const normalizedDocPhone = cleanDocDigits.length === 10
-                        ? `${docCountryCode.replace(/\D/g, "")}${cleanDocDigits}`
-                        : cleanDocDigits;
+                    const normalizedDocPhone = toInternationalPhone(doctorUser.PhoneNumber, doctorUser.CountryCode);
 
                     let docDisplayName = `${doctorUser.FirstName || ""} ${doctorUser.LastName || ""}`.trim() || doctorName;
                     while (/^(?:dr\.?|doctor)\s+/i.test(docDisplayName)) {
@@ -1161,7 +1181,14 @@ export class MobileAppointmentService {
 
         // Trigger Push Notification for status update (both patient and parent account if dependent)
         try {
+            // A patient cancelling their own visit already sees it in the app, so they get no push for it.
+            let changedByPatient = false;
+            if (requesterId && appointment.UserId) {
+                const { isFamilyLinked } = await import("../../../../middlewares/request-identity.js");
+                changedByPatient = await isFamilyLinked(requesterId, String(appointment.UserId)).catch(() => false);
+            }
             await pushNotificationService.notifyAppointmentStatusChanged({
+                changedByPatient,
                 appointmentId: appointment.Id,
                 doctorId: appointment.DoctorId,
                 patientId: appointment.UserId,
