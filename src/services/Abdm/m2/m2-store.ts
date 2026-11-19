@@ -101,7 +101,11 @@ export interface M2Store {
     patientsAt(hospitalId: number, criteria: { abhaAddress?: string; abhaNumber?: string; mobile?: string; userId?: string }): Promise<PatientProfile[]>;
     /** Every ABHA address the patient holds, lower case: one ABHA number can carry several. */
     abhaAddresses(userId: string): Promise<string[]>;
-    /** Patients registered at the hospital who hold an ABHA address. */
+    /**
+     * The patients the linking sweep visits at the hospital: those registered there who hold an ABHA
+     * address on the profile, and those with a care context there linked under an ABHA address
+     * (linkedAbhaAddress), as one linked from a PHR app is though the profile holds none.
+     */
     patientsWithAbhaAt(hospitalId: number): Promise<string[]>;
     appointmentIds(patientUserId: string, hospitalId: number): Promise<number[]>;
 

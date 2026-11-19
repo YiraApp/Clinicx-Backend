@@ -7,9 +7,11 @@ import { LinkingError, type HipLinkingService } from "./hip-linking.js";
  * line names its prescription, a visit record its appointment. Saves come in bursts (a visit saves
  * its prescription, notes and vitals together), so they wait a few seconds to settle, then each
  * patient is linked once: new care contexts with link/carecontext, care contexts already linked
- * that gained records with link/context/notify. A patient with a mobile and no ABHA on record is
- * texted ABDM's deep link instead (sms/notify2), once per new record. The scheduled sweep remains the
- * safety net for linking.
+ * that gained records with link/context/notify. The announcing runs whether or not linking could:
+ * a care context the patient linked from a PHR app is announced under the address it was linked
+ * with, though the profile holds no ABHA. For a patient with a mobile and no ABHA on record, the
+ * care contexts not linked yet are texted ABDM's deep link instead (sms/notify2), once per new
+ * record. The scheduled sweep remains the safety net for linking and announcing.
  */
 
 /** What a saved row says about its owner. */
@@ -88,25 +90,38 @@ export class AutoLinker {
         }
 
         for (const { hip, patientId } of due.values()) {
+            let linked: { queued: number; status: string } | null = null;
+            let linkError: unknown = null;
             try {
-                const linked = await this.linking.link(hip, patientId);
-                const notified = await this.linking.notifyChanges(hip, patientId);
-                if (linked.queued || notified) {
-                    console.log(`[ABDM] auto-link at ${hip.id}: ${linked.queued} care contexts ${linked.status}, ${notified} announced`);
-                }
+                linked = await this.linking.link(hip, patientId);
+            } catch (error) {
+                linkError = error;
+            }
+            // Care contexts already linked are announced whether or not linking ran: one the patient
+            // linked from a PHR app needs no ABHA on the profile, and an invoice issued after that link
+            // reaches the PHR app only this way
+            let notified = 0;
+            try {
+                notified = await this.linking.notifyChanges(hip, patientId);
             } catch (error: any) {
-                // No ABHA yet, or no gender and date of birth: nothing to link, and the screen says why.
-                if (!(error instanceof LinkingError)) {
-                    console.warn(`[ABDM] auto-link at ${hip.id} skipped a patient: ${error?.message}`);
-                    continue;
-                }
-                // With no ABHA on record, ABDM texts the patient a link to find the new records instead
-                try {
-                    const requestId = await this.linking.notifyBySms(hip, patientId);
-                    if (requestId) console.log(`[ABDM] auto-link at ${hip.id}: deep-link SMS requested for a patient without ABHA, REQUEST-ID=${requestId}`);
-                } catch (smsError: any) {
-                    console.warn(`[ABDM] auto-link at ${hip.id}: the deep-link SMS failed: ${smsError?.message}`);
-                }
+                console.warn(`[ABDM] auto-link at ${hip.id}: announcing a patient's new records failed: ${error?.message}`);
+            }
+            if (linked?.queued || notified) {
+                console.log(`[ABDM] auto-link at ${hip.id}: ${linked?.queued ?? 0} care contexts ${linked?.status ?? "not linked"}, ${notified} announced`);
+            }
+            if (!linkError) continue;
+            // No ABHA yet, or no gender and date of birth: nothing to link, and the screen says why.
+            // Anything else is logged as before, and texts nothing.
+            if (!(linkError instanceof LinkingError)) {
+                console.warn(`[ABDM] auto-link at ${hip.id} skipped a patient: ${(linkError as any)?.message}`);
+                continue;
+            }
+            // With no ABHA on record, ABDM texts the patient a link to find the records not linked yet instead
+            try {
+                const requestId = await this.linking.notifyBySms(hip, patientId);
+                if (requestId) console.log(`[ABDM] auto-link at ${hip.id}: deep-link SMS requested for a patient without ABHA, REQUEST-ID=${requestId}`);
+            } catch (smsError: any) {
+                console.warn(`[ABDM] auto-link at ${hip.id}: the deep-link SMS failed: ${smsError?.message}`);
             }
         }
     }

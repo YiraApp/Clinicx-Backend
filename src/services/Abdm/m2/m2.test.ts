@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AbdmApiError } from "../abdm-gateway.service.js";
 import { CareContextCatalog, byHiType, careContextDisplay, parseCareContextReference } from "./care-contexts.js";
 import { HipLinkingService, LinkingError, tokenExpiry } from "./hip-linking.js";
+import { AutoLinker } from "./auto-link.js";
 import { PatientLinkingService, looksLikeSamePerson } from "./patient-linking.js";
 import { abdmSentAt, bundlesForReference, DataFlowService } from "./data-flow.js";
 import type { CareContextRow, CareContextSeed, ConsentRow, LinkRequestRow, LinkStatePatch, M2Store, PatientProfile, TransferRow } from "./m2-store.js";
@@ -36,7 +37,11 @@ class MemoryStore implements M2Store {
     }
     extraAddresses: string[] = [];
     async abhaAddresses(id: string) { const p = await this.patient(id); return p?.abhaAddress ? [p.abhaAddress.toLowerCase(), ...this.extraAddresses] : [...this.extraAddresses]; }
-    async patientsWithAbhaAt() { return this.patients.filter((p) => p.abhaAddress).map((p) => p.userId); }
+    /** As the database answers: an ABHA on the profile, or a care context here linked under an address. */
+    async patientsWithAbhaAt(h: number) {
+        const linkedHere = this.contexts.filter((c) => c.hospitalId === h && c.linkStatus === "linked" && c.linkedAbhaAddress !== null).map((c) => c.patientUserId);
+        return [...new Set([...this.patients.filter((p) => p.abhaAddress).map((p) => p.userId), ...linkedHere])];
+    }
     async appointmentIds() { return this.appointments; }
     async upsertCareContexts(seeds: CareContextSeed[]) {
         for (const s of seeds) {
@@ -98,8 +103,10 @@ const visit = (): VisitRecords => ({
 });
 const noStandalone = () => ({ prescriptions: [] as any[], consultations: [] as any[], notes: [] as any[], documents: [] as any[], reports: [] as any[], wellness: [] as any[] });
 let standalone = noStandalone();
+/** What visit 101 holds beyond its consultation and prescription: a bill issued, a document uploaded. */
+let visitExtras: Partial<VisitRecords> = {};
 const records = {
-    visit: async () => visit(),
+    visit: async () => ({ ...visit(), ...visitExtras }),
     standaloneRecordIds: async () => ({ dischargeSummaryIds: [3], immunizationIds: [], vitalsRecordIds: [] }),
     standaloneRecords: async () => standalone,
     dischargeSummary: async () => ({ summary: { AdmittedAt: new Date("2026-10-10T09:00:00+05:30"), DischargedAt: new Date("2026-10-12T09:00:00+05:30") } } as any),
@@ -116,6 +123,7 @@ const hip = { id: HIP, hospitalId: HOSPITAL, name: "Ocimum Dental Clinic" };
 
 beforeEach(() => {
     standalone = noStandalone();
+    visitExtras = {};
     store = new MemoryStore();
     gateway = new FakeGateway();
     catalog = new CareContextCatalog(store, records as any);
@@ -360,6 +368,140 @@ test("records added to a linked care context are announced once with context/not
     assert.deepEqual(n.careContext, { patientReference: PATIENT, careContextReference: "OP-101" });
     assert.equal(n.hip.id, HIP);
     assert.equal(await linking.notifyChanges(hip, PATIENT), 0, "nothing new the second time");
+});
+
+/** A visit bill: issued once Generate Invoice has given it an INV- number, a draft while it is DFT-. */
+const bill = (BillNumber: string) => ({
+    AppointmentBillId: "bill-42", BillNumber, CreatedAt: new Date("2026-10-20T10:25:00+05:30"), BillStatus: "Paid",
+    SubTotal: 500, DiscountAmount: 0, TotalAmount: 500, CgstAmount: 0, SgstAmount: 0, IgstAmount: 0,
+    BillItems: [{ AppointmentBillItemId: "i-1", ItemType: "Consultation", ItemName: "Consultation fee", Quantity: 1, UnitPrice: 500, DiscountAmount: 0, GstAmount: 0, TotalAmount: 500 }],
+} as any);
+const smsCount = () => gateway.calls.filter((c) => c.path.endsWith("/sms/notify2")).length;
+const notifyCount = () => gateway.calls.filter((c) => c.path.endsWith("/link/context/notify")).length;
+/** The patient linked OP-101 from a PHR app: link init and confirm, under the address the PHR app gave. */
+const linkedFromPhrApp = (notifiedHiTypes: CareContextRow["notifiedHiTypes"], linkedAbhaAddress: string | null = "asha.phr@sbx") =>
+    Object.assign(store.contexts.find((c) => c.referenceNumber === "OP-101")!, { linkStatus: "linked", linkedVia: "patient", linkedAbhaAddress, linkedAt: NOW, notifiedHiTypes });
+
+test("a visit the patient linked from a PHR app is announced under that link's address, though the profile holds no ABHA, once", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    await catalog.refresh(hip, PATIENT);
+    linkedFromPhrApp(["OPConsultation"]);
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 1);
+    const n = gateway.last("/link/context/notify").body.notification;
+    assert.equal(n.patient.id, "asha.phr@sbx");
+    assert.deepEqual(n.hiTypes, ["Prescription"]);
+    assert.deepEqual(n.careContext, { patientReference: PATIENT, careContextReference: "OP-101" });
+    assert.deepEqual(store.contexts.find((c) => c.referenceNumber === "OP-101")!.notifiedHiTypes, ["OPConsultation", "Prescription"]);
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 0, "nothing new the second time");
+    assert.equal(notifyCount(), 1);
+});
+
+test("a linked care context with no address on the link or the profile is not announced", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    await catalog.refresh(hip, PATIENT);
+    linkedFromPhrApp(["OPConsultation"], null);
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 0);
+    assert.equal(notifyCount(), 0);
+});
+
+test("an issued invoice is announced with its PDF, a health document, though the visit's documents announced that HI type before", async () => {
+    visitExtras = { documents: [{ id: "d-3", title: "Referral letter", category: "Clinical", contentType: "application/pdf", data: Buffer.from("%PDF-1.4\n"), createdAt: new Date("2026-10-20T10:05:00+05:30") }] };
+    await catalog.refresh(hip, PATIENT);
+    const op = store.contexts.find((c) => c.referenceNumber === "OP-101")!;
+    Object.assign(op, { linkStatus: "linked", linkedVia: "hip", linkedAbhaAddress: "asha.test@sbx", notifiedHiTypes: [...op.hiTypes] });
+    assert.deepEqual(op.notifiedHiTypes, ["OPConsultation", "Prescription", "HealthDocumentRecord"], "linked with the upload's health document");
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+
+    visitExtras = { ...visitExtras, bills: [bill("DFT-261020-0001")] };
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 0, "a bill still numbered DFT- is not an invoice yet");
+
+    // Generate Invoice
+    visitExtras = { ...visitExtras, bills: [bill("INV-2026-0042")] };
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 1);
+    const n = gateway.last("/link/context/notify").body.notification;
+    assert.deepEqual(n.hiTypes, ["Invoice", "HealthDocumentRecord"], "the invoice's PDF is a new health document");
+    assert.equal(n.patient.id, "asha.test@sbx");
+    assert.deepEqual(op.notifiedHiTypes, ["OPConsultation", "Prescription", "HealthDocumentRecord", "Invoice"]);
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 0, "announced once");
+});
+
+test("the sweep reaches a patient who linked from a PHR app with no ABHA on the profile, and announces under the link's address", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    // Another patient with no ABHA and nothing linked: not the sweep's
+    store.patients.push({ userId: "7d1e0c4a-2b3c-4d5e-8f90-a1b2c3d4e5f6", name: "Ravi Kumar", gender: "Male", birthDate: "1985-01-01", phone: "+919800000001", abhaNumber: null, abhaAddress: null });
+    await catalog.refresh(hip, PATIENT);
+    linkedFromPhrApp(["OPConsultation"]);
+    assert.deepEqual(await store.patientsWithAbhaAt(HOSPITAL), [PATIENT]);
+    assert.deepEqual(await store.patientsWithAbhaAt(HOSPITAL + 1), [], "a link at another hospital is not this one's");
+
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.deepEqual(await linking.sweep([hip]), { patients: 1, queued: 0, notified: 1 }, "linking is refused, the announcing still runs");
+    const n = gateway.last("/link/context/notify").body.notification;
+    assert.equal(n.patient.id, "asha.phr@sbx");
+    assert.deepEqual(n.hiTypes, ["Prescription"]);
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("generate-token")).length, 0);
+    assert.equal(smsCount(), 0, "the sweep texts no one");
+    assert.deepEqual(await linking.sweep([hip]), { patients: 1, queued: 0, notified: 0 }, "nothing new the second time");
+});
+
+// ---------- auto-link, end to end: the saves of a visit, then what goes to ABDM
+
+const autoLinker = (linking: HipLinkingService) =>
+    new AutoLinker({ owners: async () => [{ patientId: PATIENT, hospitalId: HOSPITAL }] }, { hips: async () => [hip] }, linking, 60_000);
+const saved = async (linker: AutoLinker) => {
+    linker.recordSaved({ patientId: PATIENT, hospitalId: HOSPITAL, appointmentId: 101 });
+    await linker.settle();
+};
+
+test("auto-link: a patient with an ABHA has new care contexts linked and linked ones that grew announced", async () => {
+    store.tokens.push({ patientUserId: PATIENT, hipId: HIP, abhaAddress: "asha.test@sbx", token: "kept", expiresAt: new Date(NOW.getTime() + 30 * 86400_000), requestId: "r" });
+    await catalog.refresh(hip, PATIENT);
+    Object.assign(store.contexts.find((c) => c.referenceNumber === "OP-101")!, { linkStatus: "linked", linkedVia: "hip", linkedAbhaAddress: "asha.test@sbx", notifiedHiTypes: ["OPConsultation"] });
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    await saved(autoLinker(linking));
+
+    const link = gateway.last("/link/carecontext").body;
+    assert.deepEqual([...new Set(link.patient.flatMap((p: any) => p.careContexts.map((c: any) => c.referenceNumber)))], ["IP-3"], "only the care context not linked yet");
+    const n = gateway.last("/link/context/notify").body.notification;
+    assert.deepEqual([n.careContext.careContextReference, n.hiTypes, n.patient.id], ["OP-101", ["Prescription"], "asha.test@sbx"]);
+    assert.equal(smsCount(), 0, "an ABHA is linked, not texted");
+});
+
+test("auto-link: an invoice issued after the patient linked the visit from a PHR app is announced, with its PDF, though the profile holds no ABHA", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    const linker = autoLinker(linking);
+    // The visit is saved: the deep link is texted for the visit and the stay
+    await saved(linker);
+    assert.equal(smsCount(), 1);
+    // The patient finds the visit from the PHR app and links it
+    linkedFromPhrApp([...store.contexts.find((c) => c.referenceNumber === "OP-101")!.hiTypes]);
+
+    // Generate Invoice on the Billing page
+    visitExtras = { bills: [bill("INV-2026-0042")] };
+    await saved(linker);
+    const n = gateway.last("/link/context/notify").body.notification;
+    assert.deepEqual([n.careContext.careContextReference, n.hiTypes, n.patient.id], ["OP-101", ["Invoice", "HealthDocumentRecord"], "asha.phr@sbx"]);
+    assert.equal(smsCount(), 1, "the stay not linked holds nothing new: no second SMS");
+    assert.equal(gateway.calls.filter((c) => c.path.endsWith("generate-token") || c.path.endsWith("/link/carecontext")).length, 0, "nothing linked without an ABHA");
+
+    await saved(linker);
+    assert.deepEqual([notifyCount(), smsCount()], [1, 1], "the same records saved again send nothing");
+});
+
+test("auto-link: a patient with no ABHA and nothing linked is texted exactly once per new record, and nothing is announced", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    const linker = autoLinker(new HipLinkingService(store, catalog, gateway as any, () => NOW));
+    await saved(linker);
+    assert.equal(smsCount(), 1);
+    await saved(linker);
+    assert.equal(smsCount(), 1, "the same records saved again: no second SMS");
+    visitExtras = { bills: [bill("INV-2026-0042")] };
+    await saved(linker);
+    assert.equal(smsCount(), 2, "the invoice is a new record");
+    assert.equal(notifyCount(), 0);
 });
 
 test("the deep-link SMS goes to the patient's ten digit mobile with the facility's name", async () => {
@@ -845,4 +987,24 @@ test("a stored callback runs its handler after the acknowledgement, and a redeli
     await service.receive({ path: "/api/v3/hip/patient/care-context/discover", headers, body });
     await new Promise((r) => setImmediate(r));
     assert.equal(runs.length, 1, "a redelivery is acknowledged, not handled twice");
+});
+
+test("with no ABHA on the profile, a linked care context without an address of its own is skipped, and the others are still announced", async () => {
+    Object.assign(store.patients[0]!, { abhaAddress: null, abhaNumber: null });
+    await catalog.refresh(hip, PATIENT);
+    linkedFromPhrApp(["OPConsultation"]);
+    Object.assign(store.contexts.find((c) => c.referenceNumber === "IP-3")!, { linkStatus: "linked", linkedVia: "hip", linkedAbhaAddress: null, notifiedHiTypes: [] });
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 1);
+    const sentTo = gateway.calls.filter((c) => c.path.endsWith("/link/context/notify")).map((c) => (c.body as any).notification.patient.id);
+    assert.deepEqual(sentTo, ["asha.phr@sbx"], "never a notify with no patient id");
+});
+
+test("a care context linked under another address of the same ABHA is announced to that address, not the profile's", async () => {
+    // The profile holds asha.test@sbx; the patient linked this visit from a PHR app as asha.phr@sbx
+    await catalog.refresh(hip, PATIENT);
+    linkedFromPhrApp(["OPConsultation"]);
+    const linking = new HipLinkingService(store, catalog, gateway as any, () => NOW);
+    assert.equal(await linking.notifyChanges(hip, PATIENT), 1);
+    assert.equal(gateway.last("/link/context/notify").body.notification.patient.id, "asha.phr@sbx");
 });

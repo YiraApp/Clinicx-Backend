@@ -9,7 +9,9 @@ import type { CareContextRow, Hip, M2Store, PatientProfile } from "./m2-store.js
  * token. The token is asked for once (generate-token, answered on on-generate-token), kept for
  * its validity (about six months) and reused; linking (link/carecontext, answered on
  * on_carecontext) waits for it when there is none yet. A linked care context that gains records
- * is announced with link/context/notify.
+ * is announced with link/context/notify, whoever linked it: the clinic, or the patient from a PHR
+ * app, whose link carries the ABHA address it was made under even when the patient's profile holds
+ * none.
  */
 
 type Gateway = Pick<AbdmGatewayService, "call">;
@@ -32,6 +34,18 @@ export class LinkingError extends Error {
 }
 
 const linkKey = (hip: Hip, userId: string): string => `${hip.id}|${patientReference(userId)}`;
+
+/**
+ * The HI types to announce for a linked care context: those it gained since it was linked or last
+ * announced. An invoice newly issued also brings a new health document, its PDF (the copy a PHR
+ * app shows, as the Invoice record cannot hold it where they look), so HealthDocumentRecord goes
+ * with it even when the visit's other documents announced that type before.
+ */
+const toAnnounce = (c: CareContextRow): HiType[] => {
+    const added = c.hiTypes.filter((t) => !c.notifiedHiTypes.includes(t));
+    if (added.includes("Invoice") && c.hiTypes.includes("HealthDocumentRecord") && !added.includes("HealthDocumentRecord")) added.push("HealthDocumentRecord");
+    return added;
+};
 
 /** When a link token runs out: its exp claim, read without verifying (it is ABDM's to verify). */
 export const tokenExpiry = (token: string, now: Date): Date => {
@@ -239,15 +253,25 @@ export class HipLinkingService {
 
     /**
      * Tells ABDM about records added to care contexts already linked: one link/context/notify per
-     * care context whose HI types grew since it was linked or last announced.
+     * care context whose HI types grew since it was linked or last announced. Each goes to the ABHA
+     * address the care context was linked under, or the profile's when the link names none. A care
+     * context the patient linked from a PHR app is announced so though the profile holds no ABHA:
+     * link/context/notify is ABDM's only way to hear of records added to a linked care context, and
+     * discovery no longer offers it. One with no address either way is left out.
      */
     async notifyChanges(hip: Hip, userId: string): Promise<number> {
         const patient = await this.patient(userId);
-        if (!patient.abhaAddress) return 0;
+        const addressOf = (c: CareContextRow) => c.linkedAbhaAddress ?? patient.abhaAddress;
+        // A patient with no ABHA on the profile and no care context linked under an address has nothing
+        // to announce: their records are not read for nothing (the deep-link SMS reads them next)
+        if (!patient.abhaAddress
+            && !(await this.store.careContexts(patientReference(userId), hip.id)).some((c) => c.linkStatus === "linked" && addressOf(c))) return 0;
         const contexts = await this.catalog.refresh(hip, userId);
         let sent = 0;
         for (const c of contexts.filter((x) => x.linkStatus === "linked")) {
-            const added = c.hiTypes.filter((t) => !c.notifiedHiTypes.includes(t));
+            const abhaAddress = addressOf(c);
+            if (!abhaAddress) continue;
+            const added = toAnnounce(c);
             if (!added.length) continue;
             try {
                 await this.gateway.call({
@@ -259,7 +283,7 @@ export class HipLinkingService {
                     awaitsCallback: true,
                     body: {
                         notification: {
-                            patient: { id: c.linkedAbhaAddress ?? patient.abhaAddress },
+                            patient: { id: abhaAddress },
                             careContext: { patientReference: patientReference(userId), careContextReference: c.referenceNumber },
                             hiTypes: added,
                             date: this.now().toISOString(),
@@ -314,7 +338,11 @@ export class HipLinkingService {
         return requestId;
     }
 
-    /** Links and announces new records for every patient who holds an ABHA, at each of these facilities. */
+    /**
+     * Links and announces new records at each of these facilities, for every patient who holds an
+     * ABHA on the profile or has a care context there linked from a PHR app. The safety net for an
+     * auto-link that never ran (a restart inside its settle, a save on another server).
+     */
     async sweep(facilities: Hip[]): Promise<{ patients: number; queued: number; notified: number }> {
         let patients = 0, queued = 0, notified = 0;
         for (const hip of facilities) {
@@ -323,9 +351,19 @@ export class HipLinkingService {
             for (const userId of userIds) {
                 try {
                     queued += (await this.link(hip, userId)).queued;
+                } catch (error: any) {
+                    // Refused here (no ABHA on the profile of a patient who linked from a PHR app, or no
+                    // gender and date of birth, which the care contexts already say): what is linked is
+                    // still announced. Anything else skips the patient.
+                    if (!(error instanceof LinkingError)) {
+                        console.warn(`[ABDM] linking sweep skipped a patient at ${hip.id}: ${error?.message}`);
+                        continue;
+                    }
+                }
+                try {
                     notified += await this.notifyChanges(hip, userId);
                 } catch (error: any) {
-                    console.warn(`[ABDM] linking sweep skipped a patient at ${hip.id}: ${error?.message}`);
+                    console.warn(`[ABDM] linking sweep could not announce a patient's new records at ${hip.id}: ${error?.message}`);
                 }
             }
         }

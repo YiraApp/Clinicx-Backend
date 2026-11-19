@@ -1,4 +1,4 @@
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { AutoLinker, type RecordRef } from "./auto-link.js";
 import { LinkingError } from "./hip-linking.js";
@@ -13,6 +13,11 @@ let notified: Array<[string, string]>;
 let texted: Array<[string, string]>;
 let autoLinkHips: Hip[];
 let noAbha: Set<string>;
+/** Patients whose linking fails for a reason other than the patient's (the database, say). */
+let linkBroken: Set<string>;
+/** Patients whose announcing fails. */
+let notifyBroken: Set<string>;
+let warnings: string[];
 
 /**
  * Owners as the database would answer: prescription rx-1 and appointment 7 are the patient's at
@@ -33,11 +38,13 @@ const owners = {
 const linking = {
     async link(hip: Hip, userId: string) {
         if (noAbha.has(userId)) throw new LinkingError("The patient has no ABHA address yet: verify or create their ABHA first.");
+        if (linkBroken.has(userId)) throw new Error("Connection lost");
         linked.push([hip.id, userId]);
         return { queued: 1, status: "awaiting-token" };
     },
     async notifyChanges(hip: Hip, userId: string) {
         notified.push([hip.id, userId]);
+        if (notifyBroken.has(userId)) throw new Error("Request timed out");
         return 0;
     },
     async notifyBySms(hip: Hip, userId: string) {
@@ -47,6 +54,8 @@ const linking = {
 };
 const autoLinker = () => new AutoLinker(owners, { hips: async (o?: { autoLink?: boolean }) => (o?.autoLink ? autoLinkHips : [OCIMUM]) }, linking, 60_000);
 
+const realConsole = { log: console.log, warn: console.warn };
+
 beforeEach(() => {
     recentLookups = [];
     linked = [];
@@ -54,6 +63,14 @@ beforeEach(() => {
     texted = [];
     autoLinkHips = [OCIMUM];
     noAbha = new Set();
+    linkBroken = new Set();
+    notifyBroken = new Set();
+    warnings = [];
+    console.log = () => {};
+    console.warn = (message: string) => { warnings.push(String(message)); };
+});
+afterEach(() => {
+    Object.assign(console, realConsole);
 });
 
 test("a burst of saves for one visit links the patient once, after it settles", async () => {
@@ -88,6 +105,41 @@ test("a patient with no ABHA is texted the deep link instead of linked, and the 
     await linker.settle();
     assert.deepEqual(linked, [[OCIMUM.id, PATIENT]]);
     assert.deepEqual(texted, [[OCIMUM.id, "no-abha"]], "only the patient linking refused for want of an ABHA");
+    assert.deepEqual(notified, [[OCIMUM.id, "no-abha"], [OCIMUM.id, PATIENT]], "both have what is already linked announced");
+});
+
+test("linking refused for want of an ABHA still announces what the patient linked from a PHR app, and texts the deep link for the rest", async () => {
+    noAbha.add(PATIENT);
+    const linker = autoLinker();
+    linker.recordSaved({ recentIn: "AppointmentBills", since: new Date() });
+    await linker.settle();
+    assert.deepEqual(linked, []);
+    assert.deepEqual(notified, [[OCIMUM.id, PATIENT]]);
+    assert.deepEqual(texted, [[OCIMUM.id, PATIENT]]);
+});
+
+test("linking that fails for another reason still announces, logs the failure, and texts nothing", async () => {
+    linkBroken.add(PATIENT);
+    const linker = autoLinker();
+    linker.recordSaved({ patientId: PATIENT, hospitalId: 20 });
+    await linker.settle();
+    assert.deepEqual(linked, []);
+    assert.deepEqual(notified, [[OCIMUM.id, PATIENT]]);
+    assert.deepEqual(texted, []);
+    assert.ok(warnings.some((w) => /skipped a patient: Connection lost/.test(w)));
+});
+
+test("an announcement that fails is logged; the deep-link SMS still goes and the next patient is still linked", async () => {
+    noAbha.add("no-abha");
+    notifyBroken.add("no-abha");
+    const linker = autoLinker();
+    linker.recordSaved({ patientId: "no-abha", hospitalId: 20 });
+    linker.recordSaved({ patientId: PATIENT, hospitalId: 20 });
+    await linker.settle();
+    assert.deepEqual(texted, [[OCIMUM.id, "no-abha"]]);
+    assert.deepEqual(linked, [[OCIMUM.id, PATIENT]]);
+    assert.deepEqual(notified, [[OCIMUM.id, "no-abha"], [OCIMUM.id, PATIENT]]);
+    assert.ok(warnings.some((w) => /announcing a patient's new records failed: Request timed out/.test(w)));
 });
 
 test("each record table is read for its owner; other tables are ignored", () => {

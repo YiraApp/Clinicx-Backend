@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { AbdmHealthRecordService, diagnosticKind, isVitalsRecord, visitRecordDate, visitSources } from "./abdm-health-record.service.js";
 import type { VisitRecords } from "../../repositories/Abdm/abdm-health-record.repository.js";
 import { documentContentType, fromDbClock, hasConsultationContent, stampedWithRow, visitStart } from "../../repositories/Abdm/abdm-health-record.repository.js";
-import { FhirSourceError, codedText, distinctCoded } from "./fhir/fhir-common.js";
+import { FhirSourceError, codedText, distinctCoded, resourceId } from "./fhir/fhir-common.js";
 import { invoicePdfDocument } from "./fhir/health-records.js";
 import { recordPdfOf } from "./fhir/record-pdf.js";
 import { fixtureParties } from "./fhir/fhir-fixtures.js";
@@ -287,8 +287,12 @@ test("an issued bill's PDF also goes as a health document of its own, the same b
     const invoicePdf = recordPdfOf(invoice.bundle)!;
     const docs = bundles.filter((r) => r.hiType === "HealthDocumentRecord");
     assert.equal(docs.length, 2, "the visit's uploads, and the invoice's PDF");
-    const asDocument = docs.find((r) => (r.bundle.entry[0].resource as any).title === "Invoice INV-1")!;
-    assert.ok(asDocument, "titled as the invoice");
+    const asDocument = docs.find((r) => (r.bundle.entry[0].resource as any).title === "Invoice INV-1 (PDF)")!;
+    assert.ok(asDocument, "titled as the invoice's PDF");
+    assert.equal((invoice.bundle.entry[0].resource as any).title, "Invoice INV-1", "so it can be told from the invoice beside it");
+    // Its ids still come from the bill: a fetch again replaces the record the PHR app holds, never adds one
+    assert.equal(asDocument.key, resourceId("Bundle:HealthDocumentRecord", "bill-bill-1:pdf"));
+    assert.equal((asDocument.bundle.entry[0].resource as any).id, resourceId("Composition:HealthDocumentRecord", "bill-bill-1:pdf"));
     const refs = asDocument.bundle.entry.map((e) => e.resource as any).filter((x) => x.resourceType === "DocumentReference");
     assert.equal(refs.length, 1);
     const a = refs[0].content[0].attachment;
@@ -308,6 +312,8 @@ test("the invoice's PDF is rendered only when read, and a bill that can't be an 
     const sources = visitSources(visit());
     const doc = sources.filter((s) => s.hiType === "HealthDocumentRecord").map((s) => s.source as any).find((s) => s.key === "bill-bill-1:pdf");
     assert.ok(doc, "listed with the visit's records");
+    assert.equal(doc.title, "Invoice INV-1 (PDF)");
+    assert.equal(doc.date.getTime(), day.getTime(), "dated when the bill was made, as the invoice is");
     assert.equal(doc.documents[0].id, "invoice-pdf-bill-1");
     const unissued = invoicePdfDocument({ ...fixtureParties, bill: { ...(sources.find((s) => s.hiType === "Invoice")!.source as any).bill, status: "Draft" } });
     assert.equal(unissued.title, "Invoice INV-1 (PDF)", "listing it renders nothing");
@@ -321,6 +327,10 @@ test("a bill still numbered DFT- has not been issued and is not an invoice", () 
     assert.equal(invoices([{ ...bill, BillStatus: "Paid", BillNumber: "DFT-123456-7890" }]), 0);
     assert.equal(invoices([{ ...bill, BillStatus: "Pending", BillNumber: null }]), 0);
     assert.equal(invoices([bill]), 1);
+    // Generate Invoice gives the same paid bill its number: then it is an invoice, with its PDF
+    const fromBill = (b: any) => visitSources(visit({ bills: [b] })).filter((x) => x.hiType === "Invoice" || (x.source as any).key === "bill-bill-1:pdf").map((x) => x.hiType);
+    assert.deepEqual(fromBill({ ...bill, BillStatus: "Paid", BillNumber: "DFT-123456-7890" }), []);
+    assert.deepEqual(fromBill({ ...bill, BillStatus: "Paid", BillNumber: "INV-2026-0042" }), ["Invoice", "HealthDocumentRecord"]);
 });
 
 test("a visit's vaccines carry each certificate once and who gave them only when recorded", () => {
@@ -394,4 +404,16 @@ test("a consultation lists a prescription's notes only when its medicines' advic
         .filter((o: any) => o.code.text === "Prescription notes").map((o: any) => o.valueString);
     assert.deepEqual(await noteObservations(withNotes("Drink water. ", "Drink water")), [], "already in the advice");
     assert.deepEqual(await noteObservations(withNotes("Ice", "Twice daily after food")), ["Ice"], "not a word of the advice");
+});
+
+test("the invoice's PDF copy is dated when the bill was made, as the invoice is, never at the visit's slot", async () => {
+    const billMade = new Date(day.getTime() + 25 * 60_000);
+    const records = { visit: async () => visit({ bills: [{ ...(visit().bills[0] as any), CreatedAt: billMade }] }) };
+    const bundles = await service(records).forAppointment(101, ["Invoice", "HealthDocumentRecord"]);
+    const dateOf = (r: { bundle: { entry: { resource: unknown }[] } }) => new Date((r.bundle.entry[0]!.resource as any).date).getTime();
+    const invoice = bundles.find((r) => r.hiType === "Invoice")!;
+    const copy = bundles.find((r) => r.hiType === "HealthDocumentRecord" && (r.bundle.entry[0]!.resource as any).title === "Invoice INV-1 (PDF)")!;
+    assert.equal(dateOf(copy), billMade.getTime());
+    assert.equal(dateOf(copy), dateOf(invoice), "a consent's date range keeps or drops both together");
+    assert.notEqual(dateOf(copy), day.getTime(), "not the appointment slot");
 });

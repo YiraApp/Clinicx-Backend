@@ -201,10 +201,14 @@ export const visitSources = (v: VisitRecords): SourceOf[] => {
             },
         };
         out.push({ hiType: "Invoice", source: invoice });
-        // The invoice's PDF again, as a document: PHR apps don't open the sub-section the invoice keeps it in
+        // The invoice's PDF again, as a document: PHR apps don't open the sub-section the invoice keeps
+        // it in, and NRCES lets nothing but the Invoice into its section. Titled as the invoice's PDF so
+        // the patient can tell it from the invoice beside it. The key and date stay the bill's: its ids
+        // come from the key, so a fetch again replaces it rather than adding one, and a consent's date
+        // range keeps or drops it together with the invoice.
         out.push({
             hiType: "HealthDocumentRecord",
-            source: { ...parties, key: `bill-${b.AppointmentBillId}:pdf`, date: b.CreatedAt, title: `Invoice ${b.BillNumber}`, documents: [invoicePdfDocument(invoice)] },
+            source: { ...parties, key: `bill-${b.AppointmentBillId}:pdf`, date: b.CreatedAt, title: `Invoice ${b.BillNumber} (PDF)`, documents: [invoicePdfDocument(invoice)] },
         });
     }
 

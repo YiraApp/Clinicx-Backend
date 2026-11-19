@@ -107,9 +107,15 @@ export class AbdmM2Repository implements M2Store, HipConsentLedger {
     }
 
     async patientsWithAbhaAt(hospitalId: number): Promise<string[]> {
+        // A patient who linked a care context here from a PHR app may hold no ABHA on the profile:
+        // the link's own address is what announces their new records
         const rows = await q(
-            `SELECT DISTINCT u.Id FROM Users u INNER JOIN PatientRegistrations pr ON pr.UserId = u.Id AND pr.HospitalId = @0 AND pr.IsDeleted = 0
-             WHERE u.IsDeleted = 0 AND u.AbhaAddress IS NOT NULL AND u.AbhaAddress <> ''`,
+            `SELECT u.Id FROM Users u INNER JOIN PatientRegistrations pr ON pr.UserId = u.Id AND pr.HospitalId = @0 AND pr.IsDeleted = 0
+             WHERE u.IsDeleted = 0 AND u.AbhaAddress IS NOT NULL AND u.AbhaAddress <> ''
+             UNION
+             SELECT u.Id FROM Users u
+             WHERE u.IsDeleted = 0 AND EXISTS (SELECT 1 FROM AbdmCareContexts c WHERE c.PatientUserId = u.Id AND c.HospitalId = @0
+                 AND c.LinkStatus = 'linked' AND c.LinkedAbhaAddress IS NOT NULL)`,
             [hospitalId],
         );
         return rows.map((r) => String(r.Id).toLowerCase());
