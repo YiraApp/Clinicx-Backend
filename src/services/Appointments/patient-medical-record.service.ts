@@ -6,8 +6,8 @@ export class PatientMedicalRecordService {
         return await patientMedicalRecordRepository.create(data);
     }
 
-    async getPatientRecords(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number): Promise<PatientMedicalRecord[]> {
-        return await patientMedicalRecordRepository.findByPatient(patientId, orgId, hospitalId, appointmentId);
+    async getPatientRecords(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number, doctorId?: string): Promise<PatientMedicalRecord[]> {
+        return await patientMedicalRecordRepository.findByPatient(patientId, orgId, hospitalId, appointmentId, doctorId);
     }
 
     async getRecordById(id: string): Promise<PatientMedicalRecord | null> {

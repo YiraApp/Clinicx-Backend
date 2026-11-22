@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { userService } from "../../services/Account/user.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
+import { tokenActorId } from "../../utils/request-actor.js";
 import { OTPPurpose } from "../../enums/OTPType.enum.js";
 import type { CreateUserRequest } from "../../dtos/Request/Account/CreateUserRequest.js";
 
@@ -322,7 +323,7 @@ export class UserController {
                 return;
             }
 
-            const result = await userService.updatePatientProfile(currentUserId, req.body);
+            const result = await userService.updatePatientProfile(currentUserId, req.body, tokenActorId(req));
             res.json(ApiResponse.success(result, "Patient profile details updated successfully."));
         } catch (error: any) {
             res.status(400).json(ApiResponse.error(error.message));

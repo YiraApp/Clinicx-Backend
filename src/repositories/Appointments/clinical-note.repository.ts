@@ -9,13 +9,15 @@ export class ClinicalNoteRepository {
         return await this.repo.save(note);
     }
 
-    async findByPatient(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number): Promise<ClinicalNote[]> {
+    async findByPatient(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number, doctorId?: string): Promise<ClinicalNote[]> {
         const where: any = { PatientId: patientId };
         // The hospital alone decides when given (it belongs to one organization), so notes saved
         // from the app with a wrong OrganizationId still show at their hospital on web and mobile.
         if (orgId && !hospitalId) where.OrganizationId = orgId;
         if (hospitalId) where.HospitalId = hospitalId;
         if (appointmentId) where.AppointmentId = appointmentId;
+        // Doctor-only view: just the notes this doctor wrote.
+        if (doctorId) where.DoctorId = doctorId;
 
         console.log("ClinicalNoteRepository.findByPatient - Filter:", where);
 

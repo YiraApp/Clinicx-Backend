@@ -7,7 +7,7 @@ import { Role } from "../../../../models/Account/role.model.js";
 import { PatientRegistration } from "../../../../models/Organizations/patient-registration.model.js";
 import { HealthcareProvider } from "../../../../models/Organizations/healthcare-provider.model.js";
 import { Hospital } from "../../../../models/Organizations/hospital.model.js";
-import { v4 as uuidv4 } from "uuid";
+import { isHospitalStaff } from "../../../../utils/hospital-admin-access.js";
 
 export class PatientAccessConsentService {
     private consentRepo = AppDataSource.getRepository(PatientAccessConsent);
@@ -122,6 +122,69 @@ export class PatientAccessConsentService {
     }
 
     /**
+     * The number an access OTP goes to: the patient's own, or for a family member without one,
+     * their account holder's (family members share the main number).
+     */
+    private async otpContactFor(patientId: string): Promise<{ phone: string; countryCode: string } | null> {
+        const patient = await this.userRepo.findOne({ where: { Id: patientId, IsDeleted: false } });
+        if (!patient) return null;
+        let holder: User | null = patient;
+        if (!String(patient.PhoneNumber || "").replace(/\D/g, "") && patient.ParentUserId) {
+            holder = await this.userRepo.findOne({ where: { Id: patient.ParentUserId, IsDeleted: false } });
+        }
+        const phone = String(holder?.PhoneNumber || "").replace(/\D/g, "");
+        if (!phone) return null;
+        return { phone, countryCode: String(holder?.CountryCode || "91").replace(/\D/g, "") || "91" };
+    }
+
+    /**
+     * A doctor with the patient in front of him asks for access by OTP: a code goes to the
+     * patient's phone (SMS in India, WhatsApp elsewhere) and the doctor types what they read out.
+     * Only for the doctor's own patients (he treats them, or they visit his hospital), so the
+     * button can't be used to send codes to strangers.
+     */
+    async sendAccessOtp(patientId: string, doctorId: string, hospitalId?: number): Promise<{ sessionId: string; sentTo: string }> {
+        if (!patientId || !doctorId) throw new Error("patientId and doctorId are required");
+        const isProvider = await this.providerRepo.count({ where: { UserId: doctorId, IsDeleted: false } });
+        if (isProvider === 0) throw new Error("Only doctors can ask for access.");
+        const access = await this.checkAccess(patientId, doctorId);
+        const hospitalAccess = hospitalId
+            ? await this.checkHospitalRecordAccess(patientId, doctorId, { hospitalId })
+            : { allowed: false };
+        if (!access.hasAccess && !access.treated && !hospitalAccess.allowed) {
+            throw new Error("You can ask for access by OTP only for patients who visit you or your hospital.");
+        }
+        const contact = await this.otpContactFor(patientId);
+        if (!contact) throw new Error("This patient has no mobile number to send the OTP to.");
+
+        const { otpService } = await import("../../../../services/Account/otp.service.js");
+        const { OTPPurpose } = await import("../../../../enums/OTPType.enum.js");
+        const channel = contact.countryCode === "91" ? "sms" : "whatsapp";
+        const sent = await otpService.sendOTP(contact.phone, OTPPurpose.SENSITIVE_OPERATION, contact.countryCode, undefined, undefined, channel);
+        const last4 = contact.phone.slice(-4);
+        return { sessionId: sent.sessionId, sentTo: `+${contact.countryCode} ••••${last4}` };
+    }
+
+    /** Checks the OTP the patient read out and, when right, gives this doctor access for [duration]. */
+    async verifyAccessOtp(
+        patientId: string,
+        doctorId: string,
+        sessionId: string,
+        otp: string,
+        duration: string = "7_DAYS",
+        hospitalId?: number
+    ): Promise<any> {
+        if (!patientId || !doctorId || !sessionId || !otp) throw new Error("patientId, sessionId and otp are required");
+        const contact = await this.otpContactFor(patientId);
+        if (!contact) throw new Error("This patient has no mobile number to check the OTP against.");
+        const { otpService } = await import("../../../../services/Account/otp.service.js");
+        const { OTPPurpose } = await import("../../../../enums/OTPType.enum.js");
+        const result = await otpService.verifyOTP(contact.phone, sessionId, String(otp).trim(), OTPPurpose.SENSITIVE_OPERATION, contact.countryCode);
+        if (!result?.success) throw new Error(result?.message || "That OTP is not right. Please check and try again.");
+        return this.grantAccess(patientId, doctorId, duration, hospitalId);
+    }
+
+    /**
      * Checks whether doctor has approved active access to patient records.
      */
     async checkAccess(patientId: string, doctorId: string): Promise<any> {
@@ -183,13 +246,17 @@ export class PatientAccessConsentService {
                 }
 
                 if (isLinked) {
+                    // Treating a patient is not access to their whole history: the doctor sees his
+                    // own consultations, and everything else only once the patient grants access
+                    // (OTP, approving the request, or sharing from their app). `treated` lets the
+                    // apps say "your patient" without opening other doctors' records.
                     return {
-                        hasAccess: true,
-                        status: "APPROVED",
+                        hasAccess: false,
+                        status: consent ? consent.Status : "NO_REQUEST",
                         treated: true,
                         hospitalId: treatedAppointment.HospitalId,
                         consent: consent || null,
-                        durationLabel: "Treating Doctor (Hospital Linked)"
+                        durationLabel: consent ? this.getDurationLabel(consent.Duration) : undefined
                     };
                 }
             }
@@ -233,14 +300,8 @@ export class PatientAccessConsentService {
         }
         if (!hospitalId) return { allowed: false, reason: "NO_HOSPITAL" };
 
-        // Staff of the hospital: a provider profile there, or any role there.
-        const isProvider = await this.providerRepo.count({
-            where: { UserId: requesterId, HospitalId: hospitalId, IsDeleted: false },
-        });
-        const isStaff = isProvider > 0 || (await AppDataSource.getRepository(UserRole).count({
-            where: { UserId: requesterId, HospitalId: hospitalId, IsDeleted: false },
-        })) > 0;
-        if (!isStaff) return { allowed: false, hospitalId, reason: "NOT_HOSPITAL_STAFF" };
+        // Staff of the hospital. Not any role there: every patient registered with it has a Patient role.
+        if (!(await isHospitalStaff(requesterId, hospitalId))) return { allowed: false, hospitalId, reason: "NOT_HOSPITAL_STAFF" };
 
         // The patient's relationship with the hospital: an appointment or a registration.
         const booked = await appointmentRepo.createQueryBuilder("a")
@@ -435,16 +496,10 @@ export class PatientAccessConsentService {
         patientUserId: string,
         doctorId: string,
         hospitalId?: number,
-        orgId?: number,
-        patientDetails?: {
-            phone?: string;
-            name?: string;
-            email?: string;
-            gender?: string;
-        }
+        orgId?: number
     ): Promise<any> {
-        if (!patientUserId && !patientDetails?.phone) {
-            throw new Error("Patient ID or phone number is required");
+        if (!patientUserId) {
+            throw new Error("Patient ID is required");
         }
         if (!doctorId) {
             throw new Error("Doctor ID is required");
@@ -453,41 +508,25 @@ export class PatientAccessConsentService {
         const userRoleRepo = AppDataSource.getRepository(UserRole);
         const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
 
-        let targetPatient: User | null = null;
-        if (patientUserId) {
-            targetPatient = await this.userRepo.findOne({ where: { Id: patientUserId, IsDeleted: false } }).catch(() => null);
-        }
-        if (!targetPatient && patientDetails?.phone) {
-            const clean = patientDetails.phone.replace(/[^\d]/g, "").slice(-10);
-            targetPatient = await this.userRepo.createQueryBuilder("u")
-                .where("u.IsDeleted = 0")
-                .andWhere("(u.PhoneNumber = :p OR u.PhoneNumber LIKE :l)", { p: patientDetails.phone, l: `%${clean}` })
-                .getOne()
-                .catch(() => null);
-        }
-
-        if (!targetPatient && patientDetails?.phone) {
-            targetPatient = new User();
-            targetPatient.Id = uuidv4();
-            targetPatient.IsPrimary = true;
-            targetPatient.Relation = "Self";
-            const nameParts = (patientDetails.name || "Patient").trim().split(/\s+/);
-            targetPatient.FirstName = nameParts[0] || "Patient";
-            targetPatient.LastName = nameParts.slice(1).join(" ") || "";
-            targetPatient.PhoneNumber = patientDetails.phone;
-            targetPatient.Email = patientDetails.email || "";
-            if (patientDetails.gender) targetPatient.Gender = patientDetails.gender;
-            targetPatient.Status = true;
-            targetPatient.IsDeleted = false;
-            await this.userRepo.save(targetPatient);
-        }
-
+        // The patient must already exist: this used to find or create one from any phone number sent.
+        const targetPatient = await this.userRepo.findOne({ where: { Id: patientUserId, IsDeleted: false } });
         if (!targetPatient) {
-            throw new Error("Could not find or create patient user");
+            throw new Error("We couldn't find your account. Please sign in again.");
         }
 
-        const hId = hospitalId || 19;
-        const oId = orgId || 1;
+        // A QR can hold the provider's number instead of the doctor's user id.
+        if (/^\d+$/.test(String(doctorId).trim())) {
+            const byNumber = await this.providerRepo.findOne({ where: { Id: Number(doctorId), IsDeleted: false } });
+            if (byNumber) doctorId = byNumber.UserId;
+        }
+        // The doctor's own hospital decides where the patient is registered, not the request.
+        const worksAt = await this.providerRepo.find({ where: { UserId: doctorId, IsDeleted: false } });
+        if (worksAt.length === 0) {
+            throw new Error("This person is not a doctor on Yira");
+        }
+        const hId = Number((worksAt.find((p) => Number(p.HospitalId) === Number(hospitalId)) ?? worksAt[0]).HospitalId);
+        const hospital = await this.hospitalRepo.findOne({ where: { Id: hId } });
+        const oId = Number(hospital?.OrganizationId) || orgId || 1;
 
         // Ensure Patient Role mapping exists
         const existingRole = await userRoleRepo.findOne({

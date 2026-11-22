@@ -5,6 +5,11 @@ import axios from "axios";
 import { keepUnits, printableCopy } from "../../utils/pdf-text.js";
 
 export interface PrescriptionPdfInput {
+    /**
+     * "medicalRecord": the PDF of a medical record saved without a prescription. Same layout, with a
+     * MEDICAL RECORD badge, no medicines or investigations, and the record's treatment and follow-up.
+     */
+    kind?: "prescription" | "medicalRecord";
     hospital: {
         name?: string;
         address?: string;
@@ -323,7 +328,7 @@ export class PrescriptionPdfService {
                 doc.fontSize(8)
                    .fillColor("#1E40AF")
                    .font("Helvetica-Bold")
-                   .text("DIGITAL PRESCRIPTION", badgeX, badgeY + 7, { width: badgeWidth, align: "center" });
+                   .text(data.kind === "medicalRecord" ? "MEDICAL RECORD" : "DIGITAL PRESCRIPTION", badgeX, badgeY + 7, { width: badgeWidth, align: "center" });
 
                 // Divider line below the logo, or below the hospital's details when they run longer
                 cursorY = Math.max(86, Math.ceil(headerBottom) + 8);
@@ -355,7 +360,11 @@ export class PrescriptionPdfService {
                 doc.fontSize(8.5)
                    .font("Helvetica-Bold")
                    .fillColor("#1E3A8A")
-                   .text(displayPrescriptionNumber ? `Prescription No: ${displayPrescriptionNumber}` : "Prescription", margin + 10, cursorY + 6);
+                   .text(
+                       data.kind === "medicalRecord"
+                           ? "Medical record"
+                           : displayPrescriptionNumber ? `Prescription No: ${displayPrescriptionNumber}` : "Prescription",
+                       margin + 10, cursorY + 6);
 
                 doc.fontSize(8)
                    .font("Helvetica")
@@ -507,6 +516,21 @@ export class PrescriptionPdfService {
                         { label: "Current Medications", value: filled(record.currentMedications) },
                     ].filter(r => r.value);
                     drawPanel("CLINICAL HISTORY & PRESENTATION", "", history);
+
+                    // A record printed on its own also shows its plan (on a prescription the medicines are the plan)
+                    if (data.kind === "medicalRecord") {
+                        const followUp = record.followUpDate ? new Date(record.followUpDate) : null;
+                        const plan: Row[] = [
+                            { label: "Treatment / Plan", value: filled(record.treatment) },
+                            {
+                                label: "Follow-up",
+                                value: followUp && !isNaN(followUp.getTime())
+                                    ? followUp.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })
+                                    : "",
+                            },
+                        ].filter(r => r.value);
+                        drawPanel("TREATMENT & FOLLOW-UP", "", plan);
+                    }
                 }
 
                 // ── Diagnoses Section (if present) ──
@@ -538,6 +562,8 @@ export class PrescriptionPdfService {
                     cursorY += 2;
                 }
 
+                // A medical record has no medicines or investigations section
+                if (data.kind !== "medicalRecord") {
                 // ── Rx Classical Prescription Section Header ──
                 ensureRoom(26 + 20 + 30);
                 doc.roundedRect(margin, cursorY, 26, 20, 4).fill("#1E3A8A");
@@ -758,6 +784,8 @@ export class PrescriptionPdfService {
                         }
                         cursorY += row.height;
                     });
+                }
+
                 }
 
                 // ── Additional Notes / Advice Section (Only if present in DB) ──

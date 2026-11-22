@@ -4,6 +4,8 @@ import { User } from "../models/Account/user.model.js";
 import { FamilyLink } from "../models/Account/family-link.model.js";
 import { verifyAccessToken } from "../utils/jwt.utils.js";
 import { findByAccessToken } from "../repositories/Account/token.repository.js";
+import { samePhoneNumber } from "../utils/phone-number.js";
+import { findPrimaryOnSameNumber } from "../utils/family-phone.js";
 
 /**
  * Released mobile builds identify themselves with userId + deviceId and no token.
@@ -19,14 +21,15 @@ const phoneKey = (phone?: string | null) => (phone ? phone.replace(/\D/g, "").sl
 const loadPair = (userId: string, otherUserId: string) =>
     AppDataSource.getRepository(User).find({
         where: [{ Id: userId, IsDeleted: false }, { Id: otherUserId, IsDeleted: false }],
-        select: { Id: true, ParentUserId: true, PhoneNumber: true, IsPrimary: true },
+        select: { Id: true, ParentUserId: true, PhoneNumber: true, CountryCode: true, IsPrimary: true },
     });
 
 function samePhoneFamily(a: User, b: User): boolean {
     const rootOf = (u: User) => u.ParentUserId || u.Id;
     if (sameId(rootOf(a), rootOf(b))) return true;
     const phone = phoneKey(a.PhoneNumber);
-    return phone.length === 10 && phone === phoneKey(b.PhoneNumber);
+    // The country too: +1 900 000 0001 is not the family of +91 90000 00001.
+    return phone.length === 10 && phone === phoneKey(b.PhoneNumber) && samePhoneNumber(a, b);
 }
 
 /** True when both accounts are in one family: same parent account or same phone number, as at login. */
@@ -47,10 +50,7 @@ async function familyRootIds(user: User): Promise<string[]> {
     if (user.ParentUserId) {
         ids.push(user.ParentUserId);
     } else if (user.IsPrimary === false && phoneKey(user.PhoneNumber).length === 10) {
-        const primary = await AppDataSource.getRepository(User).findOne({
-            where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false },
-            select: { Id: true },
-        });
+        const primary = await findPrimaryOnSameNumber(user);
         if (primary) ids.push(primary.Id);
     }
     return ids;

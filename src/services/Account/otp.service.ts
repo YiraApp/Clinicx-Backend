@@ -4,6 +4,7 @@ import { mailService } from "../../services/Mail/mail.service.js";
 import { smsService } from "../../services/Common/sms.service.js";
 import { whatsappService } from "../../services/Common/whatsapp.service.js";
 import { OTPType, OTPPurpose } from "../../enums/OTPType.enum.js";
+import { isOnNumber } from "../../utils/phone-number.js";
 
 /**
  * Global Service for OTP operations (Email & Mobile).
@@ -25,6 +26,26 @@ export class OTPService {
 
         const fullMobileForSMS = cleanCountryCode + finalContact;
         return { finalContact, finalCountryCode: cleanCountryCode, fullMobileForSMS };
+    }
+
+    /**
+     * Accounts are found by their digits, but the code goes to the country the caller typed. So a code
+     * that signs in, resets a password or gives access is sent only if that is the account's own number.
+     */
+    private async assertDeliveredToOwner(national: string, code: string, purpose: OTPPurpose): Promise<void> {
+        const opensAccount = purpose === OTPPurpose.LOGIN || purpose === OTPPurpose.PASSWORD_RESET;
+        if (!opensAccount && purpose !== OTPPurpose.SENSITIVE_OPERATION) return;
+        const found = await userRepository.findAllByPhone(national);
+        const primaries = found.filter((u) => u.IsPrimary === true);
+        // Login opens the primary account; an access code can be for any account on the number. A family
+        // member saved without a country follows the account holder's.
+        const owners = opensAccount
+            ? (primaries.length ? primaries : found)
+            : found.filter((u) => u.CountryCode || !u.ParentUserId);
+        const to = { code, national: national.replace(/^0+/, "") };
+        if (owners.some((u) => !isOnNumber(u, to))) {
+            throw new Error("This mobile number is registered with a different country code. Choose that country and try again.");
+        }
     }
 
     /**
@@ -98,6 +119,8 @@ export class OTPService {
                 throw new Error("No patient account found for this mobile number.");
             }
         }
+
+        if (!isEmail) await this.assertDeliveredToOwner(finalContact, finalCountryCode!, purpose);
 
         // Create OTP record in repository
         const { otp, sessionId, expiryTime, contactType, message } = await userOTPRepository.sendOTP(finalContact, purpose, finalCountryCode);

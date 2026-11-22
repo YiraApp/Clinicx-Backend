@@ -17,7 +17,8 @@ import { zoomService } from "../../../../services/Common/zoom.service.js";
 import { v4 as uuidv4 } from "uuid";
 import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
 import { canManageHospital } from "../../../../utils/staff-access.js";
-import { toInternationalPhone } from "../../../../utils/phone-number.js";
+import { isOnNumber, parsePhoneQuery, phoneMatchSql, toInternationalPhone } from "../../../../utils/phone-number.js";
+import { familyLinkService } from "../../../../services/Family/family-link.service.js";
 
 export class MobileAppointmentService {
     async getAppointmentDashboard(
@@ -254,6 +255,8 @@ export class MobileAppointmentService {
         isPrimary?: boolean;
         patientName?: string;
         patientPhone: string;
+        /** Country calling code of patientPhone, digits only; India (91) when not sent. */
+        countryCode?: string;
         patientEmail?: string;
         email?: string;
         gender?: string;
@@ -282,10 +285,11 @@ export class MobileAppointmentService {
         const appointmentRepo = AppDataSource.getRepository(Appointment);
         const slotRepo = AppDataSource.getRepository(HealthcareProviderScheduleSlot);
 
-        const cleanPhone = (data.patientPhone || "").replace(/[^\d]/g, "");
-        if (!cleanPhone || cleanPhone.length < 10) {
+        const phoneQuery = parsePhoneQuery(data.patientPhone, data.countryCode);
+        if (!phoneQuery) {
             throw new Error("Valid patient phone number is required");
         }
+        const cleanPhone = phoneQuery.national;
 
         // File the booking under the hospital's own organization. The app falls back to org 1 when a
         // hospital entry has no orgId, and the web lists (and this dashboard) filter by organization,
@@ -299,7 +303,6 @@ export class MobileAppointmentService {
         const { treatmentPlanService } = await import("../../../../services/Payments/treatment-plan.service.js");
         await treatmentPlanService.assertBookable(data.treatmentPlanIds);
 
-        const last10Digits = cleanPhone.slice(-10);
         // 1. Verify Slot Availability & Ensure Time Slot Has Not Passed
         const now = new Date();
         const [appYear, appMonth, appDay] = (data.appointmentDate || "").split("-").map(Number);
@@ -385,12 +388,10 @@ export class MobileAppointmentService {
         const isExplicitRelation = reqRelation.length > 0 && reqRelation.toLowerCase() !== "self";
 
         // Fetch all existing users under this phone number (both primary and family relations)
+        const [phoneWhere, phoneParams] = phoneMatchSql("u", phoneQuery);
         const phoneUsers = await userRepo.createQueryBuilder("u")
             .where("u.IsDeleted = 0")
-            .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
-                phone: cleanPhone,
-                last10: `%${last10Digits}`
-            })
+            .andWhere(phoneWhere, phoneParams)
             .getMany();
 
         const phoneUserIds = phoneUsers.map(u => u.Id);
@@ -417,7 +418,11 @@ export class MobileAppointmentService {
                           allAssociatedUsers.find(u => !u.ParentUserId) ||
                           null;
         if (!primaryUser && looksLikeUserId(data.parentUserId)) {
-            primaryUser = await userRepo.findOne({ where: { Id: data.parentUserId.trim(), IsDeleted: false } });
+            const parent = await userRepo.findOne({ where: { Id: data.parentUserId.trim(), IsDeleted: false } });
+            // A parent id in the request makes family: only the booker's own family, or the account on that number.
+            if (parent && (isOnNumber(parent, phoneQuery) || (!!data.requesterId && await isFamilyLinked(data.requesterId, parent.Id)))) {
+                primaryUser = parent;
+            }
         }
 
         let patientUser: User | null = null;
@@ -428,6 +433,11 @@ export class MobileAppointmentService {
             patientUser = allUsersMap.get(pickedId.toUpperCase()) || allUsersMap.get(pickedId) || await userRepo.findOne({
                 where: { Id: pickedId, IsDeleted: false }
             });
+            if (patientUser) {
+                const booker = data.requesterId;
+                const mayBook = !!booker && ((await isFamilyLinked(booker, patientUser.Id)) || (await familyLinkService.isStaffAccount([booker])));
+                if (!mayBook) throw new Error("You can only book for yourself and your family.");
+            }
             if (patientUser && isExplicitRelation && patientUser.Relation !== reqRelation) {
                 patientUser.Relation = reqRelation;
                 await userRepo.save(patientUser);
@@ -497,6 +507,7 @@ export class MobileAppointmentService {
                 primaryUser.FirstName = "Primary";
                 primaryUser.LastName = "Account";
                 primaryUser.PhoneNumber = cleanPhone;
+                primaryUser.CountryCode = phoneQuery.code;
                 primaryUser.Status = true;
                 primaryUser.IsDeleted = false;
                 await userRepo.save(primaryUser);
@@ -520,6 +531,7 @@ export class MobileAppointmentService {
             patientUser.FirstName = firstName;
             patientUser.LastName = lastName;
             patientUser.PhoneNumber = cleanPhone;
+            patientUser.CountryCode = phoneQuery.code;
             if (data.gender) patientUser.Gender = data.gender;
             if (data.dob) (patientUser as any).DateOfBirth = data.dob;
             patientUser.Email = providedEmail.length > 0 ? providedEmail : "";
@@ -542,6 +554,7 @@ export class MobileAppointmentService {
                 patientUser.FirstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : "Patient";
                 patientUser.LastName = nameParts.slice(1).join(" ") || "";
                 patientUser.PhoneNumber = cleanPhone;
+                patientUser.CountryCode = phoneQuery.code;
                 if (data.gender) patientUser.Gender = data.gender;
                 if (data.dob) (patientUser as any).DateOfBirth = data.dob;
                 patientUser.Email = providedEmail.length > 0 ? providedEmail : "";
@@ -772,7 +785,7 @@ export class MobileAppointmentService {
         const accessDuration = recordAccessDurations[String(data.shareRecordsDuration || "").toUpperCase()]
             ? String(data.shareRecordsDuration).toUpperCase()
             : "7_DAYS";
-        const shouldGrantAccess = data.shareRecords !== false && data.grantRecordAccess !== false;
+        const shouldGrantAccess = data.shareRecords === true && data.grantRecordAccess !== false;
         let recordAccess: { duration: string; label: string; expiresAt: Date } | null = null;
         let bookedByPatient = false;
         if (shouldGrantAccess && data.requesterId && patientUser?.Id) {
@@ -1238,22 +1251,23 @@ export class MobileAppointmentService {
         phone: string,
         orgId?: number,
         hospitalId?: number,
-        search?: string
+        search?: string,
+        countryCode?: string,
+        /** The doctor asking: except for their own family, visits shown are only those with them. */
+        doctorId?: string
     ): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const apptRepo = AppDataSource.getRepository(Appointment);
 
-        const cleanPhone = (phone || "").replace(/[^\d]/g, "");
-        const last10Digits = cleanPhone.slice(-10);
+        const phoneQuery = parsePhoneQuery(phone, countryCode);
+        const cleanPhone = phoneQuery?.national ?? (phone || "").replace(/[^\d]/g, "");
 
         let usersQuery = userRepo.createQueryBuilder("u")
             .where("u.IsDeleted = 0");
 
-        if (cleanPhone.length >= 10) {
-            usersQuery.andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
-                phone: cleanPhone,
-                last10: `%${last10Digits}`
-            });
+        if (phoneQuery) {
+            const [phoneWhere, phoneParams] = phoneMatchSql("u", phoneQuery);
+            usersQuery.andWhere(phoneWhere, phoneParams);
         } else if (search && search.trim().length > 0) {
             const searchPattern = `%${search.trim().toLowerCase()}%`;
             usersQuery.andWhere(
@@ -1294,14 +1308,15 @@ export class MobileAppointmentService {
             const accountType: "Independent" | "Dependent" = isPrimary ? "Independent" : "Dependent";
             const fullName = `${u.FirstName || ''} ${u.LastName || ''}`.trim() || (isPrimary ? "Primary Account" : "Family Member");
 
-            const lastAppt = await apptRepo.createQueryBuilder("apt")
+            const onlyWith = doctorId && !(await isFamilyLinked(doctorId, u.Id)) ? doctorId : undefined;
+            const lastQuery = apptRepo.createQueryBuilder("apt")
                 .where("apt.UserId = :userId", { userId: u.Id })
-                .andWhere("apt.Status != 'Cancelled'")
-                .orderBy("apt.AppointmentDate", "DESC")
-                .getOne();
+                .andWhere("apt.Status != 'Cancelled'");
+            if (onlyWith) lastQuery.andWhere("apt.DoctorId = :onlyWith", { onlyWith });
+            const lastAppt = await lastQuery.orderBy("apt.AppointmentDate", "DESC").getOne();
 
             const count = await apptRepo.count({
-                where: { UserId: u.Id }
+                where: onlyWith ? { UserId: u.Id, DoctorId: onlyWith } : { UserId: u.Id }
             });
 
             return {
@@ -1311,6 +1326,7 @@ export class MobileAppointmentService {
                 firstName: u.FirstName || '',
                 lastName: u.LastName || '',
                 phone: u.PhoneNumber || cleanPhone,
+                countryCode: String(u.CountryCode || phoneQuery?.code || "91").replace(/\D/g, "") || "91",
                 gender: u.Gender || 'Male',
                 dob: u.DateOfBirth ? new Date(u.DateOfBirth).toISOString().split('T')[0] : '',
                 email: u.Email && !u.Email.endsWith('@yira.ai') ? u.Email : '',
@@ -1347,6 +1363,8 @@ export class MobileAppointmentService {
      */
     async createOrLinkDependent(data: {
         primaryPhone: string;
+        /** Country calling code of primaryPhone, digits only; India (91) when not sent. */
+        countryCode?: string;
         parentUserId?: string;
         name: string;
         relation: string;
@@ -1361,11 +1379,12 @@ export class MobileAppointmentService {
         const patientRegRepo = AppDataSource.getRepository(PatientRegistration);
         const roleRepo = AppDataSource.getRepository(Role);
 
-        const cleanPhone = (data.primaryPhone || "").replace(/[^\d]/g, "");
-        if (!cleanPhone || cleanPhone.length < 10) {
+        const phoneQuery = parsePhoneQuery(data.primaryPhone, data.countryCode);
+        if (!phoneQuery) {
             throw new Error("Valid primary phone number is required to link a family member");
         }
-        const last10Digits = cleanPhone.slice(-10);
+        const cleanPhone = phoneQuery.national;
+        const [phoneWhere, phoneParams] = phoneMatchSql("u", phoneQuery);
 
         const reqRelation = (data.relation || "Dependent").trim();
         if (reqRelation.toLowerCase() === "self") {
@@ -1376,27 +1395,23 @@ export class MobileAppointmentService {
         let primaryUser: User | null = null;
         const isUuid = (id?: string): boolean => Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim()));
         if (data.parentUserId && isUuid(data.parentUserId)) {
-            primaryUser = await userRepo.findOne({
+            const parent = await userRepo.findOne({
                 where: { Id: data.parentUserId.trim(), IsDeleted: false }
             });
+            // Only when that account is on the typed number: otherwise this number would join its family.
+            if (parent && isOnNumber(parent, phoneQuery)) primaryUser = parent;
         }
         if (!primaryUser) {
             primaryUser = await userRepo.createQueryBuilder("u")
                 .where("u.IsDeleted = 0")
-                .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
-                    phone: cleanPhone,
-                    last10: `%${last10Digits}`
-                })
+                .andWhere(phoneWhere, phoneParams)
                 .andWhere("u.IsPrimary = 1")
                 .getOne();
         }
         if (!primaryUser) {
             primaryUser = await userRepo.createQueryBuilder("u")
                 .where("u.IsDeleted = 0")
-                .andWhere("(u.PhoneNumber = :phone OR u.PhoneNumber LIKE :last10)", {
-                    phone: cleanPhone,
-                    last10: `%${last10Digits}`
-                })
+                .andWhere(phoneWhere, phoneParams)
                 .getOne();
         }
 
@@ -1409,19 +1424,21 @@ export class MobileAppointmentService {
             primaryUser.FirstName = "Primary";
             primaryUser.LastName = "Account";
             primaryUser.PhoneNumber = cleanPhone;
+            primaryUser.CountryCode = phoneQuery.code;
             primaryUser.Status = true;
             primaryUser.IsDeleted = false;
             await userRepo.save(primaryUser);
         }
 
         // Check existing dependents count (Max 6 limit!)
-        const existingDependents = await userRepo.createQueryBuilder("u")
+        const primaryId = primaryUser.Id.toUpperCase();
+        const existingDependents = (await userRepo.createQueryBuilder("u")
             .where("u.IsDeleted = 0")
             .andWhere("(u.ParentUserId = :primaryId OR (u.PhoneNumber = :phone AND u.IsPrimary = 0))", {
                 primaryId: primaryUser.Id,
                 phone: cleanPhone
             })
-            .getMany();
+            .getMany()).filter(d => d.ParentUserId?.toUpperCase() === primaryId || isOnNumber(d, phoneQuery));
 
         if (existingDependents.length >= 6) {
             throw new Error("Maximum limit of 6 family relations reached for this primary account.");
@@ -1458,6 +1475,7 @@ export class MobileAppointmentService {
             dependentUser.FirstName = firstName;
             dependentUser.LastName = lastName;
             dependentUser.PhoneNumber = cleanPhone;
+            dependentUser.CountryCode = phoneQuery.code;
             if (data.gender) dependentUser.Gender = data.gender;
             if (data.dob) (dependentUser as any).DateOfBirth = data.dob;
             const providedEmail = (data.email || "").trim();

@@ -1,6 +1,16 @@
 import { Request, Response } from "express";
 import { doctorSuggestionService } from "../../../../services/Appointments/doctor-suggestion.service.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
+import { requireTokenActor } from "../../../../utils/request-actor.js";
+import { isDoctor, workingAccountId } from "../../../../utils/work-access.js";
+import { patientAccessConsentService } from "../../services/consent/patient-access-consent.service.js";
+
+async function canSuggest(doctorId: string, patientId: string, hospitalId?: number): Promise<boolean> {
+    if (!(await isDoctor(doctorId))) return false;
+    const access = await patientAccessConsentService.checkAccess(patientId, doctorId);
+    if (access?.hasAccess || access?.treated) return true;
+    return !!hospitalId && (await patientAccessConsentService.checkHospitalRecordAccess(patientId, doctorId, { hospitalId })).allowed;
+}
 
 export class MobileDoctorSuggestionController {
     async getPatientSuggestions(req: Request, res: Response) {
@@ -18,7 +28,8 @@ export class MobileDoctorSuggestionController {
             const suggestions = await doctorSuggestionService.getPatientSuggestions(
                 patientId,
                 isNaN(parsedOrgId as any) ? undefined : parsedOrgId,
-                isNaN(parsedHospitalId as any) ? undefined : parsedHospitalId
+                isNaN(parsedHospitalId as any) ? undefined : parsedHospitalId,
+                res.locals.recordDoctorId // set by requirePatientRecordAccess: a doctor sees only his own suggestions
             );
 
             return res.json(ApiResponse.success(suggestions, "Doctor suggestions fetched successfully"));
@@ -30,13 +41,18 @@ export class MobileDoctorSuggestionController {
 
     async addSuggestion(req: Request, res: Response) {
         try {
-            const { doctorId, patientId, title, description, organizationId, hospitalId } = req.body;
+            const { patientId, title, description, organizationId, hospitalId } = req.body;
 
             if (!patientId || !title || !description) {
                 return res.status(400).json(ApiResponse.error("Patient ID, title, and description are required"));
             }
 
-            const effectiveDoctorId = doctorId || (req as any).user?.userId;
+            // The author is the signed-in doctor, and only for their own patient: the id used to come from the body.
+            if (!requireTokenActor(req, res)) return;
+            const effectiveDoctorId = await workingAccountId(req);
+            if (!effectiveDoctorId || !(await canSuggest(effectiveDoctorId, String(patientId), Number(hospitalId) || undefined))) {
+                return res.status(403).json(ApiResponse.error("You can only add suggestions for your own patients."));
+            }
 
             // Handle optional file upload to Azure Blob Storage
             let filePath: string | undefined;

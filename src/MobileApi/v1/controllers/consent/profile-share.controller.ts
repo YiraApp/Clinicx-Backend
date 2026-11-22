@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { profileShareService, ShareLinkError } from "../../services/consent/profile-share.service.js";
 import { patientAccessConsentService } from "../../services/consent/patient-access-consent.service.js";
 import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
+import { requireTokenActor } from "../../../../utils/request-actor.js";
 import { AppDataSource } from "../../../../config/database.js";
 import { User } from "../../../../models/Account/user.model.js";
 
@@ -60,15 +61,26 @@ export class ProfileShareController {
             const patient = await AppDataSource.getRepository(User).findOne({ where: { Id: patientId, IsDeleted: false } });
             if (!patient) return res.status(404).json({ success: false, message: "Patient not found" });
 
+            // A doctor at the hospital without the patient's consent sees only his own past work
+            // with them; other staff (front desk, admins) keep the hospital's view.
+            let doctorId: string | undefined;
+            if (scope === "hospital" && hospitalId) {
+                const rows = await AppDataSource.query(
+                    "SELECT TOP 1 Id FROM HealthcareProviders WHERE UserId = @0 AND HospitalId = @1 AND IsDeleted = 0",
+                    [requesterId, hospitalId]
+                ).catch(() => []);
+                if (Array.isArray(rows) && rows.length > 0) doctorId = requesterId;
+            }
             const bundle = await profileShareService.buildPatientBundle(patient, {
                 hospitalId: scope === "hospital" ? hospitalId : undefined,
                 excludeAppointmentId: appointmentId,
+                doctorId,
             });
             res.setHeader("Cache-Control", "no-store");
             return res.json({
                 success: true,
                 data: {
-                    scope,
+                    scope: doctorId ? "doctor" : scope,
                     accessExpiresAt: scope === "all" ? consent?.consent?.ExpiresAt ?? null : null,
                     ...bundle,
                 },
@@ -81,6 +93,8 @@ export class ProfileShareController {
     /** POST /v1/api/auth/patient/share-links { patientId?, duration, label? } */
     async create(req: Request, res: Response) {
         try {
+            // Access given outlasts the request, so a token must prove who gives it.
+            if (!requireTokenActor(req, res)) return;
             const requesterId = requesterOf(req);
             const patientId = String(req.body?.patientId || requesterId);
             const data = await profileShareService.createLink(requesterId, patientId, req.body?.duration, req.body?.label);
@@ -127,6 +141,8 @@ export class ProfileShareController {
     /** POST /v1/api/auth/patient-access/grant { patientId?, doctorId, duration, hospitalId? } — the patient shares with a Yira doctor. */
     async grant(req: Request, res: Response) {
         try {
+            // Access given outlasts the request, so a token must prove who gives it.
+            if (!requireTokenActor(req, res)) return;
             const requesterId = requesterOf(req);
             const patientId = String(req.body?.patientId || requesterId);
             const { isFamilyLinked } = await import("../../../../middlewares/request-identity.js");

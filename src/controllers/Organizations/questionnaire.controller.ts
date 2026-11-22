@@ -4,7 +4,7 @@ import { questionnaireAiService as ai } from "../../services/Questionnaires/ques
 import { questionnaireTemplateService as templates } from "../../services/Questionnaires/questionnaire-template.service.js";
 import { questionnaireAnalyticsService as analytics, type AnalyticsFilter } from "../../services/Questionnaires/questionnaire-analytics.service.js";
 import { QuestionnaireError } from "../../services/Questionnaires/questionnaire-shared.js";
-import { canManageHospital, isHospitalStaff, isSystemAdmin } from "../../utils/hospital-admin-access.js";
+import { canManageHospitalSetup, isHospitalStaff, isSystemAdmin } from "../../utils/hospital-admin-access.js";
 import { ApiResponse } from "../../utils/response.utils.js";
 
 const userIdOf = (req: Request) => String((req as any).user?.userId || (req as any).user?.id || "").trim();
@@ -30,7 +30,7 @@ type Handler = (ctx: { req: Request; res: Response; hospitalId: number; userId: 
 
 /**
  * Every questionnaire admin route: the caller must manage this hospital
- * (its admins, its organization's admins, or system admins).
+ * (its admins, its organization's admins, system admins, or its front desk).
  */
 function route(handler: Handler, message = "Done.", status = 200, who: "admins" | "staff" = "admins") {
     return async (req: Request, res: Response) => {
@@ -40,10 +40,10 @@ function route(handler: Handler, message = "Done.", status = 200, who: "admins" 
             if (!Number.isInteger(hospitalId) || hospitalId <= 0) {
                 return res.status(400).json(ApiResponse.error("Hospital ID is required."));
             }
-            const allowed = who === "staff" ? await isHospitalStaff(userId, hospitalId) : await canManageHospital(userId, hospitalId);
+            const allowed = who === "staff" ? await isHospitalStaff(userId, hospitalId) : await canManageHospitalSetup(userId, hospitalId);
             if (!userId || !allowed) {
                 return res.status(403).json(ApiResponse.error(
-                    who === "staff" ? "Only this hospital's staff can do this." : "Only this hospital's admins can manage its questionnaires."
+                    who === "staff" ? "Only this hospital's staff can do this." : "Only this hospital's admins and front desk can manage its questionnaires."
                 ));
             }
             const result = await handler({ req, res, hospitalId, userId, id: Number(req.params.id) });

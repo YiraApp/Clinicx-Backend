@@ -4,6 +4,9 @@ import { medicalReportAiService, ReportAnalysisError } from "../../../../service
 import { ANALYSIS_PENDING_MESSAGE, medSenseService } from "../../../../services/Appointments/medsense.service.js";
 import { ApiResponse } from "../../../../utils/response.utils.js";
 import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
+import { canOpenDocument } from "../../../../utils/document-access.js";
+import { requireTokenActor } from "../../../../utils/request-actor.js";
+import { workingAccountId } from "../../../../utils/work-access.js";
 
 export class MobileMedicalDocumentController {
     async getPatientDocuments(req: Request, res: Response) {
@@ -20,7 +23,9 @@ export class MobileMedicalDocumentController {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
-            let result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit, page);
+            // Set by requirePatientRecordAccess: a doctor without the patient's consent sees only his own documents.
+            const doctorId: string | undefined = res.locals.recordDoctorId;
+            let result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, limit, page, doctorId);
 
             // In a hospital's view, staff see what was added there, not the
             // patient's own uploads that are not tied to a visit. The patient, or a
@@ -165,6 +170,13 @@ export class MobileMedicalDocumentController {
         try {
             const id = parseInt(req.params.id as string);
             if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid document ID"));
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { MedicalDocument } = await import("../../../../models/Appointments/medical-document.model.js");
+            const doc = await AppDataSource.getRepository(MedicalDocument).findOne({ where: { Id: id, IsDeleted: false } as any });
+            if (!doc) return res.status(404).json(ApiResponse.error("Document not found"));
+            if (!(await canOpenDocument(req, doc))) {
+                return res.status(403).json(ApiResponse.error("You can only open reports you can see for this patient."));
+            }
             const analysis = await medicalReportAiService.getStoredAnalysis(id);
             return res.json(ApiResponse.success(analysis, analysis ? "Analysis found." : "Not analysed yet."));
         } catch (error: any) {
@@ -184,6 +196,44 @@ export class MobileMedicalDocumentController {
         }
         console.error(`${label}:`, error);
         return res.status(500).json(ApiResponse.error("Something went wrong. Please try again."));
+    }
+
+    /**
+     * POST /medical-documents/:id/share-whatsapp
+     * Sends one document to the patient's WhatsApp (a link that opens it). Anyone
+     * who can see the document may send it: the patient and family, a doctor the
+     * patient gave access to, the hospital's staff, and a doctor for his own records.
+     */
+    async shareOnWhatsApp(req: Request, res: Response) {
+        try {
+            const id = parseInt(req.params.id as string);
+            if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid document ID"));
+            if (!requireTokenActor(req, res)) return;
+            const requesterId = await workingAccountId(req);
+            if (!requesterId) return res.status(401).json(ApiResponse.error("Please sign in again."));
+
+            const { AppDataSource } = await import("../../../../config/database.js");
+            const { MedicalDocument } = await import("../../../../models/Appointments/medical-document.model.js");
+            const doc = await AppDataSource.getRepository(MedicalDocument).findOne({ where: { Id: id, IsDeleted: false } as any });
+            if (!doc) return res.status(404).json(ApiResponse.error("Document not found"));
+            if (!(await canOpenDocument(req, doc))) {
+                return res.status(403).json(ApiResponse.error("You can only send documents you can see for this patient."));
+            }
+
+            const result = await medicalDocumentService.shareSingleDocument(id, String(doc.PatientId), requesterId);
+            return res.json(ApiResponse.success({ sentCount: result?.docCount ?? 1 }, "Sent to the patient's WhatsApp."));
+        } catch (error: any) {
+            const message = String(error?.message || "");
+            if (["Document not found.", "Patient not found.", "Patient does not have a registered mobile number."].includes(message)) {
+                return res.status(400).json(ApiResponse.error(message));
+            }
+            console.error("Mobile Medical Document WhatsApp Share Error:", error);
+            // The WhatsApp service throws when Meta refuses; its raw reply is not for the app.
+            if (message.startsWith("WhatsApp Graph API error")) {
+                return res.status(502).json(ApiResponse.error("WhatsApp couldn't deliver it right now. Please try again."));
+            }
+            return res.status(500).json(ApiResponse.error("Couldn't send it on WhatsApp. Please try again."));
+        }
     }
 
     async deleteDocument(req: Request, res: Response) {

@@ -3,7 +3,11 @@ import { mobileDashboardService } from "../../services/provider/mobile-dashboard
 import { ApiResponse } from "../../../../utils/response.utils.js";
 import { AppDataSource } from "../../../../config/database.js";
 import { User } from "../../../../models/Account/user.model.js";
-import { requireTokenActor } from "../../../../utils/request-actor.js";
+import { requireTokenActor, actingProfileId, tokenActorId } from "../../../../utils/request-actor.js";
+import { requireDoctorView } from "../../../../utils/work-access.js";
+import { assertContactChange } from "../../../../utils/contact-change.js";
+import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
+import { patientAccessConsentService } from "../../services/consent/patient-access-consent.service.js";
 
 /**
  * Retrieves the provider dashboard statistics, todays schedule, recent patients,
@@ -30,6 +34,7 @@ export const getProviderDashboard = async (req: Request, res: Response) => {
             });
         }
 
+        if (!(await requireDoctorView(req, res, doctorId, parsedHospitalId))) return;
         const result = await mobileDashboardService.getProviderDashboard(doctorId, parsedHospitalId, parsedOrgId);
         return res.json(ApiResponse.success(result, "Dashboard details fetched successfully."));
     } catch (error: any) {
@@ -67,11 +72,21 @@ export const getClinicalData = async (req: Request, res: Response) => {
             });
         }
 
+        const view = await resolvePatientView(req, String(resolvedPatientId), parsedHospitalId);
+        if (view.denied) {
+            return res.status(403).json(
+                ApiResponse.error("The patient hasn't given you access to their records.", {
+                    code: "CONSENT_REQUIRED",
+                    consentStatus: view.consentStatus,
+                })
+            );
+        }
         const result = await mobileDashboardService.getPatientClinicalData(
             resolvedPatientId,
             parsedOrgId,
             parsedHospitalId,
-            parsedAppointmentId
+            parsedAppointmentId,
+            view.scopeDoctorId
         );
 
         return res.json(ApiResponse.success(result, "Patient clinical data retrieved successfully"));
@@ -107,6 +122,7 @@ export const getPatientsList = async (req: Request, res: Response) => {
             });
         }
 
+        if (!(await requireDoctorView(req, res, doctorId, parsedHospitalId))) return;
         const result = await mobileDashboardService.getPatientsList(
             doctorId,
             parsedOrgId,
@@ -153,6 +169,59 @@ export const getPatientsFilters = async (req: Request, res: Response) => {
 };
 
 /**
+ * What a caller may see of a patient. The patient and their family see everything. A doctor sees the
+ * whole history (every doctor, every hospital) only with the patient's consent; without it only his
+ * own consultations (scopeDoctorId). Other staff at a hospital the patient visits see that hospital.
+ * Anyone else is denied: before this, any signed-in account could read any patient's overview.
+ */
+async function resolvePatientView(req: Request, patientId: string, hospitalId?: number): Promise<{
+    denied: boolean;
+    isSelfOrFamily: boolean;
+    scopeDoctorId?: string;
+    consentStatus?: string;
+    recordAccess: { scope: "all" | "doctor" | "hospital"; hasConsent: boolean; treated?: boolean; status?: string };
+}> {
+    const user = (req as any).user || {};
+    const callerIds = [user.userId, user.id, user.tokenUserId]
+        .map((id: unknown) => String(id || "").trim())
+        .filter((id: string, i: number, all: string[]) => id && all.indexOf(id) === i);
+    const requesterId = callerIds[0] || "";
+    const pid = patientId.trim();
+    let isSelfOrFamily = callerIds.some((id) => id.toLowerCase() === pid.toLowerCase());
+    for (const id of callerIds) {
+        if (isSelfOrFamily) break;
+        isSelfOrFamily = await isFamilyLinked(id, pid).catch(() => false);
+    }
+    if (isSelfOrFamily) return { denied: false, isSelfOrFamily, recordAccess: { scope: "all", hasConsent: true } };
+    if (!requesterId) return { denied: true, isSelfOrFamily, recordAccess: { scope: "doctor", hasConsent: false } };
+
+    const consent = await patientAccessConsentService.checkAccess(pid, requesterId);
+    if (consent?.hasAccess) {
+        return { denied: false, isSelfOrFamily, recordAccess: { scope: "all", hasConsent: true, status: consent.status } };
+    }
+    const hospitalAccess = hospitalId
+        ? await patientAccessConsentService.checkHospitalRecordAccess(pid, requesterId, { hospitalId })
+        : { allowed: false };
+    const providerRows = await AppDataSource.query(
+        "SELECT TOP 1 Id FROM HealthcareProviders WHERE UserId = @0 AND IsDeleted = 0",
+        [requesterId]
+    ).catch(() => []);
+    const isDoctor = Array.isArray(providerRows) && providerRows.length > 0;
+    if (isDoctor && (hospitalAccess.allowed || consent?.treated)) {
+        return {
+            denied: false,
+            isSelfOrFamily,
+            scopeDoctorId: requesterId,
+            recordAccess: { scope: "doctor", hasConsent: false, treated: !!consent?.treated, status: consent?.status },
+        };
+    }
+    if (hospitalAccess.allowed) {
+        return { denied: false, isSelfOrFamily, recordAccess: { scope: "hospital", hasConsent: false, status: consent?.status } };
+    }
+    return { denied: true, isSelfOrFamily, consentStatus: consent?.status ?? "NO_REQUEST", recordAccess: { scope: "doctor", hasConsent: false } };
+}
+
+/**
  * Retrieves the patient's overview information (contact, medical, insurance, and visit history).
  */
 export const getPatientOverview = async (req: Request, res: Response) => {
@@ -166,7 +235,7 @@ export const getPatientOverview = async (req: Request, res: Response) => {
             });
         }
 
-        const parsedOrgId = orgId !== undefined && orgId !== null && !isNaN(Number(orgId)) ? Number(orgId) : undefined;
+        let parsedOrgId = orgId !== undefined && orgId !== null && !isNaN(Number(orgId)) ? Number(orgId) : undefined;
         let parsedHospitalId = hospitalId !== undefined && hospitalId !== null && !isNaN(Number(hospitalId)) && Number(hospitalId) > 0 ? Number(hospitalId) : undefined;
 
         // If hospitalId was not provided, fallback to the authenticated doctor/provider's hospital
@@ -183,9 +252,26 @@ export const getPatientOverview = async (req: Request, res: Response) => {
             }
         }
 
-        const result = await mobileDashboardService.getPatientOverview(patientId, parsedOrgId, parsedHospitalId);
+        const view = await resolvePatientView(req, String(patientId), parsedHospitalId);
+        if (view.denied) {
+            return res.status(403).json(
+                ApiResponse.error("The patient hasn't given you access to their records.", {
+                    code: "CONSENT_REQUIRED",
+                    consentStatus: view.consentStatus,
+                })
+            );
+        }
+        if (view.recordAccess.scope === "all" && view.recordAccess.hasConsent && !view.isSelfOrFamily) {
+            // Shared with this doctor: the whole history, at every hospital
+            parsedOrgId = undefined;
+            parsedHospitalId = undefined;
+        }
+        const scopeDoctorId = view.scopeDoctorId;
+        const recordAccess = view.recordAccess;
 
-        return res.json(ApiResponse.success(result, "Overview details fetched successfully"));
+        const result = await mobileDashboardService.getPatientOverview(patientId, parsedOrgId, parsedHospitalId, scopeDoctorId);
+
+        return res.json(ApiResponse.success({ ...result, record_access: recordAccess }, "Overview details fetched successfully"));
     } catch (error: any) {
         return res.status(400).json({
             status: false,
@@ -211,7 +297,17 @@ export const getPatientProfile = async (req: Request, res: Response) => {
         const parsedOrgId = orgId !== undefined && orgId !== null && !isNaN(Number(orgId)) ? Number(orgId) : undefined;
         const parsedHospitalId = hospitalId !== undefined && hospitalId !== null && !isNaN(Number(hospitalId)) ? Number(hospitalId) : undefined;
 
-        const result = await mobileDashboardService.getPatientProfile(patientId, parsedOrgId, parsedHospitalId);
+        const view = await resolvePatientView(req, String(patientId), parsedHospitalId);
+        if (view.denied) {
+            return res.status(403).json(
+                ApiResponse.error("The patient hasn't given you access to their records.", {
+                    code: "CONSENT_REQUIRED",
+                    consentStatus: view.consentStatus,
+                })
+            );
+        }
+
+        const result = await mobileDashboardService.getPatientProfile(patientId, parsedOrgId, parsedHospitalId, view.scopeDoctorId);
 
         return res.json(ApiResponse.success(result, "Patient profile data retrieved successfully"));
     } catch (error: any) {
@@ -306,6 +402,17 @@ export const getProviderProfile = async (req: Request, res: Response) => {
     }
 };
 
+/** The profile being edited, when it is the signed-in person's own or their family's. Answers otherwise. */
+async function requireEditableProfile(req: Request, res: Response, targetUserId: string): Promise<User | null> {
+    const signedIn = requireTokenActor(req, res);
+    if (!signedIn) return null;
+    const open = actingProfileId(req) || signedIn;
+    const mine = (await isFamilyLinked(signedIn, targetUserId)) || (await isFamilyLinked(open, targetUserId));
+    const target = mine ? await AppDataSource.getRepository(User).findOne({ where: { Id: targetUserId, IsDeleted: false } }) : null;
+    if (!target) res.status(403).json({ status: false, message: "You can only edit your own profile or your family's." });
+    return target;
+}
+
 /**
  * Updates doctor personal and professional profile details.
  */
@@ -321,6 +428,9 @@ export const updateProviderProfile = async (req: Request, res: Response) => {
             });
         }
 
+        const target = await requireEditableProfile(req, res, String(targetUserId));
+        if (!target) return;
+        await assertContactChange(tokenActorId(req), target, { phone: req.body.phoneNumber, email: req.body.email });
         const result = await mobileDashboardService.updateProviderProfile(targetUserId, req.body);
         return res.json(ApiResponse.success(result, "Doctor profile updated successfully"));
     } catch (error: any) {
@@ -354,6 +464,7 @@ export const uploadProviderProfilePhoto = async (req: Request, res: Response) =>
             });
         }
 
+        if (!(await requireEditableProfile(req, res, String(targetUserId)))) return;
         const result = await mobileDashboardService.uploadProviderPhoto(targetUserId, file);
         return res.json(ApiResponse.success(result, "Doctor profile photo uploaded successfully"));
     } catch (error: any) {
@@ -379,6 +490,7 @@ export const toggleFavoritePatient = async (req: Request, res: Response) => {
             });
         }
 
+        if (!(await requireDoctorView(req, res, currentDocId, Number(req.body.hospitalId) || undefined))) return;
         const result = await mobileDashboardService.toggleFavoritePatient(currentDocId, patientId, isFavorite);
         return res.json(ApiResponse.success(result, "Favorite status updated successfully"));
     } catch (error: any) {
@@ -399,6 +511,7 @@ export const getFavoritePatientsList = async (req: Request, res: Response) => {
         const parsedOrgId = Number(orgId || 1);
         const parsedHospitalId = Number(hospitalId || 1);
 
+        if (!(await requireDoctorView(req, res, currentDocId, parsedHospitalId))) return;
         const result = await mobileDashboardService.getFavoritePatients(currentDocId, parsedOrgId, parsedHospitalId);
         return res.json(ApiResponse.success(result, "Favorite patients retrieved successfully"));
     } catch (error: any) {

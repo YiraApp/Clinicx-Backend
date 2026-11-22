@@ -22,7 +22,8 @@ export class MobileMedicalRecordController {
                 patientId,
                 orgId ? parseInt(String(orgId)) : undefined,
                 hospitalId ? parseInt(String(hospitalId)) : undefined,
-                appointmentId ? parseInt(String(appointmentId)) : undefined
+                appointmentId ? parseInt(String(appointmentId)) : undefined,
+                res.locals.recordDoctorId // set by requirePatientRecordAccess: a doctor sees only his own records
             );
 
             return res.json(ApiResponse.success(records, "Medical records fetched successfully"));
@@ -93,7 +94,7 @@ export class MobileMedicalRecordController {
                 console.error("Failed to send medical record push notification:", e);
             }
 
-            refreshAppointmentPrescriptionPdfs(data.AppointmentId);
+            refreshAppointmentPrescriptionPdfs(data.AppointmentId, (record as any)?.Id ? String((record as any).Id) : undefined);
             return res.status(201).json(ApiResponse.success(record, "Medical record created successfully"));
         } catch (error: any) {
             console.error("Mobile Medical Record Add Error:", error);
@@ -170,10 +171,50 @@ export class MobileMedicalRecordController {
             }
 
             await patientMedicalRecordService.deleteRecord(String(id));
+            // Its own PDF goes with it; a visit's prescription PDF is built again without it.
+            const { medicalRecordDocumentService } = await import("../../../../services/Prescriptions/medical-record-document.service.js");
+            await medicalRecordDocumentService.withdrawForRecord(String(id)).catch(() => undefined);
+            if ((existing as any).AppointmentId) refreshAppointmentPrescriptionPdfs((existing as any).AppointmentId);
             return res.json(ApiResponse.success(null, "Medical record deleted successfully"));
         } catch (error: any) {
             console.error("Mobile Medical Record Delete Error:", error);
             return res.status(500).json(ApiResponse.error(error.message));
+        }
+    }
+
+    /**
+     * GET /medical-records/:id/pdf: the record as a PDF, built fresh. For the patient and their
+     * family, the doctor who wrote it, and doctors the patient has shared access with.
+     */
+    async getRecordPdf(req: Request, res: Response) {
+        try {
+            const id = String(req.params.id || "").trim();
+            if (!id) return res.status(400).json(ApiResponse.error("Record ID is required"));
+            const { medicalRecordDocumentService } = await import("../../../../services/Prescriptions/medical-record-document.service.js");
+            const built = await medicalRecordDocumentService.buildPdf(id);
+            if (!built) return res.status(404).json(ApiResponse.error("Medical record not found"));
+
+            const requesterId = String((req as any).user?.userId || (req as any).user?.id || "").trim().toLowerCase();
+            const patientId = String(built.record.PatientId || "");
+            let allowed = !!requesterId && (requesterId === patientId.toLowerCase() || requesterId === String(built.record.DoctorId || "").toLowerCase());
+            if (!allowed) {
+                const { isFamilyLinked } = await import("../../../../middlewares/request-identity.js");
+                allowed = await isFamilyLinked(requesterId, patientId).catch(() => false);
+            }
+            if (!allowed) {
+                const { patientAccessConsentService } = await import("../../services/consent/patient-access-consent.service.js");
+                const consent = await patientAccessConsentService.checkAccess(patientId, requesterId).catch(() => null);
+                allowed = !!consent?.hasAccess;
+            }
+            if (!allowed) return res.status(403).json(ApiResponse.error("You can't open this medical record."));
+
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `inline; filename="${built.fileName}"`);
+            res.setHeader("Cache-Control", "no-store");
+            return res.send(built.buffer);
+        } catch (error: any) {
+            console.error("Mobile Medical Record PDF Error:", error);
+            return res.status(500).json(ApiResponse.error(error.message || "Couldn't create the record's PDF."));
         }
     }
 }

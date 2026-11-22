@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { hospitalLabTestService } from "../../services/Organizations/hospital-lab-test.service.js";
-import { canManageHospital as canManage } from "../../utils/hospital-admin-access.js";
+import { canManageHospitalSetup as canManage } from "../../utils/hospital-admin-access.js";
 import { ApiResponse } from "../../utils/response.utils.js";
 
 const hospitalIdOf = (req: Request) => Number(req.params.hospitalId);
@@ -14,7 +14,7 @@ class HospitalLabTestController {
             return null;
         }
         if (!userId || !(await canManage(userId, hospitalId))) {
-            res.status(403).json(ApiResponse.error("Only this hospital's admins can change its lab tests."));
+            res.status(403).json(ApiResponse.error("Only this hospital's admins and front desk can change its lab tests."));
             return null;
         }
         return hospitalId;

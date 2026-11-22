@@ -5,9 +5,11 @@ import { healthcareProviderScheduleSlotRepository } from "../../../../repositori
 import { healthcareProviderService } from "../../../../services/Organizations/healthcare-provider.service.js";
 import { healthcareProviderRepository } from "../../../../repositories/Organizations/healthcare-provider.repository.js";
 import { familyLinkService } from "../../../../services/Family/family-link.service.js";
-import { requireTokenActor, actingProfileId, sameUserId } from "../../../../utils/request-actor.js";
+import { requireTokenActor, actingProfileId, sameUserId, tokenActorId } from "../../../../utils/request-actor.js";
+import { samePhoneNumber } from "../../../../utils/phone-number.js";
 import { isFamilyLinked, isSameFamily } from "../../../../middlewares/request-identity.js";
 import { canManageHospital } from "../../../../utils/staff-access.js";
+import { isDoctor, requireDoctorView, workingAccountId } from "../../../../utils/work-access.js";
 
 /**
  * Retrieves provider appointment dashboard stats and filtered appointment list.
@@ -36,6 +38,7 @@ export const getAppointmentDashboard = async (req: Request, res: Response) => {
             });
         }
 
+        if (!(await requireDoctorView(req, res, doctorId, parsedHospitalId, { familyView: true }))) return;
         const result = await mobileAppointmentService.getAppointmentDashboard(
             doctorId,
             parsedHospitalId,
@@ -85,7 +88,8 @@ export const bookAppointment = async (req: Request, res: Response) => {
             consultationFee,
             shareRecords,
             grantRecordAccess,
-            shareRecordsDuration
+            shareRecordsDuration,
+            countryCode
         } = req.body;
 
         if (!doctorId || hospitalId === undefined || orgId === undefined || !patientPhone) {
@@ -105,6 +109,15 @@ export const bookAppointment = async (req: Request, res: Response) => {
             });
         }
 
+        const signedIn = tokenActorId(req);
+        const bookerIds = [actingProfileId(req), signedIn].filter((id): id is string => !!id);
+        // Builds that send no country book their own number in that account's country.
+        const bookingCountry = countryCode
+            ? String(countryCode)
+            : (await familyLinkService.ownFamilyNumber(bookerIds, patientPhone)) ?? undefined;
+        // Access is given only when the box was ticked, and only by someone a token proves.
+        const askedToShare = String(shareRecords ?? grantRecordAccess) === "true";
+
         const result = await mobileAppointmentService.bookAppointment({
             doctorId,
             hospitalId: parsedHospitalId,
@@ -117,6 +130,7 @@ export const bookAppointment = async (req: Request, res: Response) => {
             isPrimary: typeof isPrimary === "boolean" ? isPrimary : undefined,
             patientName,
             patientPhone,
+            countryCode: bookingCountry,
             email: (patientEmail || email || "").trim() || undefined,
             gender,
             dob,
@@ -131,7 +145,7 @@ export const bookAppointment = async (req: Request, res: Response) => {
             discountAmount: discountAmount ? Number(discountAmount) : 0,
             includeConsultationFee: includeConsultationFee !== undefined ? Boolean(includeConsultationFee) : true,
             consultationFee: consultationFee !== undefined ? Number(consultationFee) : undefined,
-            shareRecords: shareRecords !== undefined ? Boolean(shareRecords) : (grantRecordAccess !== undefined ? Boolean(grantRecordAccess) : true),
+            shareRecords: askedToShare && !!signedIn,
             shareRecordsDuration: shareRecordsDuration ? String(shareRecordsDuration) : undefined,
             // Who is booking: only the patient (or their family) can give the doctor access to their records
             requesterId: String((req as any).user?.tokenUserId || (req as any).user?.userId || "").trim() || undefined
@@ -420,13 +434,15 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
                     ? userRepo
                         .createQueryBuilder("u")
                         .select("u.Id", "Id")
+                        .addSelect("u.PhoneNumber", "PhoneNumber")
+                        .addSelect("u.CountryCode", "CountryCode")
                         .where("RIGHT(u.PhoneNumber, 10) = :last10", { last10 })
                         .andWhere("u.IsDeleted = 0")
                         .getRawMany()
                     : Promise.resolve([] as any[]),
             ]);
             children.forEach((c: any) => patientIds.add(c.Id));
-            samePhone.forEach((r: any) => patientIds.add(r.Id));
+            samePhone.filter((r: any) => samePhoneNumber(target, r)).forEach((r: any) => patientIds.add(r.Id));
         }
 
         const apptRepo = AppDataSource.getRepository(Appointment);
@@ -523,6 +539,11 @@ export const getPatientAppointments = async (req: Request, res: Response) => {
     }
 };
 
+async function doctorAmong(req: Request): Promise<string | undefined> {
+    const id = (await workingAccountId(req)) || actingProfileId(req);
+    return id && (await isDoctor(id)) ? id : undefined;
+}
+
 /**
  * Retrieves all matching patient accounts (primary & dependent family members) for a given phone or search.
  */
@@ -537,9 +558,11 @@ export const getPatientAccountsByPhone = async (req: Request, res: Response) => 
         // on their own family's number, and may not search other users by name.
         const caller = (req as any).user || {};
         const callerIds = [caller.userId, caller.tokenUserId].filter(Boolean).map(String);
+        let askedCountry = String(req.body.countryCode || req.query.countryCode || "") || undefined;
+        const ownCountry = await familyLinkService.ownFamilyNumber(callerIds, phone, askedCountry);
+        askedCountry ??= ownCountry ?? undefined;
         if (!(await familyLinkService.isStaffAccount(callerIds))) {
-            const asked = String(phone).replace(/\D/g, "").slice(-10);
-            if (asked.length < 10 || !(await familyLinkService.ownFamilyPhones(callerIds)).has(asked)) {
+            if (!ownCountry) {
                 return res.status(403).json({
                     status: false,
                     message: "You can only look up accounts on your own number.",
@@ -552,7 +575,10 @@ export const getPatientAccountsByPhone = async (req: Request, res: Response) => 
             String(phone),
             orgId ? Number(orgId) : undefined,
             hospitalId ? Number(hospitalId) : undefined,
-            String(search)
+            String(search),
+            askedCountry,
+            // A doctor is told about their own visits with a patient, not visits to other doctors.
+            await doctorAmong(req)
         );
 
         return res.json(ApiResponse.success(result, "Patient accounts retrieved successfully."));
@@ -591,12 +617,12 @@ export const addDependentPatient = async (req: Request, res: Response) => {
         // under any number or parent account.
         const actor = requireTokenActor(req, res);
         if (!actor) return;
+        const profile = actingProfileId(req);
+        const typedCountry = req.body.countryCode ? String(req.body.countryCode) : undefined;
+        const ownCountry = await familyLinkService.ownFamilyNumber([actor, ...(profile ? [profile] : [])], targetPhone, typedCountry);
         if (!(await familyLinkService.isStaffAccount([actor]))) {
-            const profile = actingProfileId(req);
-            const ownPhones = await familyLinkService.ownFamilyPhones([actor, ...(profile ? [profile] : [])]);
-            const asked = String(targetPhone).replace(/\D/g, "").slice(-10);
             const parentOk = !parentUserId || (await isSameFamily(actor, String(parentUserId)));
-            if (asked.length < 10 || !ownPhones.has(asked) || !parentOk) {
+            if (!ownCountry || !parentOk) {
                 return res.status(403).json({
                     status: false,
                     message: "You can only add family members to your own account.",
@@ -616,6 +642,7 @@ export const addDependentPatient = async (req: Request, res: Response) => {
 
         const result = await mobileAppointmentService.createOrLinkDependent({
             primaryPhone: String(targetPhone),
+            countryCode: typedCountry ?? ownCountry ?? undefined,
             parentUserId: parentUserId ? String(parentUserId) : undefined,
             name: String(name),
             relation: String(relation || "Dependent"),

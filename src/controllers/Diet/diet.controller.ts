@@ -9,6 +9,11 @@ import { dietPlanDocumentService } from "../../services/Diet/diet-plan-document.
 import { sendPdf } from "../../utils/send-pdf.js";
 import { editLockMessage } from "../../utils/edit-window.js";
 import { AppDataSource } from "../../config/database.js";
+import { isFamilyLinked } from "../../middlewares/request-identity.js";
+import { isDoctor, workingAccountId } from "../../utils/work-access.js";
+import { staffHospitalIds } from "../../utils/staff-access.js";
+import { isSystemAdmin } from "../../utils/hospital-admin-access.js";
+import { sameUserId } from "../../utils/request-actor.js";
 
 function getOrganizationId(req: Request): number | undefined {
     const orgId = req.headers["x-org-id"] 
@@ -21,18 +26,68 @@ function getOrganizationId(req: Request): number | undefined {
     return orgId ? parseInt(String(orgId), 10) : undefined;
 }
 
-function getDoctorId(req: Request): string | undefined {
-    return (req as any).user?.userId 
-        || (req as any).user?.Id 
-        || req.body?.doctorId 
-        || (req.query.doctorId as string);
-}
-
 /** The signed-in user. Ownership checks use only this, never ids sent in the request. */
 function getAuthUserId(req: Request): string | undefined {
     const user = (req as any).user;
     const id = user?.userId || user?.Id || user?.id;
     return id ? String(id) : undefined;
+}
+
+/** What the caller is to this patient. */
+interface PlanAccess {
+    /** The account working in this request, proven by its token. */
+    me: string | null;
+    family: boolean;
+    consented: boolean;
+    doctor: boolean;
+    /** Works with this patient: treats them, has their consent, or works at a hospital they visit. */
+    related: boolean;
+    /** Works as a doctor or other hospital staff at all. */
+    staff: boolean;
+}
+
+async function planAccess(req: Request, patientId: string): Promise<PlanAccess> {
+    const open = getAuthUserId(req);
+    const family = !!open && (await isFamilyLinked(open, patientId));
+    const me = await workingAccountId(req);
+    if (!me) return { me, family, consented: false, doctor: false, related: family, staff: false };
+
+    const doctor = await isDoctor(me);
+    const hospitals = await staffHospitalIds(me);
+    const systemAdmin = !doctor && (await isSystemAdmin(me));
+    const consent = await patientAccessConsentService.checkAccess(patientId, me);
+    const consented = consent?.hasAccess === true;
+    let related = family || consented || !!consent?.treated || systemAdmin;
+    for (const hospitalId of hospitals) {
+        if (related) break;
+        related = (await patientAccessConsentService.checkHospitalRecordAccess(patientId, me, { hospitalId })).allowed;
+    }
+    return { me, family, consented, doctor, related, staff: doctor || systemAdmin || hospitals.length > 0 };
+}
+
+/** A doctor manages the plans they assigned; other staff, their organisation's plans for patients they work with. */
+async function canManagePlan(access: PlanAccess, plan: any): Promise<boolean> {
+    if (!access.me || plan.CreatedByPatient) return false;
+    if (sameUserId(plan.AssignedByDoctorId, access.me)) return true;
+    return !access.doctor && access.related && (await dietPlanDocumentService.canStaffOpen(access.me, plan));
+}
+
+/** The patient, family, and a doctor with consent see every plan listed; anyone else only what they manage. */
+async function canSeePlan(access: PlanAccess, plan: any): Promise<boolean> {
+    return access.family || access.consented || (await canManagePlan(access, plan));
+}
+
+/** Who prescribes: a doctor or staff member who works with this patient. Answers and returns null otherwise. */
+async function requirePrescriber(req: Request, res: Response): Promise<string | null> {
+    const patientId = String(req.body?.patientId ?? "").trim();
+    if (!patientId) {
+        res.status(400).json({ error: "PatientId is required." });
+        return null;
+    }
+    const access = await planAccess(req, patientId);
+    if (access.me && access.staff && access.related) return access.me;
+    res.status(403).json({ error: "You can only prescribe diet plans for your own patients." });
+    return null;
 }
 
 function sendError(res: Response, error: any, fallback: string, context: string) {
@@ -269,10 +324,8 @@ export class DietController {
             if (!organizationId) {
                 return res.status(400).json({ error: "OrganizationId is required." });
             }
-            const doctorId = getDoctorId(req);
-            if (!doctorId) {
-                return res.status(400).json({ error: "DoctorId is required." });
-            }
+            const doctorId = await requirePrescriber(req, res);
+            if (!doctorId) return;
 
             const plan = await patientDietPlanService.assignPlan({
                 ...req.body,
@@ -296,8 +349,8 @@ export class DietController {
         try {
             const organizationId = getOrganizationId(req);
             if (!organizationId) return res.status(400).json({ error: "OrganizationId is required." });
-            const doctorId = getDoctorId(req);
-            if (!doctorId) return res.status(400).json({ error: "DoctorId is required." });
+            const doctorId = await requirePrescriber(req, res);
+            if (!doctorId) return;
             const draft = await patientDietPlanService.draftPlan({ ...req.body, organizationId, doctorId });
             const buffer = await dietPlanDocumentService.previewPdf(draft as any);
             res.setHeader("Cache-Control", "no-store");
@@ -332,7 +385,17 @@ export class DietController {
                 return res.status(403).json({ error: "The patient hasn't given you access to their full records.", code: "CONSENT_REQUIRED" });
             }
             const plans = await patientDietPlanService.getPatientPlans(patientId, organizationId, { fullHistory });
-            res.json(plans);
+            if (fullHistory) return res.json(plans);
+
+            const access = await planAccess(req, patientId);
+            const visible: typeof plans = [];
+            for (const plan of plans) {
+                if (await canSeePlan(access, plan)) visible.push(plan);
+            }
+            if (!access.family && !access.consented && !visible.length && !(access.staff && access.related)) {
+                return res.status(403).json({ error: "You can only see diet plans of your own patients." });
+            }
+            res.json(visible);
         } catch (error: any) {
             res.status(500).json({ error: error.message || "Failed to get patient plans." });
         }
@@ -357,7 +420,7 @@ export class DietController {
             const plan = await patientDietPlanService.getPlanDetails(id, organizationId);
 
             // Plans a patient made for themselves are private to them.
-            if (!plan || plan.CreatedByPatient) {
+            if (!plan || plan.CreatedByPatient || !(await canSeePlan(await planAccess(req, String(plan.PatientId)), plan))) {
                 return res.status(404).json({ error: "Diet plan not found." });
             }
 
@@ -375,8 +438,14 @@ export class DietController {
             }
 
             const id = parseInt(String(req.params.id), 10);
+            if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid plan id." });
+            const current = await patientDietPlanService.getPlanDetails(id);
+            if (!current) return res.status(404).json({ error: "Diet plan not found." });
+            if (!(await canManagePlan(await planAccess(req, String(current.PatientId)), current))) {
+                return res.status(403).json({ error: "Only the doctor who prescribed this plan, or their hospital's staff, can change it." });
+            }
             // A doctor's change is allowed only within an hour of prescribing.
-            const locked = Number.isInteger(id) ? await editLockMessage("dietPlan", id) : null;
+            const locked = await editLockMessage("dietPlan", id);
             if (locked) return res.status(403).json({ error: locked });
             const updated = await patientDietPlanService.updatePlan(id, req.body, organizationId);
             // The PDF in the patient's documents follows the plan.
@@ -419,7 +488,7 @@ export class DietController {
             // A doctor the patient gave access to their full records sees every plan in the list
             // (self-made ones and other organisations' too), so may open each plan's PDF as well.
             const allowed = !!plan && (isPatient
-                || (await dietPlanDocumentService.canStaffOpen(userId, plan))
+                || (await canManagePlan(await planAccess(req, String(plan.PatientId)), plan))
                 || (await this.canSeeFullHistory(req, String(plan.PatientId))));
             if (!plan || !allowed) {
                 return res.status(404).json({ error: "Diet plan not found." });
@@ -438,7 +507,7 @@ export class DietController {
             const id = parseInt(String(req.params.id), 10);
             if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid plan id." });
             const plan = await patientDietPlanService.getPlanDetails(id);
-            if (!plan || !(await dietPlanDocumentService.canStaffOpen(getAuthUserId(req), plan))) {
+            if (!plan || !(await canManagePlan(await planAccess(req, String(plan.PatientId)), plan))) {
                 return res.status(404).json({ error: "Diet plan not found." });
             }
             const document = await dietPlanDocumentService.saveToDocuments(id);

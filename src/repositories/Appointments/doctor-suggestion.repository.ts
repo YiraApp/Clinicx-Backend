@@ -13,7 +13,7 @@ export class DoctorSuggestionRepository {
         return this.findByPatientIds([patientId], orgId, hospitalId);
     }
 
-    async findByPatientIds(patientIds: string[], orgId?: number, hospitalId?: number): Promise<DoctorSuggestion[]> {
+    async findByPatientIds(patientIds: string[], orgId?: number, hospitalId?: number, doctorId?: string): Promise<DoctorSuggestion[]> {
         const isGuid = (val?: string): boolean =>
             !!val && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val.trim());
 
@@ -24,6 +24,8 @@ export class DoctorSuggestionRepository {
             .leftJoinAndSelect("s.Doctor", "Doctor")
             .where("s.PatientId IN (:...patientIds)", { patientIds: validIds })
             .orderBy("s.Id", "DESC");
+        // Doctor-only view: just the suggestions this doctor gave.
+        if (doctorId) qb.andWhere("s.DoctorId = :doctorId", { doctorId });
 
         const allSuggestions = await qb.getMany();
 

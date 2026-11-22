@@ -14,6 +14,8 @@ import type { UpdateUserRequest } from "../../dtos/Request/Account/UpdateUserReq
 import { generateTemporaryPassword } from "../../utils/password.utils.js";
 import { roleRepository } from "../../repositories/Account/role.repository.js";
 import { organizationRepository } from "../../repositories/Organizations/organization.repository.js";
+import { isRelatedAccount } from "../../utils/family-phone.js";
+import { assertContactChange } from "../../utils/contact-change.js";
 import { hospitalRepository } from "../../repositories/Organizations/hospital.repository.js";
 import { addressRepository } from "../../repositories/Account/address.repository.js";
 import { Address } from "../../models/Account/address.model.js";
@@ -986,7 +988,7 @@ export class UserService implements IUserService {
     /**
      * Updates details of the authenticated patient's profile.
      */
-    async updatePatientProfile(userId: string, profileData: any): Promise<any> {
+    async updatePatientProfile(userId: string, profileData: any, signedInId: string | null = null): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const user = await userRepo.findOne({
             where: { Id: userId },
@@ -999,6 +1001,7 @@ export class UserService implements IUserService {
 
         // 1. Update basic personal info
         const personal = profileData.personalInfo || {};
+        await assertContactChange(signedInId, user, { phone: personal.phone, email: personal.email });
         if (personal.firstName !== undefined) user.FirstName = personal.firstName;
         if (personal.lastName !== undefined) user.LastName = personal.lastName;
         if (personal.email !== undefined) user.Email = personal.email;
@@ -1126,7 +1129,7 @@ export class UserService implements IUserService {
             .orderBy('u.IsPrimary', 'DESC')
             .addOrderBy('u.CreatedAt', 'ASC');
 
-        const familyMembers = await qb.getMany();
+        const familyMembers = (await qb.getMany()).filter((member) => isRelatedAccount(user, member));
 
         if (familyMembers.length === 0) return [];
 

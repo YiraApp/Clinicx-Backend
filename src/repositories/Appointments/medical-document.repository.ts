@@ -9,7 +9,7 @@ export class MedicalDocumentRepository {
         return await this.repo.save(document);
     }
 
-    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number, page = 1): Promise<MedicalDocument[]> {
+    async findByPatient(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number, page = 1, doctorId?: string): Promise<MedicalDocument[]> {
         const query: any = { PatientId: patientId, IsDeleted: false };
         if (appointmentId) {
             query.AppointmentId = appointmentId;
@@ -20,7 +20,8 @@ export class MedicalDocumentRepository {
             if (hospitalId) query.HospitalId = hospitalId;
         }
 
-        if (limit && limit > 0) {
+        const paging = !!(limit && limit > 0);
+        if (paging || doctorId) {
             // Every relation here is to one row, so a plain TOP n returns the same documents in
             // one query; find() with take ran a separate DISTINCT query to page the ids first.
             const paged = this.repo.createQueryBuilder("doc")
@@ -35,9 +36,18 @@ export class MedicalDocumentRepository {
             if (query.AppointmentId !== undefined) paged.andWhere("doc.AppointmentId = :appointmentId", { appointmentId: query.AppointmentId });
             if (query.OrganizationId !== undefined) paged.andWhere("doc.OrganizationId = :organizationId", { organizationId: query.OrganizationId });
             if (query.HospitalId !== undefined) paged.andWhere("doc.HospitalId = :hospitalId", { hospitalId: query.HospitalId });
+            // Doctor-only view: what this doctor uploaded, what is filed under him, or what belongs
+            // to one of his appointments.
+            if (doctorId) {
+                paged.andWhere(
+                    "(doc.UploadedByUserId = :doctorId OR doc.DoctorId = :doctorId OR appointment.DoctorId = :doctorId)",
+                    { doctorId }
+                );
+            }
             // Id breaks ties so pages never overlap or skip a document.
-            return await paged.orderBy("doc.CreatedAt", "DESC").addOrderBy("doc.Id", "DESC")
-                .offset((Math.max(1, page) - 1) * limit).limit(limit).getMany();
+            paged.orderBy("doc.CreatedAt", "DESC").addOrderBy("doc.Id", "DESC");
+            if (paging) paged.offset((Math.max(1, page) - 1) * limit!).limit(limit);
+            return await paged.getMany();
         }
 
         return await this.repo.find({

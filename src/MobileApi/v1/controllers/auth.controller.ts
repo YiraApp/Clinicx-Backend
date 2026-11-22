@@ -716,8 +716,9 @@ export const getUserData = async (req: Request, res: Response) => {
         // app act as that person everywhere, and reach their dependents and their other links.
         const tokenUserId = (req as any).user?.tokenUserId ? String((req as any).user.tokenUserId) : "";
         const viaFamilyLink = !!tokenUserId && !(await isSameFamily(tokenUserId, String(userId)));
-        const userData = viaFamilyLink
-            ? await mobileAuthService.getUserData(userId, undefined, tokenUserId)
+        // Tokens only for a caller a token already proves: a bare userId + deviceId used to get 30 days of login here.
+        const userData = !tokenUserId || viaFamilyLink
+            ? await mobileAuthService.getUserData(userId, undefined, tokenUserId || String(callerId))
             : await mobileAuthService.getUserData(userId, deviceId, String(callerId));
         return res.json(ApiResponse.success(userData, "User details fetched successfully"));
     } catch (error: any) {

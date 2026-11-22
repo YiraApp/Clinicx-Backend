@@ -15,6 +15,7 @@ import { PatientPrescription } from "../../../../models/Appointments/patient-pre
 import { MedicalDocument } from "../../../../models/Appointments/medical-document.model.js";
 import { MedicalRecord } from "../../../../models/Appointments/medical-record.model.js";
 import { PatientAccessConsent } from "../../../../models/Consent/patient-access-consent.model.js";
+import { isHospitalStaff } from "../../../../utils/hospital-admin-access.js";
 import { Visit } from "../../../../models/Appointments/visit.model.js";
 
 export class MobileDashboardService {
@@ -40,7 +41,7 @@ export class MobileDashboardService {
             }
             return found;
         };
-        const [user, provider, hospital, dependents, doctorProviders] = await Promise.all([
+        const [user, provider, hospital, doctorProviders] = await Promise.all([
             userRepo.findOne({
                 where: { Id: userId }
             }),
@@ -49,7 +50,6 @@ export class MobileDashboardService {
                 where: { Id: hospId },
                 relations: ["Organization"]
             }),
-            userRepo.find({ where: { ParentUserId: userId, IsDeleted: false } }).catch(() => [] as User[]),
             providerRepo.find({
                 where: { UserId: userId, IsDeleted: false }
             }).catch(() => [] as HealthcareProvider[]),
@@ -78,12 +78,6 @@ export class MobileDashboardService {
         };
 
         const todayStr = new Date().toISOString().split('T')[0];
-
-        // Find all family user IDs under this account
-        let allFamilyUserIds = [userId];
-        if (dependents.length > 0) {
-            allFamilyUserIds.push(...dependents.map(d => d.Id));
-        }
 
         // Cancelled and rejected bookings are not visits: listing them showed a patient once per
         // cancelled attempt in today's schedule and recent patients
@@ -184,8 +178,16 @@ export class MobileDashboardService {
                         .groupBy("a.UserId")
                         .getRawMany(),
                 ]);
-                const allPatients: any[] = webResult.patients || [];
-                totalPatients = webResult.total !== undefined ? webResult.total : allPatients.length;
+                // One entry per person: someone registered at two hospitals has two registrations
+                const seen = new Set<string>();
+                const allPatients: any[] = (webResult.patients || []).filter((p: any) => {
+                    const key = String(p.userId || `reg:${p.id}`).toUpperCase();
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+                const dropped = (webResult.patients || []).length - allPatients.length;
+                totalPatients = webResult.total !== undefined ? Math.max(0, webResult.total - dropped) : allPatients.length;
 
                 const sevenDaysAgo = new Date();
                 sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -225,12 +227,23 @@ export class MobileDashboardService {
             return { totalPatients, newPatientsThisWeek };
         };
 
-        // 5. Weekly Appointments Graph Data (Mon-Sun)
+        // 5. Weekly Appointments Graph Data: this doctor's bookings in the current week, Monday to
+        // Sunday (IST), so each bar is one day of this week. Appointments where the doctor or their
+        // family are the patient are not the doctor's work, and cancelled ones were never seen:
+        // counting them gave a brand-new workspace bars with no appointments of its own.
+        const istToday = new Date(Date.now() + 330 * 60_000);
+        const weekStart = new Date(Date.UTC(istToday.getUTCFullYear(), istToday.getUTCMonth(), istToday.getUTCDate() - ((istToday.getUTCDay() + 6) % 7)));
+        const nextWeekStart = new Date(weekStart.getTime() + 7 * 86_400_000);
+        const ymd = (d: Date) => d.toISOString().slice(0, 10);
         const dailyStatsQuery = appointmentRepo.createQueryBuilder("appointment")
             .select("FORMAT(appointment.AppointmentDate, 'ddd')", "day")
             .addSelect("COUNT(*)", "appointments")
-            .where("(appointment.DoctorId = :doctorId OR appointment.UserId IN (:...allFamilyUserIds))", { doctorId: userId, allFamilyUserIds })
-            .andWhere("appointment.AppointmentDate >= CAST(DATEADD(day, -6, DATEADD(MINUTE, 330, GETUTCDATE())) AS DATE)");
+            .where("appointment.DoctorId = :doctorId", { doctorId: userId })
+            .andWhere("appointment.AppointmentDate >= :weekStart AND appointment.AppointmentDate < :nextWeekStart", {
+                weekStart: ymd(weekStart),
+                nextWeekStart: ymd(nextWeekStart),
+            })
+            .andWhere(notCancelled);
 
         if (hospId && hospId > 0) {
             dailyStatsQuery.andWhere("appointment.HospitalId = :hospId", { hospId });
@@ -392,7 +405,7 @@ export class MobileDashboardService {
             const rawDay = (row.day || "").toUpperCase();
             const dayName = rawDay === "THR" ? "THU" : rawDay;
             if (dayCounts[dayName as keyof typeof dayCounts] !== undefined) {
-                dayCounts[dayName as keyof typeof dayCounts] = parseInt(row.appointments || "0", 10);
+                dayCounts[dayName as keyof typeof dayCounts] += parseInt(row.appointments || "0", 10);
             }
         });
 
@@ -444,8 +457,8 @@ export class MobileDashboardService {
         };
     }
 
-    async getPatientClinicalData(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number): Promise<any> {
-        const notes = await clinicalNoteRepository.findByPatient(patientId, orgId, hospitalId, appointmentId);
+    async getPatientClinicalData(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number, doctorId?: string): Promise<any> {
+        const notes = await clinicalNoteRepository.findByPatient(patientId, orgId, hospitalId, appointmentId, doctorId);
 
         const formatDateMMMdd = (dateInput: Date | string) => {
             if (!dateInput) return "";
@@ -565,7 +578,17 @@ export class MobileDashboardService {
             return { patients: [], total: 0 };
         });
 
-        const rawPatients = webResult.patients || [];
+        // One row per person. Someone registered at two hospitals has two registrations, and the
+        // list matched both (one by the registration's hospital, the other by the person's role
+        // here), so they showed twice. Keep the registration at this hospital, else the newest.
+        const byPerson = new Map<string, any>();
+        for (const p of webResult.patients || []) {
+            const key = String(p.userId || `reg:${p.id}`).toUpperCase();
+            const kept = byPerson.get(key);
+            const here = hospId && Number(p.hospitalId) === Number(hospId);
+            if (!kept || (here && Number(kept.hospitalId) !== Number(hospId))) byPerson.set(key, p);
+        }
+        const rawPatients = Array.from(byPerson.values());
         const userIds = rawPatients.map((p: any) => p.userId).filter(Boolean);
 
         // Fetch latest appointment per patient to enrich condition and last visit date. Only each
@@ -661,6 +684,7 @@ export class MobileDashboardService {
                 lastName: p.lastName || "",
                 phoneNumber: p.phone || "",
                 phone: p.phone || "",
+                countryCode: String(p.countryCode || "91").replace(/\D/g, "") || "91",
                 email: p.email || "",
                 gender: gender_label,
                 gender_id,
@@ -694,7 +718,9 @@ export class MobileDashboardService {
             }
         }
 
-        const totalCount = webResult.total !== undefined ? webResult.total : filteredList.length;
+        // People, not registrations: the duplicates dropped above don't count
+        const droppedDuplicates = (webResult.patients || []).length - rawPatients.length;
+        const totalCount = webResult.total !== undefined ? Math.max(0, webResult.total - droppedDuplicates) : filteredList.length;
         const pageNum = Math.max(1, Number(filters?.page) || 1);
         const pageSizeNum = Math.max(0, Number(filters?.pageSize) || 0);
         const paginatedList = pageSizeNum > 0 && pageSizeNum < filteredList.length
@@ -725,7 +751,11 @@ export class MobileDashboardService {
     }
 
     // removed getPatientNotesDetail method
-    async getPatientOverview(patientId: string, orgId?: number, hospitalId?: number): Promise<any> {
+    /**
+     * @param doctorId When set, a doctor without the patient's consent: only his own consultations
+     *                 (and the records filed on them) are shown, and vitals only from his own records.
+     */
+    async getPatientOverview(patientId: string, orgId?: number, hospitalId?: number, doctorId?: string): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
         const appointmentRepo = AppDataSource.getRepository(Appointment);
@@ -804,7 +834,7 @@ export class MobileDashboardService {
         const noteRepo = AppDataSource.getRepository(ClinicalNote);
         const medicalRecordRepo = AppDataSource.getRepository(PatientMedicalRecord);
 
-        const [user, reg, insurance, appointments, allPatientAppts, allPrescriptions, allNotes, allDocs, allRecords, latestRecord] = await Promise.all([
+        const [user, reg, insurance, appointmentsRead, allPatientApptsRead, allPrescriptions, allNotes, allDocs, allRecords, latestRecordRead] = await Promise.all([
             loadUser(),
             loadRegistration(),
             loadInsurance(),
@@ -826,7 +856,7 @@ export class MobileDashboardService {
                 .getMany(),
             prescriptionRepo.find({
                 where: { PatientId: patientId },
-                relations: ["Diagnoses", "Medications", "Doctor"],
+                relations: ["Diagnoses", "Medications", "Doctor", "LabTests"],
                 order: { CreatedAt: "DESC" }
             }),
             noteRepo.find({
@@ -845,10 +875,19 @@ export class MobileDashboardService {
                 order: { CreatedAt: "DESC" }
             }),
             medicalRecordRepo.findOne({
-                where: { PatientId: patientId },
+                where: doctorId ? { PatientId: patientId, DoctorId: doctorId } : { PatientId: patientId },
                 order: { Date: "DESC", CreatedAt: "DESC" }
             }).catch(() => null),
         ]);
+
+        // A doctor without the patient's consent sees only his own consultations: other doctors'
+        // visits (and the prescriptions, notes and records filed on them) stay hidden until the
+        // patient grants access.
+        const ownDoctor = (doctorId || "").toLowerCase();
+        const isOwnVisit = (a: Appointment) => !ownDoctor || String(a.DoctorId || "").toLowerCase() === ownDoctor;
+        const appointments = appointmentsRead.filter(isOwnVisit);
+        const allPatientAppts = allPatientApptsRead.filter(isOwnVisit);
+        const latestRecord = latestRecordRead;
 
         // Format date helpers
         const formatDateMMMddyyyy = (dateInput: Date | string | null | undefined) => {
@@ -1012,6 +1051,14 @@ export class MobileDashboardService {
                             id: String(d.Id),
                             name: d.Diagnosis || "",
                             icd10: d.DiagnosisConceptId || ""
+                        })),
+                        // Investigations ordered on the prescription (a prescription can have only these)
+                        lab_tests: (p.LabTests || []).map(t => ({
+                            id: String(t.Id),
+                            name: t.TestName || "",
+                            category: t.Category || "",
+                            priority: t.Priority || "",
+                            instructions: t.Instructions || ""
                         }))
                     };
                 }),
@@ -1044,12 +1091,15 @@ export class MobileDashboardService {
             if (s === "" || s.toLowerCase() === "none" || s === "--" || s.toLowerCase() === "null") return "--";
             return s;
         };
-        const bpVal = cleanVital(latestRecord?.BloodPressure || user.BloodPressure);
-        const pulseVal = cleanVital(latestRecord?.HeartRate || user.HeartRate);
-        const tempVal = cleanVital(latestRecord?.Temperature || user.Temperature);
-        const spO2Val = cleanVital(latestRecord?.SpO2 || user.SpO2);
-        const weightVal = cleanVital(latestRecord?.Weight || (user.Weight != null ? String(user.Weight) : null));
-        const heightVal = cleanVital(latestRecord?.Height || (user.Height != null ? String(user.Height) : null));
+        // The patient's own vitals (from their profile and devices) are shown to a doctor only once
+        // the patient shares access; until then only what this doctor recorded.
+        const own: Partial<User> = doctorId ? {} : user;
+        const bpVal = cleanVital(latestRecord?.BloodPressure || own.BloodPressure);
+        const pulseVal = cleanVital(latestRecord?.HeartRate || own.HeartRate);
+        const tempVal = cleanVital(latestRecord?.Temperature || own.Temperature);
+        const spO2Val = cleanVital(latestRecord?.SpO2 || own.SpO2);
+        const weightVal = cleanVital(latestRecord?.Weight || (own.Weight != null ? String(own.Weight) : null));
+        const heightVal = cleanVital(latestRecord?.Height || (own.Height != null ? String(own.Height) : null));
 
         const latest_vitals = {
             blood_pressure: {
@@ -1188,7 +1238,8 @@ export class MobileDashboardService {
         };
     }
 
-    async getPatientProfile(patientId: string, orgId?: number, hospitalId?: number): Promise<any> {
+    /** @param doctorId A doctor without the patient's consent: vitals only from his own records. */
+    async getPatientProfile(patientId: string, orgId?: number, hospitalId?: number, doctorId?: string): Promise<any> {
         const userRepo = AppDataSource.getRepository(User);
         const regRepo = AppDataSource.getRepository(PatientRegistration);
         const appointmentRepo = AppDataSource.getRepository(Appointment);
@@ -1250,13 +1301,14 @@ export class MobileDashboardService {
         // The hospital alone decides when given, as in the web lists (it belongs to one organization).
         if (orgId && !hospitalId) recordWhere.OrganizationId = orgId;
         if (hospitalId) recordWhere.HospitalId = hospitalId;
+        if (doctorId) recordWhere.DoctorId = doctorId;
         let latestRecord = await medicalRecordRepo.findOne({
             where: recordWhere,
             order: { CreatedAt: "DESC" }
         });
         if (!latestRecord && hospitalId) {
             latestRecord = await medicalRecordRepo.findOne({
-                where: { PatientId: patientId },
+                where: doctorId ? { PatientId: patientId, DoctorId: doctorId } : { PatientId: patientId },
                 order: { CreatedAt: "DESC" }
             });
         }
@@ -1317,7 +1369,7 @@ export class MobileDashboardService {
                 unit: "°F"
             },
             spo2: {
-                value: (latestRecord?.SpO2 && latestRecord.SpO2.trim() !== "" && latestRecord.SpO2.toLowerCase() !== "none") ? latestRecord.SpO2 : (user.SpO2 && user.SpO2.trim() !== "" && user.SpO2.toLowerCase() !== "none" ? user.SpO2 : "--"),
+                value: (latestRecord?.SpO2 && latestRecord.SpO2.trim() !== "" && latestRecord.SpO2.toLowerCase() !== "none") ? latestRecord.SpO2 : (!doctorId && user.SpO2 && user.SpO2.trim() !== "" && user.SpO2.toLowerCase() !== "none" ? user.SpO2 : "--"),
                 unit: "%"
             },
             weight: {
@@ -1590,12 +1642,16 @@ export class MobileDashboardService {
             if (data.experience !== undefined) provider.Experience = data.experience;
             if (data.consultationFee !== undefined) provider.ConsultationFee = Number(data.consultationFee);
             if (data.bio !== undefined) provider.Bio = data.bio;
-            if (data.hospitalId !== undefined && !isNaN(Number(data.hospitalId))) {
-                provider.HospitalId = Number(data.hospitalId);
+            // A doctor profile makes its owner staff of that hospital: only move it to one they already work at.
+            const movingTo = Number(data.hospitalId);
+            if (movingTo > 0 && movingTo !== Number(provider.HospitalId) && (await isHospitalStaff(userId, movingTo))) {
+                provider.HospitalId = movingTo;
             }
             provider.UpdatedAt = new Date();
             await providerRepo.save(provider);
-        } else if (data.specialty !== undefined || data.registrationNumber !== undefined) {
+        } else if ((data.specialty !== undefined || data.registrationNumber !== undefined)
+            // Typing a specialty doesn't make a patient a doctor: the hospital must have them as staff already.
+            && (await isHospitalStaff(userId, data.hospitalId ? Number(data.hospitalId) : 19))) {
             provider = providerRepo.create({
                 UserId: userId,
                 HospitalId: data.hospitalId ? Number(data.hospitalId) : 19,

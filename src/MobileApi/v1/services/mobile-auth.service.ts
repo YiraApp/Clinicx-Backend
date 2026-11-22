@@ -17,6 +17,7 @@ import { defaultOrganizationRepository } from "../../../repositories/Organizatio
 import { HealthcareProvider } from "../../../models/Organizations/healthcare-provider.model.js";
 import { isSameFamily } from "../../../middlewares/request-identity.js";
 import { familyLinkService } from "../../../services/Family/family-link.service.js";
+import { findPrimaryOnSameNumber, isRelatedAccount } from "../../../utils/family-phone.js";
 
 export class MobileAuthService {
     /**
@@ -91,9 +92,7 @@ export class MobileAuthService {
             } catch (_) {}
         } else if (user.IsPrimary === false) {
             try {
-                const parentByPhone = await userRepo.findOne({
-                    where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false }
-                });
+                const parentByPhone = await findPrimaryOnSameNumber(user);
                 if (parentByPhone) {
                     primaryUser = parentByPhone;
                 }
@@ -111,7 +110,7 @@ export class MobileAuthService {
             if (dependents.length > 0) {
                 const seen = new Set([primaryUser.Id]);
                 for (const dep of dependents) {
-                    if (!seen.has(dep.Id)) {
+                    if (!seen.has(dep.Id) && isRelatedAccount(primaryUser, dep)) {
                         seen.add(dep.Id);
                         allFamilyUsers.push(dep);
                     }

@@ -4,6 +4,7 @@ import { DietValidationError } from "../../../services/Diet/diet-validation.js";
 import { blobService } from "../../../services/Common/blob.service.js";
 import { dietPlanDocumentService } from "../../../services/Diet/diet-plan-document.service.js";
 import { sendPdf } from "../../../utils/send-pdf.js";
+import { isFamilyLinked } from "../../../middlewares/request-identity.js";
 
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
 const PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"];
@@ -19,6 +20,19 @@ function signedInPatientId(req: Request): string | undefined {
     const user = (req as any).user;
     const id = user?.userId || user?.Id || user?.id;
     return id ? String(id) : undefined;
+}
+
+/**
+ * The patient whose plans are being read: the signed-in user, or a family member
+ * they manage when ?patientId= names one. Only for reading; changes stay with
+ * the signed-in patient. Null when the family member is not linked.
+ */
+async function viewedPatientId(req: Request): Promise<string | null | undefined> {
+    const signedIn = signedInPatientId(req);
+    if (!signedIn) return undefined;
+    const asked = String(req.query.patientId || "").trim();
+    if (!asked || asked.toLowerCase() === signedIn.toLowerCase()) return signedIn;
+    return (await isFamilyLinked(signedIn, asked)) ? asked : null;
 }
 
 function planIdParam(req: Request): number | undefined {
@@ -87,9 +101,12 @@ export class MobilePatientDietController {
      */
     async getPlanDetails(req: Request, res: Response) {
         try {
-            const patientId = signedInPatientId(req);
-            if (!patientId) {
+            const patientId = await viewedPatientId(req);
+            if (patientId === undefined) {
                 return res.status(401).json({ error: "Patient authentication required." });
+            }
+            if (patientId === null) {
+                return res.status(403).json({ error: "You can only see diet plans for yourself and your family." });
             }
             const planId = parseInt(String(req.params.planId), 10);
             if (!Number.isInteger(planId)) {
@@ -114,9 +131,12 @@ export class MobilePatientDietController {
      */
     async downloadPlanPdf(req: Request, res: Response) {
         try {
-            const patientId = signedInPatientId(req);
-            if (!patientId) {
+            const patientId = await viewedPatientId(req);
+            if (patientId === undefined) {
                 return res.status(401).json({ error: "Patient authentication required." });
+            }
+            if (patientId === null) {
+                return res.status(403).json({ error: "You can only see diet plans for yourself and your family." });
             }
             const planId = planIdParam(req);
             if (!planId) {
@@ -163,8 +183,9 @@ export class MobilePatientDietController {
     /** GET /my-plans — every plan prescribed to the signed-in patient */
     async listMyPlans(req: Request, res: Response) {
         try {
-            const patientId = signedInPatientId(req);
-            if (!patientId) return res.status(401).json({ error: "Patient authentication required." });
+            const patientId = await viewedPatientId(req);
+            if (patientId === undefined) return res.status(401).json({ error: "Patient authentication required." });
+            if (patientId === null) return res.status(403).json({ error: "You can only see diet plans for yourself and your family." });
             res.json(await patientDietPlanService.listPlansForPatient(patientId));
         } catch (error: any) {
             sendPatientError(res, error, "Failed to load your diet plans.", "listMyPlans");

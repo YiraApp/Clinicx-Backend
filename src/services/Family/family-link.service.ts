@@ -7,6 +7,8 @@ import { UserRole } from "../../models/Account/userrole.model.js";
 import { HealthcareProvider } from "../../models/Organizations/healthcare-provider.model.js";
 import { PATIENT_ROLE_ID } from "../../utils/staff-access.js";
 import { pushNotificationService } from "../Notifications/push-notification.service.js";
+import { findPrimaryOnSameNumber } from "../../utils/family-phone.js";
+import { isOnNumber, parsePhoneQuery } from "../../utils/phone-number.js";
 
 /** How long a family code works after it is shown. */
 export const FAMILY_CODE_TTL_MS = 10 * 60 * 1000;
@@ -121,6 +123,13 @@ const codesMatch = (a: string, b: string) => a.length === b.length && crypto.tim
 
 const minutesUntil = (when: Date, now: Date) => Math.max(1, Math.ceil((when.getTime() - now.getTime()) / 60000));
 
+/** The national digits a number is compared on: the last 10 of a long one, or all of a shorter one (Australia 9). */
+function nationalKey(phone: unknown, countryCode?: string | null): string {
+    const parsed = countryCode ? parsePhoneQuery(String(phone ?? ""), countryCode) : null;
+    const digits = (parsed?.national ?? String(phone ?? "")).replace(/\D/g, "").replace(/^0+/, "");
+    return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
 export class FamilyLinkService {
     private get users() {
         return AppDataSource.getRepository(User);
@@ -148,7 +157,7 @@ export class FamilyLinkService {
             const parent = await this.users.findOne({ where: { Id: user.ParentUserId, IsDeleted: false } });
             if (parent) return parent;
         } else if (user.IsPrimary === false && user.PhoneNumber) {
-            const primary = await this.users.findOne({ where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false } });
+            const primary = await findPrimaryOnSameNumber(user);
             if (primary) return primary;
         }
         return user;
@@ -448,19 +457,27 @@ export class FamilyLinkService {
         return providers > 0;
     }
 
-    /** Last 10 digits of the numbers of [userIds] and of their parent accounts. */
-    async ownFamilyPhones(userIds: string[]): Promise<Set<string>> {
-        const phones = new Set<string>();
+    /**
+     * The country code of [phone] when it is the number of one of [userIds] or of their parent accounts,
+     * else null. Builds that send no country get the one saved on that account.
+     */
+    async ownFamilyNumber(userIds: string[], phone: unknown, countryCode?: string): Promise<string | null> {
         const ids = userIds.filter(isUuid).map((id) => id.trim());
-        if (ids.length === 0) return phones;
+        const asked = nationalKey(phone, countryCode);
+        if (ids.length === 0 || asked.length < 6) return null;
         const users = await this.users.find({ where: { Id: In(ids), IsDeleted: false } });
         const parentIds = users.map((u) => u.ParentUserId).filter((id): id is string => !!id && isUuid(id));
         const parents = parentIds.length ? await this.users.find({ where: { Id: In(parentIds), IsDeleted: false } }) : [];
         for (const u of [...users, ...parents]) {
-            const digits = String(u.PhoneNumber || "").replace(/\D/g, "");
-            if (digits.length >= 10) phones.add(digits.slice(-10));
+            if (nationalKey(u.PhoneNumber, u.CountryCode) !== asked) continue;
+            if (countryCode) {
+                const typed = parsePhoneQuery(String(phone ?? ""), countryCode);
+                if (typed && isOnNumber(u, typed)) return typed.code;
+            } else {
+                return String(u.CountryCode || "").replace(/\D/g, "") || "91";
+            }
         }
-        return phones;
+        return null;
     }
 
     // ── Views ────────────────────────────────────────────────────────────────

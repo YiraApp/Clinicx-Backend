@@ -11,6 +11,7 @@ import { mailService } from "../../services/Mail/mail.service.js";
 import type { IAuthService } from "../../interfaces/Service/Account/IAuthService.js";
 import { userOTPRepository } from "../../repositories/Account/userotp.repository.js";
 import { OTPPurpose, OTPType } from "../../enums/OTPType.enum.js";
+import { isRelatedAccount } from "../../utils/family-phone.js";
 
 /**
  * Authentication service implementation.
@@ -177,7 +178,7 @@ export class AuthService implements IAuthService {
         const cleanPhone = user.PhoneNumber ? user.PhoneNumber.replace(/\D/g, '').slice(-10) : '';
         const parentId = user.ParentUserId || user.Id;
 
-        const familyMembers = await this.userRepository.createQueryBuilder('u')
+        const familyMembers = (await this.userRepository.createQueryBuilder('u')
             .where('u.IsDeleted = 0')
             .andWhere(
                 '(u.Id = :userId OR u.Id = :parentId OR u.ParentUserId = :parentId OR u.ParentUserId = :userId' +
@@ -186,7 +187,7 @@ export class AuthService implements IAuthService {
             )
             .orderBy('u.IsPrimary', 'DESC')
             .addOrderBy('u.CreatedAt', 'ASC')
-            .getMany();
+            .getMany()).filter((member) => isRelatedAccount(user, member));
 
         let relations: any[] = [];
         if (familyMembers.length > 0) {

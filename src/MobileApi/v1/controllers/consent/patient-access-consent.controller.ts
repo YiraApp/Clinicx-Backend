@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { patientAccessConsentService } from "../../services/consent/patient-access-consent.service.js";
+import { isFamilyLinked } from "../../../../middlewares/request-identity.js";
+import { actingProfileId, requireTokenActor } from "../../../../utils/request-actor.js";
 
 export class PatientAccessConsentController {
     /**
@@ -33,6 +35,29 @@ export class PatientAccessConsentController {
                 notes
             );
 
+            // Tell the patient: until now a request sat unseen until they happened to open
+            // the consents screen. A family member's request also reaches the account holder.
+            try {
+                const { pushNotificationService } = await import("../../../../services/Notifications/push-notification.service.js");
+                const { AppDataSource } = await import("../../../../config/database.js");
+                const { User } = await import("../../../../models/Account/user.model.js");
+                const doctor = await AppDataSource.getRepository(User).findOne({ where: { Id: doctorId } }).catch(() => null);
+                const full = `${doctor?.FirstName || ""} ${doctor?.LastName || ""}`.trim();
+                const doctorName = !full ? "A doctor" : full.toLowerCase().startsWith("dr") ? full : `Dr. ${full}`;
+                await pushNotificationService.sendNotification({
+                    userId: String(patientId),
+                    senderId: String(doctorId),
+                    title: "Access to your health records",
+                    body: `${doctorName} asks to see your health records, fitness and vitals (${result?.durationLabel || "7 days"}). Open to approve or decline.`,
+                    type: "CONSENT_REQUEST",
+                    referenceId: String(result?.Id ?? ""),
+                    route: "/patientConsentsScreen",
+                    additionalData: { consentId: result?.Id, doctorId, duration: duration || "7_DAYS" },
+                });
+            } catch (notifyError: any) {
+                console.error("[PatientAccess] Could not notify the patient of the request:", notifyError?.message);
+            }
+
             return res.status(200).json({
                 success: true,
                 message: "Access request submitted to patient successfully",
@@ -44,6 +69,42 @@ export class PatientAccessConsentController {
                 success: false,
                 message: error.message || "Failed to request patient access"
             });
+        }
+    }
+
+    /**
+     * Doctor asks for access by OTP: sends a code to the patient's phone.
+     * POST /v1/api/auth/patient-access/otp/send  { patientId, hospitalId? }
+     */
+    async sendAccessOtp(req: Request, res: Response) {
+        try {
+            const doctorId = String((req as any).user?.userId || (req as any).user?.id || "").trim();
+            const { patientId, hospitalId } = req.body || {};
+            if (!patientId) return res.status(400).json({ success: false, message: "patientId is required" });
+            const result = await patientAccessConsentService.sendAccessOtp(String(patientId), doctorId, hospitalId ? Number(hospitalId) : undefined);
+            return res.status(200).json({ success: true, message: `OTP sent to ${result.sentTo}`, data: result });
+        } catch (error: any) {
+            return res.status(400).json({ success: false, message: error.message || "Couldn't send the OTP." });
+        }
+    }
+
+    /**
+     * Doctor enters the OTP the patient read out; when right, access is granted.
+     * POST /v1/api/auth/patient-access/otp/verify  { patientId, sessionId, otp, duration?, hospitalId? }
+     */
+    async verifyAccessOtp(req: Request, res: Response) {
+        try {
+            const doctorId = String((req as any).user?.userId || (req as any).user?.id || "").trim();
+            const { patientId, sessionId, otp, duration, hospitalId } = req.body || {};
+            if (!patientId || !sessionId || !otp) {
+                return res.status(400).json({ success: false, message: "patientId, sessionId and otp are required" });
+            }
+            const result = await patientAccessConsentService.verifyAccessOtp(
+                String(patientId), doctorId, String(sessionId), String(otp), duration || "7_DAYS", hospitalId ? Number(hospitalId) : undefined
+            );
+            return res.status(200).json({ success: true, message: "Access granted.", data: result });
+        } catch (error: any) {
+            return res.status(400).json({ success: false, message: error.message || "Couldn't check the OTP." });
         }
     }
 
@@ -93,6 +154,10 @@ export class PatientAccessConsentController {
                 });
             }
 
+            const caller = actingProfileId(req);
+            if (!caller || !(await isFamilyLinked(caller, String(patientId)))) {
+                return res.status(403).json({ success: false, message: "You can only see who can access your own or your family's records." });
+            }
             const results = await patientAccessConsentService.getPatientConsents(patientId);
 
             return res.status(200).json({
@@ -114,6 +179,8 @@ export class PatientAccessConsentController {
      */
     async respondToConsent(req: Request, res: Response) {
         try {
+            // Access given outlasts the request, so a token must prove who gives it.
+            if (!requireTokenActor(req, res)) return;
             const { consentId, action } = req.body;
             const patientId = (req as any).user?.userId || (req as any).user?.id || req.body.patientId;
 
@@ -283,8 +350,15 @@ export class PatientAccessConsentController {
      */
     async connectDoctorPatient(req: Request, res: Response): Promise<Response> {
         try {
-            const { doctorId, patientUserId, hospitalId, orgId, patientPhone, patientName, patientEmail, gender } = req.body;
-            const targetPatientUserId = patientUserId || (req as any).user?.userId || (req as any).user?.Id || (req as any).user?.id || (req as any).userId;
+            const { doctorId, patientUserId, hospitalId, orgId } = req.body;
+            // Scanning gives the doctor 30 days of access, so only the patient or their family can do it.
+            const signedIn = requireTokenActor(req, res);
+            if (!signedIn) return res;
+            const open = actingProfileId(req) || signedIn;
+            const targetPatientUserId = String(patientUserId || open);
+            if (!(await isFamilyLinked(open, targetPatientUserId))) {
+                return res.status(403).json({ status: false, message: "You can only connect yourself or your family with a doctor." });
+            }
 
             if (!doctorId) {
                 return res.status(400).json({
@@ -297,13 +371,7 @@ export class PatientAccessConsentController {
                 targetPatientUserId,
                 doctorId,
                 hospitalId ? Number(hospitalId) : undefined,
-                orgId ? Number(orgId) : undefined,
-                {
-                    phone: patientPhone,
-                    name: patientName,
-                    email: patientEmail,
-                    gender
-                }
+                orgId ? Number(orgId) : undefined
             );
 
             return res.status(200).json({

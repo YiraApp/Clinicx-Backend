@@ -3,6 +3,30 @@ import { AppDataSource } from "../../../config/database.js";
 import { User } from "../../../models/Account/user.model.js";
 import { PatientMedicalRecord } from "../../../models/Appointments/patient-medical-record.model.js";
 import { ApiResponse } from "../../../utils/response.utils.js";
+import { isFamilyLinked } from "../../../middlewares/request-identity.js";
+import { patientAccessConsentService } from "../services/consent/patient-access-consent.service.js";
+
+/**
+ * How much of a patient's vitals the caller may see or add to.
+ * - "full": the patient, their family, or a doctor the patient has shared access with.
+ * - "doctor": a doctor treating the patient (or at a hospital they visit) without that consent:
+ *   he reads and writes only the vitals he records himself.
+ * - "none": anyone else. Before this, any signed-in account could read or write any patient's vitals.
+ */
+async function vitalsAccess(req: Request, patientId: string): Promise<{ mode: "full" | "doctor" | "none"; requesterId: string }> {
+    const requesterId = String((req as any).user?.userId || (req as any).user?.id || "").trim();
+    if (!requesterId) return { mode: "none", requesterId };
+    if (requesterId.toLowerCase() === patientId.toLowerCase()) return { mode: "full", requesterId };
+    if (await isFamilyLinked(requesterId, patientId).catch(() => false)) return { mode: "full", requesterId };
+    const consent = await patientAccessConsentService.checkAccess(patientId, requesterId).catch(() => null);
+    if (consent?.hasAccess) return { mode: "full", requesterId };
+    const hospitalId = Number(req.query.hospitalId || req.body?.hospitalId) || undefined;
+    const hospitalAccess = hospitalId
+        ? await patientAccessConsentService.checkHospitalRecordAccess(patientId, requesterId, { hospitalId }).catch(() => ({ allowed: false }))
+        : { allowed: false };
+    if (consent?.treated || hospitalAccess.allowed) return { mode: "doctor", requesterId };
+    return { mode: "none", requesterId };
+}
 
 export class PatientVitalsController {
     /**
@@ -17,15 +41,25 @@ export class PatientVitalsController {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
+            const access = await vitalsAccess(req, String(patientId));
+            if (access.mode === "none") {
+                return res.status(403).json(ApiResponse.error("The patient hasn't shared their vitals with you.", { code: "CONSENT_REQUIRED" }));
+            }
+            const ownOnly = access.mode === "doctor";
+
             const userRepo = AppDataSource.getRepository(User);
             const pmrRepo = AppDataSource.getRepository(PatientMedicalRecord);
 
-            const user = await userRepo.findOne({
-                where: { Id: patientId }
-            }).catch(() => null);
+            // Without the patient's consent a doctor sees only the vitals he recorded, not the
+            // patient's own readings or other doctors'.
+            const user = ownOnly
+                ? null
+                : await userRepo.findOne({
+                      where: { Id: patientId }
+                  }).catch(() => null);
 
             const allRecords = await pmrRepo.find({
-                where: { PatientId: patientId },
+                where: ownOnly ? { PatientId: patientId, DoctorId: access.requesterId } : { PatientId: patientId },
                 relations: ["Doctor"],
                 order: { Date: "DESC", CreatedAt: "DESC" }
             }).catch(() => []);
@@ -141,6 +175,13 @@ export class PatientVitalsController {
                 return res.status(400).json(ApiResponse.error("Patient ID is required"));
             }
 
+            const access = await vitalsAccess(req, String(patientId));
+            if (access.mode === "none") {
+                return res.status(403).json(ApiResponse.error("You can't add vitals for this patient.", { code: "CONSENT_REQUIRED" }));
+            }
+            const recordedByDoctor = access.requesterId.toLowerCase() !== String(patientId).toLowerCase()
+                && !(await isFamilyLinked(access.requesterId, String(patientId)).catch(() => false));
+
             const userRepo = AppDataSource.getRepository(User);
             const pmrRepo = AppDataSource.getRepository(PatientMedicalRecord);
 
@@ -192,6 +233,8 @@ export class PatientVitalsController {
                 Weight: weight || null,
                 Height: height || null,
                 Status: "Completed",
+                // Filed under the doctor who took them, so he sees them without the patient's consent
+                ...(recordedByDoctor ? { DoctorId: access.requesterId } : {}),
                 CreatedBy: (req as any).user?.firstName 
                     ? `${(req as any).user?.firstName} ${(req as any).user?.lastName || ''}`.trim() 
                     : "Patient"

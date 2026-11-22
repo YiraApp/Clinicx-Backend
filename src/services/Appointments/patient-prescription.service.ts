@@ -6,8 +6,8 @@ export class PatientPrescriptionService {
         return await patientPrescriptionRepository.create(data);
     }
 
-    async getPatientPrescriptions(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: string): Promise<PatientPrescription[]> {
-        return await patientPrescriptionRepository.findByPatient(patientId, orgId, hospitalId, appointmentId);
+    async getPatientPrescriptions(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: string, doctorId?: string): Promise<PatientPrescription[]> {
+        return await patientPrescriptionRepository.findByPatient(patientId, orgId, hospitalId, appointmentId, doctorId);
     }
 
     async getPrescriptionById(id: string): Promise<PatientPrescription | null> {

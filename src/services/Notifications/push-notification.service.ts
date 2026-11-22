@@ -1,5 +1,6 @@
 import { AppDataSource } from "../../config/database.js";
 import { AppNotification } from "../../models/Common/app-notification.model.js";
+import { findPrimaryOnSameNumber } from "../../utils/family-phone.js";
 import { userDeviceRepository } from "../../MobileApi/v1/repositories/userdevice.repository.js";
 
 /**
@@ -99,10 +100,7 @@ export class PushNotificationService {
                 if (user.ParentUserId && this.isUuid(user.ParentUserId)) {
                     holderIds.add(user.ParentUserId);
                 } else if (user.IsPrimary === false && user.PhoneNumber) {
-                    const primary = await userRepo.findOne({
-                        where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false },
-                        select: { Id: true },
-                    }).catch(() => null);
+                    const primary = await findPrimaryOnSameNumber(user).catch(() => null);
                     if (primary?.Id && this.isUuid(primary.Id)) holderIds.add(primary.Id);
                 }
             }

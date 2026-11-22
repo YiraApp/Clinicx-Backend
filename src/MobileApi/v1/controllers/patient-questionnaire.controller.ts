@@ -86,7 +86,8 @@ export const patientQuestionnaireController = {
             }
             // With a hospital or appointment, staff were let in for that hospital only, so that's all they get.
             // Without one, the middleware required the patient's consent (or family), which covers every hospital.
-            const groups = await service.forDoctor(patientId, hospitalId);
+            // A doctor there without the patient's consent sees only the questionnaires he sent (recordDoctorId).
+            const groups = await service.forDoctor(patientId, hospitalId, res.locals.recordDoctorId);
             return res.json(ApiResponse.success(groups, "Questionnaires fetched."));
         } catch (error) {
             return fail(res, error);

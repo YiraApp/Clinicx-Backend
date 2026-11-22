@@ -20,7 +20,8 @@ export class MobileClinicalNoteController {
                 patientId,
                 isNaN(parsedOrgId as any) ? undefined : parsedOrgId,
                 isNaN(parsedHospitalId as any) ? undefined : parsedHospitalId,
-                isNaN(parsedAppointmentId as any) ? undefined : parsedAppointmentId
+                isNaN(parsedAppointmentId as any) ? undefined : parsedAppointmentId,
+                res.locals.recordDoctorId // set by requirePatientRecordAccess: a doctor sees only his own notes
             );
 
             return res.json(ApiResponse.success(notes, "Clinical notes fetched successfully"));

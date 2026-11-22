@@ -142,6 +142,10 @@ export class PatientRegistrationRepository {
             if (filters.hospitalId) {
                 appointmentQuery.andWhere("a.HospitalId = :hospId", { hospId: filters.hospitalId });
             }
+            // In a doctor's list the counts are that doctor's: totals gave away visits to other doctors.
+            if (filters.doctorId) {
+                appointmentQuery.andWhere("a.DoctorId = :countDoctorId", { countDoctorId: filters.doctorId });
+            }
 
             const appointmentsRaw = await appointmentQuery
                 .setParameter("completedStatus", AppointmentStatus.Completed)
@@ -170,6 +174,9 @@ export class PatientRegistrationRepository {
             }
             if (filters.hospitalId) {
                 nextAptQuery.andWhere("a.HospitalId = :hospId", { hospId: filters.hospitalId });
+            }
+            if (filters.doctorId) {
+                nextAptQuery.andWhere("a.DoctorId = :nextDoctorId", { nextDoctorId: filters.doctorId });
             }
 
             const nextAptRaw = await nextAptQuery
@@ -221,6 +228,7 @@ export class PatientRegistrationRepository {
                 organizationName: pr.Organization?.Name || pr.User?.UserRoles?.[0]?.Organization?.Name,
                 organizationCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
                 orgCode: pr.Organization?.OrgCode || pr.User?.UserRoles?.[0]?.Organization?.OrgCode,
+                hospitalId: pr.HospitalId ?? null,
                 hospitalName: pr.Hospital?.Name || pr.User?.UserRoles?.[0]?.Hospital?.Name,
                 hospitalCode: pr.Hospital?.HospitalCode || pr.User?.UserRoles?.[0]?.Hospital?.HospitalCode,
                 roleId: pr.User?.UserRoles?.[0]?.RoleId,

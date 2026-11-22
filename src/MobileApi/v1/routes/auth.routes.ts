@@ -100,6 +100,7 @@ authRouter.delete("/clinical-notes/:id", authMiddleware, (req, res) => mobileCli
 // Medical Records
 authRouter.get("/medical-records/patient/:patientId", authMiddleware, requirePatientRecordAccess, (req, res) => mobileMedicalRecordController.getPatientRecords(req, res));
 authRouter.post("/medical-records", authMiddleware, (req, res) => mobileMedicalRecordController.addRecord(req, res));
+authRouter.get("/medical-records/:id/pdf", authMiddleware, (req, res) => mobileMedicalRecordController.getRecordPdf(req, res));
 authRouter.put("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.updateRecord(req, res));
 authRouter.delete("/medical-records/:id", authMiddleware, (req, res) => mobileMedicalRecordController.deleteRecord(req, res));
 
@@ -118,12 +119,15 @@ authRouter.post("/medical-documents/report", authMiddleware, upload.array("files
 authRouter.post("/prescriptions/scan", authMiddleware, upload.single("file"), scanPrescription);
 authRouter.post("/medical-documents/:id/analyze", authMiddleware, (req, res) => mobileMedicalDocumentController.analyzeDocument(req, res));
 authRouter.get("/medical-documents/:id/analysis", authMiddleware, (req, res) => mobileMedicalDocumentController.getAnalysis(req, res));
+authRouter.post("/medical-documents/:id/share-whatsapp", authMiddleware, (req, res) => mobileMedicalDocumentController.shareOnWhatsApp(req, res));
 authRouter.delete("/medical-documents/:id", authMiddleware, (req, res) => mobileMedicalDocumentController.deleteDocument(req, res));
 
 // Patient Medical Record Access Consents & Doctor QR Linking
 authRouter.post("/doctor/connect-patient", authMiddleware, (req, res) => patientAccessConsentController.connectDoctorPatient(req, res));
 authRouter.post("/patient-access/connect-by-qr", authMiddleware, (req, res) => patientAccessConsentController.connectDoctorPatient(req, res));
 authRouter.post("/patient-access/request", authMiddleware, (req, res) => patientAccessConsentController.requestAccess(req, res));
+authRouter.post("/patient-access/otp/send", authMiddleware, (req, res) => patientAccessConsentController.sendAccessOtp(req, res));
+authRouter.post("/patient-access/otp/verify", authMiddleware, (req, res) => patientAccessConsentController.verifyAccessOtp(req, res));
 authRouter.get("/patient-access/check", authMiddleware, (req, res) => patientAccessConsentController.checkAccess(req, res));
 authRouter.get("/patient-access/patient-consents", authMiddleware, (req, res) => patientAccessConsentController.getPatientConsents(req, res));
 authRouter.post("/patient-access/respond", authMiddleware, (req, res) => patientAccessConsentController.respondToConsent(req, res));

@@ -17,6 +17,23 @@ export async function canManageHospital(userId: string, hospitalId: number): Pro
 }
 
 /**
+ * Who maintains a hospital's questionnaires and lab tests: everyone canManageHospital allows,
+ * plus the hospital's own front desk (an active Front Desk role at this hospital).
+ */
+export async function canManageHospitalSetup(userId: string, hospitalId: number): Promise<boolean> {
+    if (await canManageHospital(userId, hospitalId)) return true;
+    const rows = await AppDataSource.query(
+        `SELECT TOP 1 1 AS ok
+         FROM UserRoles ur
+         JOIN Roles r ON r.Id = ur.RoleId
+         WHERE ur.UserId = @0 AND ur.HospitalId = @1 AND ur.IsDeleted = 0 AND ISNULL(ur.Status, 1) = 1
+           AND r.RoleName LIKE '%Front%Desk%'`,
+        [userId, hospitalId]
+    );
+    return rows.length > 0;
+}
+
+/**
  * Anyone who works at this hospital: front desk, doctors, nurses and other staff roles
  * (any role there that isn't Patient), doctors registered as its providers, and its admins.
  */

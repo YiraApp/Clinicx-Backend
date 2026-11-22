@@ -338,8 +338,31 @@ export class QuestionnairePatientService {
         };
     }
 
-    /** A patient's submissions for their doctor, newest first, grouped by questionnaire. */
-    async forDoctor(patientId: string, hospitalId?: number) {
+    /**
+     * A patient's submissions for their doctor, newest first, grouped by questionnaire.
+     * With [doctorId] (doctor-only view), just the answers to questionnaires this doctor
+     * sent: the request he sent, or a repeat of one he sent earlier.
+     */
+    async forDoctor(patientId: string, hospitalId?: number, doctorId?: string) {
+        const params: unknown[] = [patientId];
+        let filter = "";
+        if (hospitalId) {
+            params.push(hospitalId);
+            filter += ` AND s.HospitalId = @${params.length - 1}`;
+        }
+        if (doctorId) {
+            params.push(doctorId);
+            const doc = `@${params.length - 1}`;
+            filter += `
+               AND (EXISTS (SELECT 1 FROM QuestionnaireAssignments a
+                            WHERE a.SentBy = ${doc} AND a.PatientUserId = s.PatientUserId
+                              AND (a.Id = s.AssignmentId OR a.SubmissionId = s.Id))
+                    OR EXISTS (SELECT 1 FROM QuestionnaireAssignments ra
+                               JOIN QuestionnaireAssignments a
+                                 ON a.QuestionnaireId = ra.QuestionnaireId AND a.PatientUserId = ra.PatientUserId
+                                AND a.SentBy = ${doc} AND a.SentAt <= ra.SentAt
+                               WHERE ra.Id = s.AssignmentId AND ra.Source = 'Repeat'))`;
+        }
         const rows = await AppDataSource.query(
             `SELECT s.Id, s.QuestionnaireId, s.AttemptNo, s.SubmittedAt, s.HospitalId,
                     f.Title, f.RepeatAfterDays, c.Name AS CategoryName, h.Name AS HospitalName
@@ -347,9 +370,9 @@ export class QuestionnairePatientService {
              JOIN Questionnaires f ON f.Id = s.QuestionnaireId
              LEFT JOIN QuestionnaireCategories c ON c.Id = f.CategoryId
              LEFT JOIN Hospitals h ON h.Id = s.HospitalId
-             WHERE s.PatientUserId = @0 AND s.IsDeleted = 0 ${hospitalId ? "AND s.HospitalId = @1" : ""}
+             WHERE s.PatientUserId = @0 AND s.IsDeleted = 0${filter}
              ORDER BY s.SubmittedAt DESC`,
-            hospitalId ? [patientId, hospitalId] : [patientId]
+            params
         );
         const answers = await answersFor(rows.map((r: any) => r.Id));
         const groups = new Map<number, any>();

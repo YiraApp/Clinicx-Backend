@@ -22,8 +22,8 @@ export class ClinicalNoteService {
         });
     }
 
-    async getPatientNotes(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number): Promise<ClinicalNote[]> {
-        return await clinicalNoteRepository.findByPatient(patientId, orgId, hospitalId, appointmentId);
+    async getPatientNotes(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number, doctorId?: string): Promise<ClinicalNote[]> {
+        return await clinicalNoteRepository.findByPatient(patientId, orgId, hospitalId, appointmentId, doctorId);
     }
 
     async getAppointmentNotes(appointmentId: number): Promise<ClinicalNote[]> {

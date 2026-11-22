@@ -9,13 +9,15 @@ export class PatientMedicalRecordRepository {
         return await this.repo.save(record);
     }
 
-    async findByPatient(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number): Promise<PatientMedicalRecord[]> {
+    async findByPatient(patientId: string, orgId?: number, hospitalId?: number, appointmentId?: number, doctorId?: string): Promise<PatientMedicalRecord[]> {
         const where: any = { PatientId: patientId };
         // The hospital alone decides when given (it belongs to one organization), so records saved
         // from the app with a wrong OrganizationId still show at their hospital on web and mobile.
         if (orgId && !hospitalId) where.OrganizationId = orgId;
         if (hospitalId) where.HospitalId = hospitalId;
         if (appointmentId) where.AppointmentId = appointmentId;
+        // Doctor-only view: just the records of this doctor's consultations.
+        if (doctorId) where.DoctorId = doctorId;
 
         return await this.repo.find({
             where,

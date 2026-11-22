@@ -287,6 +287,16 @@ export class UserRepository implements IUserRepository {
             .getOne();
     }
 
+    /** Every account a phone lookup could resolve to: the matching findPrimaryByPhone does, all rows. */
+    async findAllByPhone(phone: string): Promise<User[]> {
+        if (!phone) return [];
+        const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+        return await this.repo.createQueryBuilder('u')
+            .where('u.IsDeleted = 0')
+            .andWhere('(u.PhoneNumber = :phone OR RIGHT(REPLACE(u.PhoneNumber, \' \', \'\'), 10) = :cleanPhone)', { phone, cleanPhone })
+            .getMany();
+    }
+
     async findPrimaryByEmail(email: string): Promise<User | null> {
         if (!email) return null;
         let user = await this.repo.findOne({

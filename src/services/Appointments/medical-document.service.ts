@@ -577,12 +577,17 @@ export class MedicalDocumentService {
         const patient = await userRepository.findById(patientId);
         if (!patient) throw new Error("Patient not found.");
 
-        const phone = patient.PhoneNumber;
+        // A child's profile often has no number of its own; it goes to the parent's.
+        let phoneOwner: any = patient;
+        if (!patient.PhoneNumber && patient.ParentUserId) {
+            phoneOwner = (await userRepository.findById(patient.ParentUserId)) || patient;
+        }
+        const phone = phoneOwner.PhoneNumber;
         if (!phone) throw new Error("Patient does not have a registered mobile number.");
 
-        const normalizedPhone = toInternationalPhone(phone, patient.CountryCode);
+        const normalizedPhone = toInternationalPhone(phone, phoneOwner.CountryCode);
 
-        const patientName = (patient.FirstName || "") + " " + (patient.LastName || "").trim() || "Valued Patient";
+        const patientName = [patient.FirstName, patient.LastName].filter(Boolean).join(" ").trim() || "Valued Patient";
 
         // Resolve hospital name
         let hospitalName = "Yira Hospitals";
@@ -937,13 +942,13 @@ export class MedicalDocumentService {
         return savedDocuments;
     }
 
-    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number, page = 1): Promise<MedicalDocument[]> {
+    async getPatientDocuments(patientId: string, organizationId?: number, hospitalId?: number, appointmentId?: number, limit?: number, page = 1, doctorId?: string): Promise<MedicalDocument[]> {
         const validPatientId = ensureUUID(patientId);
         if (validPatientId === DEFAULT_UUID) {
             return [];
         }
         // A failed read is an error: answering "no documents" made the app show an empty list.
-        return await medicalDocumentRepository.findByPatient(validPatientId, organizationId, hospitalId, appointmentId, limit, page);
+        return await medicalDocumentRepository.findByPatient(validPatientId, organizationId, hospitalId, appointmentId, limit, page, doctorId);
     }
 
     async deleteDocument(id: number, userId?: string): Promise<void> {

@@ -63,7 +63,7 @@ export interface IUserService {
     /**
      * Updates details of the authenticated patient's profile.
      */
-    updatePatientProfile(userId: string, profileData: any): Promise<any>;
+    updatePatientProfile(userId: string, profileData: any, signedInId?: string | null): Promise<any>;
 
     /**
      * Checks if an email address is available or already used by another primary account.

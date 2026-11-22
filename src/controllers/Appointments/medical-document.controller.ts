@@ -1,6 +1,14 @@
 import { Request, Response } from "express";
 import { medicalDocumentService } from "../../services/Appointments/medical-document.service.js";
 import { ApiResponse } from "../../utils/response.utils.js";
+import { AppDataSource } from "../../config/database.js";
+import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
+import { canDeleteDocument, canOpenDocument } from "../../utils/document-access.js";
+import { requireTokenActor, sameUserId } from "../../utils/request-actor.js";
+import { workingAccountId } from "../../utils/work-access.js";
+
+const findDocument = (id: number) =>
+    AppDataSource.getRepository(MedicalDocument).findOne({ where: { Id: id, IsDeleted: false } as any });
 
 export class MedicalDocumentController {
 
@@ -69,10 +77,20 @@ export class MedicalDocumentController {
 
     async shareSingle(req: Request, res: Response) {
         try {
-            const { documentId, patientId, senderId } = req.body;
+            const { documentId, patientId } = req.body;
             if (!documentId || !patientId) {
                 return res.status(400).json(ApiResponse.error("Document ID and Patient ID are required."));
             }
+            if (!requireTokenActor(req, res)) return;
+            const doc = await findDocument(Number(documentId));
+            if (!doc) return res.status(404).json(ApiResponse.error("Document not found."));
+            if (!sameUserId(String(doc.PatientId || ""), String(patientId))) {
+                return res.status(400).json(ApiResponse.error("This document belongs to another patient."));
+            }
+            if (!(await canOpenDocument(req, doc))) {
+                return res.status(403).json(ApiResponse.error("You can only send documents you can see for this patient."));
+            }
+            const senderId = (await workingAccountId(req)) ?? undefined;
             const result = await medicalDocumentService.shareSingleDocument(Number(documentId), patientId, senderId);
             return res.json(ApiResponse.success(result, "Document shared via WhatsApp successfully."));
         } catch (error: any) {
@@ -125,7 +143,9 @@ export class MedicalDocumentController {
 
             if (!patientId) return res.status(400).json(ApiResponse.error("Patient ID is required"));
 
-            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId);
+            // Set by requirePatientRecordAccess: a doctor without the patient's consent sees only his own documents.
+            const doctorId: string | undefined = res.locals.recordDoctorId;
+            const result = await medicalDocumentService.getPatientDocuments(patientId, organizationId, hospitalId, appointmentId, undefined, undefined, doctorId);
             return res.json(ApiResponse.success(result, "Patient documents fetched successfully."));
         } catch (error: any) {
             return res.status(500).json(ApiResponse.error(error.message));
@@ -135,11 +155,16 @@ export class MedicalDocumentController {
     async delete(req: Request, res: Response) {
         try {
             const id = parseInt(req.params.id as string);
-            const { userId } = req.query; // Assuming userId is passed or retrieved from auth
-
             if (isNaN(id)) return res.status(400).json(ApiResponse.error("Invalid document ID"));
-
-            await medicalDocumentService.deleteDocument(id, userId as string);
+            if (!requireTokenActor(req, res)) return;
+            const doc = await findDocument(id);
+            if (!doc) return res.status(404).json(ApiResponse.error("Document not found."));
+            if (!(await canDeleteDocument(req, doc))) {
+                return res.status(403).json(ApiResponse.error("You can only delete documents you added or that your hospital holds."));
+            }
+            // Who deleted it comes from the login, not from a query parameter.
+            const deletedBy = (await workingAccountId(req)) ?? undefined;
+            await medicalDocumentService.deleteDocument(id, deletedBy as string);
             return res.json(ApiResponse.success(null, "Document deleted successfully."));
         } catch (error: any) {
             return res.status(400).json(ApiResponse.error(error.message));

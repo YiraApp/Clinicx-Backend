@@ -84,9 +84,9 @@ export class DoctorSuggestionService {
         });
     }
 
-    async getPatientSuggestions(patientId: string, orgId?: number, hospitalId?: number): Promise<DoctorSuggestion[]> {
+    async getPatientSuggestions(patientId: string, orgId?: number, hospitalId?: number, doctorId?: string): Promise<DoctorSuggestion[]> {
         const candidateIds = await this.resolveCandidatePatientIds(patientId);
-        return await doctorSuggestionRepository.findByPatientIds(candidateIds, orgId, hospitalId);
+        return await doctorSuggestionRepository.findByPatientIds(candidateIds, orgId, hospitalId, doctorId);
     }
 
     async deleteSuggestion(id: number): Promise<void> {

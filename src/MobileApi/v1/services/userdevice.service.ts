@@ -3,6 +3,7 @@ import { UserDevice } from "../../../models/Account/userdevice.model.js";
 import { PlatformType } from "../enums/platform.enum.js";
 import { AppDataSource } from "../../../config/database.js";
 import { User } from "../../../models/Account/user.model.js";
+import { findPrimaryOnSameNumber } from "../../../utils/family-phone.js";
 
 export class UserDeviceService {
     /**
@@ -13,11 +14,11 @@ export class UserDeviceService {
     async accountHolderOf(userId: string): Promise<string> {
         try {
             const repo = AppDataSource.getRepository(User);
-            const user = await repo.findOne({ where: { Id: userId }, select: { Id: true, ParentUserId: true, IsPrimary: true, PhoneNumber: true } });
+            const user = await repo.findOne({ where: { Id: userId }, select: { Id: true, ParentUserId: true, IsPrimary: true, PhoneNumber: true, CountryCode: true } });
             if (!user) return userId;
             if (user.ParentUserId) return user.ParentUserId;
             if (user.IsPrimary === false && user.PhoneNumber) {
-                const primary = await repo.findOne({ where: { PhoneNumber: user.PhoneNumber, IsPrimary: true, IsDeleted: false }, select: { Id: true } });
+                const primary = await findPrimaryOnSameNumber(user);
                 if (primary?.Id) return primary.Id;
             }
             return user.Id;

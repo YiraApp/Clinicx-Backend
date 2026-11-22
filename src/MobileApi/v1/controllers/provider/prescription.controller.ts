@@ -316,6 +316,7 @@ export async function renderPrescriptionPdf(prescription: any, overrides?: any, 
     const clinicalRecord = await clinicalRecordForPdf(prescription);
 
     const pdfBuffer = await prescriptionPdfService.generatePrescriptionPdf({
+        kind: overrides?.kind === "medicalRecord" ? "medicalRecord" : "prescription",
         clinicalRecord,
         hospital: {
             name: hospitalName,
@@ -412,6 +413,11 @@ export async function uploadPrescriptionPdfToBlob(prescriptionId: string, overri
             medDoc.CreatedAt = new Date();
             await medicalDocumentRepository.save(medDoc);
         }
+        // The visit's medical record is printed on this prescription now, so its own PDF is withdrawn.
+        if (Number(prescription.AppointmentId)) {
+            const { medicalRecordDocumentService } = await import("../../../../services/Prescriptions/medical-record-document.service.js");
+            await medicalRecordDocumentService.withdrawForAppointment(Number(prescription.AppointmentId));
+        }
     } catch (docErr) {
         console.warn("[Prescription] MedicalDocument archive notice:", docErr);
     }
@@ -433,7 +439,8 @@ export class MobilePrescriptionController {
                 patientId,
                 orgId ? parseInt(String(orgId)) : undefined,
                 hospitalId ? parseInt(String(hospitalId)) : undefined,
-                appointmentId ? String(appointmentId) : undefined
+                appointmentId ? String(appointmentId) : undefined,
+                res.locals.recordDoctorId // set by requirePatientRecordAccess: a doctor sees only his own prescriptions
             );
 
             return res.json(ApiResponse.success(prescriptions, "Prescriptions fetched successfully"));

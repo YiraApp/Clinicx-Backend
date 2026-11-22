@@ -40,8 +40,9 @@ export class PatientMedicalRecordController {
             
             const record = await patientMedicalRecordService.addRecord(data);
             res.status(201).json(ApiResponse.success(record, "Medical record added successfully"));
-            // The visit's prescription PDF shows the medical record, so it is built again.
-            refreshAppointmentPrescriptionPdfs(data.AppointmentId);
+            // The visit's prescription PDF shows the medical record, so it is built again
+            // (or, with no prescription, the record gets a PDF of its own).
+            refreshAppointmentPrescriptionPdfs(data.AppointmentId, (record as any)?.Id ? String((record as any).Id) : undefined);
         } catch (error: any) {
             console.error("Error in addRecord:", error);
             res.status(500).json(ApiResponse.error(error.message));

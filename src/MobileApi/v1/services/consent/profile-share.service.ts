@@ -150,7 +150,11 @@ export class ProfileShareService {
      * the patient's self-entered data (medicines, fitness, uploaded record
      * files) is left out. [excludeAppointmentId] drops the visit being viewed.
      */
-    async buildPatientBundle(patient: User, opts: { hospitalId?: number; excludeAppointmentId?: number } = {}) {
+    /**
+     * @param opts.doctorId A doctor without the patient's consent: only what he did for this patient
+     *                      (his visits, prescriptions, notes, records, documents, diet plans).
+     */
+    async buildPatientBundle(patient: User, opts: { hospitalId?: number; excludeAppointmentId?: number; doctorId?: string } = {}) {
         const patientId = patient.Id;
         const { PatientMedicalRecord } = await import("../../../../models/Appointments/patient-medical-record.model.js");
         const { PatientPrescription } = await import("../../../../models/Appointments/patient-prescription.model.js");
@@ -220,8 +224,12 @@ export class ProfileShareService {
             safe(AppDataSource.getRepository(PatientInsurance).find({ where: { UserId: patientId, IsDeleted: false } as any, relations: ["Organization"], take: 20 })),
         ]);
 
+        const ownDoctor = (opts.doctorId || "").toLowerCase();
+        const byThisDoctor = (r: any) =>
+            !ownDoctor ||
+            [r.DoctorId, r.AssignedByDoctorId, r.UploadedByUserId].some((v) => String(v || "").toLowerCase() === ownDoctor);
         const scoped = <T>(rows: T[]): T[] =>
-            opts.hospitalId ? rows.filter((r: any) => Number(r.HospitalId) === Number(opts.hospitalId)) : rows;
+            rows.filter((r: any) => (!opts.hospitalId || Number(r.HospitalId) === Number(opts.hospitalId)) && byThisDoctor(r));
         // Cancelled and rejected bookings never happened, so they aren't past visits.
         const visits = scoped(appointments)
             .filter((a: any) => !["cancelled", "canceled", "rejected"].includes(String(a.Status || "").toLowerCase()))
