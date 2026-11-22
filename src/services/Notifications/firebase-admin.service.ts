@@ -111,6 +111,7 @@ export async function sendFcmPushToTokens(
         type?: string;
         route?: string;
         referenceId?: string;
+        userId?: string;
         additionalData?: Record<string, any>;
     }
 ): Promise<{
@@ -157,6 +158,7 @@ export async function sendFcmPushToTokens(
                     type: payload.type || "SYSTEM",
                     route: payload.route || "",
                     referenceId: payload.referenceId || "",
+                    userId: payload.userId || "",
                     ...(imageUrl ? { imageUrl, image: imageUrl } : {}),
                     ...(payload.additionalData ? Object.fromEntries(
                         Object.entries(payload.additionalData).map(([k, v]) => [k, String(v)])

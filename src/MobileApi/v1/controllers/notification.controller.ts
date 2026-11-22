@@ -64,7 +64,7 @@ export class NotificationController {
                 return res.status(200).json(ApiResponse.error("User ID not found in session"));
             }
 
-            const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+            const linkedUserIds = [userId]; // active profile only; each profile has its own feed + count
 
             const page = parseInt(req.query.page as string || "1", 10);
             const limit = parseInt(req.query.limit as string || "30", 10);
@@ -141,7 +141,7 @@ export class NotificationController {
 
             const query: any = { Id: id };
             if (userId) {
-                const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+                const linkedUserIds = [userId]; // active profile only; each profile has its own feed + count
                 query.UserId = In(linkedUserIds);
             }
 
@@ -168,7 +168,7 @@ export class NotificationController {
                 return res.status(400).json(ApiResponse.error("User ID not found"));
             }
 
-            const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+            const linkedUserIds = [userId]; // active profile only; each profile has its own feed + count
 
             await this.notificationRepo.update(
                 { UserId: In(linkedUserIds), IsRead: false },
@@ -193,7 +193,7 @@ export class NotificationController {
                 return res.status(400).json(ApiResponse.error("User ID not found in session"));
             }
 
-            const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+            const linkedUserIds = [userId]; // active profile only; each profile has its own feed + count
 
             if (linkedUserIds.length > 0) {
                 await this.notificationRepo.delete({
@@ -222,7 +222,7 @@ export class NotificationController {
 
             const deleteCriteria: any = { Id: id };
             if (userId) {
-                const linkedUserIds = await this.getLinkedFamilyUserIds(userId);
+                const linkedUserIds = [userId]; // active profile only; each profile has its own feed + count
                 if (linkedUserIds.length > 0) {
                     deleteCriteria.UserId = In(linkedUserIds);
                 }

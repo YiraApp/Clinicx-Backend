@@ -182,6 +182,7 @@ export class PushNotificationService {
                     type,
                     route: route || undefined,
                     referenceId: referenceId || undefined,
+                    userId: userId || undefined,
                     additionalData
                 });
             } else if (tokens.length === 0) {
