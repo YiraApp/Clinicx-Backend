@@ -411,14 +411,30 @@ export class LabPackageService {
      * Hospitals that can take a lab package payment: active, with their own Razorpay keys saved in an
      * active payment configuration. Lab package payments never fall back to Yira's keys.
      */
+    /**
+     * The default organization's (Yira's) Razorpay keys. Lab packages are ALWAYS paid through this
+     * one configuration; the booking hospital is only where the sample is collected, so its own
+     * keys are never used. Returns null when the default org has no usable payment configuration.
+     */
+    async defaultOrgPaymentKeys(): Promise<{ keyId: string; keySecret: string; currency: string } | null> {
+        const active = await defaultOrganizationRepository.getActiveDefault();
+        if (!active?.HospitalId) return null;
+        const config = await AppDataSource.getRepository(HospitalPaymentConfiguration).findOne({
+            where: { HospitalId: Number(active.HospitalId), IsDeleted: false, IsActive: true }
+        });
+        if (!config?.RazorpayKeyId || !config.RazorpayKeySecret) return null;
+        return { keyId: config.RazorpayKeyId, keySecret: config.RazorpayKeySecret, currency: config.CurrencyCode || "INR" };
+    }
+
+    /**
+     * Hospitals a package can be booked at. Lab packages always take payment through the default
+     * org (Yira) config, so every live linked hospital is bookable once that config has keys — a
+     * hospital's own Razorpay keys are not required.
+     */
     async payableHospitalIds(hospitalIds: number[]): Promise<Set<number>> {
         if (hospitalIds.length === 0) return new Set();
-        const configs = await AppDataSource.getRepository(HospitalPaymentConfiguration).find({
-            where: { HospitalId: In(hospitalIds), IsDeleted: false, IsActive: true }
-        });
-        const withKeys = configs.filter(c => c.RazorpayKeyId && c.RazorpayKeySecret).map(c => Number(c.HospitalId));
-        if (withKeys.length === 0) return new Set();
-        const hospitals = await AppDataSource.getRepository(Hospital).find({ where: { Id: In(withKeys) } });
+        if (!(await this.defaultOrgPaymentKeys())) return new Set();
+        const hospitals = await AppDataSource.getRepository(Hospital).find({ where: { Id: In(hospitalIds) } });
         return new Set(hospitals.filter(h => h.IsDeleted !== true && h.Status !== false).map(h => Number(h.Id)));
     }
 

@@ -10,7 +10,6 @@ import { LabPackageHospital } from "../../models/LabPackages/lab-package-hospita
 import { LabPackageOrder } from "../../models/LabPackages/lab-package-order.model.js";
 import { LabPackagePayment } from "../../models/LabPackages/lab-package-payment.model.js";
 import { Hospital } from "../../models/Organizations/hospital.model.js";
-import { HospitalPaymentConfiguration } from "../../models/Organizations/hospital-payment-configuration.model.js";
 import { MedicalDocument } from "../../models/Appointments/medical-document.model.js";
 import { isYiraSystemAdmin, staffHospitalIds, canManageHospital } from "../../utils/staff-access.js";
 import { isFamilyLinked } from "../../middlewares/request-identity.js";
@@ -71,15 +70,17 @@ export class LabPackageOrderService {
     private orderRepo = AppDataSource.getRepository(LabPackageOrder);
     private paymentRepo = AppDataSource.getRepository(LabPackagePayment);
 
-    /** The hospital's own Razorpay keys. Lab package payments never use Yira's keys. */
-    private async hospitalKeys(hospitalId: number) {
-        const config = await AppDataSource.getRepository(HospitalPaymentConfiguration).findOne({
-            where: { HospitalId: hospitalId, IsDeleted: false, IsActive: true }
-        });
-        if (!config?.RazorpayKeyId || !config.RazorpayKeySecret) {
-            throw new Error("Online payment is not set up at this hospital. Choose another hospital.");
+    /**
+     * The Razorpay keys that take the money for a lab package. Packages are ALWAYS paid through the
+     * default organization (Yira) configuration — the booking hospital is only where the sample is
+     * collected, so its own keys are never used.
+     */
+    private async packagePaymentKeys() {
+        const keys = await labPackageService.defaultOrgPaymentKeys();
+        if (!keys) {
+            throw new Error("Online payment for lab packages isn't set up yet. Please try again shortly or contact support.");
         }
-        return { keyId: config.RazorpayKeyId, keySecret: config.RazorpayKeySecret, currency: config.CurrencyCode || "INR" };
+        return keys;
     }
 
     private orderNumber() {
@@ -284,7 +285,7 @@ export class LabPackageOrderService {
             throw new Error(`This package can't be paid online: its total (₹${amounts.totalAmount}) is below ₹${MIN_ONLINE_PAYMENT}, the smallest payment Razorpay accepts. Please contact the hospital.`);
         }
 
-        const keys = await this.hospitalKeys(hospitalId);
+        const keys = await this.packagePaymentKeys();
         const razorpay = new Razorpay({ key_id: keys.keyId, key_secret: keys.keySecret });
         const rzpOrder = await razorpay.orders.create({
             amount: Math.round(amounts.totalAmount * 100),
@@ -340,13 +341,13 @@ export class LabPackageOrderService {
         return transitioned;
     }
 
-    /** Checks the checkout's signature with the hospital's secret and records the payment. */
+    /** Checks the checkout's signature with the Yira default-org secret and records the payment. */
     async verifyPayment(data: { transactionId: string; razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
         const payment = await this.paymentRepo.findOne({ where: { TransactionId: String(data.transactionId || "") } });
         if (!payment) throw new Error("Payment record not found.");
         if (payment.GatewayOrderId !== data.razorpay_order_id) throw new Error("This payment does not belong to the order.");
 
-        const keys = await this.hospitalKeys(payment.HospitalId);
+        const keys = await this.packagePaymentKeys();
         const expected = crypto.createHmac("sha256", keys.keySecret)
             .update(`${data.razorpay_order_id}|${data.razorpay_payment_id}`)
             .digest("hex");
