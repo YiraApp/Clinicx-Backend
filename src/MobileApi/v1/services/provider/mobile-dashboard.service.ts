@@ -1150,43 +1150,46 @@ export class MobileDashboardService {
 
         const hospLogo = activeHosp?.ImageUrl || (activeHosp?.Id === 19 || activeHosp?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (activeHosp?.Organization?.ImageUrl || null));
 
-        // Resolve upcoming appointment / next appointment if any
+        // Resolve upcoming appointments across every hospital (not just the active one), so the
+        // dashboard's upcoming section matches the global appointments screen. Cancelled/rejected
+        // and completed visits are left out.
         const upcomingFutureAppts = allPatientAppts.filter(a => {
             const aptDateStr = new Date(a.AppointmentDate).toISOString().split("T")[0];
-            return aptDateStr >= todayStr && a.Status !== "Completed";
+            const status = String(a.Status || "").toLowerCase().trim();
+            return aptDateStr >= todayStr && !["completed", "cancelled", "canceled", "rejected"].includes(status);
         });
-        const nextApptRaw = upcomingFutureAppts.length > 0 ? upcomingFutureAppts[0] : null;
 
-        let next_appointment: any = null;
-        if (nextApptRaw) {
-            const nHosp = nextApptRaw.Hospital;
-            const nHospLogo = nHosp?.ImageUrl || (nextApptRaw.HospitalId === 19 || nHosp?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (nHosp?.Organization?.ImageUrl || hospLogo));
-            const docName = nextApptRaw.Doctor ? `Dr. ${nextApptRaw.Doctor.FirstName || ""} ${nextApptRaw.Doctor.LastName || ""}`.trim() : "Healthcare Provider";
-
-            next_appointment = {
-                id: nextApptRaw.Id,
-                appointment_id: String(nextApptRaw.Id),
+        const mapUpcomingAppt = (apt: Appointment) => {
+            const nHosp = apt.Hospital;
+            const nHospLogo = nHosp?.ImageUrl || (apt.HospitalId === 19 || nHosp?.Name === "Yira Hospitals" ? "https://yiraappdev.blob.core.windows.net/adminuploadedfiles/yiraai.svg" : (nHosp?.Organization?.ImageUrl || hospLogo));
+            const docName = apt.Doctor ? `Dr. ${apt.Doctor.FirstName || ""} ${apt.Doctor.LastName || ""}`.trim() : "Healthcare Provider";
+            return {
+                id: apt.Id,
+                appointment_id: String(apt.Id),
                 doctor_name: docName,
-                doctor_id: nextApptRaw.DoctorId,
+                doctor_id: apt.DoctorId,
                 doctor_specialty: "General Practitioner",
-                hospital_id: nextApptRaw.HospitalId,
+                hospital_id: apt.HospitalId,
                 hospital_name: nHosp?.Name || activeHosp?.Name || "Yira Hospitals",
                 hospital_logo: nHospLogo,
                 hospital_address: nHosp?.Address || activeHosp?.Address || "",
                 hospital_phone: nHosp?.HelplineNumber || nHosp?.MobileNumber || activeHosp?.HelplineNumber || "",
-                org_id: nextApptRaw.OrgId,
-                org_name: nextApptRaw.Organization?.Name || "yira",
-                appointment_date: nextApptRaw.AppointmentDate,
-                formatted_date: formatDateMMMddyyyy(nextApptRaw.AppointmentDate),
-                start_time: nextApptRaw.StartTime,
-                formatted_time: formatTime12h(nextApptRaw.StartTime),
-                consultation_type: nextApptRaw.IsTeleConsultation ? "Video Consultation" : (nextApptRaw.AppointmentType || "In-Person"),
-                is_teleconsultation: nextApptRaw.IsTeleConsultation || false,
-                reason: nextApptRaw.Reason || nextApptRaw.ChiefComplaint || "Regular Checkup",
-                status: nextApptRaw.Status || "Scheduled",
-                meeting_url: nextApptRaw.MeetingUrl || null
+                org_id: apt.OrgId,
+                org_name: apt.Organization?.Name || "yira",
+                appointment_date: apt.AppointmentDate,
+                formatted_date: formatDateMMMddyyyy(apt.AppointmentDate),
+                start_time: apt.StartTime,
+                formatted_time: formatTime12h(apt.StartTime),
+                consultation_type: apt.IsTeleConsultation ? "Video Consultation" : (apt.AppointmentType || "In-Person"),
+                is_teleconsultation: apt.IsTeleConsultation || false,
+                reason: apt.Reason || apt.ChiefComplaint || "Regular Checkup",
+                status: apt.Status || "Scheduled",
+                meeting_url: apt.MeetingUrl || null
             };
-        }
+        };
+
+        const upcoming_appointments = upcomingFutureAppts.map(mapUpcomingAppt);
+        const next_appointment = upcoming_appointments.length > 0 ? upcoming_appointments[0] : null;
 
         return {
             contact_information: {
@@ -1234,6 +1237,7 @@ export class MobileDashboardService {
                 is_24_hours: activeHosp.Is24Hours ?? true
             } : null,
             next_appointment,
+            upcoming_appointments,
             appointments: mappedAppointments
         };
     }
