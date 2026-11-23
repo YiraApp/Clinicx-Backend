@@ -42,32 +42,19 @@ jobs:
       - name: Prune dev dependencies
         run: npm prune --omit=dev
 
-      - name: Upload artifact for deployment job
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-app
-          path: |
-            dist/
-            node_modules/
-            package.json
-            package-lock.json
+      # Deployed straight from this job, with no artifact upload: the organisation's GitHub
+      # artifact storage quota is full (the node_modules artifact each run uploaded filled it),
+      # and an upload that fails stops the deploy. The package is the same four items as before.
+      - name: Collect the files to deploy
+        run: |
+          mkdir -p deploy
+          cp -r dist node_modules package.json package-lock.json deploy/
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    
-    steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
-        with:
-          name: node-app
-      
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp-qa
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'Clinicx-api-qa'
           slot-name: 'Production'
-          package: .
+          package: deploy
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_C820B2D03C0440CCB8BCFDD0E0C3FB3F }}
-
