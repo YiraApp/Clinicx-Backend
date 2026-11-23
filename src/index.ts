@@ -18,6 +18,7 @@ const startServer = async () => {
         await MigrationService.ensureLogIndexes();
         await MigrationService.ensureAbdmSchema();
         await MigrationService.ensureAbdmHiuSchema();
+        await MigrationService.ensureUserRolesSoftDeleteKey();
         await DietMigrationService.runMigrationsAndSeed();
         await QuestionnaireMigrationService.run();
 

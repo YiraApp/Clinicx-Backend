@@ -365,7 +365,13 @@ table { border-collapse:collapse; width:100%; }
         // Yira notice are only for a patient newly registered at this organisation, and never for an
         // edit (an edit can still add a registration at another organisation, silently).
         const isNewRegistration = !registration && isEdit !== true;
-        if (!registration) {
+        // A patient Front Desk removed from this organisation's hospital gets their old registration
+        // back (allergies, medical history, token, employee id) rather than a blank one.
+        const removedRegistration = registration ? null : await patientRegistrationRepository.findRemovedRegistration(userId, effectiveOrgId);
+        if (removedRegistration) {
+            registration = removedRegistration;
+            registration.HospitalId = effectiveHospitalId;
+        } else if (!registration) {
             registration = new PatientRegistration();
             registration.UserId = userId;
             registration.OrganizationId = effectiveOrgId;

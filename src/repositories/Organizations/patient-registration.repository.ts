@@ -1,3 +1,4 @@
+import { IsNull, Not } from "typeorm";
 import { AppDataSource } from "../../config/database.js";
 import { Appointment } from "../../models/Appointments/appointment.model.js";
 import { AppointmentStatus } from "../../enums/appointments.js";
@@ -12,6 +13,17 @@ export class PatientRegistrationRepository {
         const where: any = { UserId: userId, IsDeleted: false };
         if (organizationId) where.OrganizationId = organizationId;
         return await this.repo.findOne({ where });
+    }
+
+    /**
+     * The patient's registration in the organization that Front Desk removed (soft-deleted, with
+     * UpdatedBy naming who removed them), latest first. Registering them again brings it back.
+     */
+    async findRemovedRegistration(userId: string, organizationId: number): Promise<PatientRegistration | null> {
+        return await this.repo.findOne({
+            where: { UserId: userId, OrganizationId: organizationId, IsDeleted: true, UpdatedBy: Not(IsNull()) },
+            order: { UpdatedAt: "DESC", Id: "DESC" },
+        });
     }
 
     async findByUserAndHospital(userId: string, hospitalId: number): Promise<PatientRegistration | null> {
@@ -270,6 +282,8 @@ export class PatientRegistrationRepository {
                 // address not at all: this list is also served to callers without a login.
                 registeredViaAbha: !!pr.RegisteredViaAbha,
                 abhaNumber: pr.User?.AbhaNumber ? `xx-xxxx-xxxx-${pr.User.AbhaNumber.slice(-4)}` : null,
+                // An ABHA number or address on the account: Front Desk's "Unlink ABHA" shows for these
+                hasAbha: !!(pr.User?.AbhaNumber || pr.User?.AbhaAddress),
                 employeeId: pr.EmployeeId || pr.User?.EmployeeId || null,
                 insuranceProvider: ins?.InsuranceProvider || null,
                 insuranceNumber: ins?.InsuranceNumber || null,

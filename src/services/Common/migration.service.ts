@@ -293,6 +293,26 @@ export class MigrationService {
     }
 
     /**
+     * One live role row per (user, role, organization, hospital), and any number of deleted ones.
+     * Front Desk removes a patient from a hospital by marking their Patient row IsDeleted (a soft
+     * delete that keeps who removed them and when); the old key (UQ_UserRoles) counted deleted rows
+     * too, so booking, Scan and Share, the mobile app or registration could never add that patient
+     * back. The new index is built before the old key goes, so the four columns are never unguarded.
+     * A failure is logged and startup goes on: removal still works, and restore falls back to
+     * reviving the removed row while the old key stands.
+     */
+    static async ensureUserRolesSoftDeleteKey() {
+        try {
+            for (const statement of USER_ROLES_SOFT_DELETE_KEY) {
+                await AppDataSource.query(statement);
+            }
+            console.log("UserRoles: unique key covers live rows only (UX_UserRoles_Active).");
+        } catch (error: any) {
+            console.error("UserRoles soft-delete key failed:", error?.message);
+        }
+    }
+
+    /**
      * ABDM (ABHA) schema. The User and PatientRegistration entities map these columns, so a failure
      * here stops startup rather than leaving every patient query broken.
      */
@@ -897,6 +917,16 @@ export const ABDM_HIU_MENU = { name: "ABDM Record Request", route: "/abdm/record
 export const ABDM_FACILITIES_MENU = { name: "ABDM Facilities", route: "/admin/abdm-facilities", icon: "Building2", orderNo: 910 } as const;
 /** The role the facility routes allow (systemAdminOnly). */
 export const ABDM_FACILITIES_ROLE = "Yira System Admin";
+
+/** ensureUserRolesSoftDeleteKey, in order: the filtered unique index first, then the old key goes. */
+export const USER_ROLES_SOFT_DELETE_KEY = [
+    `IF OBJECT_ID('dbo.UserRoles', 'U') IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_UserRoles_Active' AND object_id = OBJECT_ID('dbo.UserRoles'))
+    EXEC('CREATE UNIQUE NONCLUSTERED INDEX UX_UserRoles_Active ON dbo.UserRoles (UserId, RoleId, OrganizationId, HospitalId) WHERE IsDeleted = 0');`,
+    `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_UserRoles_Active' AND object_id = OBJECT_ID('dbo.UserRoles'))
+        AND EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = 'UQ_UserRoles' AND parent_object_id = OBJECT_ID('dbo.UserRoles'))
+    ALTER TABLE dbo.UserRoles DROP CONSTRAINT UQ_UserRoles;`,
+] as const;
 
 type MigrationRun = (statement: string, params?: unknown[]) => Promise<any>;
 
