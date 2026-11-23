@@ -2,6 +2,8 @@ import { MssqlParameter } from "typeorm/index.js";
 import { abdmConfig } from "../../config/abdm.config.js";
 import { HiuError, type SessionStatus } from "../../services/Abdm/hiu/hiu-enums.js";
 import { errorCodeOf, RecordPurgeError, retryTransient, sqlErrorNumber, TRANSIENT_RETRY_DELAYS_MS, type RetryOptions } from "../../services/Abdm/hiu/hiu-db-errors.js";
+import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, type PushRefusalWrite } from "../../services/Abdm/hiu/hiu-audit.js";
+import { toAuditRow } from "./hiu-audit.repository.js";
 import type {
     HiuDataArtefact,
     HiuDataRequestChanges,
@@ -10,6 +12,7 @@ import type {
     HiuRecordRow,
     NewHiuDataRequest,
     NewHiuRecord,
+    NewPushRefusal,
 } from "../../services/Abdm/hiu/hiu-data-flow.service.js";
 import type { HiuMaintenanceStore } from "../../services/Abdm/hiu/hiu-maintenance.service.js";
 
@@ -91,6 +94,57 @@ const ID_CHUNK = 500;
 
 /** A JS Date bound as datetime2(3), so milliseconds survive (a bare Date binds as DATETIME). */
 const at = (date: Date | null | undefined): unknown => (date ? new MssqlParameter(new Date(date), "datetime2", 3) : null);
+
+/**
+ * An id bound as VARCHAR(64), as the audit table's id columns are: a bare string binds as NVARCHAR,
+ * which converts the column on every row under this database's SQL collation, so its index could
+ * only be scanned.
+ */
+const auditId = (value: string | null | undefined): MssqlParameter => new MssqlParameter(value ?? null, "varchar", 64);
+
+/** The applock name prefix that makes one transfer's PUSH_REFUSED writes one at a time (addPushRefusalSql). */
+export const PUSH_REFUSAL_LOCK = "AbdmHiuPushRefused";
+
+/** How long a PUSH_REFUSED write waits for another of the same transfer: well under requestTimeout. */
+export const PUSH_REFUSAL_LOCK_WAIT_MS = 10_000;
+
+/** Raised by addPushRefusalSql's own THROW when its applock was not granted in time. */
+export const PUSH_REFUSAL_LOCK_ERROR = 50_002;
+
+/**
+ * One refused push's PUSH_REFUSED row, written unless it adds nothing. One transaction under an
+ * applock of the transfer's own (@9), so the transfer's refusals (pages sent in parallel, on any
+ * instance) are counted, compared and written one at a time, while the audit table takes no range
+ * lock and other events' inserts never wait on it. Under read committed snapshot each statement
+ * reads what the previous holder of the lock committed. The transfer is @0 (hospital), @1 (its
+ * HiRequestId, the row's RequestId) and @2 (its consent request id; IS NULL when
+ * [consentRequestKnown] is false). Answers one row, Result:
+ *   full       it already holds @8 refusals (the ceiling)
+ *   repeat     @7 has the cause of its newest refusal (sameRefusalCause: the same status, and the
+ *              same text but for its numbers), and no page of the transfer (@3) was stored since
+ *   recorded   the row was written (@4 At, @5 artefact id, @6 transaction id, @7 detail)
+ */
+export const addPushRefusalSql = (consentRequestKnown: boolean): string => {
+    const transfer = `HospitalId = @0 AND Event = 'PUSH_REFUSED' AND RequestId = @1 AND ${consentRequestKnown ? "ConsentRequestId = @2" : "ConsentRequestId IS NULL"}`;
+    return `SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+DECLARE @lock INT, @kept INT, @lastDetail NVARCHAR(500), @lastAt DATETIME2(3), @result VARCHAR(10);
+EXEC @lock = sp_getapplock @Resource = @9, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = ${PUSH_REFUSAL_LOCK_WAIT_MS};
+IF @lock < 0
+    THROW ${PUSH_REFUSAL_LOCK_ERROR}, 'The push refusal lock was not granted.', 1;
+SELECT @kept = COUNT(1) FROM AbdmHiuAuditEvents WHERE ${transfer};
+SELECT TOP 1 @lastDetail = Detail, @lastAt = At FROM AbdmHiuAuditEvents WHERE ${transfer} ORDER BY At DESC, Id DESC;
+SELECT @result = CASE
+    WHEN @kept >= @8 THEN 'full'
+    WHEN LEFT(@lastDetail, 4) = LEFT(@7, 4) AND REPLACE(TRANSLATE(@lastDetail, '0123456789', '##########'), '#', '') = REPLACE(TRANSLATE(@7, '0123456789', '##########'), '#', '')
+        AND NOT EXISTS (SELECT 1 FROM AbdmHiuRecords WHERE DataRequestFk = @3 AND ReceivedAt > @lastAt) THEN 'repeat'
+    ELSE 'recorded' END;
+IF @result = 'recorded'
+    INSERT INTO AbdmHiuAuditEvents (At, HospitalId, Event, ConsentRequestId, ArtefactId, TransactionId, RequestId, Outcome, Detail)
+    VALUES (@4, @0, 'PUSH_REFUSED', @2, @5, @6, @1, 'REJECTED', @7);
+COMMIT TRANSACTION;
+SELECT @result AS Result, @kept AS Kept;`;
+};
 
 /**
  * A sealed value (seal(): its header and base64, all ASCII) bound as VARCHAR(MAX), as its column
@@ -468,6 +522,31 @@ export class HiuDataRepository implements HiuDataStore, HiuMaintenanceStore {
     async findDataRequestByTokenHash(pushTokenHash: string): Promise<HiuDataRequestRow | null> {
         const rows = rowsOf(await this.query(`SELECT ${DATA_REQUEST_COLUMNS} FROM AbdmHiuDataRequests WHERE PushTokenHash = @0`, [pushTokenHash]));
         return rows[0] ? toDataRequestRow(rows[0]) : null;
+    }
+
+    /**
+     * One refused push's PUSH_REFUSED row, in one batch and one transaction (addPushRefusalSql): the
+     * transfer's refusals are counted, compared and written one at a time on every instance, under
+     * an applock of the transfer's own. Its answer is "recorded", "repeat" or "full".
+     */
+    async addPushRefusal(input: NewPushRefusal): Promise<PushRefusalWrite> {
+        const row = toAuditRow({
+            hospitalId: input.hospitalId,
+            event: HIU_AUDIT_EVENTS.PUSH_REFUSED,
+            consentRequestId: input.consentRequestId,
+            artefactId: input.artefactId,
+            transactionId: input.transactionId,
+            requestId: input.hiRequestId,
+            outcome: HIU_AUDIT_OUTCOMES.REJECTED,
+            detail: input.detail,
+        }, input.at);
+        const rows = rowsOf(await this.query(addPushRefusalSql(row.ConsentRequestId != null), [
+            row.HospitalId, auditId(row.RequestId), auditId(row.ConsentRequestId), input.dataRequestId, at(input.at), auditId(row.ArtefactId),
+            auditId(row.TransactionId), row.Detail, Math.max(0, Math.floor(input.ceiling)), `${PUSH_REFUSAL_LOCK}:${row.RequestId}`,
+        ]));
+        const result = String(rows[0]?.Result ?? "");
+        if (result === "recorded" || result === "repeat" || result === "full") return result;
+        throw Object.assign(new Error("The push refusal write gave no answer."), { code: "ENOANSWER" });
     }
 
     async adoptTransactionId(id: number, transactionId: string): Promise<boolean> {

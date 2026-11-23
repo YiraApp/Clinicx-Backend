@@ -1440,6 +1440,38 @@ test("list and detail are scoped to the staff member's hospital", async () => {
     await assertRefused(service.detail(ctx, 999), "not-found", 404);
 });
 
+test("the detail shows each transfer's latest refused push (status, reason, ISO time), and null without one", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    const [a, b] = artefacts;
+    const refusedAt = new Date(now);
+    const transfer = { transactionId: "txn", sessionStatus: "REQUESTED", pageCount: null, pagesReceived: 0, error: null, requestedAt: new Date(now - 60_000), completedAt: null };
+    a!.transfer = { ...transfer, lastPushRefusal: { status: 401, reason: "token expired", at: refusedAt } };
+    b!.transfer = { ...transfer, transactionId: "txn-b" };
+    const detail = await service.detail(ctx, row.id);
+    const cards = new Map(detail.artefacts.map((artefact) => [artefact.consentArtefactId, artefact]));
+    // Never the word the frontend reads as its own login lapsing.
+    assert.deepEqual(cards.get(ARTEFACT_A)!.transfer!.lastPushRefusal, { status: 401, reason: "token ran out", at: refusedAt.toISOString() });
+    assert.equal(cards.get(ARTEFACT_B)!.transfer!.lastPushRefusal, null);
+    assert.equal(cards.get(ARTEFACT_A)!.transfer!.lastPageAt, null, "no page accepted yet");
+});
+
+test("the detail shows when each transfer's newest page was stored, so a refusal older than it reads as history", async () => {
+    const row = await raised();
+    await notify("GRANTED", [ARTEFACT_A, ARTEFACT_B]);
+    const [a, b] = artefacts;
+    const refusedAt = new Date(now - 120_000);
+    const lastPageAt = new Date(now - 30_000);
+    const transfer = { transactionId: "txn", sessionStatus: "RECEIVING", pageCount: 10, pagesReceived: 9, error: null, requestedAt: new Date(now - 600_000), completedAt: null };
+    a!.transfer = { ...transfer, lastPageAt, lastPushRefusal: { status: 401, reason: "token too old (ran out 90 minutes ago; up to 60 are allowed)", at: refusedAt } };
+    b!.transfer = { ...transfer, transactionId: "txn-b", pagesReceived: 0, pageCount: null };
+    const cards = new Map((await service.detail(ctx, row.id)).artefacts.map((artefact) => [artefact.consentArtefactId, artefact]));
+    const shown = cards.get(ARTEFACT_A)!.transfer!;
+    assert.equal(shown.lastPageAt, lastPageAt.toISOString());
+    assert.ok(Date.parse(shown.lastPushRefusal!.at) < Date.parse(shown.lastPageAt!), "the refusal came before pages that were accepted");
+    assert.equal(cards.get(ARTEFACT_B)!.transfer!.lastPageAt, null);
+});
+
 test("artefact stage follows the artefact and its latest transfer", () => {
     const base = { status: "GRANTED" as const, recordsPurgedAt: null, fetchedAt: new Date(now), dataEraseAt: new Date(now + 86_400_000), transfer: null };
     const transfer = (sessionStatus: string, transactionId: string | null = "txn") =>

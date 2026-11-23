@@ -2,11 +2,14 @@ import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "crypto";
 import { AbdmApiError, type AbdmCall } from "../abdm-gateway.service.js";
-import { checksumOf, decryptEntry, encryptEntry, generateKeyMaterial, verifyChecksum, KEY_MATERIAL_CURVE, KEY_MATERIAL_CRYPTO_ALG, KEY_MATERIAL_PARAMETERS } from "./fidelius-crypto.js";
+import { checksumFormOf, checksumOf, decryptEntry, encryptEntry, generateKeyMaterial, verifyChecksum, KEY_MATERIAL_CURVE, KEY_MATERIAL_CRYPTO_ALG, KEY_MATERIAL_PARAMETERS } from "./fidelius-crypto.js";
+import { createHash } from "crypto";
 import { atRestKeysFrom, open, seal, type AtRestKeys } from "./hiu-at-rest.js";
-import type { HiuAuditEventInput } from "./hiu-audit.js";
+import { HIU_PUSH_REFUSALS_KEPT, sameRefusalCause, type HiuAuditEventInput, type PushRefusalWrite } from "./hiu-audit.js";
+import { pushRefusalOf } from "../../../repositories/Abdm/hiu-consent.sql.js";
 import { DATA_PUSH_URL_PATTERN, HiuError } from "./hiu-enums.js";
 import {
+    defaultHiuCrypto,
     deploymentPushBaseUrl,
     HIU_RECORDS_RESPONSE_MAX_BYTES,
     HiuDataFlowService,
@@ -39,7 +42,10 @@ let artefacts: Map<number, HiuDataArtefact>;
 let requests: HiuDataRequestRow[];
 let records: (HiuRecordRow & { artefactFk: number; hospitalId: number })[];
 let calls: AbdmCall[];
-let audits: HiuAuditEventInput[];
+/** Audit rows; a PUSH_REFUSED row (written by the store's addPushRefusal) carries its time. */
+let audits: (HiuAuditEventInput & { at?: Date })[];
+/** The tail of the store's PUSH_REFUSED writes, which run one at a time. */
+let refusalWrites: Promise<unknown>;
 let tasks: Promise<void>[];
 /** Every wait the service asked for, in ms; none is waited. */
 let sleeps: number[];
@@ -62,6 +68,8 @@ let pageStoreFault: ((pageNumber: number) => Error | "lost-answer" | "lost-last-
 /** hasPage fails (the database still unreachable after a page store's last try); set by the store when hasPageFaultAfterStore. */
 let hasPageFault: boolean;
 let hasPageFaultAfterStore: boolean;
+/** How many times a transfer was looked up by its push token's hash. */
+let tokenLookups: number;
 
 /** Like the repository's SHOWN_TRANSFER: the latest RECEIVED transfer holding entries, else the latest holding entries. */
 const shownTransfer = (artefactFk: number): number | undefined => {
@@ -101,7 +109,33 @@ const store: HiuDataStore = {
     },
     async findDataRequest(id) { const row = requests.find((r) => r.id === id); return row ? { ...row } : null; },
     async findDataRequestByHiRequestId(hiRequestId) { const row = requests.find((r) => r.hiRequestId === hiRequestId); return row ? { ...row } : null; },
-    async findDataRequestByTokenHash(hash) { const row = requests.find((r) => r.pushTokenHash === hash); return row ? { ...row } : null; },
+    async findDataRequestByTokenHash(hash) { tokenLookups += 1; const row = requests.find((r) => r.pushTokenHash === hash); return row ? { ...row } : null; },
+    async addPushRefusal(input) {
+        // One at a time, like the repository's applock: each write counts and compares what the one
+        // before it wrote, with a database round trip inside, where other refusals queue.
+        const write = refusalWrites.then(async (): Promise<PushRefusalWrite> => {
+            await new Promise((resolve) => setImmediate(resolve));
+            const kept = audits.filter((event) => event.event === "PUSH_REFUSED" && event.hospitalId === input.hospitalId
+                && event.requestId === input.hiRequestId && (event.consentRequestId ?? null) === input.consentRequestId);
+            if (kept.length >= input.ceiling) return "full";
+            const last = kept.at(-1);
+            if (last && sameRefusalCause(last.detail ?? "", input.detail) && !records.some((r) => r.dataRequestFk === input.dataRequestId && r.receivedAt > last.at!)) return "repeat";
+            audits.push({
+                hospitalId: input.hospitalId,
+                event: "PUSH_REFUSED",
+                consentRequestId: input.consentRequestId,
+                artefactId: input.artefactId,
+                transactionId: input.transactionId,
+                requestId: input.hiRequestId,
+                outcome: "REJECTED",
+                detail: input.detail,
+                at: input.at,
+            });
+            return "recorded";
+        });
+        refusalWrites = write.catch(() => undefined);
+        return write;
+    },
     async adoptTransactionId(id, transactionId) {
         const row = requests.find((r) => r.id === id)!;
         if (row.transactionId !== null || requests.some((r) => r.transactionId === transactionId)) return false;
@@ -188,7 +222,7 @@ const gateway = {
 const audit = { async record(event: HiuAuditEventInput) { audits.push(event); } };
 
 const crypto = {
-    generateKeyMaterial,
+    generateKeyMaterial: () => generateKeyMaterial(),
     decryptEntry: (input: Parameters<typeof decryptEntry>[0]) => {
         decrypts += 1;
         return decryptEntry(input);
@@ -284,6 +318,7 @@ beforeEach(() => {
     records = [];
     calls = [];
     audits = [];
+    refusalWrites = Promise.resolve();
     tasks = [];
     sleeps = [];
     decrypts = 0;
@@ -294,6 +329,7 @@ beforeEach(() => {
     pageStoreFault = null;
     hasPageFault = false;
     hasPageFaultAfterStore = false;
+    tokenLookups = 0;
     settings = { transferWindowMinutes: 20 };
     pushBase = "https://clinic.example.org";
     logged = [];
@@ -760,6 +796,313 @@ test("the push address is checked on its own, before any body: unknown, ended, p
     assert.equal((await unkeyed.pushAddressProblem(token))!.status, 503);
 });
 
+// ---- data push: refusals recorded against the transfer (PUSH_REFUSED) ----
+
+const pushRefusals = () => audits.filter((event) => event.event === "PUSH_REFUSED");
+
+test("a page refused for a known transfer is recorded as PUSH_REFUSED: its ids, our status and a plain reason, never the token or the body", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const good = hipPage(1, 1, [{ reference: "CC-A", content: JSON.stringify(bundle("a")) }]);
+
+    assert.equal((await service.acceptPush(token, { ...good, keyMaterial: { cryptoAlg: "ECDH" } })).status, 400);
+    assert.equal((await service.acceptPush(token, { ...good, transactionId: "someone-elses" })).status, 400);
+    assert.equal((await service.acceptPush(token, [])).status, 400);
+    assert.equal((await service.acceptPush(token, { ...good, transactionId: undefined })).status, 400);
+    assert.deepEqual(pushRefusals().map((event) => event.detail), [
+        "400: page shape: keyMaterial.dhPublicKey.keyValue is required",
+        "400: transaction id does not match this request",
+        "400: page shape: the body is not a JSON object",
+        "400: page shape: transactionId is required",
+    ]);
+    const first = pushRefusals()[0]!;
+    assert.deepEqual(
+        [first.hospitalId, first.consentRequestId, first.artefactId, first.requestId, first.transactionId, first.outcome],
+        [HOSPITAL, "cr-0001", "art-0001", requests[0].hiRequestId, TRANSACTION, "REJECTED"],
+    );
+    const written = JSON.stringify(pushRefusals());
+    for (const secret of [token, good.keyMaterial.nonce, good.keyMaterial.dhPublicKey.keyValue, good.entries[0]!.content!, "CC-A"]) {
+        assert.ok(!written.includes(secret), "no token, key material, content or care-context reference is written");
+    }
+
+    // An accepted page records nothing.
+    assert.equal((await service.acceptPush(token, good)).status, 202);
+    await settle();
+    assert.equal(pushRefusals().length, 4);
+});
+
+test("the real crypto sends the bare 65-byte point by default, and the old SPKI to a HIP listed in ABDM_HIU_SPKI_KEY_HIPS", async () => {
+    const saved = { format: process.env.ABDM_HIU_KEY_FORMAT, hips: process.env.ABDM_HIU_SPKI_KEY_HIPS };
+    delete process.env.ABDM_HIU_KEY_FORMAT;
+    delete process.env.ABDM_HIU_SPKI_KEY_HIPS;
+    try {
+        const service = makeService({ crypto: defaultHiuCrypto });
+        const keyValues = () => calls.filter((call) => call.path.endsWith("/health-information/request"))
+            .map((call) => Buffer.from((call.body as any).hiRequest.keyMaterial.dhPublicKey.keyValue, "base64"));
+        await service.requestForArtefact(1);
+        assert.equal(keyValues()[0]!.length, 65);
+        assert.equal(keyValues()[0]![0], 4);
+
+        // The artefact's HIP (IN2810014366) is kept on the old form, read on the next request without a restart.
+        process.env.ABDM_HIU_SPKI_KEY_HIPS = "IN9999999999, in2810014366";
+        requests[0].sessionStatus = "FAILED";
+        await service.requestForArtefact(1);
+        assert.equal(keyValues()[1]!.length, 93);
+        assert.ok(keyValues()[1]!.subarray(-65).equals(keyValues()[1]!.subarray(28)), "the same kind of point, in SPKI");
+
+        // Emptying the list returns that HIP to the bare point.
+        process.env.ABDM_HIU_SPKI_KEY_HIPS = "";
+        requests[1].sessionStatus = "FAILED";
+        await service.requestForArtefact(1);
+        assert.equal(keyValues()[2]!.length, 65);
+    } finally {
+        if (saved.format === undefined) delete process.env.ABDM_HIU_KEY_FORMAT; else process.env.ABDM_HIU_KEY_FORMAT = saved.format;
+        if (saved.hips === undefined) delete process.env.ABDM_HIU_SPKI_KEY_HIPS; else process.env.ABDM_HIU_SPKI_KEY_HIPS = saved.hips;
+    }
+});
+
+test("a push past the window, to an ended transfer, or with a changed pageCount is recorded with why; an unknown address never is", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const page = (n: number, of: number) => hipPage(n, of, [{ reference: "CC-A", content: "{}" }]);
+
+    // An unknown address (or one that is no address at all) stays in the console: nothing is written.
+    assert.equal((await service.acceptPush("ab".repeat(32), page(1, 1))).status, 404);
+    assert.equal((await service.pushAddressProblem("ab".repeat(32)))!.status, 404);
+    await service.notePushRefused("ab".repeat(32), 401, "no bearer token");
+    const lookups = tokenLookups;
+    await service.notePushRefused("not-a-token", 401, "no bearer token");
+    assert.equal(tokenLookups, lookups, "a malformed push token is not even looked up");
+    assert.equal(pushRefusals().length, 0);
+
+    assert.equal((await service.acceptPush(token, page(1, 3))).status, 202);
+    assert.equal((await service.acceptPush(token, page(2, 4))).status, 409);
+    now = T0 + 25 * 60_000;
+    assert.equal((await service.pushAddressProblem(token))!.status, 410);
+    now = T0;
+    requests[0].sessionStatus = "FAILED";
+    assert.equal((await service.acceptPush(token, page(2, 3))).status, 409);
+    await settle();
+    assert.deepEqual(pushRefusals().map((event) => event.detail), [
+        "409: page count 4 differs from the 3 given by earlier pages",
+        "410: after the 20-minute window (5 min late)",
+        "409: transfer already ended (it failed)",
+    ]);
+});
+
+test("a pageCount refusal is still answered 409 when the read for its record fails", async () => {
+    let failReads = false;
+    const flaky: HiuDataStore = {
+        ...store,
+        async findDataRequest(id) {
+            if (failReads) throw Object.assign(new Error("db down"), { code: "ETIMEOUT" });
+            return store.findDataRequest(id);
+        },
+    };
+    const service = makeService({ store: flaky });
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const page = (n: number, of: number) => hipPage(n, of, [{ reference: "CC-A", content: "{}" }]);
+    assert.equal((await service.acceptPush(token, page(1, 3))).status, 202);
+    await settle();
+    failReads = true;
+    assert.equal((await service.acceptPush(token, page(2, 4))).status, 409, "not a 500: the HIP is answered as before the record existed");
+    await settle();
+    assert.deepEqual(pushRefusals().map((event) => event.detail), ["409: page count differs from earlier pages, or the transfer ended"]);
+});
+
+test("a push that comes after the window is recorded as late, though the sweep already failed the transfer; other endings say how it ended", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const page = (n: number, of: number) => hipPage(n, of, [{ reference: "CC-A", content: "{}" }]);
+    assert.equal((await service.acceptPush(token, page(1, 2))).status, 202);
+    await settle();
+
+    // The sweep runs a minute after the deadline and fails the transfer (1 of 2 pages in).
+    now = T0 + 21 * 60_000;
+    await service.failTransfer(requests[0].id);
+    assert.equal(requests[0].sessionStatus, "FAILED");
+    // The window is the row's own: a later change of the setting does not change what is recorded.
+    settings = { ...settings, transferWindowMinutes: 45 };
+    now = T0 + 25 * 60_000 + 30_000;
+    assert.equal((await service.acceptPush(token, page(2, 2))).status, 409, "still answered as an ended transfer");
+    assert.equal((await service.pushAddressProblem(token))!.status, 409);
+    await settle();
+    assert.deepEqual(pushRefusals().map((event) => event.detail), [
+        "409: after the 20-minute window (5 min late; the transfer had already failed)",
+    ], "the second push, the same refusal with no page since, is not written again");
+});
+
+test("with a window longer than the key's lifetime, a push after the key was cleared is late, not refused for an ended consent", async () => {
+    settings = { ...settings, transferWindowMinutes: 45 };
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const keyExpiresAt = new Date(requests[0].keyExpiresAt).getTime();
+    assert.ok(keyExpiresAt < new Date(requests[0].transferDeadline!).getTime(), "the key runs out before the window");
+    // The sweep's clearPrivateKeys at KeyExpiresAt: the row is still open.
+    requests[0].privateKey = null;
+    now = keyExpiresAt + 5 * 60_000;
+    assert.equal((await service.pushAddressProblem(token))!.status, 410);
+    const minutes = Math.round((keyExpiresAt - new Date(requests[0].createdAt).getTime()) / 60_000);
+    assert.deepEqual(pushRefusals().map((event) => event.detail), [`410: after the ${minutes}-minute window (5 min late)`]);
+});
+
+test("a push to an open transfer whose key was cleared before its deadline (its consent ended) says so", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    requests[0].privateKey = null;
+    now = T0 + 5 * 60_000;
+    assert.equal((await service.pushAddressProblem(pushTokenOf()))!.status, 409);
+    assert.deepEqual(pushRefusals().map((event) => event.detail), ["409: transfer already ended (its consent ended)"]);
+});
+
+for (const [name, end, expected] of [
+    ["failed before its deadline (ABDM refused the request)", (row: HiuDataRequestRow) => Object.assign(row, { sessionStatus: "FAILED", privateKey: null, completedAt: new Date(T0 + 60_000) }), "409: transfer already ended (it failed)"],
+    ["received every page", (row: HiuDataRequestRow) => Object.assign(row, { sessionStatus: "RECEIVED", privateKey: null, notifiedAt: new Date(T0 + 120_000), completedAt: new Date(T0 + 120_000) }), "409: transfer already ended (every page was received)"],
+    ["was being closed", (row: HiuDataRequestRow) => Object.assign(row, { notifiedAt: new Date(T0 + 21 * 60_000) }), "409: transfer already ended (it was being closed)"],
+] as const) {
+    test(`a late push to a transfer that ${name} keeps saying how it ended`, async () => {
+        const service = makeService();
+        await openTransfer(service);
+        end(requests[0]);
+        now = T0 + 25 * 60_000;
+        assert.equal((await service.pushAddressProblem(pushTokenOf()))!.status, 409);
+        assert.deepEqual(pushRefusals().map((event) => event.detail), [expected]);
+    });
+}
+
+test("a refusal the route made before the body is recorded per push for a known address: a repeat of the last one is not written again", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+
+    const lookups = tokenLookups;
+    await service.notePushRefused(token, 401, "token too old (ran out 90 minutes ago; up to 60 are allowed)");
+    assert.equal(tokenLookups - lookups, 1, "one indexed lookup of the push token's hash");
+    assert.equal(pushRefusals()[0]!.detail, "401: token too old (ran out 90 minutes ago; up to 60 are allowed)");
+    assert.equal(pushRefusals()[0]!.requestId, requests[0].hiRequestId);
+    assert.equal(pushRefusals()[0]!.at!.getTime(), now, "at the service's clock");
+
+    for (let i = 0; i < 8; i += 1) await service.notePushRefused(token, 401, "no bearer token");
+    assert.equal((await service.acceptPush(token, [])).status, 400);
+    assert.deepEqual(pushRefusals().map((event) => event.detail), [
+        "401: token too old (ran out 90 minutes ago; up to 60 are allowed)",
+        "401: no bearer token",
+        "400: page shape: the body is not a JSON object",
+    ]);
+    assert.ok(logged.some((line) => line.includes("not recorded again")));
+
+    // The word the frontend reads as its own login lapsing is never written.
+    requests[0].sessionStatus = "FAILED";
+    await service.requestForArtefact(1);
+    const second = (calls.filter((call) => call.path.endsWith("/health-information/request")).at(-1)!.body as any).hiRequest.dataPushUrl.split("/").pop();
+    await service.notePushRefused(second, 401, "token expired");
+    const fresh = pushRefusals().at(-1)!;
+    assert.equal(fresh.requestId, requests[1].hiRequestId, "a new transfer has its own allowance");
+    assert.ok(!/expired/i.test(fresh.detail!));
+});
+
+/** The refusal the transfer's view shows: the newest PUSH_REFUSED row (At, then Id, descending), as LIST_ARTEFACTS reads it. */
+const shownRefusal = () => {
+    const rows = pushRefusals().map((event, index) => ({ event, index }));
+    rows.sort((a, b) => b.event.at!.getTime() - a.event.at!.getTime() || b.index - a.index);
+    return rows[0] ? pushRefusalOf({ PrAt: rows[0].event.at, PrDetail: rows[0].event.detail }) : null;
+};
+
+test("a new reason is always kept and shown: five refusals for one reason, then one for another, and the view shows the new one", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    for (let i = 0; i < 5; i += 1) {
+        now += 60_000;
+        await service.notePushRefused(token, 401, "token too old (ran out 90 minutes ago; up to 60 are allowed)");
+    }
+    now += 60_000;
+    assert.equal((await service.acceptPush(token, hipPage(1, 1, [{ reference: "CC-A", content: "{}" }], "someone-elses"))).status, 400);
+    assert.deepEqual(shownRefusal(), { status: 400, reason: "transaction id does not match this request", at: new Date(now) });
+    assert.equal(pushRefusals().length, 2, "the repeats added nothing");
+});
+
+test("a cause retried every minute, whose text counts the minutes, is one row: it never fills the allowance, and a later cause is shown", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    // Every 30 s, so all of it stays inside the 20-minute window; the count crosses from 2 to 3 digits.
+    for (let i = 0; i < HIU_PUSH_REFUSALS_KEPT + 5; i += 1) {
+        now += 30_000;
+        await service.notePushRefused(token, 401, `token too old (ran out ${90 + i} minutes ago; up to 60 are allowed)`);
+    }
+    now += 30_000;
+    assert.equal((await service.acceptPush(token, hipPage(1, 1, [{ reference: "CC-A", content: "{}" }], "someone-elses"))).status, 400);
+    assert.deepEqual(pushRefusals().map((event) => event.detail), [
+        "401: token too old (ran out 90 minutes ago; up to 60 are allowed)",
+        "400: transaction id does not match this request",
+    ]);
+    assert.deepEqual(shownRefusal(), { status: 400, reason: "transaction id does not match this request", at: new Date(now) });
+});
+
+test("sameRefusalCause: numbers do not make a new cause, but the status and the words do", () => {
+    assert.ok(sameRefusalCause("410: after the 20-minute window (5 min late)", "410: after the 20-minute window (12 min late)"));
+    assert.ok(!sameRefusalCause("401: no bearer token", "403: no bearer token"));
+    assert.ok(!sameRefusalCause("401: no bearer token", "401: token too old (ran out 90 minutes ago; up to 60 are allowed)"));
+});
+
+test("a repeat of the last refusal is news again once a page was stored after it", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const broken = () => service.acceptPush(token, { ...hipPage(2, 3, [{ reference: "CC-A", content: "{}" }]), keyMaterial: { cryptoAlg: "ECDH" } });
+
+    now = T0 + 60_000;
+    assert.equal((await broken()).status, 400);
+    now = T0 + 2 * 60_000;
+    assert.equal((await service.acceptPush(token, hipPage(1, 3, [{ reference: "CC-A", content: "{}" }]))).status, 202);
+    await settle();
+    now = T0 + 3 * 60_000;
+    assert.equal((await broken()).status, 400);
+    now = T0 + 4 * 60_000;
+    assert.equal((await broken()).status, 400);
+    assert.deepEqual(pushRefusals().map((event) => event.at!.getTime()), [T0 + 60_000, T0 + 3 * 60_000],
+        "the refusal after the stored page is written, so the view does not take it for one that came before it; the one after that is a repeat");
+});
+
+test("refusals stay within HIU_PUSH_REFUSALS_KEPT per transfer, even sent all at once, and past it a refusal is still answered", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    // Causes that differ in their words: ones that differ only in a number are one cause (sameRefusalCause).
+    await Promise.all(Array.from({ length: HIU_PUSH_REFUSALS_KEPT + 15 }, (_, i) =>
+        service.notePushRefused(token, 401, `cause ${"ab".repeat(i + 1)}`)));
+    assert.equal(pushRefusals().length, HIU_PUSH_REFUSALS_KEPT);
+    assert.deepEqual(await service.acceptPush(token, []), { accepted: false, status: 400, reason: "The body must be a JSON object." });
+    assert.equal(pushRefusals().length, HIU_PUSH_REFUSALS_KEPT);
+    assert.ok(logged.some((line) => line.includes(`not recorded: ${HIU_PUSH_REFUSALS_KEPT} refusals already kept`)));
+});
+
+test("the same refused page sent many times at once is written once", async () => {
+    const service = makeService();
+    await openTransfer(service);
+    const token = pushTokenOf();
+    const answers = await Promise.all(Array.from({ length: 10 }, () => service.acceptPush(token, [])));
+    assert.ok(answers.every((answer) => answer.status === 400));
+    assert.deepEqual(pushRefusals().map((event) => event.detail), ["400: page shape: the body is not a JSON object"]);
+});
+
+test("recording a refusal never changes the answer: a store that fails is only logged", async () => {
+    const broken: HiuDataStore = { ...store, async addPushRefusal() { throw Object.assign(new Error("db down"), { code: "ESOCKET" }); } };
+    const service = makeService({ store: broken });
+    await openTransfer(service);
+    const token = pushTokenOf();
+    assert.deepEqual(await service.acceptPush(token, []), { accepted: false, status: 400, reason: "The body must be a JSON object." });
+    await service.notePushRefused(token, 413, "page too large (over 20 MB)");
+    assert.equal(pushRefusals().length, 0);
+    assert.ok(logged.some((line) => line.includes("could not be recorded (ESOCKET)")));
+});
+
 for (const [name, close] of [
     ["the consent is revoked", () => { artefacts.set(1, { ...artefacts.get(1)!, status: "REVOKED", recordsPurgedAt: new Date(now) }); }],
     ["the transfer times out", () => { requests[0].notifiedAt = new Date(now); requests[0].sessionStatus = "FAILED"; requests[0].privateKey = null; }],
@@ -958,6 +1301,29 @@ test("a checksum mismatch marks that care context ERRORED and the transfer FAILE
     assert.ok(audits.some((event) => event.event === "DECRYPT_FAIL"));
 });
 
+test("with the real checksum check, a checksum in another HIP form is checked in that form, an unknown form is kept on AES-GCM, a wrong MD5 hex is still ERRORED", async () => {
+    const service = makeService({ crypto: { ...crypto, checksumFormOf } });
+    await openTransfer(service);
+    const a = JSON.stringify(bundle("sha256-base64"));
+    const b = JSON.stringify(bundle("unknown-form"));
+    const c = JSON.stringify(bundle("wrong-md5"));
+    const page = hipPage(1, 1, [
+        // 44 base64 characters, as ASPIRE HIMS Vass sends.
+        { reference: "CC-A", content: a, checksum: createHash("sha256").update(a).digest("base64") },
+        { reference: "CC-B", content: b, checksum: "not a checksum we know" },
+        { reference: "CC-C", content: c, checksum: checksumOf("something else") },
+    ]);
+    await service.acceptPush(pushTokenOf(), page);
+    await settle();
+
+    assert.deepEqual(records.map((record) => [record.checksumOk, record.content !== null]), [[true, true], [true, true], [false, false]]);
+    const statuses = (notifies()[0].body as any).notification.statusNotification.statusResponses;
+    assert.deepEqual(statuses.map((item: any) => [item.careContextReference, item.hiStatus]), [["CC-A", "OK"], ["CC-B", "OK"], ["CC-C", "ERRORED"]]);
+    const received = audits.find((event) => event.event === "PAGE_RECEIVED")!;
+    assert.equal(received.detail, "page 1 of 1, 3 entries, 1 failed, checksum as sha256 base64 of the plaintext, 1 checksum in an unknown form, kept on AES-GCM");
+    assert.equal(audits.find((event) => event.event === "DECRYPT_FAIL")!.detail, "page 1: 1 of 3 entries (1 checksum mismatch)");
+});
+
 test("an entry that does not decrypt, and a link entry with no content, are ERRORED", async () => {
     const service = makeService();
     await openTransfer(service);
@@ -968,6 +1334,7 @@ test("an entry that does not decrypt, and a link entry with no content, are ERRO
     const statuses = (notifies()[0].body as any).notification.statusNotification;
     assert.equal(statuses.sessionStatus, "FAILED");
     assert.deepEqual(statuses.statusResponses.map((item: any) => item.hiStatus), ["ERRORED", "ERRORED"]);
+    assert.equal(audits.find((event) => event.event === "DECRYPT_FAIL")!.detail, "page 1: 2 of 2 entries (1 could not be decrypted, 1 without content)");
 });
 
 test("a push that beats on-request adopts its transaction id", async () => {

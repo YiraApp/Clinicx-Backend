@@ -9,10 +9,12 @@ import {
     KEY_MATERIAL_PARAMETERS,
     WEIERSTRASS_A,
     WEIERSTRASS_B,
+    checksumFormOf,
     checksumOf,
     decryptEntry,
     encryptEntry,
     generateKeyMaterial,
+    isSpecChecksumForm,
     montgomeryUToWeierstrassX,
     parsePeerPublicKey,
     publicKeyValueOf,
@@ -174,8 +176,10 @@ test("BouncyCastle 1.79 vectors: our key encoding, the shared secret, decryption
     assert.ok(vectors.vectors.length >= 4);
     for (const v of vectors.vectors) {
         const privateKey = Buffer.from(v.hiuPrivateKey, "base64");
-        const ours = Buffer.from(publicKeyValueOf(privateKey), "base64");
+        const ours = Buffer.from(publicKeyValueOf(privateKey, "spki"), "base64");
         const bcNamed = Buffer.from(v.hiuPublicKeyNamedSpki, "base64");
+        // The default keyValue is the bare point inside that SPKI: 04 || x || y, what the PHR app sends.
+        assert.deepEqual(Buffer.from(publicKeyValueOf(privateKey), "base64"), ours.subarray(-65), v.name);
         // Same SPKI header as BouncyCastle's named-curve encoding, same x, y equal up to sign.
         assert.deepEqual(ours.subarray(0, 28), bcNamed.subarray(0, 28), v.name);
         assert.equal(ours.length, bcNamed.length);
@@ -297,8 +301,11 @@ test("BouncyCastle leading-zero vectors: shared secret, our x and the HIP's x st
         assert.equal(shared.toString("hex"), v.sharedSecretX, v.name);
         if (v.leadingZero === "shared") assert.equal(shared[0], 0, `${v.name}: BouncyCastle keeps the zero byte`);
 
-        const ours = Buffer.from(publicKeyValueOf(privateKey), "base64");
+        const ours = Buffer.from(publicKeyValueOf(privateKey, "spki"), "base64");
         assert.equal(ours.length, 93, v.name);
+        const bare = Buffer.from(publicKeyValueOf(privateKey), "base64");
+        assert.equal(bare.length, 65, v.name);
+        assert.equal(bare.subarray(1, 33).toString("hex"), v.hiuPublicX, `${v.name}: the bare point keeps x at 32 bytes, zero-padded`);
         assert.equal(ours.subarray(29, 61).toString("hex"), v.hiuPublicX, `${v.name}: our x is BouncyCastle's x, zero-padded`);
         if (v.leadingZero === "hiuX") {
             assert.equal(ours[29], 0, v.name);
@@ -321,19 +328,21 @@ test("BouncyCastle parses our exact keyValue, with y either sign, and agrees on 
     assert.ok(parsed.vectors.some((v) => v.ySign === "negated") && parsed.vectors.some((v) => v.ySign === "same"));
     for (const v of parsed.vectors) {
         const privateKey = Buffer.from(v.hiuPrivateKey, "base64");
-        assert.equal(publicKeyValueOf(privateKey), v.hiuPublicKey, "the module still publishes these bytes");
+        assert.equal(publicKeyValueOf(privateKey, "spki"), v.hiuPublicKey, "the module still publishes these bytes as spki");
+        assert.equal(publicKeyValueOf(privateKey), Buffer.from(v.hiuPublicKey, "base64").subarray(-65).toString("base64"), "and by default the same point, bare");
         assert.equal(sharedSecretX(privateKey, v.hipPublicKey).toString("hex"), v.sharedSecretX, v.ySign);
     }
 });
 
-test("a shared x with a leading zero byte is used as 32 bytes, not stripped (random search)", () => {
-    let found: { ours: ReturnType<typeof generateKeyMaterial>; theirPoint: { x: bigint; y: bigint }; shared: Buffer } | null = null;
+test("a shared x with a leading zero byte is used as 32 bytes, and a HIP that strips it is still opened (random search)", () => {
+    let found: { ours: ReturnType<typeof generateKeyMaterial>; theirPrivate: ReturnType<typeof generateKeyMaterial>; theirPoint: { x: bigint; y: bigint }; shared: Buffer } | null = null;
     for (let i = 0; i < 20000 && !found; i += 1) {
         const ours = generateKeyMaterial();
         // The peer's public point from the module (fast); checked against the BigInt reference below.
-        const theirKey = generateKeyMaterial().publicKeyValue;
+        const theirPrivate = generateKeyMaterial();
+        const theirKey = theirPrivate.publicKeyValue;
         const shared = sharedSecretX(ours.privateKey, theirKey);
-        if (shared[0] === 0) found = { ours, theirPoint: pointOf(theirKey), shared };
+        if (shared[0] === 0) found = { ours, theirPrivate, theirPoint: pointOf(theirKey), shared };
     }
     assert.ok(found, "a leading zero byte occurs about once in 256 tries");
     const { ours, theirPoint, shared } = found;
@@ -347,9 +356,28 @@ test("a shared x with a leading zero byte is used as 32 bytes, not stripped (ran
     const content = independentEncrypt(shared, theirNonce, ours.nonce, plaintext);
     const input = { privateKey: ours.privateKey, ourNonce: ours.nonce, peerPublicKeyValue: spkiOf(theirPoint), peerNonce: theirNonce };
     assert.equal(decryptEntry({ ...input, content }).toString("utf8"), plaintext);
-    // A peer that stripped the zero byte (a variable-length secret) derives another key: refused.
+    // A peer that stripped the zero byte, as ProjectEKA's hip-service does (BigInteger.ToByteArrayUnsigned),
+    // derives another key: it is opened by the one retry with that key, and only because GCM's tag matches.
     const stripped = independentEncrypt(shared.subarray(1), theirNonce, ours.nonce, plaintext);
-    assert.throws(() => decryptEntry({ ...input, content: stripped }), isReason("decrypt-failed"));
+    assert.equal(decryptEntry({ ...input, content: stripped }).toString("utf8"), plaintext);
+    // The module's own HIP-side encrypt does the same when asked to.
+    const theirPrivate = found.theirPrivate;
+    const asProjectEka = encryptEntry({ privateKey: theirPrivate.privateKey, ourNonce: theirNonce, peerPublicKeyValue: ours.publicKeyValue, peerNonce: ours.nonce, plaintext, stripLeadingZero: true });
+    assert.equal(decryptEntry({ ...input, content: asProjectEka }).toString("utf8"), plaintext);
+    // Any other key is still refused: a secret with a byte changed, and one cut by two bytes.
+    const tampered = Buffer.from(shared); tampered[31] ^= 1;
+    assert.throws(() => decryptEntry({ ...input, content: independentEncrypt(tampered, theirNonce, ours.nonce, plaintext) }), isReason("decrypt-failed"));
+    assert.throws(() => decryptEntry({ ...input, content: independentEncrypt(shared.subarray(2), theirNonce, ours.nonce, plaintext) }), isReason("decrypt-failed"));
+});
+
+test("without a leading zero in the shared x, no second key is tried: a stripped-key HIP derives the same key anyway", () => {
+    for (let i = 0; i < 50; i += 1) {
+        const hiu = generateKeyMaterial();
+        const hip = generateKeyMaterial();
+        if (sharedSecretX(hiu.privateKey, hip.publicKeyValue)[0] === 0) continue;
+        const content = encryptEntry({ privateKey: hip.privateKey, ourNonce: hip.nonce, peerPublicKeyValue: hiu.publicKeyValue, peerNonce: hiu.nonce, plaintext: "x", stripLeadingZero: true });
+        assert.equal(decryptEntry({ privateKey: hiu.privateKey, ourNonce: hiu.nonce, peerPublicKeyValue: hip.publicKeyValue, peerNonce: hip.nonce, content }).toString("utf8"), "x");
+    }
 });
 
 test("a multi-megabyte entry decrypts (the base64 check must not overflow the regexp stack)", () => {
@@ -394,9 +422,15 @@ test("generateKeyMaterial is fresh every time, with the spec's shapes and litera
     assert.equal(a.privateKey.length, 32);
     assert.equal(a.privateKey[0] & 7, 0, "clamped");
     assert.equal(a.privateKey[31] & 0xc0, 0x40, "clamped");
-    const spki = Buffer.from(a.publicKeyValue, "base64");
+    // By default the bare uncompressed point, as the PHR app sends it; "spki" wraps the same kind of point.
+    const bare = Buffer.from(a.publicKeyValue, "base64");
+    assert.equal(bare.length, 65);
+    assert.equal(bare[0], 4);
+    const spki = Buffer.from(generateKeyMaterial("spki").publicKeyValue, "base64");
     assert.equal(spki.length, 93);
     assert.ok(spki.subarray(0, 28).equals(NAMED_HEADER) && spki[28] === 4);
+    // Both forms are what a peer (and our own HIP) reads: the trailing 65 bytes.
+    assert.ok(sharedSecretX(b.privateKey, a.publicKeyValue).equals(sharedSecretX(a.privateKey, b.publicKeyValue)));
     assert.equal(KEY_MATERIAL_CRYPTO_ALG, "ECDH");
     assert.equal(KEY_MATERIAL_CURVE, "Curve25519");
     assert.equal(KEY_MATERIAL_PARAMETERS, "Curve25519/32byte random key");
@@ -409,4 +443,31 @@ test("generateKeyMaterial is fresh every time, with the spec's shapes and litera
         assert.ok(!text.includes(a.nonce) && !text.includes(b.publicKeyValue) && !text.includes(a.privateKey.toString("base64")));
         assert.ok(!/expired/i.test((error as Error).message));
     }
+});
+
+test("checksumFormOf names the form a HIP's checksum takes, and nothing for a checksum that matches no form", () => {
+    const plaintext = Buffer.from('{"resourceType":"Bundle","id":"checksum-forms"}', "utf8");
+    const content = randomBytes(48).toString("base64");
+    const ciphertext = Buffer.from(content, "base64");
+    const digest = (algorithm: string, data: Buffer) => createHash(algorithm).update(data).digest();
+    const cases: Array<[string, string]> = [
+        [digest("sha256", plaintext).toString("base64"), "sha256 base64 of the plaintext"],
+        [digest("sha256", plaintext).toString("base64").replace(/=+$/, ""), "sha256 base64 of the plaintext"],
+        [digest("sha256", plaintext).toString("hex").toUpperCase(), "sha256 hex of the plaintext"],
+        [digest("md5", plaintext).toString("base64"), "md5 base64 of the plaintext"],
+        [Buffer.from(digest("md5", plaintext).toString("hex")).toString("base64"), "md5 hex, base64 encoded, of the plaintext"],
+        [digest("md5", Buffer.from(content, "utf8")).toString("hex"), "md5 hex of the content text"],
+        [digest("sha256", ciphertext).toString("base64url"), "sha256 base64 of the ciphertext"],
+        [digest("sha1", plaintext).toString("hex"), "sha1 hex of the plaintext"],
+    ];
+    for (const [checksum, form] of cases) assert.equal(checksumFormOf(plaintext, content, checksum), form, checksum);
+    assert.equal(checksumFormOf(plaintext, content, checksumOf("something else")), null);
+    assert.equal(checksumFormOf(plaintext, content, "not a checksum"), null);
+    assert.equal(checksumFormOf(plaintext, content, ""), null);
+    assert.equal(checksumFormOf(plaintext, content, undefined), null);
+
+    assert.ok(isSpecChecksumForm(checksumOf(plaintext)));
+    assert.ok(isSpecChecksumForm(` ${checksumOf(plaintext).toUpperCase()} `));
+    assert.ok(!isSpecChecksumForm(digest("sha256", plaintext).toString("base64")));
+    assert.ok(!isSpecChecksumForm(null));
 });

@@ -3,9 +3,11 @@ import { abdmConfig } from "../../../config/abdm.config.js";
 import type { AbdmSettings } from "../abdm-facilities.service.js";
 import { AbdmApiError, abdmGatewayService, isAbdmSideFailure, isOutcomeUnknown, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import {
+    checksumFormOf as fideliusChecksumFormOf,
     decryptEntry as fideliusDecrypt,
     generateKeyMaterial as fideliusKeyMaterial,
     HiuCryptoError,
+    isSpecChecksumForm,
     KEY_MATERIAL_CRYPTO_ALG,
     KEY_MATERIAL_CURVE,
     KEY_MATERIAL_PARAMETERS,
@@ -13,7 +15,7 @@ import {
     type HiuKeyMaterial,
 } from "./fidelius-crypto.js";
 import { atRestKeysFromConfig, open, seal, type AtRestKeys } from "./hiu-at-rest.js";
-import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, type HiuAudit, type HiuAuditEventInput } from "./hiu-audit.js";
+import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, HIU_PUSH_REFUSALS_KEPT, pushRefusalDetail, type HiuAudit, type HiuAuditEventInput, type PushRefusalWrite } from "./hiu-audit.js";
 import { errorCodeOf, retryTransient } from "./hiu-db-errors.js";
 // Type-only: the shared staff and callback shapes live with the consent service; no runtime cycle.
 import type { CallbackHeaders, HealthInformationRequester, StaffContext } from "./hiu-consent.service.js";
@@ -38,8 +40,11 @@ import {
  *   onRequest           ABDM's acknowledgement: the transaction id, or a refusal.
  *   acceptPush          A HIP's page at our dataPushUrl. What can be checked without decrypting
  *                       is checked at once (token, transaction, window, shape); the page is then
- *                       decrypted and stored in the background, and the HIP gets its 202.
- *   records             The decrypted records of one artefact, for staff of its hospital, only
+ *                       decrypted and stored in the background, and the HIP gets its 202. A
+ *                       push refused for a transfer we know (here, or by the route before the
+ *                       body: notePushRefused) is recorded as PUSH_REFUSED, so a HIP that pushed
+ *                       and was refused does not look like one that sent nothing.
+ *   records            The decrypted records of one artefact, for staff of its hospital, only
  *                       while the artefact is GRANTED and before its dataEraseAt.
  *
  * Once every page up to pageCount has arrived, one health-information/notify reports the transfer
@@ -173,6 +178,23 @@ export interface HiuRecordRow {
     contentOmitted?: boolean;
 }
 
+/** One refused push, as HiuDataStore.addPushRefusal writes it (PUSH_REFUSED, outcome REJECTED). */
+export interface NewPushRefusal {
+    /** The transfer's AbdmHiuDataRequests.Id: a page of it stored after the newest refusal makes a repeat news again. */
+    dataRequestId: number;
+    hospitalId: number;
+    /** The transfer's HiRequestId: the audit row's RequestId. */
+    hiRequestId: string;
+    consentRequestId: string | null;
+    artefactId: string | null;
+    transactionId: string | null;
+    /** pushRefusalDetail: "<status>: <reason>". */
+    detail: string;
+    at: Date;
+    /** The most PUSH_REFUSED rows the transfer keeps (HIU_PUSH_REFUSALS_KEPT). */
+    ceiling: number;
+}
+
 /** What the data flow reads and writes in the clinic database. */
 export interface HiuDataStore {
     findArtefact(artefactDbId: number): Promise<HiuDataArtefact | null>;
@@ -195,6 +217,14 @@ export interface HiuDataStore {
     findDataRequest(id: number): Promise<HiuDataRequestRow | null>;
     findDataRequestByHiRequestId(hiRequestId: string): Promise<HiuDataRequestRow | null>;
     findDataRequestByTokenHash(pushTokenHash: string): Promise<HiuDataRequestRow | null>;
+    /**
+     * Appends one PUSH_REFUSED audit row for a transfer (its HiRequestId, under its consent request),
+     * in one atomic step: the transfer's refusals are counted and written one at a time, on every
+     * instance, so refused pages sent in parallel never pass the ceiling. "repeat", and nothing
+     * written, when [detail] is the transfer's newest refusal's and no page of it was stored since;
+     * "full" when it already holds [ceiling] refusals; else "recorded".
+     */
+    addPushRefusal(input: NewPushRefusal): Promise<PushRefusalWrite>;
     /**
      * Sets the transaction id when it is still empty (a push that beat on-request), only while the
      * transfer is open (REQUESTED or RECEIVING, notify unclaimed). False when it was not set.
@@ -232,10 +262,21 @@ export interface HiuDataStore {
 
 type GatewayCall = Pick<AbdmGatewayService, "call">;
 
+/** The Fidelius crypto, with the keyValue format each request's HIP gets (abdmConfig.hiuKeyFormatFor). */
+export const defaultHiuCrypto: HiuDataFlowCrypto = {
+    generateKeyMaterial: (hipId) => fideliusKeyMaterial(abdmConfig.hiuKeyFormatFor(hipId)),
+    decryptEntry: (input) => fideliusDecrypt(input),
+    verifyChecksum: (plaintext, checksum) => fideliusVerifyChecksum(plaintext, checksum),
+    checksumFormOf: (plaintext, content, checksum) => fideliusChecksumFormOf(plaintext, content, checksum),
+};
+
 export interface HiuDataFlowCrypto {
-    generateKeyMaterial(): HiuKeyMaterial;
+    /** A fresh key pair and nonce for a request to [hipId] (its keyValue format can depend on the HIP). */
+    generateKeyMaterial(hipId?: string | null): HiuKeyMaterial;
     decryptEntry(input: { privateKey: Buffer; ourNonce: string; peerPublicKeyValue: string; peerNonce: string; content: string }): Buffer;
     verifyChecksum(plaintext: Buffer, checksum: unknown): void;
+    /** The non-spec form a checksum that failed verifyChecksum takes (checksumFormOf), or null. */
+    checksumFormOf?(plaintext: Buffer, content: string, checksum: unknown): string | null;
 }
 
 export interface HiuDataFlowSettings {
@@ -390,7 +431,8 @@ export class HiuDataFlowService implements HealthInformationRequester {
         this.audit = deps.audit;
         this.gateway = deps.gateway ?? abdmGatewayService;
         this.clock = deps.clock ?? Date.now;
-        this.crypto = deps.crypto ?? { generateKeyMaterial: fideliusKeyMaterial, decryptEntry: fideliusDecrypt, verifyChecksum: fideliusVerifyChecksum };
+        // The keyValue format is read per request and per HIP (ABDM_HIU_KEY_FORMAT, ABDM_HIU_SPKI_KEY_HIPS).
+        this.crypto = deps.crypto ?? defaultHiuCrypto;
         this.atRestKeys = deps.atRestKeys ?? atRestKeysFromConfig;
         this.settings = deps.settings ?? defaultSettings;
         this.pushBaseUrl = deps.pushBaseUrl ?? deploymentPushBaseUrl;
@@ -454,7 +496,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
             throw new HiuError("not-configured", "The records push address (ABDM_DATA_PUSH_BASE_URL, or the bridge URL) is too long or has characters ABDM does not allow.");
         }
 
-        const keyMaterial = this.crypto.generateKeyMaterial();
+        const keyMaterial = this.crypto.generateKeyMaterial(artefact.hipId);
         const keyExpiresAt = new Date(now.getTime() + HIU_KEY_LIFETIME_MS);
         const transferDeadline = new Date(now.getTime() + settings.transferWindowMinutes * 60_000);
         // The granted range exactly: ABDM refuses a wider one (ABDM-1063) and a narrower one would drop records.
@@ -632,25 +674,41 @@ export class HiuDataFlowService implements HealthInformationRequester {
         const open = await this.openTransfer(pushToken);
         if ("answer" in open) return open.answer;
         const row = open.row;
+        /** Refuses the page, recorded against this transfer (PUSH_REFUSED) in [why]'s plain words. */
+        const refuse = async (status: number, reason: string, why: string): Promise<PushAnswer> => {
+            await this.recordPushRefusal(row, status, why);
+            return { accepted: false, status, reason };
+        };
 
-        if (!body || typeof body !== "object" || Array.isArray(body)) return { accepted: false, status: 400, reason: "The body must be a JSON object." };
+        if (!body || typeof body !== "object" || Array.isArray(body)) return refuse(400, "The body must be a JSON object.", "page shape: the body is not a JSON object");
         const transactionId = typeof body.transactionId === "string" ? body.transactionId.trim() : "";
-        if (!transactionId) return { accepted: false, status: 400, reason: "transactionId is required." };
+        if (!transactionId) return refuse(400, "transactionId is required.", "page shape: transactionId is required");
         if (row.transactionId !== null && row.transactionId !== transactionId) {
-            return { accepted: false, status: 400, reason: "transactionId does not match this push address." };
+            return refuse(400, "transactionId does not match this push address.", "transaction id does not match this request");
         }
 
         const problem = shapeProblem(body);
-        if (problem) return { accepted: false, status: 400, reason: problem };
+        if (problem) return refuse(400, problem, `page shape: ${problem.replace(/\.$/, "")}`);
 
         if (row.transactionId === null && !(await this.store.adoptTransactionId(row.id, transactionId))) {
             const fresh = await this.store.findDataRequest(row.id);
             if (!fresh || fresh.transactionId !== transactionId) {
-                return { accepted: false, status: 400, reason: "transactionId does not match this push address." };
+                return refuse(400, "transactionId does not match this push address.", "transaction id does not match this request");
             }
         }
         if (!(await this.store.claimPageCount(row.id, body.pageCount))) {
-            return { accepted: false, status: 409, reason: "pageCount differs from earlier pages, or the transfer has ended." };
+            // Which of the two it was, for the record: read once, only on this refusal. A failed read
+            // only loses the detail; the HIP is still answered 409, as before the record existed.
+            let why = "page count differs from earlier pages, or the transfer ended";
+            try {
+                const fresh = await this.store.findDataRequest(row.id);
+                why = !fresh || isFinal(fresh) || !fresh.privateKey
+                    ? "transfer already ended"
+                    : `page count ${body.pageCount} differs from the ${fresh.pageCount ?? "?"} given by earlier pages`;
+            } catch {
+                // keep the generic detail
+            }
+            return refuse(409, "pageCount differs from earlier pages, or the transfer has ended.", why);
         }
         // A page already stored (the HIP sending it again) is answered as taken, and not counted twice.
         if (await this.store.hasPage(row.id, body.pageNumber)) return { accepted: true, status: 202 };
@@ -658,7 +716,7 @@ export class HiuDataFlowService implements HealthInformationRequester {
         const maxMb = this.settings().maxTransferMb ?? DEFAULT_MAX_TRANSFER_MB;
         const bytes = (body.entries as any[]).reduce((total: number, entry: any) => total + (typeof entry.content === "string" ? entry.content.length : 0), 0);
         if (!(await this.store.reserveBytes(row.id, bytes, Math.floor(maxMb * 1024 * 1024)))) {
-            return { accepted: false, status: 413, reason: `This transfer is larger than this HIU accepts (${maxMb} MB in all).` };
+            return refuse(413, `This transfer is larger than this HIU accepts (${maxMb} MB in all).`, `page too large: the transfer passed its ${maxMb} MB total`);
         }
 
         const page = {
@@ -683,18 +741,100 @@ export class HiuDataFlowService implements HealthInformationRequester {
         return "answer" in open ? open.answer : null;
     }
 
-    /** The open transfer behind a push token, or the answer that refuses the push. */
+    /**
+     * A push the route refused before acceptPush could look at it (the HIP's bearer token, a body
+     * too large or not JSON), recorded against its transfer as PUSH_REFUSED: one indexed lookup of
+     * the push token's hash, and nothing at all when no transfer has that address, so an unknown
+     * address stays in the console only. [reason] is plain words, never the token or the body.
+     * Never throws.
+     */
+    async notePushRefused(pushToken: string, status: number, reason: string): Promise<void> {
+        try {
+            if (typeof pushToken !== "string" || !PUSH_TOKEN.test(pushToken)) return;
+            const row = await this.store.findDataRequestByTokenHash(sha256Hex(pushToken));
+            if (row) await this.recordPushRefusal(row, status, reason);
+        } catch (error: any) {
+            console.error(`[ABDM HIU] data push refusal could not be recorded: ${error?.code ?? error?.name ?? "error"}`);
+        }
+    }
+
+    /**
+     * The open transfer behind a push token, or the answer that refuses the push. A refusal of a
+     * transfer we know (ended, or past its window) is recorded against it; an unknown token is not.
+     */
     private async openTransfer(pushToken: string): Promise<{ row: HiuDataRequestRow } | { answer: PushAnswer }> {
         if (typeof pushToken !== "string" || !PUSH_TOKEN.test(pushToken)) return { answer: NOT_FOUND };
         if (!this.atRestKeys()) return { answer: { accepted: false, status: 503, reason: "Not accepting records at the moment." } };
 
         const row = await this.store.findDataRequestByTokenHash(sha256Hex(pushToken));
         if (!row) return { answer: NOT_FOUND };
-        if (isFinal(row) || !row.privateKey) return { answer: { accepted: false, status: 409, reason: "This transfer has already ended." } };
-
         const deadline = Math.min(new Date(row.keyExpiresAt).getTime(), row.transferDeadline ? new Date(row.transferDeadline).getTime() : Infinity);
-        if (this.clock() >= deadline) return { answer: { accepted: false, status: 410, reason: "The window for this transfer has closed." } };
+        const now = this.clock();
+        /** How the record says a push past the deadline came late: the row's own window, by how much, and [note]. */
+        const late = (note = ""): string => `after the ${this.windowMinutesOf(row, deadline)}-minute window (${Math.floor((now - deadline) / 60_000)} min late${note})`;
+        // A key is cleared without ending the transfer when its consent ends, and by the sweep at
+        // KeyExpiresAt, which comes first when the window is set longer than the key's lifetime:
+        // past the deadline a missing key is the late push's own deadline, answered as late below.
+        if (isFinal(row) || (!row.privateKey && now < deadline)) {
+            // The sweep fails a transfer within a minute of its deadline, so a late push nearly always
+            // finds it FAILED: one that timed out (it ended at or after its deadline, never RECEIVED)
+            // is recorded as late, which is what the HIP has to change. Other endings say how it ended.
+            const endedAt = row.completedAt ? new Date(row.completedAt).getTime() : Infinity;
+            const timedOut = row.sessionStatus === "FAILED" && now >= deadline && endedAt >= deadline;
+            const how = row.sessionStatus === "RECEIVED" ? "every page was received"
+                : row.sessionStatus === "FAILED" ? "it failed"
+                : row.notifiedAt ? "it was being closed"
+                : "its consent ended";
+            await this.recordPushRefusal(row, 409, timedOut ? late("; the transfer had already failed") : `transfer already ended (${how})`);
+            return { answer: { accepted: false, status: 409, reason: "This transfer has already ended." } };
+        }
+
+        if (now >= deadline) {
+            await this.recordPushRefusal(row, 410, late());
+            return { answer: { accepted: false, status: 410, reason: "The window for this transfer has closed." } };
+        }
         return { row };
+    }
+
+    /**
+     * The window a transfer was given, in minutes: from its own row (asked at CreatedAt, closing at
+     * [deadline]), so a later change of the setting does not change what its record says. The
+     * current setting when the row's times cannot tell.
+     */
+    private windowMinutesOf(row: HiuDataRequestRow, deadline: number): number {
+        const minutes = Math.round((deadline - new Date(row.createdAt).getTime()) / 60_000);
+        return Number.isFinite(minutes) && minutes > 0 ? minutes : this.settings().transferWindowMinutes;
+    }
+
+    /**
+     * Records one refused push against [row]'s transfer (PUSH_REFUSED: the ids, the status we
+     * answered and the plain reason; never the token, keys, nonces or the body). Append-only, in one
+     * atomic store step: a repeat of the transfer's newest refusal with no page stored since adds
+     * nothing, a new reason is always written, up to HIU_PUSH_REFUSALS_KEPT per transfer. Never
+     * throws: a refusal is answered whatever happens here.
+     */
+    private async recordPushRefusal(row: HiuDataRequestRow, status: number, reason: string): Promise<void> {
+        const label = `[ABDM HIU] data push ${status} refused REQUEST-ID=${row.hiRequestId}`;
+        try {
+            const artefact = await this.store.findArtefact(row.artefactFk);
+            const written: PushRefusalWrite = await this.store.addPushRefusal({
+                dataRequestId: row.id,
+                hospitalId: row.hospitalId,
+                hiRequestId: row.hiRequestId,
+                consentRequestId: artefact?.consentRequestId ?? null,
+                artefactId: artefact?.consentArtefactId ?? null,
+                transactionId: row.transactionId,
+                detail: pushRefusalDetail(status, safeText(reason, 400)),
+                at: new Date(this.clock()),
+                ceiling: HIU_PUSH_REFUSALS_KEPT,
+            });
+            const note = written === "repeat" ? " (not recorded again: the same as the last refusal kept for this transfer)"
+                : written === "full" ? ` (not recorded: ${HIU_PUSH_REFUSALS_KEPT} refusals already kept for this transfer)`
+                : "";
+            console.warn(`${label}: ${safeText(reason, 200)}${note}`);
+        } catch (error: any) {
+            console.error(`${label}: the refusal could not be recorded (${error?.code ?? error?.name ?? "error"})`);
+        }
     }
 
     /** Decrypts, verifies and stores one accepted page, then completes the transfer if it was the last. */
@@ -729,37 +869,57 @@ export class HiuDataFlowService implements HealthInformationRequester {
 
         let failed = 0;
         let notJson = 0;
+        /** Why entries failed, for the page's record. */
+        const failures = { undecrypted: 0, checksumMismatch: 0, noContent: 0 };
+        /** Checksums that matched in a form other than the spec's (checksumFormOf). */
+        const checksumForms = new Set<string>();
+        /** Checksums in a form we could not check, kept on AES-GCM's word. */
+        let uncheckedChecksums = 0;
         const records: NewHiuRecord[] = page.entries.map((entry, entryIndex) => {
             const reference = typeof entry.careContextReference === "string" && entry.careContextReference ? entry.careContextReference : null;
             const media = typeof entry.media === "string" ? entry.media.slice(0, 100) : null;
             const sealedReference = reference ? seal(reference, keys) : null;
-            const failedRecord = (): NewHiuRecord => {
+            const failedRecord = (why: keyof typeof failures): NewHiuRecord => {
                 failed += 1;
+                failures[why] += 1;
                 return { entryIndex, careContextReference: sealedReference, media, checksumOk: false, content: null, deleteAt };
             };
             // A link entry (no inline content) is not fetched: the spec defines no field for it.
-            if (typeof entry.content !== "string" || !entry.content) return failedRecord();
+            if (typeof entry.content !== "string" || !entry.content) return failedRecord("noContent");
+            let plaintext: Buffer;
             try {
-                const plaintext = this.crypto.decryptEntry({
+                plaintext = this.crypto.decryptEntry({
                     privateKey,
                     ourNonce: row.nonce!,
                     peerPublicKeyValue: page.peerPublicKeyValue,
                     peerNonce: page.peerNonce,
                     content: entry.content,
                 });
-                this.crypto.verifyChecksum(plaintext, entry.checksum);
-                if ((media ?? HIU_ENTRY_MEDIA).toLowerCase().includes("json")) {
-                    try {
-                        JSON.parse(plaintext.toString("utf8"));
-                    } catch {
-                        notJson += 1;
-                    }
-                }
-                return { entryIndex, careContextReference: sealedReference, media, checksumOk: true, content: seal(plaintext, keys), deleteAt };
             } catch (error) {
                 if (!(error instanceof HiuCryptoError)) throw error;
-                return failedRecord();
+                return failedRecord("undecrypted");
             }
+            try {
+                this.crypto.verifyChecksum(plaintext, entry.checksum);
+            } catch (error) {
+                if (!(error instanceof HiuCryptoError)) throw error;
+                // AES-GCM already proved the content intact and from the holder of the session key.
+                // A checksum in another form HIPs use is checked in that form; one in the spec's form
+                // (MD5 hex) that matches nothing is a real mismatch; one in a form we do not know
+                // (nor can check) is kept on GCM's word, and the page's record says so.
+                const form = this.crypto.checksumFormOf?.(plaintext, entry.content, entry.checksum) ?? null;
+                if (form) checksumForms.add(form);
+                else if (isSpecChecksumForm(entry.checksum) || typeof this.crypto.checksumFormOf !== "function") return failedRecord("checksumMismatch");
+                else uncheckedChecksums += 1;
+            }
+            if ((media ?? HIU_ENTRY_MEDIA).toLowerCase().includes("json")) {
+                try {
+                    JSON.parse(plaintext.toString("utf8"));
+                } catch {
+                    notJson += 1;
+                }
+            }
+            return { entryIndex, careContextReference: sealedReference, media, checksumOk: true, content: seal(plaintext, keys), deleteAt };
         });
         privateKey.fill(0);
 
@@ -814,10 +974,19 @@ export class HiuDataFlowService implements HealthInformationRequester {
             console.warn(`[ABDM HIU] data push ${label}: transfer closed while the page was processed; page dropped`);
             return;
         }
-        const detail = `page ${page.pageNumber} of ${page.pageCount}, ${records.length} entries, ${failed} failed${notJson ? `, ${notJson} not JSON` : ""}`;
+        const checksumNote = [
+            checksumForms.size ? `checksum as ${[...checksumForms].join(" / ")}` : "",
+            uncheckedChecksums ? `${uncheckedChecksums} checksum${uncheckedChecksums === 1 ? "" : "s"} in an unknown form, kept on AES-GCM` : "",
+        ].filter(Boolean).join(", ");
+        const detail = `page ${page.pageNumber} of ${page.pageCount}, ${records.length} entries, ${failed} failed${notJson ? `, ${notJson} not JSON` : ""}${checksumNote ? `, ${checksumNote}` : ""}`;
         await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.PAGE_RECEIVED, outcome: failed ? HIU_AUDIT_OUTCOMES.FAILED : HIU_AUDIT_OUTCOMES.OK, detail });
         if (failed) {
-            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DECRYPT_FAIL, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail: `page ${page.pageNumber}: ${failed} of ${records.length} entries` });
+            const why = [
+                failures.undecrypted ? `${failures.undecrypted} could not be decrypted` : "",
+                failures.checksumMismatch ? `${failures.checksumMismatch} checksum mismatch` : "",
+                failures.noContent ? `${failures.noContent} without content` : "",
+            ].filter(Boolean).join(", ");
+            await this.audit.record({ ...auditBase, event: HIU_AUDIT_EVENTS.DECRYPT_FAIL, outcome: HIU_AUDIT_OUTCOMES.FAILED, detail: `page ${page.pageNumber}: ${failed} of ${records.length} entries (${why})` });
         }
         // Stored by a try whose answer was lost: the count is read back.
         const pagesReceived = stored.afterRetry ? ((await this.store.findDataRequest(row.id))?.pagesReceived ?? 0) : stored.pagesReceived;

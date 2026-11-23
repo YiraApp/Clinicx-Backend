@@ -83,7 +83,7 @@ export const encodePublicKey = (montgomeryU: bigint): string => {
     return der(0x30, Buffer.concat([ALGORITHM, der(0x03, Buffer.concat([Buffer.from([0x00]), point]))])).toString("base64");
 };
 
-/** A peer's public key, whichever SPKI form it came in: the trailing 65 bytes are the point. */
+/** A peer's public key, in any SPKI form or as the bare 65-byte point: the trailing 65 bytes are the point. */
 export const decodePublicKey = (base64: string): bigint => {
     const bytes = Buffer.from(base64, "base64");
     if (bytes.length < 65) throw new HieCryptoError("The public key is too short to hold a Curve25519 point.");

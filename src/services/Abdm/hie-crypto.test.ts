@@ -99,6 +99,20 @@ test("a record round-trips between HIP and HIU, and any wrong input fails the ta
     assert.throws(() => decrypt(tampered.toString("base64"), hiu, { publicKey: hip.publicKey, nonce: hip.nonce }), "a changed byte");
 });
 
+test("our HIP reads the bare 65-byte point our HIU (and the PHR app) sends, and our HIU opens what it encrypts", async () => {
+    const fidelius = await import("./hiu/fidelius-crypto.js");
+    for (let i = 0; i < 20; i += 1) {
+        const hiu = fidelius.generateKeyMaterial("point");
+        assert.equal(Buffer.from(hiu.publicKeyValue, "base64").length, 65);
+        // The same key, bare or in SPKI, decodes to the same point.
+        assert.equal(decodePublicKey(hiu.publicKeyValue), decodePublicKey(fidelius.publicKeyValueOf(hiu.privateKey, "spki")));
+        const hip = generateKeyMaterial();
+        const content = encrypt(`record ${i}`, hip, { publicKey: hiu.publicKeyValue, nonce: hiu.nonce });
+        const opened = fidelius.decryptEntry({ privateKey: hiu.privateKey, ourNonce: hiu.nonce, peerPublicKeyValue: hip.publicKey, peerNonce: hip.nonce, content });
+        assert.equal(opened.toString("utf8"), `record ${i}`);
+    }
+});
+
 test("the session key and IV come from the XOR of the nonces, split 20 and 12", async () => {
     const { createDecipheriv, hkdfSync } = await import("crypto");
     const hip = generateKeyMaterial();

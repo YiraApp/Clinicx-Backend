@@ -7,13 +7,13 @@ import { hiuDataRepository } from "./hiu-data.repository.js";
 import { User } from "../../models/Account/user.model.js";
 import type { StoredArtefactStatus } from "../../services/Abdm/hiu/hiu-enums.js";
 import {
-    ARTEFACT_RECORD_COUNT,
     CLAIM_STATUS_CHECK,
     END_ARTEFACT,
     EXPIRE_EMPTY_REQUESTS,
     expireEmptyRequestsParams,
     findPatientIn,
     jsonList,
+    LIST_ARTEFACTS,
     LIST_LAPSED_ARTEFACTS,
     LIST_UNSETTLED_REQUESTS,
     LIST_WAITING_REQUESTS,
@@ -21,6 +21,7 @@ import {
     SELECT_REQUEST,
     statusCheckParams,
     toRequestRow,
+    toTransferRow,
     waitingRequestsParams,
 } from "./hiu-consent.sql.js";
 import { retryTransient } from "../../services/Abdm/hiu/hiu-db-errors.js";
@@ -32,7 +33,6 @@ import type {
     FetchedDetail,
     HiuConsentStore,
     NewConsentRequestRow,
-    TransferRow,
 } from "../../services/Abdm/hiu/hiu-consent.service.js";
 
 /** SQL Server duplicate key errors (unique constraint, unique index). */
@@ -241,35 +241,8 @@ export class HiuConsentRepository implements HiuConsentStore {
     }
 
     async listArtefacts(consentRequestFk: number): Promise<ArtefactWithTransfer[]> {
-        const rows = await AppDataSource.query(
-            `SELECT a.*,
-                    d.Id AS DrId, d.TransactionId AS DrTransactionId, d.SessionStatus AS DrSessionStatus,
-                    d.PageCount AS DrPageCount, d.PagesReceived AS DrPagesReceived, d.Error AS DrError,
-                    d.CreatedAt AS DrCreatedAt, d.CompletedAt AS DrCompletedAt,
-                    ${ARTEFACT_RECORD_COUNT} AS RecordCount
-             FROM AbdmHiuConsentArtefacts a
-             OUTER APPLY (
-                 SELECT TOP 1 dr.Id, dr.TransactionId, dr.SessionStatus, dr.PageCount, dr.PagesReceived, dr.Error, dr.CreatedAt, dr.CompletedAt
-                 FROM AbdmHiuDataRequests dr
-                 WHERE dr.ArtefactFk = a.Id
-                 ORDER BY dr.CreatedAt DESC, dr.Id DESC
-             ) d
-             WHERE a.ConsentRequestFk = @0
-             ORDER BY a.Id`,
-            [consentRequestFk],
-        );
-        return (rows as any[]).map((raw) => {
-            const transfer: TransferRow | null = raw.DrId == null ? null : {
-                transactionId: raw.DrTransactionId ?? null,
-                sessionStatus: raw.DrSessionStatus,
-                pageCount: raw.DrPageCount ?? null,
-                pagesReceived: Number(raw.DrPagesReceived ?? 0),
-                error: raw.DrError ?? null,
-                requestedAt: raw.DrCreatedAt ?? null,
-                completedAt: raw.DrCompletedAt ?? null,
-            };
-            return { ...toArtefactRow(raw), transfer, recordCount: Number(raw.RecordCount ?? 0) };
-        });
+        const rows = await AppDataSource.query(LIST_ARTEFACTS, [consentRequestFk]);
+        return (rows as any[]).map((raw) => ({ ...toArtefactRow(raw), transfer: toTransferRow(raw), recordCount: Number(raw.RecordCount ?? 0) }));
     }
 
     async findArtefactsByConsentArtefactIds(ids: string[]): Promise<ArtefactRow[]> {

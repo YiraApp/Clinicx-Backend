@@ -10,9 +10,19 @@ import { createCipheriv, createDecipheriv, createHash, createPrivateKey, createP
  *   CustomNamedCurves), not the Montgomery form X25519 libraries use. Node has only X25519, so
  *   the scalar multiplication runs in OpenSSL's X25519 and only the encoding is converted:
  *   Weierstrass x = Montgomery u + A/3 (mod p), with A = 486662 and p = 2^255 - 19.
- * - keyValue: base64 X.509 SubjectPublicKeyInfo, OIDs 1.2.840.10045.2.1 (EC public key) and
- *   1.3.6.1.4.1.3029.1.5.1 (curve25519), bit string 04 || x || y. A peer's key is read as its
- *   trailing 65 bytes, so named-curve, explicit-parameter and bare-point encodings all work.
+ * - keyValue we send: by default the bare uncompressed point 04 || x || y in base64 (65 bytes).
+ *   The HIU-to-HIP direction is a bare point in the reference code HIPs are built on: Fidelius
+ *   makes the HIU key with getQ().getEncoded(false) (KeysController) and the HIP reads it only with
+ *   curve.decodePoint (EncryptionController); ProjectEKA's hip-service reads it with
+ *   Curve.DecodePoint (EncryptorHelper.cs); the PHR app sends it bare; every keyValue example in
+ *   the M3 and M2 specs is a bare point. A decodePoint HIP throws "Invalid point encoding 0x30" on
+ *   an SPKI, on every BouncyCastle version, and never pushes. The atom
+ *   shared.concept.fidelius-ecdh-interop, and the spec's prose, say SPKI: that is wrong for this
+ *   direction (a HIP sends its OWN key as SPKI). "spki" (ABDM_HIU_KEY_FORMAT, or per HIP with
+ *   ABDM_HIU_SPKI_KEY_HIPS) gives the X.509 SubjectPublicKeyInfo, OIDs 1.2.840.10045.2.1 (EC public
+ *   key) and 1.3.6.1.4.1.3029.1.5.1 (curve25519), around the same point, as ClinicX sent before.
+ *   A peer's key is read as its trailing 65 bytes, so named-curve, explicit-parameter and
+ *   bare-point encodings all work.
  * - The shared secret is the Weierstrass x of the ECDH point as 32 big-endian bytes (what
  *   BouncyCastle's JCA KeyAgreement.generateSecret returns).
  * - Each side's nonce is 32 random bytes in base64. XOR the two: bytes 0-19 are the HKDF salt,
@@ -48,7 +58,7 @@ const DEFAULT_MESSAGES: Record<HiuCryptoErrorReason, string> = {
 export interface HiuKeyMaterial {
     /** Our private scalar, 32 bytes, clamped, as Node's X25519 holds it. Secret. */
     privateKey: Buffer;
-    /** keyMaterial.dhPublicKey.keyValue: base64 SPKI of the Weierstrass point. */
+    /** keyMaterial.dhPublicKey.keyValue: base64 of the Weierstrass point, bare or in SPKI (KeyValueFormat). */
     publicKeyValue: string;
     /** keyMaterial.nonce: base64 of 32 random bytes. */
     nonce: string;
@@ -156,22 +166,29 @@ const montgomeryPublicU = (privateKey: Buffer): bigint => {
 };
 
 /**
- * The keyValue for [privateKey]: SPKI of the Weierstrass point of clamp(privateKey) * G.
- * X25519 yields only u, so y is recovered by a square root and the even root is published; the
- * other root is the negated point, which yields the same shared x in any ECDH with it.
+ * How keyValue is written: "point", the bare uncompressed point 04 || x || y (65 bytes), as the PHR
+ * app sends it; "spki", that point in an X.509 SubjectPublicKeyInfo naming curve25519 (93 bytes).
  */
-export function publicKeyValueOf(privateKey: Buffer): string {
+export type KeyValueFormat = "point" | "spki";
+
+/**
+ * The keyValue for [privateKey]: the Weierstrass point of clamp(privateKey) * G, bare (the
+ * default) or in SPKI. X25519 yields only u, so y is recovered by a square root and the even root
+ * is published; the other root is the negated point, which yields the same shared x in any ECDH.
+ */
+export function publicKeyValueOf(privateKey: Buffer, format: KeyValueFormat = "point"): string {
     const x = montgomeryUToWeierstrassX(montgomeryPublicU(privateKey));
     const root = sqrtMod(curveRhs(x));
     if (root === null) throw new HiuCryptoError("bad-key", "The private key does not give a point on the curve.");
     const y = root % 2n === 0n ? root : P - root;
-    return Buffer.concat([NAMED_CURVE_SPKI_PREFIX, Buffer.from([0x04]), bigToBigEndian32(x), bigToBigEndian32(y)]).toString("base64");
+    const point = Buffer.concat([Buffer.from([0x04]), bigToBigEndian32(x), bigToBigEndian32(y)]);
+    return (format === "spki" ? Buffer.concat([NAMED_CURVE_SPKI_PREFIX, point]) : point).toString("base64");
 }
 
 /** A fresh key pair and nonce. One per health-information request, never reused. */
-export function generateKeyMaterial(): HiuKeyMaterial {
+export function generateKeyMaterial(format: KeyValueFormat = "point"): HiuKeyMaterial {
     const privateKey = clamp(randomBytes(32));
-    return { privateKey, publicKeyValue: publicKeyValueOf(privateKey), nonce: randomBytes(32).toString("base64") };
+    return { privateKey, publicKeyValue: publicKeyValueOf(privateKey, format), nonce: randomBytes(32).toString("base64") };
 }
 
 /**
@@ -240,36 +257,60 @@ export function sharedSecretX(privateKey: Buffer, peerPublicKeyValue: string): B
 }
 
 /** The AES key and IV for one page, from our key and nonce and the peer's. */
-const sessionKey = (privateKey: Buffer, ourNonce: string, peerPublicKeyValue: string, peerNonce: string): { key: Buffer; iv: Buffer } => {
+/**
+ * The AES key and IV for one transfer. [stripLeadingZero]: the HKDF input is the shared x without
+ * its leading zero byte(s), as a HIP built on ProjectEKA's hip-service derives it
+ * (BigInteger.ToByteArrayUnsigned, EncryptorHelper.cs), about one transfer in 256; Fidelius and
+ * BouncyCastle's JCA keep all 32 bytes, which is the default.
+ */
+const sessionKey = (privateKey: Buffer, ourNonce: string, peerPublicKeyValue: string, peerNonce: string, stripLeadingZero = false): { key: Buffer; iv: Buffer; sharedStartsWithZero: boolean } => {
     const ours = decodeNonce(ourNonce);
     const theirs = decodeNonce(peerNonce);
     const xor = Buffer.alloc(32);
     for (let i = 0; i < 32; i += 1) xor[i] = ours[i] ^ theirs[i];
     const salt = xor.subarray(0, 20);
     const iv = Buffer.from(xor.subarray(20, 32));
-    const key = Buffer.from(hkdfSync("sha256", sharedSecretX(privateKey, peerPublicKeyValue), salt, Buffer.alloc(0), 32));
-    return { key, iv };
+    const shared = sharedSecretX(privateKey, peerPublicKeyValue);
+    let start = 0;
+    if (stripLeadingZero) while (start < shared.length - 1 && shared[start] === 0) start += 1;
+    const key = Buffer.from(hkdfSync("sha256", shared.subarray(start), salt, Buffer.alloc(0), 32));
+    return { key, iv, sharedStartsWithZero: shared[0] === 0 };
 };
 
 const TAG_LENGTH = 16;
 
-/** Decrypts one entries[].content. Throws HiuCryptoError: bad-key, bad-nonce or decrypt-failed. */
-export function decryptEntry(input: { privateKey: Buffer; ourNonce: string; peerPublicKeyValue: string; peerNonce: string; content: string }): Buffer {
-    const { key, iv } = sessionKey(input.privateKey, input.ourNonce, input.peerPublicKeyValue, input.peerNonce);
-    const sealed = decodeBase64(input.content);
-    if (!sealed || sealed.length < TAG_LENGTH) throw new HiuCryptoError("decrypt-failed");
+const openSealed = (key: Buffer, iv: Buffer, sealed: Buffer): Buffer | null => {
     try {
         const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_LENGTH });
         decipher.setAuthTag(sealed.subarray(sealed.length - TAG_LENGTH));
         return Buffer.concat([decipher.update(sealed.subarray(0, sealed.length - TAG_LENGTH)), decipher.final()]);
     } catch {
-        throw new HiuCryptoError("decrypt-failed");
+        return null;
     }
+};
+
+/**
+ * Decrypts one entries[].content. Throws HiuCryptoError: bad-key, bad-nonce or decrypt-failed.
+ * When the shared x starts with a zero byte and the 32-byte key does not open it, the key a
+ * ProjectEKA-based HIP derives (that zero dropped) is tried once; GCM's tag decides, so a wrong
+ * key can never be taken for a right one.
+ */
+export function decryptEntry(input: { privateKey: Buffer; ourNonce: string; peerPublicKeyValue: string; peerNonce: string; content: string }): Buffer {
+    const { key, iv, sharedStartsWithZero } = sessionKey(input.privateKey, input.ourNonce, input.peerPublicKeyValue, input.peerNonce);
+    const sealed = decodeBase64(input.content);
+    if (!sealed || sealed.length < TAG_LENGTH) throw new HiuCryptoError("decrypt-failed");
+    const opened = openSealed(key, iv, sealed)
+        ?? (sharedStartsWithZero ? openSealed(sessionKey(input.privateKey, input.ourNonce, input.peerPublicKeyValue, input.peerNonce, true).key, iv, sealed) : null);
+    if (!opened) throw new HiuCryptoError("decrypt-failed");
+    return opened;
 }
 
-/** Encrypts one entry as a HIP would. Used for round trips in tests; the HIU never sends content. */
-export function encryptEntry(input: { privateKey: Buffer; ourNonce: string; peerPublicKeyValue: string; peerNonce: string; plaintext: Buffer | string }): string {
-    const { key, iv } = sessionKey(input.privateKey, input.ourNonce, input.peerPublicKeyValue, input.peerNonce);
+/**
+ * Encrypts one entry as a HIP would. Used for round trips in tests; the HIU never sends content.
+ * [stripLeadingZero] encrypts as a ProjectEKA-based HIP does (see sessionKey).
+ */
+export function encryptEntry(input: { privateKey: Buffer; ourNonce: string; peerPublicKeyValue: string; peerNonce: string; plaintext: Buffer | string; stripLeadingZero?: boolean }): string {
+    const { key, iv } = sessionKey(input.privateKey, input.ourNonce, input.peerPublicKeyValue, input.peerNonce, input.stripLeadingZero ?? false);
     const plaintext = typeof input.plaintext === "string" ? Buffer.from(input.plaintext, "utf8") : input.plaintext;
     const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_LENGTH });
     return Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]).toString("base64");
@@ -284,6 +325,34 @@ export function checksumOf(data: Buffer | string): string {
 }
 
 /** Throws HiuCryptoError("checksum-mismatch") unless [checksum] is the hex MD5 of [plaintext] (any case). */
+/** Whether [checksum] is in the spec's form: 32 hex characters, an MD5 digest. */
+export const isSpecChecksumForm = (checksum: unknown): boolean => typeof checksum === "string" && /^[0-9a-f]{32}$/i.test(checksum.trim());
+
+/**
+ * The form [checksum] takes when it is not the spec's (MD5 hex of the plaintext), among those
+ * HIPs are seen to send: MD5, SHA-256 or SHA-1, of the plaintext, of the base64 content text or of
+ * the ciphertext bytes, as hex, base64 (padded or not, or url-safe) or base64 of the hex text.
+ * For example ASPIRE HIMS Vass sends 44 base64 characters. Null when it matches none of them.
+ */
+export function checksumFormOf(plaintext: Buffer, content: string, checksum: unknown): string | null {
+    if (typeof checksum !== "string" || !checksum.trim()) return null;
+    const given = checksum.trim();
+    const unpadded = given.replace(/=+$/, "");
+    const inputs: Array<[string, Buffer]> = [["plaintext", plaintext], ["content text", Buffer.from(content, "utf8")], ["ciphertext", decodeBase64(content) ?? Buffer.alloc(0)]];
+    for (const algorithm of ["md5", "sha256", "sha1"]) {
+        for (const [what, data] of inputs) {
+            const raw = createHash(algorithm).update(data).digest();
+            const hex = raw.toString("hex");
+            if (given.toLowerCase() === hex) return `${algorithm} hex of the ${what}`;
+            if (unpadded === raw.toString("base64").replace(/=+$/, "") || given === raw.toString("base64url")) return `${algorithm} base64 of the ${what}`;
+            if (unpadded === Buffer.from(hex).toString("base64").replace(/=+$/, "") || unpadded === Buffer.from(hex.toUpperCase()).toString("base64").replace(/=+$/, "")) {
+                return `${algorithm} hex, base64 encoded, of the ${what}`;
+            }
+        }
+    }
+    return null;
+}
+
 export function verifyChecksum(plaintext: Buffer | string, checksum: unknown): void {
     if (typeof checksum !== "string" || checksum.trim().toLowerCase() !== checksumOf(plaintext)) {
         throw new HiuCryptoError("checksum-mismatch");

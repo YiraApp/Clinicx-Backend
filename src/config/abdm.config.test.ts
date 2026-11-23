@@ -9,6 +9,9 @@ const HIU_SETTINGS = [
     "ABDM_DATA_PUSH_BASE_URL",
     "ABDM_DATA_PUSH_MAX_MB",
     "ABDM_DATA_PUSH_MAX_TRANSFER_MB",
+    "ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES",
+    "ABDM_HIU_KEY_FORMAT",
+    "ABDM_HIU_SPKI_KEY_HIPS",
     "ABDM_HIU_DATA_KEY",
     "ABDM_HIU_DATA_KEY_ID",
     "ABDM_HIU_ROLE_NAMES",
@@ -37,11 +40,34 @@ test("HIU settings default as the contract says", () => {
     assert.equal(abdmConfig.dataPushBaseUrl, "");
     assert.equal(abdmConfig.dataPushMaxMb, 20);
     assert.equal(abdmConfig.dataPushMaxTransferMb, 100);
+    assert.equal(abdmConfig.dataPushTokenGraceMinutes, 60);
     assert.equal(abdmConfig.hiuDataKey, "");
     assert.equal(abdmConfig.hiuDataKeyId, "k1");
     assert.deepEqual(abdmConfig.hiuRoleNames, ["Provider", "Hospital Admin"]);
     assert.equal(abdmConfig.hiuTransferWindowMinutes, 20);
+    assert.equal(abdmConfig.hiuKeyFormat, "point", "the bare point, as the PHR app sends it");
     assert.equal(abdmConfig.hiuConfigured, false, "no records key");
+});
+
+test("the HIU key format is 'spki' only when asked for, in any case; anything else is the bare point", () => {
+    process.env.ABDM_HIU_KEY_FORMAT = "SPKI";
+    assert.equal(abdmConfig.hiuKeyFormat, "spki");
+    process.env.ABDM_HIU_KEY_FORMAT = "x509";
+    assert.equal(abdmConfig.hiuKeyFormat, "point");
+});
+
+test("a HIP listed in ABDM_HIU_SPKI_KEY_HIPS gets spki, any other HIP the deployment's format", () => {
+    assert.deepEqual(abdmConfig.hiuSpkiKeyHips, []);
+    assert.equal(abdmConfig.hiuKeyFormatFor("IN2410002641"), "point");
+    process.env.ABDM_HIU_SPKI_KEY_HIPS = " IN2410002641 , in0910034358,, ";
+    assert.deepEqual(abdmConfig.hiuSpkiKeyHips, ["IN2410002641", "in0910034358"]);
+    assert.equal(abdmConfig.hiuKeyFormatFor("IN2410002641"), "spki");
+    assert.equal(abdmConfig.hiuKeyFormatFor(" IN0910034358 "), "spki", "matched without case or spaces");
+    assert.equal(abdmConfig.hiuKeyFormatFor("IN3310002235"), "point");
+    assert.equal(abdmConfig.hiuKeyFormatFor(null), "point");
+    assert.equal(abdmConfig.hiuKeyFormatFor(""), "point");
+    process.env.ABDM_HIU_KEY_FORMAT = "spki";
+    assert.equal(abdmConfig.hiuKeyFormatFor("IN3310002235"), "spki", "the deployment's format for an unlisted HIP");
 });
 
 test("HIU settings are read and cleaned", () => {
@@ -101,4 +127,36 @@ test("hiuConfigured needs a 32-byte key and a usable push address when one is se
     assert.equal(abdmConfig.hiuConfigured, true, "unset, the bridge URL is the push address (checked where it is read)");
     delete process.env.ABDM_HIU_DATA_KEY;
     assert.equal(abdmConfig.hiuConfigured, false);
+});
+
+test("the data push token grace is read in minutes: 0 turns it off, junk or a negative falls back to 60, at most a day", () => {
+    process.env.ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES = "15";
+    assert.equal(abdmConfig.dataPushTokenGraceMinutes, 15);
+    process.env.ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES = "0";
+    assert.equal(abdmConfig.dataPushTokenGraceMinutes, 0);
+    process.env.ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES = "-5";
+    assert.equal(abdmConfig.dataPushTokenGraceMinutes, 60);
+    process.env.ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES = "soon";
+    assert.equal(abdmConfig.dataPushTokenGraceMinutes, 60);
+    process.env.ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES = "100000";
+    assert.equal(abdmConfig.dataPushTokenGraceMinutes, 24 * 60);
+});
+
+test("a data push needs a gateway token only when ABDM_DATA_PUSH_REQUIRE_TOKEN says so", () => {
+    const original = process.env.ABDM_DATA_PUSH_REQUIRE_TOKEN;
+    try {
+        delete process.env.ABDM_DATA_PUSH_REQUIRE_TOKEN;
+        assert.equal(abdmConfig.dataPushRequiresToken, false, "off by default: the push address admits a push with no token");
+        for (const value of ["true", "TRUE", "1", "yes"]) {
+            process.env.ABDM_DATA_PUSH_REQUIRE_TOKEN = value;
+            assert.equal(abdmConfig.dataPushRequiresToken, true, value);
+        }
+        for (const value of ["false", "0", "no", "maybe", ""]) {
+            process.env.ABDM_DATA_PUSH_REQUIRE_TOKEN = value;
+            assert.equal(abdmConfig.dataPushRequiresToken, false, value);
+        }
+    } finally {
+        if (original === undefined) delete process.env.ABDM_DATA_PUSH_REQUIRE_TOKEN;
+        else process.env.ABDM_DATA_PUSH_REQUIRE_TOKEN = original;
+    }
 });

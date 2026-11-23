@@ -6,6 +6,7 @@ import { HiuError } from "../../services/Abdm/hiu/hiu-enums.js";
 import { errorCodeOf, isTransientSqlError, RecordPurgeError, TRANSIENT_RETRY_DELAYS_MS as RETRY_DELAYS } from "../../services/Abdm/hiu/hiu-db-errors.js";
 import {
     HiuDataRepository, isDuplicateKeyError, LARGE_WRITE_LOCK, LARGE_WRITE_LOCK_POLL_MS, LARGE_WRITE_LOCK_WAIT_MS, LargeWriteLockError, nativeTypeOf, PURGE_SWEEP_BUDGET_MS, toDataRequestRow,
+    PUSH_REFUSAL_LOCK, PUSH_REFUSAL_LOCK_ERROR, PUSH_REFUSAL_LOCK_WAIT_MS,
 } from "./hiu-data.repository.js";
 
 type Sent = { sql: string; parameters: unknown[] };
@@ -668,4 +669,60 @@ test("a sweep delete that still fails stops the sweep's deleting, but what it de
     } finally {
         console.error = originalError;
     }
+});
+
+const refusal = {
+    dataRequestId: 9, hospitalId: 7, hiRequestId: "hr-1", consentRequestId: "cr-1", artefactId: "art-1", transactionId: "t-1",
+    detail: "401: no bearer token", at: new Date("2026-11-20T10:05:00.123Z"), ceiling: 20,
+};
+
+test("a refused push is counted, compared and written in one transaction under its transfer's own applock, never count-then-insert", async () => {
+    const { repository, sent } = repositoryWith(() => [{ Result: "recorded", Kept: 3 }]);
+    assert.equal(await repository.addPushRefusal(refusal), "recorded");
+    assert.equal(sent.length, 1, "one batch");
+    const sql = sent[0]!.sql;
+    assert.match(sql, /^SET XACT_ABORT ON;\s+BEGIN TRANSACTION;/);
+    assert.match(sql, new RegExp(`EXEC @lock = sp_getapplock @Resource = @9, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = ${PUSH_REFUSAL_LOCK_WAIT_MS};\\s+IF @lock < 0\\s+THROW ${PUSH_REFUSAL_LOCK_ERROR},`));
+    const transfer = "HospitalId = @0 AND Event = 'PUSH_REFUSED' AND RequestId = @1 AND ConsentRequestId = @2";
+    assert.ok(sql.includes(`SELECT @kept = COUNT(1) FROM AbdmHiuAuditEvents WHERE ${transfer};`));
+    assert.ok(sql.includes(`SELECT TOP 1 @lastDetail = Detail, @lastAt = At FROM AbdmHiuAuditEvents WHERE ${transfer} ORDER BY At DESC, Id DESC;`));
+    // The ceiling first; a repeat is the newest refusal's detail with no page of the transfer stored since.
+    assert.match(sql, /WHEN @kept >= @8 THEN 'full'\s+WHEN LEFT\(@lastDetail, 4\) = LEFT\(@7, 4\) AND REPLACE\(TRANSLATE\(@lastDetail, '0123456789', '##########'\), '#', ''\) = REPLACE\(TRANSLATE\(@7, '0123456789', '##########'\), '#', ''\)\s+AND NOT EXISTS \(SELECT 1 FROM AbdmHiuRecords WHERE DataRequestFk = @3 AND ReceivedAt > @lastAt\) THEN 'repeat'\s+ELSE 'recorded' END;/);
+    assert.match(sql, /IF @result = 'recorded'\s+INSERT INTO AbdmHiuAuditEvents \(At, HospitalId, Event, ConsentRequestId, ArtefactId, TransactionId, RequestId, Outcome, Detail\)\s+VALUES \(@4, @0, 'PUSH_REFUSED', @2, @5, @6, @1, 'REJECTED', @7\);\s+COMMIT TRANSACTION;\s+SELECT @result AS Result, @kept AS Kept;$/);
+    // Lock, then read, then write, then commit: nothing is read before the lock is held.
+    const order = ["sp_getapplock", "COUNT(1)", "SELECT TOP 1", "INSERT INTO", "COMMIT TRANSACTION"].map((part) => sql.indexOf(part));
+    assert.deepEqual([...order].sort((a, b) => a - b), order);
+    assert.ok(!/GETDATE|SYSUTCDATETIME|SYSDATETIME|CURRENT_TIMESTAMP/i.test(sql), "its time is the app's, like every other HIU time");
+
+    const parameters = sent[0]!.parameters;
+    assert.equal(parameters[0], 7);
+    // The audit table's id columns are VARCHAR(64): bound as such, so their indexes can be sought.
+    for (const [index, value] of [[1, "hr-1"], [2, "cr-1"], [5, "art-1"], [6, "t-1"]] as const) {
+        const bound = parameters[index] as MssqlParameter;
+        assert.ok(bound instanceof MssqlParameter);
+        assert.deepEqual([bound.type, bound.value, bound.params], ["varchar", value, [64]]);
+    }
+    assert.equal(parameters[3], 9);
+    assert.equal((parameters[4] as MssqlParameter).type, "datetime2");
+    assert.equal(((parameters[4] as MssqlParameter).value as Date).getTime(), refusal.at.getTime());
+    assert.deepEqual(parameters.slice(7), ["401: no bearer token", 20, `${PUSH_REFUSAL_LOCK}:hr-1`]);
+});
+
+test("a refused push without a consent request id is matched on ConsentRequestId IS NULL; repeat and full pass through; no answer throws", async () => {
+    let answer: any[] = [{ Result: "repeat", Kept: 1 }];
+    const { repository, sent } = repositoryWith(() => answer);
+    assert.equal(await repository.addPushRefusal({ ...refusal, consentRequestId: null }), "repeat");
+    assert.equal(sent[0]!.sql.match(/AND ConsentRequestId IS NULL/g)!.length, 2);
+    assert.ok(!sent[0]!.sql.includes("ConsentRequestId = @2"));
+    assert.equal((sent[0]!.parameters[2] as MssqlParameter).value, null, "still bound, for the insert");
+
+    answer = [{ Result: "full", Kept: 20 }];
+    assert.equal(await repository.addPushRefusal(refusal), "full");
+    // Cut to the audit columns' widths, as every audit write is.
+    await repository.addPushRefusal({ ...refusal, detail: "x".repeat(600), transactionId: "t".repeat(80) });
+    assert.equal((sent[2]!.parameters[7] as string).length, 500);
+    assert.equal(((sent[2]!.parameters[6] as MssqlParameter).value as string).length, 64);
+
+    answer = [];
+    await assert.rejects(repository.addPushRefusal(refusal), /gave no answer/);
 });

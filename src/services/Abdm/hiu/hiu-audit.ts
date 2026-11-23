@@ -55,6 +55,14 @@ export const HIU_AUDIT_EVENTS = {
     ON_REQUEST: "ON_REQUEST",
     /** A data push page arrived (detail: "page n of m, k entries"). */
     PAGE_RECEIVED: "PAGE_RECEIVED",
+    /**
+     * A HIP's push to a known transfer's address was refused (outcome REJECTED; detail
+     * "<HTTP status>: <plain reason>", pushRefusalDetail). Without it a refused push looks the same
+     * as a HIP that sent nothing. Append-only: a repeat of the transfer's newest refusal (same cause,
+     * sameRefusalCause; no page stored since) is not written again, and at most HIU_PUSH_REFUSALS_KEPT are written per
+     * transfer. An unknown push address is never recorded.
+     */
+    PUSH_REFUSED: "PUSH_REFUSED",
     /** An entry failed to decrypt or its checksum did not match. */
     DECRYPT_FAIL: "DECRYPT_FAIL",
     /** A data push page was accepted but could not be stored, after its retries (detail: "page n of m: code"). */
@@ -92,6 +100,46 @@ export const HIU_AUDIT_OUTCOMES = {
     /** A repeat or an unknown id: logged and dropped. */
     IGNORED: "IGNORED",
 } as const;
+
+/**
+ * The most PUSH_REFUSED rows one transfer keeps (its hard ceiling). A repeat of the newest kept
+ * refusal is never written, so the ceiling is only reached by refusals whose reason keeps changing:
+ * a new reason is always shown until then, and a HIP sending refused pushes again and again cannot
+ * fill the audit table. Refusals past it reach the console only.
+ */
+export const HIU_PUSH_REFUSALS_KEPT = 20;
+
+/** What happened to one refused push's PUSH_REFUSED row (HiuDataStore.addPushRefusal). */
+export type PushRefusalWrite = "recorded" | "repeat" | "full";
+
+/** A refused push as the transfer's view shows it: the status we answered, the reason and when. */
+export interface PushRefusal {
+    status: number;
+    reason: string;
+    at: Date;
+}
+
+/**
+ * PUSH_REFUSED's detail: "<status>: <reason>". The reason is plain words with no patient data, and
+ * never the word the frontend reads as its own login lapsing (the callers say "ran out" or "too old").
+ */
+export const pushRefusalDetail = (status: number, reason: string): string =>
+    `${Number.isInteger(status) ? status : 400}: ${String(reason).replace(/expired/gi, "ran out").replace(/\s+/g, " ").trim()}`.slice(0, 500);
+
+/**
+ * Whether two PUSH_REFUSED details give the same cause: the same status, and the same text with
+ * its digits (and any '#') left out, so "ran out 9 minutes ago" and "ran out 91 minutes ago" are
+ * one cause and a HIP retrying it every minute does not fill the transfer's allowance.
+ * addPushRefusalSql compares the same way (LEFT 4, then TRANSLATE the digits to '#' and drop '#').
+ */
+export const sameRefusalCause = (a: string, b: string): boolean =>
+    a.slice(0, 4) === b.slice(0, 4) && a.replace(/[0-9#]/g, "") === b.replace(/[0-9#]/g, "");
+
+/** The status and reason back from a PUSH_REFUSED detail; null when it is not in that form. */
+export const readPushRefusalDetail = (detail: string | null | undefined): { status: number; reason: string } | null => {
+    const match = /^(\d{3}): ([\s\S]+)$/.exec(String(detail ?? "").trim());
+    return match ? { status: Number(match[1]), reason: match[2]!.trim() } : null;
+};
 
 /** An audit sink that records nothing, for tests and tools. */
 export const noopHiuAudit: HiuAudit = { record: async () => {} };

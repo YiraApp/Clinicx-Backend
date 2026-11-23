@@ -1,5 +1,6 @@
 import type { StoredConsentStatus } from "../../services/Abdm/hiu/hiu-enums.js";
-import type { ConsentRequestRow } from "../../services/Abdm/hiu/hiu-consent.service.js";
+import type { ConsentRequestRow, TransferRow } from "../../services/Abdm/hiu/hiu-consent.service.js";
+import { readPushRefusalDetail, type PushRefusal } from "../../services/Abdm/hiu/hiu-audit.js";
 
 /**
  * The consent repository's raw SQL and row mapping, kept apart from the repository so tests can read
@@ -149,6 +150,73 @@ export const ARTEFACT_RECORD_COUNT = `(SELECT COUNT(1) FROM AbdmHiuRecords rec
                            WHERE dr.ArtefactFk = a.Id
                              AND EXISTS (SELECT 1 FROM AbdmHiuRecords x WHERE x.DataRequestFk = dr.Id AND x.EntryIndex >= 0)
                            ORDER BY CASE WHEN dr.SessionStatus = 'RECEIVED' THEN 0 ELSE 1 END, dr.Id DESC))`;
+
+/**
+ * When the latest transfer's (d) newest page was stored: its records' latest ReceivedAt (a page with
+ * no entries has its marker row), so an accepted page always counts and nothing is inferred from the
+ * audit trail. NULL before any page; a transfer's records are only deleted with its artefact's.
+ */
+export const TRANSFER_LAST_PAGE_AT = `(SELECT MAX(lp.ReceivedAt) FROM AbdmHiuRecords lp WHERE lp.DataRequestFk = d.Id)`;
+
+/**
+ * A consent request's (@0) artefacts, each with its latest transfer (d), that transfer's record
+ * count and newest page's time, and the latest push refused for that transfer (pr, PUSH_REFUSED:
+ * its RequestId is the transfer's HiRequestId, under the request's consent request id, so the read
+ * seeks the audit table's consent-request index). A refusal older than the newest page came before
+ * pages that were accepted: the view sends both times and says which.
+ */
+export const LIST_ARTEFACTS = `SELECT a.*,
+                    d.Id AS DrId, d.TransactionId AS DrTransactionId, d.SessionStatus AS DrSessionStatus,
+                    d.PageCount AS DrPageCount, d.PagesReceived AS DrPagesReceived, d.Error AS DrError,
+                    d.CreatedAt AS DrCreatedAt, d.CompletedAt AS DrCompletedAt,
+                    ${TRANSFER_LAST_PAGE_AT} AS DrLastPageAt,
+                    pr.At AS PrAt, pr.Detail AS PrDetail,
+                    ${ARTEFACT_RECORD_COUNT} AS RecordCount
+             FROM AbdmHiuConsentArtefacts a
+             LEFT JOIN AbdmHiuConsentRequests cr ON cr.Id = a.ConsentRequestFk
+             OUTER APPLY (
+                 SELECT TOP 1 dr.Id, dr.HiRequestId, dr.TransactionId, dr.SessionStatus, dr.PageCount, dr.PagesReceived, dr.Error, dr.CreatedAt, dr.CompletedAt
+                 FROM AbdmHiuDataRequests dr
+                 WHERE dr.ArtefactFk = a.Id
+                 ORDER BY dr.CreatedAt DESC, dr.Id DESC
+             ) d
+             OUTER APPLY (
+                 SELECT TOP 1 e.At, e.Detail
+                 FROM AbdmHiuAuditEvents e
+                 WHERE e.ConsentRequestId = cr.ConsentRequestId AND e.HospitalId = a.HospitalId
+                   AND e.Event = 'PUSH_REFUSED' AND e.RequestId = d.HiRequestId
+                 ORDER BY e.At DESC, e.Id DESC
+             ) pr
+             WHERE a.ConsentRequestFk = @0
+             ORDER BY a.Id`;
+
+/** A date column's value, or null when it is empty or unreadable. */
+const validDate = (value: unknown): Date | null => {
+    if (value === null || value === undefined || value === "") return null;
+    const date = new Date(value as any);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+/** The latest refused push of a LIST_ARTEFACTS row (PrAt, PrDetail); null when there is none or its detail is unreadable. */
+export const pushRefusalOf = (raw: any): PushRefusal | null => {
+    if (!raw?.PrAt) return null;
+    const at = new Date(raw.PrAt);
+    const detail = readPushRefusalDetail(raw.PrDetail);
+    return detail && !Number.isNaN(at.getTime()) ? { ...detail, at } : null;
+};
+
+/** A LIST_ARTEFACTS row's latest transfer; null when the artefact has none. */
+export const toTransferRow = (raw: any): TransferRow | null => raw?.DrId == null ? null : {
+    transactionId: raw.DrTransactionId ?? null,
+    sessionStatus: raw.DrSessionStatus,
+    pageCount: raw.DrPageCount ?? null,
+    pagesReceived: Number(raw.DrPagesReceived ?? 0),
+    error: raw.DrError ?? null,
+    requestedAt: raw.DrCreatedAt ?? null,
+    completedAt: raw.DrCompletedAt ?? null,
+    lastPageAt: validDate(raw.DrLastPageAt),
+    lastPushRefusal: pushRefusalOf(raw),
+};
 
 export const toRequestRow = (raw: any): ConsentRequestRow => ({
     id: Number(raw.Id),

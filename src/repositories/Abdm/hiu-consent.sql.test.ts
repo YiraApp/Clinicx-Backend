@@ -7,6 +7,7 @@ import {
     EXPIRE_EMPTY_REQUESTS,
     expireEmptyRequestsParams,
     findPatientIn,
+    LIST_ARTEFACTS,
     LIST_LAPSED_ARTEFACTS,
     LIST_UNSETTLED_REQUESTS,
     LIST_WAITING_REQUESTS,
@@ -15,8 +16,11 @@ import {
     SELECT_REQUEST,
     statusCheckParams,
     toRequestRow,
+    toTransferRow,
+    TRANSFER_LAST_PAGE_AT,
     waitingRequestsParams,
 } from "./hiu-consent.sql.js";
+import { pushRefusalDetail, readPushRefusalDetail } from "../../services/Abdm/hiu/hiu-audit.js";
 
 /** The database's own clock: the driver runs with useUTC=false, so it reads hours off the stored values. */
 const DB_CLOCK = /GETDATE|SYSUTCDATETIME|SYSDATETIME|CURRENT_TIMESTAMP|GETUTCDATE/i;
@@ -154,4 +158,45 @@ test("an artefact's record count is the records view's: one transfer's entries, 
     assert.match(ARTEFACT_RECORD_COUNT, /rec\.DataRequestFk = \(SELECT TOP 1 dr\.Id FROM AbdmHiuDataRequests dr\s+WHERE dr\.ArtefactFk = a\.Id/);
     assert.match(ARTEFACT_RECORD_COUNT, /EXISTS \(SELECT 1 FROM AbdmHiuRecords x WHERE x\.DataRequestFk = dr\.Id AND x\.EntryIndex >= 0\)/);
     assert.match(ARTEFACT_RECORD_COUNT, /ORDER BY CASE WHEN dr\.SessionStatus = 'RECEIVED' THEN 0 ELSE 1 END, dr\.Id DESC\)\)$/);
+});
+
+test("the artefact list reads each latest transfer's latest refused push by its HiRequestId, under the request's consent request id", () => {
+    assert.match(LIST_ARTEFACTS, /pr\.At AS PrAt, pr\.Detail AS PrDetail/);
+    assert.match(LIST_ARTEFACTS, /LEFT JOIN AbdmHiuConsentRequests cr ON cr\.Id = a\.ConsentRequestFk/);
+    assert.match(LIST_ARTEFACTS, /SELECT TOP 1 dr\.Id, dr\.HiRequestId, dr\.TransactionId/);
+    // The consent-request id first, so the read seeks IX_AbdmHiuAuditEvents_ConsentRequestId; the newest refusal wins.
+    assert.match(LIST_ARTEFACTS, /WHERE e\.ConsentRequestId = cr\.ConsentRequestId AND e\.HospitalId = a\.HospitalId\s+AND e\.Event = 'PUSH_REFUSED' AND e\.RequestId = d\.HiRequestId\s+ORDER BY e\.At DESC, e\.Id DESC/);
+    assert.match(LIST_ARTEFACTS, /WHERE a\.ConsentRequestFk = @0\s+ORDER BY a\.Id$/);
+    assert.ok(LIST_ARTEFACTS.includes(ARTEFACT_RECORD_COUNT));
+    assert.ok(!DB_CLOCK.test(LIST_ARTEFACTS));
+});
+
+test("the artefact list reads when the latest transfer's newest page was stored, from that transfer's own records", () => {
+    // A page with no entries has its marker row (EntryIndex -1), so it counts too; the audit trail is not consulted.
+    assert.equal(TRANSFER_LAST_PAGE_AT, "(SELECT MAX(lp.ReceivedAt) FROM AbdmHiuRecords lp WHERE lp.DataRequestFk = d.Id)");
+    assert.ok(LIST_ARTEFACTS.includes(`${TRANSFER_LAST_PAGE_AT} AS DrLastPageAt`));
+});
+
+test("a listed transfer carries its latest refused push read back from the audit detail; none, or an unreadable one, is null", () => {
+    const at = new Date("2026-11-20T10:05:00.000Z");
+    const raw = { DrId: 4, DrTransactionId: "t-1", DrSessionStatus: "REQUESTED", DrPageCount: null, DrPagesReceived: 0, DrError: null, DrCreatedAt: new Date("2026-11-20T10:00:00.000Z"), DrCompletedAt: null };
+    const transfer = toTransferRow({ ...raw, PrAt: at, PrDetail: pushRefusalDetail(401, "token not signed by ABDM") })!;
+    assert.deepEqual(transfer.lastPushRefusal, { status: 401, reason: "token not signed by ABDM", at });
+    assert.deepEqual([transfer.transactionId, transfer.sessionStatus, transfer.pagesReceived], ["t-1", "REQUESTED", 0]);
+    assert.equal(transfer.lastPageAt, null, "no page yet");
+    const lastPageAt = new Date("2026-11-20T10:07:30.250Z");
+    assert.deepEqual(toTransferRow({ ...raw, DrPagesReceived: 2, DrLastPageAt: lastPageAt })!.lastPageAt, lastPageAt);
+    assert.equal(toTransferRow({ ...raw, DrLastPageAt: "not a date" })!.lastPageAt, null);
+    assert.equal(toTransferRow({ ...raw, PrAt: null, PrDetail: null })!.lastPushRefusal, null);
+    assert.equal(toTransferRow({ ...raw, PrAt: at, PrDetail: "garbled" })!.lastPushRefusal, null);
+    assert.equal(toTransferRow({ DrId: null }), null);
+});
+
+test("a refused push's audit detail is \"<status>: <reason>\", reads back the same, and never carries the login-lapse word", () => {
+    assert.equal(pushRefusalDetail(410, "after the 20-minute window (5 min late)"), "410: after the 20-minute window (5 min late)");
+    assert.equal(pushRefusalDetail(401, "token  expired\n"), "401: token ran out");
+    assert.deepEqual(readPushRefusalDetail("413: page too large (over 20 MB)"), { status: 413, reason: "page too large (over 20 MB)" });
+    assert.equal(readPushRefusalDetail("page 1 of 2"), null);
+    assert.equal(readPushRefusalDetail(null), null);
+    assert.ok(pushRefusalDetail(400, "x".repeat(900)).length <= 500, "fits the Detail column");
 });

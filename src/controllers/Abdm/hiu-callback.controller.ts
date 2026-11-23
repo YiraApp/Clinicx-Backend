@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import { abdmCallbackAuth, type AbdmCallbackAuth } from "../../services/Abdm/abdm-callback-auth.service.js";
+import { abdmConfig } from "../../config/abdm.config.js";
+import { abdmCallbackAuth, bearerToken, CallbackAuthError, type AbdmCallbackAuth, type CallbackAuthReason } from "../../services/Abdm/abdm-callback-auth.service.js";
 import { abdmFacilities, type AbdmFacilityDirectory } from "../../services/Abdm/abdm-facilities.service.js";
 import type { CallbackHeaders, HiuConsentService } from "../../services/Abdm/hiu/hiu-consent.service.js";
 import type { HiuDataFlowService } from "../../services/Abdm/hiu/hiu-data-flow.service.js";
@@ -19,7 +20,10 @@ import { hiuServices } from "./hiu.controller.js";
  * without the gateway client pin. Any ABDM client can hold such a token, so the push token in the
  * URL (an open transfer, inside its window) is checked next, still before the body is read; then
  * acceptPush checks everything again with the body, and its status is the answer (202 when the
- * page was taken).
+ * page was taken). HIPs' clients differ, so the push alone takes the bearer leniently ("bearer" in
+ * any case, or a bare JWT) and a token up to ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES past its expiry,
+ * still only when ABDM signed it. A refusal of a push to a transfer we know is recorded against
+ * that transfer (PUSH_REFUSED), so staff see why its records have not come.
  *
  * Logs carry a structural summary only (keys, array lengths, ids and statuses), never content,
  * ABHA addresses, care-context references, keys, nonces or tokens.
@@ -27,7 +31,7 @@ import { hiuServices } from "./hiu.controller.js";
 
 export type HiuCallbackServices = {
     consent: Pick<HiuConsentService, "onInit" | "onStatus" | "notify" | "onFetch">;
-    dataFlow: Pick<HiuDataFlowService, "onRequest" | "acceptPush" | "pushAddressProblem">;
+    dataFlow: Pick<HiuDataFlowService, "onRequest" | "acceptPush" | "pushAddressProblem" | "notePushRefused">;
 };
 
 export interface HiuCallbackDeps {
@@ -35,7 +39,32 @@ export interface HiuCallbackDeps {
     services: () => Promise<HiuCallbackServices>;
     /** The hospitals' HIUs: a callback whose X-HIU-ID names none of them is refused. */
     directory: Pick<AbdmFacilityDirectory, "hiuById">;
+    /** ABDM_DATA_PUSH_TOKEN_GRACE_MINUTES unless a test passes its own. */
+    pushTokenGraceMinutes?: () => number;
+    /** ABDM_DATA_PUSH_REQUIRE_TOKEN unless a test passes its own. */
+    pushRequiresToken?: () => boolean;
 }
+
+/** A refused push token in plain words, for PUSH_REFUSED. Never "expired": the frontend reads that word as its own login lapsing. */
+const AUTH_REFUSAL_REASONS: Record<CallbackAuthReason, string> = {
+    "no-token": "no bearer token",
+    unreadable: "token not readable as a JWT",
+    "not-rs256": "token not signed by ABDM (not an RS256 token with a key id)",
+    "unknown-key": "token not signed by ABDM (signed with a key ABDM does not publish)",
+    "bad-signature": "token not signed by ABDM",
+    "ran-out": "token too old",
+    "not-yet-valid": "token not valid yet (the HIP's clock may be ahead)",
+    "client-not-allowed": "token from an ABDM client that is not allowed",
+};
+
+/** Why the push's bearer check refused [error], for PUSH_REFUSED. */
+export const pushAuthRefusalReason = (error: unknown, graceMinutes: number): string => {
+    if (!(error instanceof CallbackAuthError)) return "ABDM's signing keys could not be read to check the token";
+    if (error.reason === "ran-out" && error.ranOutMinutesAgo !== undefined) {
+        return `token too old (ran out ${error.ranOutMinutesAgo} minutes ago; up to ${graceMinutes} are allowed)`;
+    }
+    return AUTH_REFUSAL_REASONS[error.reason] ?? "token refused";
+};
 
 const header = (req: Request, name: string): string | null => {
     const value = req.headers[name];
@@ -154,16 +183,40 @@ export const createHiuCallbackController = (deps: HiuCallbackDeps = defaultDeps)
             console.error(`${label} could not be processed: ${error?.code ?? error?.name ?? "error"}`));
     };
 
+    const pushTokenGraceMinutes = deps.pushTokenGraceMinutes ?? (() => abdmConfig.dataPushTokenGraceMinutes);
+    const pushRequiresToken = deps.pushRequiresToken ?? (() => abdmConfig.dataPushRequiresToken);
+
     /**
-     * The data push's bearer check, run before its body is read: a gateway-signed, unexpired token
-     * from any ABDM client (no pin). It keeps out callers outside ABDM, not other ABDM clients.
+     * Records a push the route refused before acceptPush ran (the bearer, the body) against its
+     * transfer, when the push token names one (notePushRefused). Runs after the answer; never throws.
+     */
+    const dataPushRefused = (req: Request, status: number, reason: string): void => {
+        const pushToken = String(req.params?.pushToken ?? "");
+        void (async () => (await deps.services()).dataFlow.notePushRefused(pushToken, status, reason))().catch((error: any) =>
+            console.error(`[ABDM HIU] data push refusal could not be recorded: ${error?.code ?? error?.name ?? "error"}`));
+    };
+
+    /**
+     * The data push's bearer check, run before its body is read: a token ABDM's gateway signed
+     * (RS256, a key ABDM publishes), from any ABDM client (no pin). It keeps out callers outside
+     * ABDM, not other ABDM clients. The bearer is read leniently and a token up to the grace past
+     * its expiry is taken (CallbackVerifyOptions): the push token in the URL is checked next.
      */
     const dataPushAuth = async (req: Request, res: Response, next: NextFunction) => {
+        // A push with no gateway token at all (as many HIPs send it) is admitted by its push address,
+        // which dataPushAddress checks next; a token that is sent must still be ABDM's and current.
+        if (!pushRequiresToken() && !bearerToken(req.headers.authorization, true)) {
+            console.log("[ABDM HIU] data push carries no ABDM token; the push address decides");
+            return next();
+        }
+        const graceMinutes = pushTokenGraceMinutes();
         try {
-            await deps.auth.verify(req.headers.authorization, { pinClient: false });
+            await deps.auth.verify(req.headers.authorization, { pinClient: false, lenientBearer: true, expiryGraceMs: graceMinutes * 60_000 });
         } catch (error: any) {
             console.warn(`[ABDM HIU] data push refused: ${error?.message}`);
-            return res.status(401).json(UNAUTHORIZED);
+            res.status(401).json(UNAUTHORIZED);
+            dataPushRefused(req, 401, pushAuthRefusalReason(error, graceMinutes));
+            return;
         }
         next();
     };
@@ -213,6 +266,7 @@ export const createHiuCallbackController = (deps: HiuCallbackDeps = defaultDeps)
         dataPushAuth,
         dataPushAddress,
         dataPush,
+        dataPushRefused,
     };
 };
 

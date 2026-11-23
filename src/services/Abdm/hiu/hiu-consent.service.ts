@@ -4,7 +4,7 @@ import { hiuAuditRepository } from "../../../repositories/Abdm/hiu-audit.reposit
 import type { AbdmFacilityDirectory, Hiu } from "../abdm-facilities.service.js";
 import { AbdmApiError, abdmGatewayService, isOutcomeUnknown, normalizeAbdmCode, type AbdmGatewayService } from "../abdm-gateway.service.js";
 import { atRestKeysFromConfig, seal, type AtRestKeys } from "./hiu-at-rest.js";
-import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, notifyAuditEvent, type HiuAudit } from "./hiu-audit.js";
+import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, notifyAuditEvent, type HiuAudit, type PushRefusal } from "./hiu-audit.js";
 import { errorCodeOf, RecordPurgeError } from "./hiu-db-errors.js";
 import { deploymentPushBaseUrl } from "./hiu-data-flow.service.js";
 import {
@@ -140,7 +140,25 @@ export interface ArtefactView {
     /** What the patient granted (ISO date-times), which may differ from what was asked. Null until on-fetch. */
     granted: { hiTypes: string[]; dateFrom: string; dateTo: string; dataEraseAt: string | null; accessMode: string | null } | null;
     stage: ArtefactStage;
-    transfer: { pagesReceived: number; pageCount: number | null; error: string | null; requestedAt: string | null; completedAt: string | null } | null;
+    transfer: {
+        pagesReceived: number;
+        pageCount: number | null;
+        error: string | null;
+        requestedAt: string | null;
+        completedAt: string | null;
+        /**
+         * When this transfer's newest page was accepted and stored (ISO); null before any page. A
+         * lastPushRefusal older than it came before pages that went through: it is history, not why
+         * records are missing.
+         */
+        lastPageAt: string | null;
+        /**
+         * The latest push of this transfer that ClinicX refused (PUSH_REFUSED): the HTTP status we
+         * answered, the plain reason and when (ISO). A HIP that pushed and was refused otherwise looks
+         * the same as one that sent nothing ("Waiting for the provider").
+         */
+        lastPushRefusal: { status: number; reason: string; at: string } | null;
+    } | null;
     recordCount: number;
 }
 
@@ -234,6 +252,10 @@ export interface TransferRow {
     error: string | null;
     requestedAt: Date | null;
     completedAt: Date | null;
+    /** When the transfer's newest page was stored (its records' latest ReceivedAt); absent or null before any page. */
+    lastPageAt?: Date | null;
+    /** The transfer's latest PUSH_REFUSED audit row, read back (pushRefusalDetail); absent or null when none. */
+    lastPushRefusal?: PushRefusal | null;
 }
 
 export interface ArtefactWithTransfer extends ArtefactRow {
@@ -1870,6 +1892,15 @@ export class HiuConsentService {
                     error: transfer.error,
                     requestedAt: iso(transfer.requestedAt),
                     completedAt: iso(transfer.completedAt),
+                    lastPageAt: iso(transfer.lastPageAt),
+                    lastPushRefusal: transfer.lastPushRefusal
+                        ? {
+                            status: transfer.lastPushRefusal.status,
+                            // Never the word the frontend reads as its own login lapsing.
+                            reason: transfer.lastPushRefusal.reason.replace(/expired/gi, "ran out"),
+                            at: isoOr(transfer.lastPushRefusal.at),
+                        }
+                        : null,
                 }
                 : null,
             recordCount: artefact.recordCount,
