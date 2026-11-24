@@ -22,6 +22,7 @@ import { patientMedicationReminderController } from "../controllers/patient-medi
 import { upload } from "../../../middlewares/upload.middleware.js";
 import { scanPrescription } from "../controllers/provider/prescription-scan.controller.js";
 import { authMiddleware } from "../../../middlewares/auth.middleware.js";
+import { requireYiraSystemAdmin } from "../../../middlewares/yira-system-admin.middleware.js";
 import { requirePatientRecordAccess } from "../../../middlewares/patient-record-access.middleware.js";
 import { paymentController } from "../../../controllers/Payments/payment.controller.js";
 import { hospitalLabTestController } from "../../../controllers/Organizations/hospital-lab-test.controller.js";
@@ -86,7 +87,8 @@ authRouter.post("/device-token", authMiddleware, registerDeviceToken);
 authRouter.post("/account/deactivate", authMiddleware, deactivateUserAccount);
 authRouter.get("/app-version", getLatestAppVersion);
 authRouter.post("/app-version/status", getVersionAndTokenStatus);
-authRouter.post("/app-version", authMiddleware, registerNewAppVersion);
+// Setting the live app version (web Version Management): a signed-in Yira System Admin only
+authRouter.post("/app-version", requireYiraSystemAdmin, registerNewAppVersion);
 
 // SNOMED CT Search
 authRouter.get("/snomed/search", authMiddleware, (req, res) => mobileSnomedController.search(req, res));

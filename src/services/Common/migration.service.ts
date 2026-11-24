@@ -324,4 +324,42 @@ export class MigrationService {
             }
         }
     }
+
+    /**
+     * The "Version Management" sidebar item (APP_VERSION_MENU), given to Yira System Admin only.
+     * The menu row is inserted only when no row has its route, so an admin's later edit or
+     * deactivation stands; the role gets one global (no organization, no hospital) assignment, only
+     * where none exists, active or not. A failure is logged and startup goes on: only the menu is missing.
+     */
+    static async ensureAppVersionMenu() {
+        const menu = APP_VERSION_MENU;
+        try {
+            await AppDataSource.query(
+                `IF NOT EXISTS (SELECT 1 FROM SidebarMenus WHERE Route = @0)
+                INSERT INTO SidebarMenus (MenuName, Route, Icon, ImagePath, UseImage, ParentMenuId, OrderNo, Status, CreatedAt)
+                VALUES (@1, @0, @2, NULL, 0, NULL, @3, 1, GETDATE());`,
+                [menu.route, menu.name, menu.icon, menu.orderNo]
+            );
+            await AppDataSource.query(
+                `INSERT INTO RoleSidebarMenus (RoleId, MenuId, OrganizationId, HospitalId, Status, CreatedAt)
+                SELECT r.Id, m.MenuId, NULL, NULL, 1, GETDATE()
+                FROM Roles r
+                CROSS JOIN (SELECT TOP 1 MenuId FROM SidebarMenus WHERE Route = @1 ORDER BY MenuId) m
+                WHERE (UPPER(LTRIM(RTRIM(r.RoleName))) = UPPER(@0) OR UPPER(r.NormalizedName) = UPPER(@0))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM RoleSidebarMenus x
+                    WHERE x.RoleId = r.Id AND x.MenuId = m.MenuId AND x.OrganizationId IS NULL AND x.HospitalId IS NULL
+                  );`,
+                [APP_VERSION_MENU_ROLE, menu.route]
+            );
+            console.log("Version Management menu guaranteed.");
+        } catch (error: any) {
+            console.error("Version Management menu failed:", error?.message);
+        }
+    }
 }
+
+/** The web Version Management screen: the mobile app's latest and minimum versions per platform. */
+export const APP_VERSION_MENU = { name: "Version Management", route: "/admin/app-versions", icon: "Smartphone", orderNo: 920 } as const;
+/** The only role that sees it; POST /v1/api/auth/app-version lets no other role in (requireYiraSystemAdmin). */
+export const APP_VERSION_MENU_ROLE = "Yira System Admin";

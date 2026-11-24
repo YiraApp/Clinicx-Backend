@@ -18,6 +18,7 @@ const startServer = async () => {
         await initializeDatabase();
         await MigrationService.ensureLogIndexes();
         await MigrationService.ensureClinicalColumns();
+        await MigrationService.ensureAppVersionMenu();
         await DietMigrationService.runMigrationsAndSeed();
         await QuestionnaireMigrationService.run();
         await FamilyMigrationService.run();
