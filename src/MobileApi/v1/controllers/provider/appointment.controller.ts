@@ -664,6 +664,67 @@ export const addDependentPatient = async (req: Request, res: Response) => {
 };
 
 /**
+ * Released app builds treat hospital id 1 as "no hospital" and ask for hospital 19's
+ * doctors instead (getLinkedDoctorsForHospital in liked_hospitals_service.dart). Hospital 1
+ * is a real hospital (Ocimum Dental Clinic), so its patients saw hospital 19's doctor there
+ * and none of its own. Until those builds are gone, a request for 19 is answered with
+ * hospital 1's doctors when the user or their family belongs to hospital 1 (and with 19's
+ * as well when they also belong to 19). Booking and slots already send hospital 1.
+ */
+const APP_SWAPPED_HOSPITAL_ID = 1;
+const APP_SWAP_TARGET_HOSPITAL_ID = 19;
+
+/**
+ * Of [hospitalIds], the ones [userIds], their account holder or their dependents are
+ * linked to: a role there, a registration, an appointment, or an access consent.
+ */
+async function familyHospitalLinks(userIds: (string | null)[], hospitalIds: number[]): Promise<Set<number>> {
+    const users = [...new Set(userIds.filter((id): id is string => !!id).map((id) => id.trim().toUpperCase()))];
+    if (!users.length || !hospitalIds.length) return new Set();
+    const userParams = users.map((_, i) => `@${i}`).join(", ");
+    const hospitalParams = hospitalIds.map((_, i) => `@${users.length + i}`).join(", ");
+    const { AppDataSource } = await import("../../../../config/database.js");
+    const rows: { HospitalId: number }[] = await AppDataSource.query(
+        `WITH me AS (
+             SELECT Id, ISNULL(ParentUserId, Id) AS RootId, PhoneNumber, CountryCode
+             FROM Users WHERE Id IN (${userParams}) AND IsDeleted = 0
+         ), fam AS (
+             SELECT DISTINCT u.Id FROM Users u
+             JOIN me ON u.Id = me.Id OR u.Id = me.RootId OR u.ParentUserId = me.RootId
+                 OR (LEN(ISNULL(me.PhoneNumber, '')) >= 6 AND u.PhoneNumber = me.PhoneNumber
+                     AND ISNULL(u.CountryCode, '') = ISNULL(me.CountryCode, ''))
+             WHERE u.IsDeleted = 0
+         )
+         SELECT DISTINCT x.HospitalId FROM (
+             SELECT ur.HospitalId FROM UserRoles ur WHERE ur.IsDeleted = 0 AND ur.UserId IN (SELECT Id FROM fam)
+             UNION ALL SELECT pr.HospitalId FROM PatientRegistrations pr WHERE pr.UserId IN (SELECT Id FROM fam)
+             UNION ALL SELECT a.HospitalId FROM Appointments a WHERE a.UserId IN (SELECT Id FROM fam)
+             UNION ALL SELECT c.HospitalId FROM PatientAccessConsents c WHERE c.PatientId IN (SELECT Id FROM fam)
+         ) x WHERE x.HospitalId IN (${hospitalParams})`,
+        [...users, ...hospitalIds],
+    );
+    return new Set(rows.map((r) => Number(r.HospitalId)));
+}
+
+/** The hospitals whose doctors answer a request for [hospitalId] (see APP_SWAPPED_HOSPITAL_ID). */
+async function hospitalsToList(req: Request, hospitalId: number): Promise<number[]> {
+    if (hospitalId !== APP_SWAP_TARGET_HOSPITAL_ID) return [hospitalId];
+    try {
+        const links = await familyHospitalLinks(
+            [actingProfileId(req), tokenActorId(req)],
+            [APP_SWAPPED_HOSPITAL_ID, APP_SWAP_TARGET_HOSPITAL_ID],
+        );
+        if (!links.has(APP_SWAPPED_HOSPITAL_ID)) return [hospitalId];
+        return links.has(APP_SWAP_TARGET_HOSPITAL_ID)
+            ? [APP_SWAPPED_HOSPITAL_ID, APP_SWAP_TARGET_HOSPITAL_ID]
+            : [APP_SWAPPED_HOSPITAL_ID];
+    } catch (error: any) {
+        console.error("getHospitalDoctors hospital link check failed:", error?.message);
+        return [hospitalId];
+    }
+}
+
+/**
  * Retrieves all doctors for a specific hospital so patients can view and book appointments with any doctor in that hospital.
  */
 export const getHospitalDoctors = async (req: Request, res: Response) => {
@@ -683,73 +744,24 @@ export const getHospitalDoctors = async (req: Request, res: Response) => {
             });
         }
 
-        const result = await healthcareProviderService.getDoctors(1, 100, {
-            hospitalId,
-            organizationId,
-            search: search || undefined,
-            status: true
-        });
-
-        const rawList = Array.isArray(result) ? result : (result.data?.data || result.data || []);
-        const doctorsList = rawList
-            .filter((d: any) => {
-                const firstName = (d.User?.FirstName || d.firstName || "").toString().toLowerCase().trim();
-                const lastName = (d.User?.LastName || d.lastName || "").toString().toLowerCase().trim();
-                const fullName = `${firstName} ${lastName}`.trim();
-                const rawName = (d.name || "").toString().toLowerCase().trim();
-                const email = (d.User?.Email || d.email || "").toString().toLowerCase().trim();
-                const specialty = (d.Specialty || d.specialty || "").toString().toLowerCase().trim();
-
-                // Exclude any test, sample, demo, fake, or dummy doctors
-                if (
-                    firstName.includes("test") ||
-                    lastName.includes("test") ||
-                    fullName.includes("test") ||
-                    rawName.includes("test") ||
-                    email.includes("test") ||
-                    specialty.includes("test") ||
-                    firstName.includes("dummy") ||
-                    lastName.includes("dummy") ||
-                    rawName.includes("dummy") ||
-                    fullName.includes("demo") ||
-                    rawName.includes("demo") ||
-                    fullName.includes("sample") ||
-                    rawName.includes("sample") ||
-                    fullName.includes("fake")
-                ) {
-                    return false;
-                }
-                return true;
-            })
-            .map((d: any) => {
-                const firstName = d.User?.FirstName || d.firstName || "";
-                const lastName = d.User?.LastName || d.lastName || "";
-                const fullName = firstName || lastName ? `Dr. ${firstName} ${lastName}`.trim() : (d.name || "Doctor");
-                const doctorGuid = d.UserId || d.userId || d.Id || d.id;
-                return {
-                    doctorId: doctorGuid,
-                    id: doctorGuid,
-                    providerId: d.Id || d.id,
-                    userId: d.UserId || d.userId,
-                    name: fullName,
-                    firstName: firstName,
-                    lastName: lastName,
-                    specialty: d.Specialty || d.specialty || "General Physician",
-                    subSpecialty: d.SubSpecialty || d.subSpecialty || null,
-                    department: d.Department || d.department || "General",
-                    qualification: d.Qualification || d.qualification || "MBBS",
-                    experience: d.Experience || d.experience || "",
-                    registrationNumber: d.RegistrationNumber || d.registrationNumber || null,
-                    bio: d.Bio || d.bio || null,
-                    hospitalId: hospitalId,
-                    hospitalName: d.Hospital?.Name || null,
-                    consultationFee: d.ConsultationFee !== undefined && d.ConsultationFee !== null ? Number(d.ConsultationFee) : 0,
-                    imagePath: d.User?.ImagePath || d.imagePath || null,
-                    email: d.User?.Email || d.email || null,
-                    phoneNumber: d.User?.PhoneNumber || d.phoneNumber || null,
-                    isLinked: true
-                };
+        const doctorsList: any[] = [];
+        const seen = new Set<string>();
+        for (const listedHospitalId of await hospitalsToList(req, hospitalId)) {
+            const result = await healthcareProviderService.getDoctors(1, 100, {
+                hospitalId: listedHospitalId,
+                // The organisation sent belongs to the hospital asked for.
+                organizationId: listedHospitalId === hospitalId ? organizationId : undefined,
+                search: search || undefined,
+                status: true
             });
+            const rawList = Array.isArray(result) ? result : (result.data?.data || result.data || []);
+            for (const doctor of mapHospitalDoctors(rawList, listedHospitalId)) {
+                const key = String(doctor.doctorId || "").toUpperCase();
+                if (key && seen.has(key)) continue;
+                if (key) seen.add(key);
+                doctorsList.push(doctor);
+            }
+        }
 
         return res.json(ApiResponse.success(doctorsList, "Hospital doctors fetched successfully"));
     } catch (error: any) {
@@ -760,6 +772,69 @@ export const getHospitalDoctors = async (req: Request, res: Response) => {
         });
     }
 };
+
+/** Doctors as the app lists them, without test or demo accounts. */
+function mapHospitalDoctors(rawList: any[], hospitalId: number): any[] {
+    return rawList
+        .filter((d: any) => {
+            const firstName = (d.User?.FirstName || d.firstName || "").toString().toLowerCase().trim();
+            const lastName = (d.User?.LastName || d.lastName || "").toString().toLowerCase().trim();
+            const fullName = `${firstName} ${lastName}`.trim();
+            const rawName = (d.name || "").toString().toLowerCase().trim();
+            const email = (d.User?.Email || d.email || "").toString().toLowerCase().trim();
+            const specialty = (d.Specialty || d.specialty || "").toString().toLowerCase().trim();
+
+            // Exclude any test, sample, demo, fake, or dummy doctors
+            if (
+                firstName.includes("test") ||
+                lastName.includes("test") ||
+                fullName.includes("test") ||
+                rawName.includes("test") ||
+                email.includes("test") ||
+                specialty.includes("test") ||
+                firstName.includes("dummy") ||
+                lastName.includes("dummy") ||
+                rawName.includes("dummy") ||
+                fullName.includes("demo") ||
+                rawName.includes("demo") ||
+                fullName.includes("sample") ||
+                rawName.includes("sample") ||
+                fullName.includes("fake")
+            ) {
+                return false;
+            }
+            return true;
+        })
+        .map((d: any) => {
+            const firstName = d.User?.FirstName || d.firstName || "";
+            const lastName = d.User?.LastName || d.lastName || "";
+            const fullName = firstName || lastName ? `Dr. ${firstName} ${lastName}`.trim() : (d.name || "Doctor");
+            const doctorGuid = d.UserId || d.userId || d.Id || d.id;
+            return {
+                doctorId: doctorGuid,
+                id: doctorGuid,
+                providerId: d.Id || d.id,
+                userId: d.UserId || d.userId,
+                name: fullName,
+                firstName: firstName,
+                lastName: lastName,
+                specialty: d.Specialty || d.specialty || "General Physician",
+                subSpecialty: d.SubSpecialty || d.subSpecialty || null,
+                department: d.Department || d.department || "General",
+                qualification: d.Qualification || d.qualification || "MBBS",
+                experience: d.Experience || d.experience || "",
+                registrationNumber: d.RegistrationNumber || d.registrationNumber || null,
+                bio: d.Bio || d.bio || null,
+                hospitalId: hospitalId,
+                hospitalName: d.Hospital?.Name || null,
+                consultationFee: d.ConsultationFee !== undefined && d.ConsultationFee !== null ? Number(d.ConsultationFee) : 0,
+                imagePath: d.User?.ImagePath || d.imagePath || null,
+                email: d.User?.Email || d.email || null,
+                phoneNumber: d.User?.PhoneNumber || d.phoneNumber || null,
+                isLinked: true
+            };
+        });
+}
 
 
 export const rescheduleAppointment = async (req: Request, res: Response) => {
