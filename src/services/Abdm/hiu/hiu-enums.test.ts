@@ -10,6 +10,7 @@ import {
     HIU_FREQUENCY_UNITS,
     HIU_HI_TYPES,
     HIU_PURPOSES,
+    HIU_REQUESTABLE_ACCESS_MODES,
     HiuError,
     hiTypeLabel,
     hiuFacilityNotConfiguredError,
@@ -23,6 +24,7 @@ import {
     isFrequencyUnit,
     isHiType,
     isPurposeCode,
+    isRequestableAccessMode,
     parseDateTime,
     parseHiTypes,
     purposeText,
@@ -58,6 +60,10 @@ test("the eight HI types, access modes and frequency units are the spec's enums"
     assert.ok(!isHiType("invoice"));
     assert.deepEqual([...HIU_ACCESS_MODES], ["VIEW", "STORE", "STREAM", "QUERY"]);
     assert.ok(isAccessMode("VIEW") && !isAccessMode("view") && !isAccessMode("READ"));
+    // A granted artefact may say any of ABDM's modes; a request from ClinicX asks for VIEW only.
+    assert.deepEqual([...HIU_REQUESTABLE_ACCESS_MODES], ["VIEW"]);
+    assert.ok(isRequestableAccessMode("VIEW"));
+    assert.ok(!isRequestableAccessMode("STORE") && !isRequestableAccessMode("STREAM") && !isRequestableAccessMode("QUERY") && !isRequestableAccessMode("view"));
     assert.deepEqual([...HIU_FREQUENCY_UNITS], ["HOUR", "DAY", "WEEK", "MONTH", "YEAR"]);
     assert.ok(isFrequencyUnit("HOUR") && !isFrequencyUnit("MINUTE"));
     assert.deepEqual([...CONSENT_STATUSES], ["SENDING", "REQUESTED", "GRANTED", "DENIED", "EXPIRED", "REVOKED", "FAILED"]);

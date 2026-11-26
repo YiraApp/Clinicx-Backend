@@ -415,13 +415,13 @@ const assertRefused = async (promise: Promise<unknown>, kind: string, status: nu
 
 // ---- options and patient ----
 
-test("options list ABDM's purposes, the eight HI types and access modes, with the defaults", async () => {
+test("options list ABDM's purposes, the eight HI types and the VIEW access mode only, with the defaults", async () => {
     const options = await service.options(ctx);
     assert.equal(options.configured, true);
     assert.equal(options.reason, undefined);
     assert.deepEqual(options.purposes.map((p) => p.code), ["CAREMGT", "BTG", "PUBHLTH", "HPAYMT", "DSRCH", "PATRQT"]);
     assert.equal(options.hiTypes.length, 8);
-    assert.deepEqual(options.accessModes, ["VIEW", "STORE", "STREAM", "QUERY"]);
+    assert.deepEqual(options.accessModes, ["VIEW"], "ClinicX only views records, so it asks for VIEW alone");
     assert.deepEqual(options.defaults, { purpose: "CAREMGT", accessMode: "VIEW" });
     settings.configured = false;
     assert.equal((await service.options(ctx)).configured, false);
@@ -503,6 +503,10 @@ test("every validation refusal stores nothing and calls nothing", async () => {
         [{ dataEraseAt: "soon" }, "dataEraseAt"],
         [{ dataEraseAt: "2026-10-26T05:00:00Z" }, "dataEraseAt"],
         [{ accessMode: "EDIT" }, "accessMode"],
+        // ABDM's other modes are not asked for: ClinicX requests records to view only.
+        [{ accessMode: "STORE" }, "accessMode"],
+        [{ accessMode: "STREAM" }, "accessMode"],
+        [{ accessMode: "QUERY" }, "accessMode"],
         [{ patientUserId: OTHER_PATIENT }, "patientUserId"],
     ];
     for (const [overrides, field] of cases) {

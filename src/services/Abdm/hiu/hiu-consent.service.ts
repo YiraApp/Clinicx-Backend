@@ -8,11 +8,11 @@ import { HIU_AUDIT_EVENTS, HIU_AUDIT_OUTCOMES, notifyAuditEvent, type HiuAudit, 
 import { errorCodeOf, RecordPurgeError } from "./hiu-db-errors.js";
 import { deploymentPushBaseUrl } from "./hiu-data-flow.service.js";
 import {
-    HIU_ACCESS_MODES,
     HIU_DEFAULT_FREQUENCY,
     HIU_HI_TYPES,
     HIU_PURPOSES,
     HIU_PURPOSE_REF_URI,
+    HIU_REQUESTABLE_ACCESS_MODES,
     HiuError,
     abdmDateTime,
     hiTypeLabel,
@@ -24,6 +24,7 @@ import {
     isConsentStatus,
     isDateOnly,
     isFrequencyUnit,
+    isRequestableAccessMode,
     isHiType,
     isNotifyConsentStatus,
     isPurposeCode,
@@ -737,7 +738,7 @@ export class HiuConsentService {
             ...(reason === null ? {} : { reason }),
             purposes: HIU_PURPOSES.map(({ code, text }) => ({ code, text })),
             hiTypes: HIU_HI_TYPES.map(({ code, label }) => ({ code, label })),
-            accessModes: [...HIU_ACCESS_MODES],
+            accessModes: [...HIU_REQUESTABLE_ACCESS_MODES],
             defaults: { purpose: "CAREMGT", accessMode: "VIEW" },
         };
     }
@@ -776,7 +777,7 @@ export class HiuConsentService {
         const dataEraseAt = parseDateTime(input?.dataEraseAt);
         if (!dataEraseAt) throw invalid("dataEraseAt", "Delete records by must be a date and time.");
         if (dataEraseAt.getTime() <= now) throw invalid("dataEraseAt", "Delete records by must be in the future.");
-        if (!isAccessMode(input?.accessMode)) throw invalid("accessMode", "Choose an access mode from ABDM's list.");
+        if (!isRequestableAccessMode(input?.accessMode)) throw invalid("accessMode", "Records can be asked for to view only (VIEW).");
 
         const patient = await this.store.findPatient(patientUserId, ctx.hospitalId);
         if (!patient) throw new HiuError("not-found", "That patient isn't registered at this hospital.");

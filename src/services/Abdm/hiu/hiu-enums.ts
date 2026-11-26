@@ -42,6 +42,12 @@ export const HIU_ACCESS_MODES = ["VIEW", "STORE", "STREAM", "QUERY"] as const;
 export type HiuAccessMode = (typeof HIU_ACCESS_MODES)[number];
 export const HIU_DEFAULT_PURPOSE: HiuPurposeCode = "CAREMGT";
 export const HIU_DEFAULT_ACCESS_MODE: HiuAccessMode = "VIEW";
+/**
+ * The access modes ClinicX asks for: VIEW only. ClinicX shows received records and never keeps,
+ * streams or queries them beyond the consent, so the record request offers and accepts VIEW alone.
+ * HIU_ACCESS_MODES still reads whatever ABDM reports on a granted artefact.
+ */
+export const HIU_REQUESTABLE_ACCESS_MODES = ["VIEW"] as const satisfies readonly HiuAccessMode[];
 
 /** permission.frequency.unit. Every ABDM sample sends HOUR / 1 / 0, which is what we send. */
 export const HIU_FREQUENCY_UNITS = ["HOUR", "DAY", "WEEK", "MONTH", "YEAR"] as const;
@@ -137,6 +143,10 @@ export const hiTypeLabel = (code: string): string =>
 
 export const isAccessMode = (value: unknown): value is HiuAccessMode =>
     typeof value === "string" && (HIU_ACCESS_MODES as readonly string[]).includes(value);
+
+/** Whether a record request may ask for [value]: VIEW only (HIU_REQUESTABLE_ACCESS_MODES). */
+export const isRequestableAccessMode = (value: unknown): value is (typeof HIU_REQUESTABLE_ACCESS_MODES)[number] =>
+    typeof value === "string" && (HIU_REQUESTABLE_ACCESS_MODES as readonly string[]).includes(value);
 
 export const isFrequencyUnit = (value: unknown): value is HiuFrequencyUnit =>
     typeof value === "string" && (HIU_FREQUENCY_UNITS as readonly string[]).includes(value);
